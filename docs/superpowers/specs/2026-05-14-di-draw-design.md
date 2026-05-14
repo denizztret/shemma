@@ -2,7 +2,7 @@
 
 - **Дата:** 2026-05-14
 - **Автор:** brainstorm-сессия (Claude Code + Денис Третьяков)
-- **Статус:** Draft v3.6, одобрено пользователем после ревью
+- **Статус:** Draft v3.7, одобрено пользователем после ревью
 - **Цель документа:** зафиксировать архитектурное решение прототипа, по которому далее будет составлен implementation plan.
 
 ## История ревизий
@@ -16,7 +16,8 @@
 - **v3.3** — MCP убран из MVP, заменён на Bash+skill с curl-cheat-sheet'ом. (Эта ревизия — промежуточная; в v3.4 заменена.)
 - **v3.4** — **CLI-first architecture**. Ядро — `CanvasState + PatchOp` REST/WS API. `didraw` CLI как стабильный machine-interface. MCP-adapter — Phase 2 тонкой обёрткой над тем же backend/client.
 - **v3.5** — добавлен §3.7 Distribution, Runtime Modes & Updates.
-- **v3.6 (текущая, одобрено)** — P1/P2-патч по результатам ревью v3.5: (1) `cascade-delete` при `delete node`/`delete group` (см. §3.1 patch semantics, §3.4 edge cases); (2) update flow переформулирован как "**manual update, controlled daemon restart**" (consistency §3.7.5); (3) golden path §3.3 переписан под `didraw` CLI вместо MCP-вызовов; (4) curl-примеры явно помечены как fallback; (5) `cleanup-on-stop` (FilePersistence.flush + SIGTERM handler) — устранить data loss между stop/update.
+- **v3.6** — P1/P2-патч: cascade-delete, golden path под CLI, update flow терминология, graceful shutdown.
+- **v3.7 (текущая, одобрено)** — добавлен **§3.8 UI Design Principles**: di.draw НЕ строит собственный UI поверх tldraw; tldraw editor — основной интерфейс, наши элементы (room badge, prompts, version, update banner) — тонкий service-layer через `components`/`overrides`/UI zones. Минимализм, no branding, не перекрывает tldraw controls. Существующие fixed-overlays в плане (Task 3/12-14 hard-coded `top:8; left:8`) — конфликт с tldraw main menu — устранён в Task 12.5 (новая) и правках Task 28/38.
 
 ## 1. Проблема и цель
 
@@ -586,6 +587,68 @@ Frontend (Phase 1.10):
 - **MVP (Phase 1.10):** GitHub Releases + `release-manifest.json`. Пользователь скачивает binary вручную одной командой, дальше `didraw update` сам.
 - **Phase 2.3:** Homebrew tap (`brew install <user>/didraw/didraw`).
 - **Phase 3.x:** npm package (`bunx didraw`), private registry для команды, code-signed binaries (Apple notarization для macOS).
+
+### 3.8 UI Design Principles
+
+**di.draw НЕ строит собственный дизайн поверх tldraw. Он использует tldraw editor как основной UI, а свои элементы (room badge, prompts, version footer, update banner) добавляет как тонкий service-layer.**
+
+#### Правила
+
+1. **tldraw editor UI остаётся основой.** Не вызываем `hideUi`, не строим свой toolbar в MVP. Все стандартные tldraw controls (main menu, style panel, navigation, context menu, page menu) должны работать без изменений.
+2. **Используем tldraw extension points**, а не произвольные `position: fixed`:
+   - `<Tldraw components={...} />` — слоты для замены/добавления стандартных компонентов (см. [UI components](https://tldraw.dev/sdk-features/ui-components)).
+   - `overrides` — кастомизация menu items, tools, keyboard shortcuts.
+   - **UI zones** (`SharePanel`, `TopPanel`, `MenuPanel`, `HelpMenu`) — куда вставлять собственные компоненты (см. [UI zones example](https://tldraw.dev/examples/zones)).
+3. **Не переопределяем `.tl-*` CSS-классы напрямую**, кроме явно документированных tldraw CSS-переменных и SDK extension points. Иначе обновление tldraw сломает наш UI.
+4. **Кастомные элементы — только там, где они нужны для di.draw:**
+   - Room/profile badge (где сейчас стоит и какая комната).
+   - Pending prompts UI (input при выделении + drawer).
+   - Update banner и version footer.
+   - Никаких toolbars, sidebars, brand-panels, hero-sections.
+5. **Минимум визуального веса.** Нейтральная системная палитра, 12–13px text, тонкие borders, без gradient'ов, без shadow-heavy cards. Subtle = good.
+6. **Не перекрывать tldraw controls.** Особенно: top-left main menu, top-right style panel (когда что-то выделено), bottom-left navigation panel (zoom), bottom toolbar, bottom-right help. Наши overlay'и идут в свободные зоны или встраиваются в tldraw slots.
+7. **AI-created shapes используют дефолтный tldraw visual style**, если стиль не имеет смысла. Не раскрашиваем узлы случайными цветами для "красоты"; цвет/стиль = семантика (например, "красный = error path").
+8. **Mobile / маленький viewport** — Phase 3. В MVP оптимизируем только под desktop (≥1024px). Но overlay'и не должны полностью разваливаться на 768px.
+
+#### Где какие наши элементы лежат
+
+| Элемент | Tldraw slot / положение | Реализация |
+|---|---|---|
+| Room/profile badge | `components.SharePanel` (top-right zone) | Свой компонент через `components` prop |
+| Update banner | Над editor'ом (вне tldraw root, `z-index` выше) | Свой компонент в `AppChrome`, рендерится ДО `<Tldraw />` |
+| Version footer | bottom-right, рядом с tldraw help button, но выше | `components.HelpMenu` либо собственный footer в `AppChrome` (z-index ниже modals) |
+| Prompt input (при selection) | Floating рядом с выделением (anchored к bounding box), НЕ fixed-bottom-center | Свой компонент, использует `editor.getSelectionPageBounds()` |
+| Prompt drawer (история) | Collapsed side-panel; открывается по клику на 💬-маркер, **не модальный** | Drawer right side, схлопывается до иконки |
+| 💬-маркер на shape | Прикреплён к bounding box выделенного shape | Через tldraw `decorator` или overlay-shape-level component |
+
+#### Design tokens
+
+Один файл — `apps/frontend/src/design-tokens.ts`:
+
+```ts
+export const tokens = {
+  font: { sm: 12, base: 13, mono: "ui-monospace, SFMono-Regular, monospace" },
+  color: {
+    text: "#1a1a1a", textMuted: "#666",
+    border: "rgba(0,0,0,0.12)",
+    bgOverlay: "rgba(255,255,255,0.95)",
+    accent: "#0a7", badgeDev: "#fc6", badgeDebug: "#f66",
+    warnBg: "#fef3c7", warnBorder: "#f59e0b",
+  },
+  radius: { sm: 3, md: 6, lg: 8 },
+  z: { overlay: 90, modal: 1000, banner: 100 },
+} as const;
+```
+
+Все наши overlay-компоненты импортируют `tokens`, никаких inline `#888`/`12px`/`rgba(...)` в JSX-файлах.
+
+#### Что под запретом
+
+- Свои toolbars или command palettes (есть в tldraw).
+- Login/auth UI, profile menus, share-buttons (вне scope — это локальная утилита).
+- Modals/dialogs кроме confirm на `didraw rm` (которое в CLI, не в UI).
+- Декоративные иконки, illustrations, splash screens.
+- Animation библиотеки сверх минимальных CSS-transitions.
 
 ## 4. Технологический стек
 
