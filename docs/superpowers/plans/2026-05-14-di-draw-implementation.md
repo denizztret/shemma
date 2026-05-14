@@ -1,4 +1,4 @@
-# di.draw — Implementation Plan (v2, CLI-first)
+# di.draw — Implementation Plan (v3, CLI-first + distribution)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -19,7 +19,7 @@
 - **Tests:** bun:test (backend, CLI, client), Playwright (UI smoke)
 - **Lint/format:** biome
 
-**Spec:** `docs/superpowers/specs/2026-05-14-di-draw-design.md` (v3.4)
+**Spec:** `docs/superpowers/specs/2026-05-14-di-draw-design.md` (v3.5)
 
 ---
 
@@ -3302,7 +3302,743 @@ git commit -m "fix(skill): clarify prompt-resolution workflow"
 
 ---
 
-## Task 31: Playwright golden-path
+## Task 31: Runtime profile dispatcher
+
+**Files:**
+- Modify: `apps/backend/src/config.ts`
+- Modify: `packages/didraw-cli/src/index.ts`
+- Modify: `packages/didraw-cli/src/daemon.ts`
+- Create: `packages/didraw-cli/src/profile.ts`
+
+- [ ] **Step 1: Extend `config.ts`**
+
+```ts
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+export type Profile = "dev" | "release" | "debug";
+const profile = (process.env.DIDRAW_PROFILE ?? "release") as Profile;
+
+const portByProfile: Record<Profile, number> = { dev: 8788, release: 8787, debug: 8787 };
+const storageSubdir: Record<Profile, string> = { dev: "canvas-dev", release: "canvas", debug: "canvas" };
+
+export const config = {
+  profile,
+  port: Number(process.env.DIDRAW_PORT ?? portByProfile[profile]),
+  storageDir: process.env.DIDRAW_STORAGE_DIR
+    ?? join(homedir(), ".claude", "projects", "default-project", storageSubdir[profile]),
+  logLevel: (process.env.DIDRAW_LOG_LEVEL ?? (profile === "dev" || profile === "debug" ? "debug" : "info")) as "debug" | "info" | "error",
+  autosaveDebounceMs: 300,
+  roomEvictionMs: 60 * 60 * 1000,
+  opLogMaxSize: 50,
+} as const;
+```
+
+- [ ] **Step 2: `packages/didraw-cli/src/profile.ts`**
+
+```ts
+import type { Profile } from "@didraw/backend/src/config";
+
+export function parseProfile(argv: string[]): Profile | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--profile") return argv[++i] as Profile;
+  }
+  return undefined;
+}
+
+export function applyProfileEnv(p: Profile | undefined) {
+  if (p) process.env.DIDRAW_PROFILE = p;
+}
+```
+
+- [ ] **Step 3: Wire into `daemon.ts` and `index.ts`**
+
+In `daemon.ts`, `PORT` becomes a function:
+```ts
+const port = () => Number(process.env.DIDRAW_PORT ?? (process.env.DIDRAW_PROFILE === "dev" ? 8788 : 8787));
+```
+Use `port()` everywhere instead of constant.
+
+In `index.ts` `main()`, before dispatching:
+```ts
+import { parseProfile, applyProfileEnv } from "./profile";
+const profileArg = parseProfile(argv);
+applyProfileEnv(profileArg);
+```
+
+- [ ] **Step 4: Smoke test parallel run**
+
+```bash
+DIDRAW_PROFILE=dev bun --cwd apps/backend src/index.ts &
+DIDRAW_PROFILE=release bun --cwd apps/backend src/index.ts &
+curl -s localhost:8787/healthz   # release
+curl -s localhost:8788/healthz   # dev
+kill %1 %2
+```
+Expected: both healthy on different ports.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add apps/backend/src/config.ts packages/didraw-cli
+git commit -m "feat: runtime profiles (dev/release/debug) with separate ports and storage"
+```
+
+---
+
+## Task 32: Version metadata + GET /api/version
+
+**Files:**
+- Create: `apps/backend/src/version.ts`
+- Create: `apps/backend/src/routes/version.ts`
+- Create: `apps/backend/src/update-check.ts`
+- Modify: `apps/backend/src/index.ts`
+- Create: `apps/backend/tests/version.test.ts`
+
+- [ ] **Step 1: `version.ts` (read at build/runtime)**
+
+```ts
+// Filled by `bun build --compile --define DIDRAW_VERSION=... DIDRAW_GIT_SHA=... etc.`
+// At dev time falls back to package.json + git.
+import pkg from "../../../package.json" assert { type: "json" };
+
+export const VERSION = {
+  version: process.env.DIDRAW_VERSION ?? pkg.version ?? "0.0.0-dev",
+  channel: (process.env.DIDRAW_CHANNEL ?? "dev") as "dev" | "stable" | "nightly",
+  gitSha: process.env.DIDRAW_GIT_SHA ?? "unknown",
+  buildDate: process.env.DIDRAW_BUILD_DATE ?? new Date().toISOString(),
+} as const;
+```
+
+- [ ] **Step 2: `update-check.ts` (lazy manifest fetch)**
+
+```ts
+import { VERSION } from "./version";
+
+export const MANIFEST_URL = process.env.DIDRAW_MANIFEST_URL
+  ?? "https://github.com/example/di.draw/releases/download/latest/release-manifest.json";
+
+type CacheEntry = { at: number; latest: string | null };
+let cache: CacheEntry | null = null;
+const TTL = 60 * 60 * 1000;
+
+export async function checkLatest(): Promise<{ updateAvailable: boolean; latest: string | null }> {
+  if (cache && Date.now() - cache.at < TTL) {
+    return { latest: cache.latest, updateAvailable: !!cache.latest && cache.latest !== VERSION.version };
+  }
+  try {
+    const r = await fetch(MANIFEST_URL);
+    if (!r.ok) throw new Error(`manifest ${r.status}`);
+    const m = await r.json() as { channels?: Record<string, { version?: string }> };
+    const latest = m.channels?.[VERSION.channel]?.version ?? null;
+    cache = { at: Date.now(), latest };
+    return { latest, updateAvailable: !!latest && latest !== VERSION.version };
+  } catch {
+    cache = { at: Date.now(), latest: null };
+    return { latest: null, updateAvailable: false };
+  }
+}
+```
+
+- [ ] **Step 3: `routes/version.ts`**
+
+```ts
+import { Hono } from "hono";
+import { VERSION } from "../version";
+import { checkLatest } from "../update-check";
+import { config } from "../config";
+
+export const versionRoutes = new Hono().get("/api/version", async (c) => {
+  const upd = await checkLatest();
+  return c.json({ ...VERSION, profile: config.profile, ...upd });
+});
+```
+
+- [ ] **Step 4: Wire in `index.ts`**
+
+```ts
+import { versionRoutes } from "./routes/version";
+// in makeApp:
+app.route("/", versionRoutes);
+```
+
+- [ ] **Step 5: Failing test**
+
+```ts
+// apps/backend/tests/version.test.ts
+import { describe, test, expect } from "bun:test";
+import { startServer } from "../src/index";
+
+describe("GET /api/version", () => {
+  test("returns version fields", async () => {
+    const srv = await startServer({ inMemory: true, port: 0 });
+    const b = await fetch(`http://localhost:${srv.port}/api/version`).then((r) => r.json());
+    expect(b).toHaveProperty("version");
+    expect(b).toHaveProperty("channel");
+    expect(b).toHaveProperty("profile");
+    expect(b).toHaveProperty("updateAvailable");
+    await srv.close();
+  });
+});
+```
+
+- [ ] **Step 6: Run — PASS, commit**
+
+```bash
+cd apps/backend && bun test tests/version.test.ts
+git add apps/backend
+git commit -m "feat(backend): /api/version with build metadata and lazy update-check"
+```
+
+---
+
+## Task 33: didraw version CLI
+
+**Files:**
+- Create: `packages/didraw-cli/src/version-cmd.ts`
+- Modify: `packages/didraw-cli/src/index.ts`
+
+- [ ] **Step 1: Implement**
+
+```ts
+// packages/didraw-cli/src/version-cmd.ts
+import { CanvasClient } from "@didraw/client";
+
+export async function cmdVersion() {
+  const c = new CanvasClient();
+  try {
+    const r = await fetch(`${(c as any).base}/api/version`);
+    if (r.ok) { console.log(JSON.stringify(await r.json())); return; }
+  } catch {}
+  // Fallback: daemon not running — show what's in env
+  console.log(JSON.stringify({
+    version: process.env.DIDRAW_VERSION ?? "unknown",
+    channel: process.env.DIDRAW_CHANNEL ?? "dev",
+    gitSha: process.env.DIDRAW_GIT_SHA ?? "unknown",
+    daemonRunning: false,
+  }));
+}
+```
+
+- [ ] **Step 2: Wire and commit**
+
+```ts
+import { cmdVersion } from "./version-cmd";
+if (cmd === "version") return cmdVersion();
+```
+
+```bash
+git add packages/didraw-cli
+git commit -m "feat(cli): didraw version (reads /api/version, falls back to env)"
+```
+
+---
+
+## Task 34: Release packaging — bun build --compile with embedded frontend
+
+**Files:**
+- Create: `scripts/build-release.sh`
+- Modify: `apps/backend/src/index.ts` (serve embedded frontend in release mode)
+- Modify: `.gitignore` (add `release/`)
+
+- [ ] **Step 1: Static-asset serving in backend**
+
+In `apps/backend/src/index.ts`, in `Bun.serve` fetch handler, before `app.fetch`:
+
+```ts
+// release-mode: serve embedded frontend from frontend-dist/
+if (config.profile === "release" || config.profile === "debug") {
+  if (url.pathname === "/" || !url.pathname.startsWith("/api") && url.pathname !== "/ws") {
+    const path = url.pathname === "/" ? "/index.html" : url.pathname;
+    const file = Bun.file(`${import.meta.dir}/frontend-dist${path}`);
+    if (await file.exists()) {
+      return new Response(file);
+    }
+  }
+}
+```
+
+> **Note:** `bun build --compile` embeds files referenced via `Bun.file(import.meta.dir + ...)` if they're under the entry's directory tree. The script (Step 2) copies frontend dist into `apps/backend/src/frontend-dist/` before compile.
+
+- [ ] **Step 2: `scripts/build-release.sh`**
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+VERSION="${1:-$(jq -r .version package.json)}"
+CHANNEL="${2:-stable}"
+GIT_SHA="$(git rev-parse --short HEAD)"
+BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+echo "Building frontend…"
+bun --cwd apps/frontend run build
+rm -rf apps/backend/src/frontend-dist
+cp -r apps/frontend/dist apps/backend/src/frontend-dist
+
+mkdir -p release
+TARGETS=(
+  "bun-darwin-arm64:didraw-darwin-arm64"
+  "bun-darwin-x64:didraw-darwin-x64"
+  "bun-linux-x64:didraw-linux-x64"
+)
+
+for entry in "${TARGETS[@]}"; do
+  IFS=':' read -r target out <<< "$entry"
+  echo "Building $out…"
+  bun build packages/didraw-cli/src/index.ts \
+    --compile \
+    --target="$target" \
+    --outfile="release/$out" \
+    --define "process.env.DIDRAW_VERSION='$VERSION'" \
+    --define "process.env.DIDRAW_CHANNEL='$CHANNEL'" \
+    --define "process.env.DIDRAW_GIT_SHA='$GIT_SHA'" \
+    --define "process.env.DIDRAW_BUILD_DATE='$BUILD_DATE'"
+done
+
+echo "Release builds ready in release/"
+ls -lh release/
+```
+
+- [ ] **Step 3: `.gitignore` add**
+
+```
+release/
+apps/backend/src/frontend-dist/
+```
+
+- [ ] **Step 4: Smoke test**
+
+```bash
+chmod +x scripts/build-release.sh
+./scripts/build-release.sh 0.0.1 stable
+./release/didraw-darwin-arm64 version
+./release/didraw-darwin-arm64 daemon &
+curl -s localhost:8787/healthz
+open http://localhost:8787/        # должен открыть встроенный UI
+kill %1
+```
+Expected: binary стартует, /healthz отвечает, browser показывает tldraw без отдельного Vite.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add scripts/ apps/backend/src/index.ts .gitignore
+git commit -m "feat(release): bun build --compile with embedded frontend assets"
+```
+
+---
+
+## Task 35: Release manifest generator + publish script
+
+**Files:**
+- Create: `scripts/generate-manifest.sh`
+- Create: `scripts/publish-release.sh`
+
+- [ ] **Step 1: `generate-manifest.sh`**
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+VERSION="${1:?usage: $0 <version> [channel]}"
+CHANNEL="${2:-stable}"
+BASE_URL="${MANIFEST_BASE_URL:-https://github.com/example/di.draw/releases/download/v$VERSION}"
+
+cd release
+
+declare -A platforms=(
+  [darwin-arm64]="didraw-darwin-arm64"
+  [darwin-x64]="didraw-darwin-x64"
+  [linux-x64]="didraw-linux-x64"
+)
+
+assets="["
+first=1
+for plat in "${!platforms[@]}"; do
+  file="${platforms[$plat]}"
+  [[ ! -f "$file" ]] && { echo "missing $file"; exit 1; }
+  sha=$(shasum -a 256 "$file" | awk '{print $1}')
+  [[ $first -eq 0 ]] && assets="$assets,"
+  assets="$assets{\"platform\":\"$plat\",\"url\":\"$BASE_URL/$file\",\"sha256\":\"$sha\"}"
+  first=0
+done
+assets="$assets]"
+
+cat > release-manifest.json <<JSON
+{
+  "channels": {
+    "$CHANNEL": {
+      "version": "$VERSION",
+      "released": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+      "notes": "$BASE_URL",
+      "assets": $assets
+    }
+  }
+}
+JSON
+
+echo "manifest written → release/release-manifest.json"
+cat release-manifest.json
+```
+
+- [ ] **Step 2: `publish-release.sh`**
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+VERSION="${1:?usage: $0 <version> [channel]}"
+CHANNEL="${2:-stable}"
+
+./scripts/build-release.sh "$VERSION" "$CHANNEL"
+./scripts/generate-manifest.sh "$VERSION" "$CHANNEL"
+
+if ! command -v gh &>/dev/null; then
+  echo "gh CLI not found — skipping GitHub Release upload"
+  echo "Manual upload: release/didraw-*  release/release-manifest.json"
+  exit 0
+fi
+
+git tag "v$VERSION" -m "Release v$VERSION ($CHANNEL)"
+git push --tags
+
+gh release create "v$VERSION" \
+  --title "v$VERSION" \
+  --notes "Release v$VERSION on channel $CHANNEL" \
+  release/didraw-* release/release-manifest.json
+
+echo "Published v$VERSION"
+```
+
+- [ ] **Step 3: chmod**
+
+```bash
+chmod +x scripts/generate-manifest.sh scripts/publish-release.sh
+```
+
+- [ ] **Step 4: Dry-run smoke**
+
+```bash
+./scripts/build-release.sh 0.0.1 stable
+./scripts/generate-manifest.sh 0.0.1 stable
+jq . release/release-manifest.json
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add scripts/
+git commit -m "feat(release): manifest generator and publish script"
+```
+
+---
+
+## Task 36: didraw update --check
+
+**Files:**
+- Create: `packages/didraw-cli/src/update.ts`
+- Modify: `packages/didraw-cli/src/index.ts`
+
+- [ ] **Step 1: Implement `--check`**
+
+```ts
+// packages/didraw-cli/src/update.ts
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+
+const MANIFEST_URL = process.env.DIDRAW_MANIFEST_URL
+  ?? "https://github.com/example/di.draw/releases/download/latest/release-manifest.json";
+
+const CONFIG_FILE = join(homedir(), ".claude", ".didraw-config.json");
+
+function readConfig(): { channel?: string } {
+  if (!existsSync(CONFIG_FILE)) return {};
+  try { return JSON.parse(readFileSync(CONFIG_FILE, "utf8")); } catch { return {}; }
+}
+
+function writeConfig(cfg: object) {
+  writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+}
+
+function semverCmp(a: string, b: string): number {
+  const pa = a.split(".").map(Number); const pb = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) - (pb[i] ?? 0);
+  return 0;
+}
+
+export async function cmdUpdateCheck(argv: string[]) {
+  const channel = readConfig().channel ?? process.env.DIDRAW_CHANNEL ?? "stable";
+  const current = process.env.DIDRAW_VERSION ?? "0.0.0";
+  try {
+    const r = await fetch(MANIFEST_URL);
+    const m = await r.json();
+    const latest = m.channels?.[channel]?.version ?? null;
+    const available = latest && semverCmp(latest, current) > 0;
+    console.log(JSON.stringify({ current, latest, available: !!available, channel }));
+  } catch (e) {
+    console.error(JSON.stringify({ ok: false, error: String(e) }));
+    process.exit(3);
+  }
+}
+
+export async function cmdUpdate(argv: string[]) {
+  // implemented in Task 37
+  console.error(JSON.stringify({ ok: false, error: "didraw update implemented in Task 37" }));
+  process.exit(1);
+}
+
+export async function cmdUpdateSetChannel(channel: string) {
+  if (!["stable", "nightly", "dev"].includes(channel)) {
+    console.error(JSON.stringify({ ok: false, error: `unknown channel ${channel}` })); process.exit(1);
+  }
+  const cfg = readConfig(); cfg.channel = channel; writeConfig(cfg);
+  console.log(JSON.stringify({ ok: true, channel }));
+}
+```
+
+- [ ] **Step 2: Wire in `index.ts`**
+
+```ts
+import { cmdUpdate, cmdUpdateCheck, cmdUpdateSetChannel } from "./update";
+
+if (cmd === "update") {
+  if (argv[1] === "--check") return cmdUpdateCheck(argv.slice(1));
+  if (argv[1] === "--channel" && argv[2]) return cmdUpdateSetChannel(argv[2]);
+  return cmdUpdate(argv.slice(1));
+}
+```
+
+- [ ] **Step 3: Smoke**
+
+```bash
+bun packages/didraw-cli/src/index.ts update --check
+```
+Expected: JSON `{current,latest,available,channel}` (latest=null if manifest unreachable — that's OK for now).
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add packages/didraw-cli
+git commit -m "feat(cli): didraw update --check and --channel"
+```
+
+---
+
+## Task 37: didraw update (download + sha256 + atomic swap + restart)
+
+**Files:**
+- Modify: `packages/didraw-cli/src/update.ts`
+
+- [ ] **Step 1: Implement full update flow**
+
+Replace stub `cmdUpdate` with:
+
+```ts
+import { promises as fs, createWriteStream } from "node:fs";
+import { createHash } from "node:crypto";
+import { tmpdir, platform, arch } from "node:os";
+import { join, dirname } from "node:path";
+import { spawn } from "node:child_process";
+import { stop, ensure } from "./daemon";
+
+function platformKey(): string {
+  const p = platform(); const a = arch();
+  if (p === "darwin" && a === "arm64") return "darwin-arm64";
+  if (p === "darwin" && a === "x64") return "darwin-x64";
+  if (p === "linux" && a === "x64") return "linux-x64";
+  throw new Error(`unsupported platform ${p}-${a}`);
+}
+
+async function downloadAndVerify(url: string, sha256Expected: string): Promise<string> {
+  const tmp = join(tmpdir(), `didraw-${Date.now()}.bin`);
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`download ${r.status}`);
+  const buf = new Uint8Array(await r.arrayBuffer());
+  await fs.writeFile(tmp, buf);
+  const sha = createHash("sha256").update(buf).digest("hex");
+  if (sha !== sha256Expected) {
+    await fs.unlink(tmp).catch(() => {});
+    throw new Error(`sha256 mismatch: expected ${sha256Expected}, got ${sha}`);
+  }
+  await fs.chmod(tmp, 0o755);
+  return tmp;
+}
+
+export async function cmdUpdate(argv: string[]) {
+  const channel = readConfig().channel ?? process.env.DIDRAW_CHANNEL ?? "stable";
+  const current = process.env.DIDRAW_VERSION ?? "0.0.0";
+  let manifest: any;
+  try { manifest = await (await fetch(MANIFEST_URL)).json(); }
+  catch (e) { fail(`fetch manifest: ${e}`); return; }
+
+  const chData = manifest.channels?.[channel];
+  if (!chData) fail(`channel ${channel} not in manifest`);
+
+  if (semverCmp(chData.version, current) <= 0) {
+    console.log(JSON.stringify({ ok: true, alreadyLatest: true, version: current })); return;
+  }
+
+  const key = platformKey();
+  const asset = chData.assets.find((a: any) => a.platform === key);
+  if (!asset) fail(`no asset for ${key}`);
+
+  // execPath = current binary path
+  const target = process.execPath;
+  const dir = dirname(target);
+
+  let tmpfile: string;
+  try { tmpfile = await downloadAndVerify(asset.url, asset.sha256); }
+  catch (e) { fail(`download/verify: ${e}`); return; }
+
+  const newPath = join(dir, "didraw.new");
+  const oldPath = join(dir, "didraw.old");
+
+  try {
+    await fs.rename(tmpfile, newPath);
+    try { await fs.rename(target, oldPath); } catch {}
+    await fs.rename(newPath, target);
+  } catch (e) {
+    fail(`atomic swap failed: ${e}`);
+    return;
+  }
+
+  await stop().catch(() => {});
+  await ensure();
+
+  console.log(JSON.stringify({
+    ok: true, from: current, to: chData.version, channel,
+    rollback: `rename ${oldPath} → ${target}`,
+  }));
+}
+
+function fail(msg: string) {
+  console.error(JSON.stringify({ ok: false, error: msg }));
+  process.exit(1);
+}
+```
+
+- [ ] **Step 2: Manual e2e test**
+
+```bash
+# 1. Build v0.0.1 stable
+./scripts/build-release.sh 0.0.1 stable
+./scripts/generate-manifest.sh 0.0.1 stable
+# 2. Put release/* in a local HTTP server (python -m http.server) and set MANIFEST_URL
+python3 -m http.server 9999 --directory release &
+DIDRAW_MANIFEST_URL=http://localhost:9999/release-manifest.json ./release/didraw-darwin-arm64 version
+
+# 3. Build v0.0.2 stable
+./scripts/build-release.sh 0.0.2 stable
+./scripts/generate-manifest.sh 0.0.2 stable
+# 4. Run v0.0.1 binary
+cp release/didraw-darwin-arm64-v001 /tmp/didraw   # if you renamed, otherwise reuse
+DIDRAW_MANIFEST_URL=http://localhost:9999/release-manifest.json /tmp/didraw update --check
+DIDRAW_MANIFEST_URL=http://localhost:9999/release-manifest.json /tmp/didraw update
+/tmp/didraw version    # должна быть 0.0.2
+kill %1
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add packages/didraw-cli/src/update.ts
+git commit -m "feat(cli): didraw update — download + sha256 + atomic swap + daemon restart"
+```
+
+---
+
+## Task 38: Frontend version footer + update banner
+
+**Files:**
+- Create: `apps/frontend/src/components/VersionFooter.tsx`
+- Create: `apps/frontend/src/components/UpdateBanner.tsx`
+- Create: `apps/frontend/src/transport/version.ts`
+- Modify: `apps/frontend/src/App.tsx`
+
+- [ ] **Step 1: `transport/version.ts`**
+
+```ts
+export async function fetchVersion() {
+  const r = await fetch("/api/version");
+  return r.json();
+}
+```
+
+- [ ] **Step 2: `VersionFooter.tsx`**
+
+```tsx
+import { useEffect, useState } from "react";
+import { fetchVersion } from "../transport/version";
+
+export function VersionFooter() {
+  const [v, setV] = useState<any>(null);
+  useEffect(() => { fetchVersion().then(setV); }, []);
+  if (!v) return null;
+  const badge = v.profile === "dev" ? "DEV" : v.profile === "debug" ? "DEBUG" : null;
+  return (
+    <div style={{
+      position: "fixed", bottom: 4, right: 8, zIndex: 999,
+      fontSize: 11, color: "#666", fontFamily: "monospace",
+    }}>
+      v{v.version} · {v.channel} · profile: {v.profile}
+      {badge && <span style={{
+        marginLeft: 8, background: "#fc6", color: "#000",
+        padding: "1px 6px", borderRadius: 3, fontWeight: "bold",
+      }}>{badge}</span>}
+    </div>
+  );
+}
+```
+
+- [ ] **Step 3: `UpdateBanner.tsx`**
+
+```tsx
+import { useEffect, useState } from "react";
+import { fetchVersion } from "../transport/version";
+
+export function UpdateBanner() {
+  const [v, setV] = useState<any>(null);
+  useEffect(() => { fetchVersion().then(setV); }, []);
+  if (!v?.updateAvailable) return null;
+  return (
+    <div style={{
+      position: "fixed", top: 0, left: 0, right: 0, zIndex: 1000,
+      background: "#fef3c7", borderBottom: "1px solid #f59e0b",
+      padding: "6px 12px", fontSize: 13, textAlign: "center",
+    }}>
+      <strong>v{v.latest}</strong> available — run <code style={{ background: "#fbbf24", padding: "1px 4px" }}>didraw update</code> to upgrade
+    </div>
+  );
+}
+```
+
+- [ ] **Step 4: Wire into `App.tsx`**
+
+```tsx
+import { VersionFooter } from "./components/VersionFooter";
+import { UpdateBanner } from "./components/UpdateBanner";
+
+// in JSX:
+<UpdateBanner />
+<VersionFooter />
+```
+
+- [ ] **Step 5: Smoke test**
+
+Stub `/api/version` to return `{updateAvailable: true, latest: "9.9.9"}` (modify backend temporarily or use proxy). Open browser → banner появляется. Reset stub → banner исчезает.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add apps/frontend
+git commit -m "feat(frontend): version footer and update banner"
+```
+
+---
+
+## Task 39: Playwright golden-path
 
 **Files:**
 - Create: `apps/frontend/playwright.config.ts`
@@ -3367,7 +4103,7 @@ git commit -m "test(frontend): Playwright golden-path AI→canvas→user→backe
 
 ---
 
-## Task 32: README + final polish
+## Task 40: README + final polish
 
 **Files:**
 - Create: `README.md`
@@ -3438,7 +4174,7 @@ git commit -m "docs: README with manual mode + Claude Code mode + CLI reference"
 
 ## Phase 2.1: MCP-adapter (thin wrapper over didraw-client)
 
-### Task 33: canvas-mcp adapter
+### Task 41: canvas-mcp adapter
 
 **Files:**
 - Create: `packages/canvas-mcp/package.json`
@@ -3571,7 +4307,7 @@ git commit -m "feat: Phase 2.1 — canvas-mcp adapter (thin wrapper over didraw-
 
 ## Phase 2.2: Channels-push canvas → Claude
 
-### Task 34: canvas-channel-mcp
+### Task 42: canvas-channel-mcp
 
 **Files:**
 - Create: `packages/canvas-channel-mcp/package.json`
@@ -3629,7 +4365,7 @@ git commit -m "feat: Phase 2.2 — canvas-channel-mcp pushes user edits to Claud
 
 ## Phase 3: D2 import, SQLite, multi-user
 
-### Task 35: D2 import
+### Task 43: D2 import
 
 Mirror Task 22 (Variant A) but for D2:
 - `apps/backend/src/d2-import.ts` with `@terrastruct/d2` WASM
@@ -3637,11 +4373,11 @@ Mirror Task 22 (Variant A) but for D2:
 - `packages/didraw-cli/src/import.ts` extended with `import d2` subcommand
 - `packages/canvas-mcp/src/tools.ts` adds `canvas_import_d2`
 
-### Task 36: SQLite persistence
+### Task 44: SQLite persistence
 
 `apps/backend/src/persistence-sqlite.ts` using `bun:sqlite`. Tables: `rooms(id PK, canvas, prompts, version)`, `op_log(room_id, version, ops, source, at)`. CLI flag `--storage=sqlite`. Migration script from JSON.
 
-### Task 37: Multi-user merge
+### Task 45: Multi-user merge
 
 `POST /api/patch` accepts optional `since: number`. If `since !== current version` → 409 `{current}`. Frontend retry-with-rebase: fetch latest state, rebase user ops on top, retry once.
 
@@ -3649,22 +4385,24 @@ Mirror Task 22 (Variant A) but for D2:
 
 ## Self-Review
 
-**Spec coverage check (against `2026-05-14-di-draw-design.md` v3.4):**
+**Spec coverage check (against `2026-05-14-di-draw-design.md` v3.5):**
 
 | Spec §  | Requirement                                       | Plan task |
 |---------|---------------------------------------------------|-----------|
 | §2 #1   | JSON canvas-state SSOT                            | Task 5 |
 | §2 #2   | tldraw SDK 5.x                                     | Task 3 |
-| §2 #3   | Mermaid as import convenience (not SSOT)          | Task 22, 23 |
-| §2 #4   | apply_patch (add/update/delete)                    | Task 6, 9 |
-| §2 #5   | didraw CLI + skill + hook + Channels (Phase 2.2); MCP as Phase 2.1 adapter | Tasks 16-29 (MVP), 33-34 (Phase 2) |
+| §2 #3   | Mermaid as import convenience (not SSOT)          | Tasks 22, 23 |
+| §2 #4   | apply_patch (add/update/delete)                    | Tasks 6, 9 |
+| §2 #5   | didraw CLI + skill + hook + Channels (Phase 2.2); MCP as Phase 2.1 adapter | Tasks 16-29 (MVP), 41-42 (Phase 2) |
 | §2 #6   | Bun + Hono backend                                 | Task 2 |
 | §2 #7   | React + tldraw 5.x frontend                        | Task 3 |
-| §2 #8   | elkjs auto-layout                                  | Task 24, 25 |
+| §2 #8   | elkjs auto-layout                                  | Tasks 24, 25 |
 | §2 #9   | Stable UUID                                        | Task 5 |
-| §2 #10  | Port 8787 with DIDRAW_PORT override                | Task 2 |
+| §2 #10  | Port 8787 with DIDRAW_PORT override                | Tasks 2, 31 |
 | §2 #11  | Multi-room + per-session storage                   | Tasks 7, 8, 17 |
 | §2 #12  | Targeted prompts                                   | Tasks 27, 28, 29 |
+| §2 #13  | Single-binary distribution                         | Tasks 34, 35 |
+| §2 #14  | Runtime profiles (dev/release/debug)               | Task 31 |
 | §3.1    | Data model (CanvasState, PatchOp, Prompt, Endpoint, Group, RoomState) | Task 5 |
 | §3.2    | Backend rooms/REST/WS                              | Tasks 7-11, 27 |
 | §3.2    | Frontend tldraw + transport + prompts UI           | Tasks 12-14, 28 |
@@ -3672,29 +4410,41 @@ Mirror Task 22 (Variant A) but for D2:
 | §3.2    | draw-prehook with additionalContext                | Task 26 |
 | §3.5    | CLI lifecycle (daemon/open/list/export/rm)         | Tasks 16, 17 |
 | §3.5    | CLI data (state/patch/import/layout/prompts/clear) | Tasks 18, 23, 25, 29 |
+| §3.5    | CLI version/update                                  | Tasks 33, 36, 37 |
 | §3.5    | SessionStart hook                                  | Task 20 |
-| §3.5    | Storage layout `~/.claude/projects/<slug>/canvas/<room>.json` | Tasks 2, 8 |
+| §3.5    | Storage layout `~/.claude/projects/<slug>/canvas/<room>.json` | Tasks 2, 8, 31 |
 | §3.6    | Targeted prompts (backend + UI + CLI)              | Tasks 27, 28, 29 |
+| §3.7.1  | Runtime profiles                                    | Task 31 |
+| §3.7.2  | `bun build --compile` with embedded frontend       | Task 34 |
+| §3.7.3  | Version metadata + `/api/version`                  | Task 32 |
+| §3.7.4  | Release manifest                                    | Task 35 |
+| §3.7.5  | Update flow (check + atomic swap + restart)        | Tasks 36, 37 |
+| §3.7.6  | UI banner + version footer                          | Task 38 |
 | §6 Phase 0.1 | Spike @tldraw/mermaid headless                | Task 4 |
-| §6 Phase 2.1 | MCP adapter                                    | Task 33 |
-| §6 Phase 2.2 | Channels-push                                  | Task 34 |
+| §6 Phase 1.9 | Release packaging                              | Tasks 31-34 |
+| §6 Phase 1.10 | Update flow                                   | Tasks 35-38 |
+| §6 Phase 2.1 | MCP adapter                                    | Task 41 |
+| §6 Phase 2.2 | Channels-push                                  | Task 42 |
+| §6 Phase 3   | D2 + SQLite + multi-user                       | Tasks 43-45 |
 | §7      | Echo-loop protection                               | Task 13 |
 | §7      | Race condition on session start                    | Task 16 (`ensure` blocks until healthz) |
 | §7      | CLI as stable contract                              | Task 18 (integration tests) |
+| §7      | Update interruption                                  | Task 37 (atomic swap + rollback) |
 
 All spec sections mapped.
 
 **Placeholder scan:** No "TBD"/"TODO" remaining. Spike output and ADR-0001 are filled by the engineer during Task 4 (Step 5) — that's a documented action, not a placeholder.
 
-**Type consistency:** `CanvasState`, `Node`, `Edge`, `Endpoint`, `Group`, `PatchOp`, `Prompt`, `RoomState` consistent across tasks 5-29. `CanvasClient` interface stable across tasks 15-33. `applyPatch` signature stable.
+**Type consistency:** `CanvasState`, `Node`, `Edge`, `Endpoint`, `Group`, `PatchOp`, `Prompt`, `RoomState` consistent across tasks 5-29. `CanvasClient` interface stable across tasks 15-41. `applyPatch` signature stable. `VERSION` shape and `/api/version` payload identical across tasks 32, 33, 38.
 
 **Engineer notes** (verification points, not gaps):
 - Task 3: confirm npm tldraw major maps to SDK 5.x at install time.
 - Task 12: confirm exact tldraw 5.x shape `type`/`props` names against `.d.ts`.
 - Task 22: code split per ADR-0001 (Task 4 result).
-- Task 34: verify Channels wire format at implementation time.
+- Task 34: verify `bun build --compile --define` macro expansion works for runtime env-reads (alternative: write `version.ts` at build time instead of `--define`).
+- Task 42: verify Channels wire format at implementation time.
 
-Plan is complete, self-consistent, and CLI-first.
+Plan is complete, self-consistent, CLI-first, and distribution-ready.
 
 ---
 
