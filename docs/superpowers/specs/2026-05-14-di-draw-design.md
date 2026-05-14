@@ -2,219 +2,291 @@
 
 - **Дата:** 2026-05-14
 - **Автор:** brainstorm-сессия (Claude Code + Денис Третьяков)
-- **Статус:** Draft, ожидает ревью пользователя
+- **Статус:** Draft v3, ожидает финального ревью пользователя
 - **Цель документа:** зафиксировать архитектурное решение прототипа, по которому далее будет составлен implementation plan.
+
+## История ревизий
+
+- **v1** — D2 как SSOT, d2oracle для bidirectional edit.
+- **v2** — Mermaid как SSOT, LLM-делегированный roundtrip через pending-deltas; tldraw watermark принят.
+- **v3 (текущая)** — **canvas-state (JSON) как SSOT**, Mermaid — лишь convenience entry-point; push canvas → Claude поднят в обязательные фазы MVP; свободные shapes (sticky/text/free-form) поддерживаются с MVP.
 
 ## 1. Проблема и цель
 
-При работе с Claude Code пользователь часто оперирует концептами архитектуры (приложение, сервер, терминал, поток сигналов). Сейчас они существуют только в тексте диалога. Идея — добавить **canvas-доску** как продолжение диалога: AI рисует/обновляет схему, пользователь правит её руками, и эти правки возвращаются в контекст следующего шага.
+При работе с Claude Code пользователь часто оперирует концептами архитектуры (приложение, сервер, терминал, поток сигналов). Сейчас они существуют только в тексте диалога. Идея — добавить **canvas-доску** как продолжение диалога: AI рисует/обновляет схему, пользователь правит её руками, и эти правки реактивно возвращаются в контекст. Цель — co-creation surface, а не "лента памяти".
 
 Ключевые ограничения:
 
-- **Стоимость токенов.** Полный JSON canvas (фигуры + координаты + стили) — слишком дорого передавать в каждом prompt'е.
-- **Двунаправленность.** Изменения должны течь и от AI к canvas, и от canvas к AI, без потери семантики.
-- **Минимум boilerplate'а.** Стартовать как одно-пользовательский локальный прототип, без коллаб-сервера и без облака.
+- **Стоимость токенов.** Полный JSON canvas — слишком дорого передавать в каждом prompt'е, нужен компактный формат и дельты.
+- **Двунаправленность.** Изменения текут и от AI к canvas, и от canvas к AI, без потери семантики.
+- **Свобода форм.** Не привязываемся к flowchart-метафоре: должны быть узлы, стрелки, стикеры, тексты, free-form линии.
+- **Минимум boilerplate'а.** Локальный одно-пользовательский прототип, без коллаб-сервера и без облака.
 
 ## 2. Принятые решения
 
 | # | Решение | Альтернативы, отвергнутые сейчас | Почему |
 |---|---|---|---|
-| 1 | DSL источника истины — **Mermaid** | D2, Graphviz/DOT, чистый JSON-shapes | tldraw SDK имеет официальный пакет **`@tldraw/mermaid`**: Mermaid-код → нативные shapes (flowchart, sequence, state, mindmap). Это снимает 30–40% работы по рендерингу. Mermaid также — самый "знакомый" AI формат. Обратное преобразование (canvas → Mermaid) делегируется LLM через delta-журнал (решение №3). |
-| 2 | Canvas-движок — **tldraw SDK** (hobby tier, watermark) | Excalidraw, fabric.js, Konva, self-rolled | Зрелый Editor API + готовый `@tldraw/mermaid`. Личное использование, watermark "made with tldraw" принят сознательно — лицензионных рисков нет. |
-| 3 | Roundtrip canvas → Mermaid — **через LLM-делегирование**, не код | Свой Mermaid-roundtrip-парсер; d2oracle для D2 | У Mermaid нет roundtrip-API с сохранением форматирования. Вместо своей реализации — пользовательские правки на canvas пишутся в **журнал pending-deltas** (`add-node`, `add-edge`, `delete-edge`, ...). На следующий шаг диалога skill инжектит `mermaid_source + pending_deltas`, AI сама перегенерирует Mermaid и вызывает `canvas_set_mermaid` — дельты консумируются. |
-| 4 | Трёхслойная модель: **семантика (Mermaid) ⟂ стиль (overlay JSON) ⟂ pending deltas (user-side draft)** | Хранить позицию/цвет внутри Mermaid; править Mermaid сразу с canvas | Разделение трёх слоёв даёт компактный AI-контекст, стабильный стилевой оверлей и явный visual-индикатор "не закоммичено" для пользовательских правок до AI-rewrite'а. |
-| 5 | Канал AI↔canvas — **MCP-сервер + skill-инъекция** | Только slash-команды; только hooks; Channels с самого начала | MCP покрывает write-сценарии Claude → canvas; skill с `!`curl`` подтягивает свежий snapshot перед каждым шагом. Channels (push canvas → Claude) откладываются на Phase 2. |
-| 6 | Backend — **локальный Bun + Hono**, in-memory state | Node/Express, Cloudflare Workers, embedded server | Минимум зависимостей, быстрый старт, нативная TS/JSX, легко завернуть в один CLI-бинарь. |
+| 1 | **SSOT — canvas-state в виде компактного JSON.** Mermaid/D2 — только опциональный *import-format* для начального наполнения. | Mermaid SSOT (v2); D2 SSOT (v1); raw tldraw store как SSOT | Пользователь явно сказал: DSL не панацея, важно минимизировать стоимость передачи. JSON {nodes, edges, groups} с типизированными узлами компактнее, чем mermaid-text+deltas, и поддерживает свободные формы. |
+| 2 | Canvas-движок — **tldraw SDK** (hobby tier, watermark) | Excalidraw, fabric.js, Konva, self-rolled | Зрелый Editor API, готовый `@tldraw/mermaid` для импорта, бесплатно для личного использования. |
+| 3 | Импорт Mermaid — через `@tldraw/mermaid` как **convenience-tool**, не SSOT | Парсить Mermaid руками; полностью отказаться от Mermaid | Когда AI хочет одной строкой вкинуть начальный граф, Mermaid удобнее, чем 10 patch-операций. `@tldraw/mermaid` парсит и сразу создаёт shapes; после импорта Mermaid забывается. |
+| 4 | AI оперирует canvas через **JSON-patch** (`canvas_apply_patch`) | Множество узких tools (add_node, add_edge, ...); set-whole-state каждый раз | Один tool с patch-форматом `{add: [...], update: [...], delete: [...]}` дёшев по токенам, идемпотентен (с client-id'ами операций), легко расширяем под новые типы shapes. Sugar-tools — поверх него. |
+| 5 | Канал AI ↔ canvas — **MCP + skill-инъекция + PreToolUse hook + Channels (Phase 2)** | Только MCP; только hooks; только Channels | Multi-channel: MCP для write, skill для bootstrap-инъекции snapshot'а в новой сессии, `PreToolUse` hook для свежести state перед каждым tool-call'ом, Channels для real-time push canvas → Claude. |
+| 6 | Backend — **локальный Bun + Hono**, in-memory state | Node/Express, Cloudflare Workers, embedded server | Минимум зависимостей, нативная TS, один CLI-бинарь. |
 | 7 | Frontend — **React + tldraw SDK + `@tldraw/mermaid`**, статически отдаётся бэкендом | Next.js, отдельный dev-server | Не нужен SSR. Один процесс, один порт. |
-| 8 | Stable id — **внутренний UUID, маппинг на mermaid-id** | Использовать mermaid-id напрямую | Mermaid id-шники могут меняться (например, AI переименовал `A` → `app`). Mapping uuid ↔ mermaid-id обновляется при каждом `set_mermaid`, overlay-ключи привязаны к UUID. |
+| 8 | Auto-layout — **elkjs (layered) опционально, по запросу** | Всегда AI считает координаты; всегда auto-layout | AI обычно знает где расположить новые узлы; но при импорте Mermaid и при `apply_patch({layout: "elk"})` бэкенд считает координаты. Свободные shapes пользователь и AI размещают сами. |
+| 9 | Stable ids — **внутренние UUID v4** для каждого node/edge/group | Использовать `mermaid-id` напрямую; client-generated nice-ids | UUID живут вне DSL'а, не страдают при rename, переживают import/export через Mermaid. |
+| 10 | Backend port — **8787** (`/api`, `/ws`, `/`) | 7777 (занят у пользователя), 3000 (типовое для dev) | Свободен по умолчанию, легко запомнить, конфигурируется через env `DIDRAW_PORT`. |
 
 ## 3. Архитектура
 
-### 3.1 Компоненты
+### 3.1 Модель данных (компактный canvas-state)
 
-1. **canvas-backend** — единый локальный процесс на Bun.
-   - Хранит:
-     - `mermaidSource: string` — текущий Mermaid-код (семантический SSOT).
-     - `overlay: Record<UUID, OverlayProps>` — стили/смещения per-node поверх Mermaid-layout, ключ — внутренний UUID.
-     - `idMap: Record<UUID, MermaidNodeId>` — стабильный internal-UUID → mermaid-id (обновляется при каждом `set_mermaid`).
-     - `pendingUserDeltas: UserDelta[]` — журнал пользовательских семантических правок (`add-node`, `add-edge`, `delete-node`, `delete-edge`, `rename-label`) с момента последнего `set_mermaid`. Консумируется при `set_mermaid`.
-     - `opLog: Op[]` — последние ≤20 операций для undo.
-   - REST API:
-     - `GET /api/state?fmt=full|compact` — snapshot. `compact` = `{ mermaidSource, pendingUserDeltas, nodeIds[] }` для skill-инъекции (~300–700 токенов).
-     - `PUT /api/mermaid/source` — полностью переписывает Mermaid-source. Backend парсит через `@tldraw/mermaid`, очищает `pendingUserDeltas`, обновляет `idMap` и broadcast'ит.
-     - `POST /api/deltas/append` — добавляет в `pendingUserDeltas` запись от пользователя (с canvas). Не трогает `mermaidSource`.
-     - `POST /api/overlay/:uuid` — записывает overlay props.
-     - `DELETE /api/deltas` — ручной reset журнала (если пользователь "передумал").
+Один универсальный JSON-документ, который и есть SSOT.
+
+```ts
+type CanvasState = {
+  version: 1,
+  nodes: Node[],
+  edges: Edge[],
+  groups: Group[],
+}
+
+type Node = {
+  id: string,        // UUID, стабильный
+  kind: "rect" | "ellipse" | "diamond" | "sticky" | "text" | "image" | "freeform",
+  label?: string,
+  x: number, y: number,
+  w?: number, h?: number,
+  style?: {                     // частичные поля, дефолты на клиенте
+    color?: string,
+    fill?: string,
+    stroke?: string,
+    fontSize?: number,
+    rotation?: number,
+  },
+  meta?: Record<string, unknown>,   // место для AI/user аннотаций
+}
+
+type Edge = {
+  id: string,
+  from: string,            // node.id
+  to: string,
+  label?: string,
+  style?: { color?: string, dashed?: boolean, arrow?: "none" | "to" | "both" },
+}
+
+type Group = { id: string, children: string[], label?: string }
+```
+
+Это сразу и хранилище, и сериализационный формат, и формат, который видит AI. Без отдельного "overlay-слоя": положение и стиль живут на самом узле.
+
+### 3.2 Компоненты
+
+1. **canvas-backend** — Bun + Hono, единый локальный процесс на порту `8787`.
+   - **State:**
+     - `canvas: CanvasState` — единственная in-memory модель.
+     - `opLog: PatchOp[]` — последние ≤50 патчей для undo и для push-diff.
+     - `version: number` — монотонный счётчик; растёт на каждый принятый patch.
+   - **REST API:**
+     - `GET /api/state?fmt=full|compact&since=<version>` — snapshot. `compact` опускает дефолтные поля и округляет координаты. `since` — отдаёт только diff от указанной версии (через opLog).
+     - `POST /api/patch` — принимает `{ ops: PatchOp[], source: "ai"|"user", clientOpId?: string }`. Применяет, возвращает новый `version`. **Идемпотентность** по `clientOpId` (защита от double-apply).
+     - `POST /api/import/mermaid` — `{ source: string, layout?: "elk"|"keep" }`. Парсит через `@tldraw/mermaid`, конвертирует в CanvasState-операции, применяет.
+     - `POST /api/layout` — `{ algorithm: "elk-layered" | "dagre", nodeIds?: string[] }`. Пересчитывает координаты для указанных узлов через elkjs, отдаёт diff.
      - `GET /healthz`.
-   - WebSocket `/ws` — broadcast `{ kind, payload }`:
-     - `kind: "mermaid-changed"` → новый source + render-plan от `@tldraw/mermaid` (`DiagramMermaidBlueprint` или эквивалент).
-     - `kind: "overlay-changed"` → patch конкретного shape.
-     - `kind: "deltas-changed"` → текущий журнал (для синхронизации других tabs/инстансов).
-     - `kind: "id-remap"` → `{ uuid, oldMermaidId, newMermaidId }` после `set_mermaid`.
+   - **WebSocket `/ws`:**
+     - Сообщение `{ kind: "patch", source: "ai"|"user", ops: PatchOp[], version }` — broadcast после каждого применённого patch'а.
+     - `{ kind: "hello", version }` при connect.
+   - **PatchOp** (одна универсальная структура для add/update/delete):
+     ```ts
+     type PatchOp =
+       | { op: "add", target: "node"|"edge"|"group", value: Node | Edge | Group }
+       | { op: "update", target: ..., id: string, set: Partial<...> }
+       | { op: "delete", target: ..., id: string }
+     ```
 
 2. **tldraw-frontend** — React SPA, отдаётся бэкендом по `/`.
-   - При connect: получает full snapshot, через `createMermaidDiagram` из `@tldraw/mermaid` рендерит Mermaid → shapes. Каждому shape присваивает `meta = { uuid, mermaidId, source: 'mermaid' }`. Поверх — overlay.
-   - При `mermaid-changed`: пересборка из render-plan. Старые UUID, чьи mermaid-id остались, сохраняют свой overlay; новые узлы получают новые UUID.
-   - При `deltas-changed` от других клиентов: рисует pending-дельты как **draft-shapes** (полупрозрачные, с маркером "не закоммичено") поверх render-plan.
-   - `editor.store.listen({ source: 'user', scope: 'document' })`:
-     - move/recolor существующего Mermaid-shape → `POST /api/overlay/:uuid` (стиль).
-     - добавление новой ноды/стрелки/удаление → `POST /api/deltas/append` (семантика, идёт в pending journal — НЕ в Mermaid сразу).
-     - редактирование label существующего Mermaid-shape → `POST /api/deltas/append { kind: "rename-label", uuid, newLabel }`.
-     - ad-hoc free-form (sticky-note, рисунок от руки) — Phase 3, пока не поддерживаем.
+   - При connect: `GET /api/state?fmt=full` → строит tldraw shapes из CanvasState. Каждому shape `meta = { canvasId, kind }`.
+   - При `{kind:"patch"}` по WS: применяет diff к tldraw editor.
+   - `editor.store.listen({ source: 'user' })`:
+     - Любая правка пользователя → конвертируется в `PatchOp[]` → `POST /api/patch` с `source: "user"`. **Семантика и стиль обрабатываются единообразно**: и move, и add — это `update`/`add` патчи; разделять их не нужно, потому что нет отдельного "overlay-слоя".
+     - Свободные формы (free-form draw, sticky, текст) — те же `kind:"freeform"|"sticky"|"text"` узлы.
+   - При получении patch с `source: "ai"` — применяет к editor, **не** ретранслирует обратно (предотвращение echo-loop через `source`-фильтр).
 
-3. **canvas-mcp** — MCP-сервер, регистрируется в `~/.claude.json` или per-project `.claude/mcp.json`.
-   - Tools (все детерминированно отображают на canvas-backend REST):
-     - `canvas_get_state({ fmt? })` → snapshot (`full` или `compact`). `compact` всегда включает `pendingUserDeltas`.
-     - `canvas_get_mermaid()` → текущий Mermaid-source.
-     - `canvas_set_mermaid({ source })` → полностью переписать source. Это основной write-инструмент для AI. Backend парсит через `@tldraw/mermaid`, при успехе **консумирует `pendingUserDeltas`** (журнал очищается, потому что AI уже учёл их при перегенерации). Возвращает `{ ok: true, nodeIds: [...] } | { ok: false, error: "mermaid parse failed: ..." }`.
-     - `canvas_move_node({ uuid, x, y, color? })` — пишет в overlay, **не** трогает Mermaid. Используется для тонких визуальных подсказок.
-     - `canvas_clear_deltas()` — очистить pending-журнал, не трогая Mermaid (если AI решает игнорировать пользовательские дельты).
-   - Все tools синхронные, идемпотентность не требуется (op-log на бэкенде).
+3. **canvas-mcp** — MCP-сервер, регистрируется в `.claude/mcp.json`.
+   - **Tools** — минимальный набор:
+     - `canvas_get_state({ fmt?: "full"|"compact", since?: number })` — snapshot или diff.
+     - `canvas_apply_patch({ ops: PatchOp[], clientOpId?: string })` — основной write-инструмент. Возвращает `{ ok: true, version } | { ok: false, error }`.
+     - `canvas_import_mermaid({ source, layout?: "elk"|"keep" })` — convenience для начального наполнения.
+     - `canvas_layout({ algorithm, nodeIds? })` — попросить auto-layout.
+     - `canvas_clear()` — обнулить canvas (с подтверждением через `confirm: "yes-i-mean-it"` параметр).
+   - **НЕТ** отдельных `add_node`, `add_edge`, `set_mermaid` и т.д. — всё это операции patch'а. AI работает с одним универсальным форматом.
 
 4. **draw skill** — `.claude/skills/draw/SKILL.md`.
-   - Frontmatter: `disable-model-invocation: false`, triggers на "нарисуй", "обнови схему", "доска", `/draw`.
-   - Тело инжектит компактный snapshot:
+   - Frontmatter: `disable-model-invocation: false`, triggers на "нарисуй", "доска", "схема", `/draw`.
+   - Тело инжектит:
      ```
-     Current canvas (Mermaid):
-     !`curl -s http://localhost:7777/api/state?fmt=compact | jq -r .mermaidSource`
+     ## Canvas state (compact JSON)
+     !`curl -s http://localhost:8787/api/state?fmt=compact`
 
-     Pending user deltas (необработанные правки с canvas; учти их при следующем canvas_set_mermaid, журнал будет очищен после успешной записи):
-     !`curl -s http://localhost:7777/api/state?fmt=compact | jq -c .pendingUserDeltas`
+     ## Cheatsheet (для apply_patch)
+     - Координаты в пикселях, центр canvas ≈ (0,0).
+     - Размер узла по умолчанию 120×60, sticky 200×120.
+     - Связь между узлами — edge со ссылками from/to на их id.
+     - Для крупных импортов: canvas_import_mermaid (graph LR/TD/sequence...) или canvas_layout после batch-add.
      ```
-   - При первом запуске сессии skill также автоматически открывает браузер на `http://localhost:7777`.
+   - При первом запуске сессии skill открывает браузер на `http://localhost:8787`.
 
-### 3.2 Граница и интерфейс между слоями
+5. **draw-prehook** — `.claude/hooks/draw-prehook.sh`, регистрируется в settings.json:
+   ```json
+   "hooks": {
+     "PreToolUse": [
+       {
+         "matcher": "canvas_*",
+         "command": "curl -s http://localhost:8787/api/state?fmt=compact&since=$DRAW_LAST_VERSION"
+       }
+     ]
+   }
+   ```
+   - Перед каждым `canvas_*` tool-call AI получает дельту с последней известной версии. Так AI всегда видит свежее, даже если пользователь только что что-то изменил.
+   - Это **Phase 1.5** канал — реактивность без Channels.
 
-- AI **видит**: `mermaidSource` + `pendingUserDeltas`. Это весь компактный контекст. Overlay не инжектится — токен-бюджет важнее точных позиций.
-- AI **может запросить**: `canvas_get_state({ fmt: "full" })` — включит overlay и render-plan, если нужно знать координаты.
-- Frontend — единственный, кто решает, **семантика** vs **стиль**:
-  - Изменение `x`, `y`, `props.color`, `props.size` существующего Mermaid-shape → overlay (мгновенно, в Mermaid не идёт).
-  - Создание новой shape, удаление, изменение label, добавление стрелки → `pendingUserDeltas` (в Mermaid НЕ идёт мгновенно; ждёт следующего `set_mermaid` от AI).
-- AI решает, как именно учитывать дельты — мерджит их в новый Mermaid (стандартный путь) или явно отбрасывает через `canvas_clear_deltas` ("я не хочу это добавлять").
-- Если AI забыла учесть дельты, они остаются в журнале до следующего шага. Журнал показывается пользователю в UI как индикатор "не закоммичено".
+6. **draw-channel-mcp** *(Phase 2)* — MCP-server по протоколу Channels (Claude Code 2.1.80+).
+   - Слушает `/ws` от canvas-backend.
+   - Когда приходит patch с `source: "user"` → формирует уведомление в активную Claude-сессию: `User edited canvas: added 'cache' (uuid), connected server→cache`.
+   - AI может реагировать без ожидания нового prompt'а от user'а.
 
-### 3.3 Поток данных (золотой путь)
+### 3.3 Поток данных (золотой путь, обновлённый)
 
-1. Пользователь в Claude Code: "Нарисуй: приложение → сервер → терминал".
-2. Skill `draw` срабатывает, инжектит snapshot → `mermaidSource = ""`, `pendingUserDeltas = []`.
-3. Claude генерирует tool-call `canvas_set_mermaid({ source: "graph LR\n  app --> server --> terminal" })`.
-4. Backend парсит через `@tldraw/mermaid`, обновляет `idMap`, очищает (и так пустой) журнал, WS push → frontend рендерит три узла + две стрелки.
-5. Пользователь руками двигает "server" вверх, перекрашивает в красный.
-6. Frontend ловит `store.listen` → `POST /api/overlay/{uuid_of_server}` с `{ x, y, color }`. Mermaid не трогается.
-7. Пользователь **вручную на canvas** добавляет ноду "cache" между server и terminal: новый shape + новые стрелки + удаление старого ребра server→terminal.
-8. Frontend интерпретирует это как набор семантических операций → шлёт `POST /api/deltas/append` четырежды: `add-node cache`, `add-edge server→cache`, `add-edge cache→terminal`, `delete-edge server→terminal`. На canvas эти 4 элемента отображаются как **draft-shapes** (полупрозрачные).
-9. Пользователь: "Хорошо, оформи эту версию".
-10. Skill инжектит `mermaidSource + pendingUserDeltas`. Claude видит обе части → генерирует новый Mermaid с cache → `canvas_set_mermaid({ source: "graph LR\n  app --> server --> cache --> terminal" })`.
-11. Backend парсит, обновляет idMap, **консумирует pending-журнал** (очищается), WS push `mermaid-changed` + `id-remap` (если что-то переименовалось).
-12. Frontend пересобирает shapes из render-plan. UUID server остался → его overlay (позиция и красный цвет) применяется поверх нового layout. Cache становится "официальной" нодой (без draft-индикатора).
+1. Пользователь в Claude Code: *"Нарисуй: приложение → сервер → терминал"*.
+2. Skill `draw` срабатывает, инжектит current state (пустой).
+3. Claude вызывает `canvas_import_mermaid({ source: "graph LR\n  app --> server --> terminal", layout: "elk" })` — самый короткий путь, AI знает Mermaid.
+4. Backend парсит через `@tldraw/mermaid`, запускает elk-layered layout, конвертирует в PatchOp'ы, применяет, broadcast'ит по WS.
+5. Frontend рисует три узла + две стрелки.
+6. Пользователь руками двигает "server" вверх, красит в красный. Frontend → `POST /api/patch` `[{op:"update", target:"node", id:"<uuid_server>", set:{y:..., style:{fill:"red"}}}]`. Broadcast обратно — других клиентов нет, но `version` инкрементируется.
+7. Пользователь руками добавляет на canvas ноду "cache" между server и terminal, рисует две новые стрелки, удаляет старую server→terminal.
+8. Frontend конвертирует в `PatchOp[]` (1 add node, 2 add edge, 1 delete edge), шлёт `POST /api/patch`.
+9. *(Phase 1.5+)* `PreToolUse` хук на следующем шаге AI подгружает diff с `since=<last_known_version>` — AI видит, что появились новые узлы и связи. *(Phase 2)* — Channels пушит это **сразу**, AI комментирует не дожидаясь user'а.
+10. Пользователь: *"Хорошо. Назови этот cache 'edge-cache' и сделай его блёкло-серым."*
+11. Claude вызывает `canvas_apply_patch({ ops: [{op:"update", target:"node", id:"<uuid_cache>", set:{label:"edge-cache", style:{fill:"#888"}}}] })`.
+12. Бэкенд применяет, WS push, canvas обновляется.
+
+Заметь: **никаких pending-deltas, никаких mermaid-roundtrip'ов, никакого overlay-слоя**. Одна модель, один формат, идём в обе стороны через `apply_patch`.
 
 ### 3.4 Обработка ошибок и edge-cases
 
 | Сценарий | Поведение |
 |---|---|
-| Mermaid не парсится `@tldraw/mermaid` | Backend → 422 с текстом ошибки. MCP-tool отдаёт `{ ok: false, error: "..." }`. Claude получает feedback и пробует снова. `pendingUserDeltas` **не консумируется** при ошибке. |
-| Одновременная правка user + AI | Last-write-wins по mermaidSource; pendingUserDeltas — append-only. Op-log из 20 операций позволяет Undo. |
-| AI забыла учесть pending-дельты | Журнал не очищается без успешного `set_mermaid`. На следующем шаге снова инжектится — AI получает повторный шанс. Пользователь видит draft-shapes и может сам нажать "Discard pending". |
-| AI явно отбрасывает дельты | `canvas_clear_deltas` — журнал очищается, draft-shapes исчезают, но user может увидеть "AI ignored your edits" в UI-лог. |
-| Mermaid id поменялся при rewrite (`A` → `app`) | Backend ищет соответствие по label (или по позиции в графе) → отправляет `id-remap { uuid, oldMermaidId, newMermaidId }`. Overlay-ключи привязаны к UUID, не страдают. |
-| Не нашёл соответствие — нода исчезла | Overlay помечается orphan. GC через 1 час, если не возвращается. |
-| Backend упал | Frontend: баннер "disconnected", экспоненциальный backoff. Claude-tool возвращает ошибку — модель видит. |
-| Несколько Claude-сессий на один порт | Phase 1 — не поддерживается. Phase 2 — multiplex по `room_id`. |
+| Patch ссылается на несуществующий `id` | Backend → 422 `{ ok: false, error: "edge.from references unknown node <id>" }`. Op-log нетронут. AI пробует снова с актуальным state. |
+| Echo-loop (AI получает свой же патч обратно через WS и применяет) | Защита: patch-сообщения по WS имеют `source` и `clientOpId`. Frontend и MCP игнорируют patch'и, инициированные ими же. |
+| Одновременный patch user+AI | Last-write-wins на уровне отдельных полей. Op-log из 50 операций → Undo стек. |
+| Mermaid-import не парсится | `/api/import/mermaid` → 422 с текстом. AI получает feedback. |
+| Свободная shape (free-form draw) от пользователя | Сохраняется как `kind: "freeform"` с массивом точек в `meta.points`. AI видит её, но обычно не модифицирует — может только удалить или прокомментировать. |
+| Backend упал | Frontend: баннер "disconnected", экспоненциальный backoff. MCP-tool → ошибка, модель видит. |
+| Несколько Claude-сессий на один backend | Phase 1: одна "комната" по умолчанию, обе сессии разделяют state и conflict-resolve через op-log. Phase 3: `room_id` параметр. |
+| Сессия Claude Code не Pro/v2.1.80+ | Channels недоступен → Phase 1.5 fallback (`PreToolUse` hook) даёт ~90% эффекта реактивности. |
 
 ## 4. Технологический стек
 
-- **Backend:** Bun 1.x, Hono (HTTP), `ws` (WebSocket). Парсинг и render-plan Mermaid на бэкенде **либо** через `@tldraw/mermaid` в browser-friendly режиме (если работает без DOM — проверить в Phase 1.1), **либо** перенести этот шаг полностью на фронтенд (фронтенд парсит mermaid от backend'а), **либо** использовать вспомогательный браузерный worker (Bun не имеет DOM). Дефолт — рендерить на клиенте, на бэкенде только валидация (попытка парсинга).
-- **Frontend:** React 18, tldraw SDK (актуальная стабильная, 4.x), `@tldraw/mermaid`, Vite (или встроенный Bun bundler), TypeScript.
+- **Backend:** Bun 1.x, Hono (HTTP/WS), `nanoid` для id (или crypto.randomUUID), elkjs для layout.
+- **Mermaid-импорт на стороне backend:** через headless вариант `@tldraw/mermaid` — **либо** в дочернем браузере (puppeteer/playwright), **либо** через CLI `mermaid-cli` (`mmdc`) для smoke-парсинга. Решение — Phase 1.1 по бенчмарку. Запасной вариант — парсить на фронте: бэкенд просто хранит mermaid-source, фронт сам конвертирует и шлёт patch.
+- **Frontend:** React 18, tldraw SDK (актуальная стабильная 4.x), `@tldraw/mermaid`, Vite, TypeScript.
 - **MCP:** `@modelcontextprotocol/sdk` (Node), запуск как `npx canvas-mcp`.
+- **Channels MCP (Phase 2):** тот же `@modelcontextprotocol/sdk` + Claude Code Channels Protocol (документация Anthropic).
 - **Тесты:** vitest для unit/integration, Playwright для UI smoke.
-- **Линтер:** biome (заменяет eslint+prettier).
+- **Линтер:** biome.
 
 ## 5. Структура проекта
 
 ```
 di.draw/
 ├── apps/
-│   ├── backend/          # Bun + Hono + ws (без рендеринга mermaid)
+│   ├── backend/
 │   │   ├── src/
 │   │   │   ├── index.ts
-│   │   │   ├── state.ts          # mermaidSource + overlay + idMap + pendingDeltas
-│   │   │   ├── mermaid-validate.ts  # smoke-parse через @tldraw/mermaid (либо CLI mmdc)
-│   │   │   ├── id-remap.ts       # сопоставление uuid ↔ mermaid-id при set_mermaid
-│   │   │   ├── ws.ts             # broadcast
+│   │   │   ├── state.ts           # CanvasState, opLog, version
+│   │   │   ├── patch.ts           # apply PatchOp, validation
+│   │   │   ├── mermaid-import.ts  # @tldraw/mermaid → PatchOp[]
+│   │   │   ├── layout.ts          # elkjs обёртка
+│   │   │   ├── ws.ts              # broadcast
 │   │   │   └── routes.ts
 │   │   └── tests/
-│   └── frontend/         # React + tldraw + @tldraw/mermaid
+│   └── frontend/
 │       ├── src/
 │       │   ├── App.tsx
 │       │   ├── canvas/
 │       │   │   ├── editor.tsx
-│       │   │   ├── from-mermaid.ts   # @tldraw/mermaid → tldraw shapes
-│       │   │   ├── user-deltas.ts    # tldraw event → POST /api/deltas/append
-│       │   │   ├── draft-overlay.ts  # рендер pending-deltas как draft-shapes
-│       │   │   └── overlay.ts        # позиция/цвет поверх mermaid layout
+│       │   │   ├── from-canvas-state.ts   # CanvasState → tldraw shapes
+│       │   │   ├── to-patch.ts            # tldraw store-event → PatchOp[]
+│       │   │   └── kinds.ts               # node-kinds → tldraw shape types
 │       │   └── transport/ws.ts
 │       └── tests/
 ├── packages/
-│   └── canvas-mcp/       # MCP-сервер, обёртка над backend REST
-│       ├── src/index.ts
-│       └── README.md
+│   ├── canvas-mcp/         # write/read MCP-сервер
+│   └── canvas-channel-mcp/ # Phase 2: Channels-протокол
 ├── .claude/
-│   ├── mcp.json          # регистрация canvas-mcp
-│   └── skills/draw/
-│       └── SKILL.md
-├── docs/
-│   └── superpowers/specs/
-│       └── 2026-05-14-di-draw-design.md   # этот файл
+│   ├── mcp.json
+│   ├── hooks/draw-prehook.sh
+│   ├── settings.json       # hook registration
+│   └── skills/draw/SKILL.md
+├── docs/superpowers/specs/
+│   └── 2026-05-14-di-draw-design.md
 ├── biome.json
-├── package.json          # workspace
+├── package.json            # Bun workspace
 └── README.md
 ```
 
 ## 6. Этапы и трудозатраты
 
-| Phase | Что делаем | Дни (1 dev) | DoD |
+| Phase | Что делаем | Дни | DoD |
 |---|---|---|---|
-| **0. Bootstrap** | monorepo, biome, tsconfig, скелеты apps/packages | 0.5 | `bun run dev` поднимает оба процесса |
-| **1.1 Backend MVP** | state (`mermaidSource` + `overlay` + `pendingDeltas` + `idMap`), REST, WS, mermaid smoke-validate | 1 | `curl PUT /api/mermaid/source -d '{source:"graph LR\n a-->b"}'` → WS push, `curl GET /api/state` отдаёт корректный snapshot |
-| **1.2 Frontend MVP** | tldraw, `@tldraw/mermaid` → shapes, store.listen → overlay | 1.5 | Браузер рисует Mermaid, drag сохраняет overlay, переподключение работает |
-| **1.3 MCP + Skill** | canvas-mcp tools, draw skill с инъекцией mermaid+deltas, регистрация в Claude Code | 1 | В Claude Code "Нарисуй a→b" → на canvas появляются узлы |
-| **1.4 User-deltas + roundtrip** | tldraw add-node → `pendingDeltas`, draft-shapes, AI учитывает deltas при следующем set_mermaid, консумация после успеха | 1 | Полный цикл §3.3 (1–12) проходит без потерь |
-| **1.5 Polish + tests** | golden-path Playwright, README, demo-gif | 0.5–1 | Видеодемо |
-| **Phase 2:** Channels-push canvas → Claude | local channels-MCP + WS-listener | +2 | User двинул shape — Claude видит без skill-инъекции |
-| **Phase 3:** Persist + git, ad-hoc free-form | Mermaid + overlay + deltas в файлы, ad-hoc shapes (sticky notes) поверх | +2 | Файлы коммитятся, free-form-объекты живут вне Mermaid |
+| **0. Bootstrap** | monorepo (Bun workspaces), biome, tsconfig, скелеты apps/packages, port=8787 (env) | 0.5 | `bun run dev` поднимает backend+frontend |
+| **1.1 Backend MVP** | CanvasState, apply_patch, REST, WS, op-log, version, idempotency по clientOpId | 1 | curl POST /api/patch добавляет узел → WS broadcast, GET /api/state?since=N отдаёт diff |
+| **1.2 Frontend MVP** | tldraw, render CanvasState → shapes, store.listen → POST /api/patch, обработка WS-patch, free-form shapes (sticky/text/draw) | 2 | Браузер рисует, пользовательские правки сразу летят в backend и обратно |
+| **1.3 MCP + Skill** | canvas-mcp с `get_state`/`apply_patch`/`import_mermaid`/`layout`, draw skill с инъекцией compact JSON | 1 | В Claude Code "Нарисуй a→b" → на canvas появляются узлы |
+| **1.4 Mermaid-import + layout** | `@tldraw/mermaid` → PatchOp[], elkjs auto-layout, обработка ошибок парсинга | 1 | AI вызывает import_mermaid с `graph LR` или `sequenceDiagram` — canvas корректно отрисовывает |
+| **1.5 PreToolUse hook** | hook-script + регистрация, передача `since=<last_version>` через env, инжект diff в AI | 0.5 | Пользователь сдвинул узел — на следующем canvas_* tool-call'е AI видит изменение |
+| **1.6 Polish + tests** | golden-path Playwright, README, demo-gif | 1 | Видеодемо: совместная сессия user + AI создаёт неравномерную схему с произвольными формами |
+| **Phase 2: Channels-push** | canvas-channel-mcp, регистрация `--channels plugin:canvas-channel-mcp`, переадресация WS-событий → Claude session | +2 | User меняет canvas — Claude получает событие без waiting; AI может комментировать без user-promt'а |
+| **Phase 3: Persist + multi-room** | dump CanvasState в файл (JSON или sqlite), autosave, git-friendly формат, room_id в URL | +2 | Файлы коммитятся, при перезапуске состояние восстанавливается, можно запустить несколько `?room=X` |
 
-**MVP (Phase 0 + 1.1–1.5): 5 рабочих дней одного разработчика** (1 день экономии на отсутствии собственного render-plan-конвертера — `@tldraw/mermaid` уже делает это).
+**MVP до Phase 1.6: 7 рабочих дней** (на день больше предыдущей оценки, потому что MVP теперь включает free-form shapes, PreToolUse hook и mermaid-import как ветку, а не основной путь).
+
+**Минимальное интересное демо = MVP + Phase 2 = 9 дней.** Phase 2 обязательна для эффекта "doca живёт", который ты хочешь.
 
 ## 7. Известные риски
 
-1. **AI-managed roundtrip не детерминирован.** Если AI неправильно учтёт `pendingUserDeltas`, журнал останется в буфере и пользователь будет видеть draft-shapes до следующего шага. Митигация: явный UI-индикатор "не закоммичено" + ручной "Discard pending" + `canvas_clear_deltas` от AI.
-2. **`@tldraw/mermaid` — новый пакет SDK 5.** Возможны баги, неполное покрытие подвидов диаграмм (mind map, sequence). Митигация: MVP ограничивается flowchart (`graph LR/TD`), остальное — Phase 3.
-3. **Потеря overlay при удалении-возврате узла под тем же label.** Если узел уходит из Mermaid и возвращается через несколько шагов, его UUID будет новым, overlay не восстановится. Документировать как known limitation MVP.
-4. **Push canvas → Claude недоступен в MVP** — реактивность только через инъекцию при следующем prompt'е. Принимается осознанно (Phase 2).
-5. **Mermaid ограничен по выразительности.** Сложные диаграммы (C4, custom shapes-with-icons) — за пределами MVP. При необходимости — гибрид с ad-hoc free-form объектами (Phase 3) или альтернативный DSL.
-6. **id-remap эвристики могут ошибаться.** Если AI переименует ноду И сместит её в графе одновременно, авто-сопоставление по label/контексту может промахнуться. Митигация: при неудаче — overlay помечается orphan и пересоздаётся.
+1. **`@tldraw/mermaid` headless на backend.** Может не работать без DOM. Митигация: парсинг и конвертация переезжают на frontend, бэкенд хранит только результирующие PatchOp'ы. Запасной план в стеке (§4).
+2. **Channels — preview-фича Claude Code (2.1.80+).** Может быть нестабильна, требовать конфигурации. Phase 1.5 (PreToolUse hook) уже даёт почти-реактивный режим, поэтому MVP не блокируется.
+3. **AI хочет двигать существующие узлы, но не помнит точные координаты.** Скилл инжектит compact JSON с округлёнными координатами; AI может попросить `canvas_layout` для авто-перерасчёта или `canvas_get_state({fmt:"full"})` для точных координат.
+4. **Свободные формы (free-form draw) с длинным массивом точек.** Если их много, compact JSON распухает. Митигация: `fmt=compact` опускает `kind:"freeform"` целиком, передавая только `{id, kind, label?: "...freeform sketch..."}` — AI знает что они есть, но не видит детали.
+5. **Echo-loop через WS.** Если patch применяется и шлётся обратно — клиент применит снова. Защита через `source` + `clientOpId`-fingerprint; в тестах эту проверку покрываем явно.
+6. **Layout-конфликты при ELK + ручные правки.** Если пользователь сдвинул узел, а потом AI запросил `canvas_layout` для всех — координаты пользователя затрутся. Митигация: `canvas_layout` принимает `nodeIds?` — можно лейаутить только новые узлы.
+7. **Размер MCP-tool responses.** `canvas_get_state({fmt:"full"})` для большого canvas может быть тяжёлым. Митигация: `fmt:"compact"` по умолчанию + `since` для дельт.
 
 ## 8. Что **не** делаем в MVP (зафиксировать)
 
 - Коллаб (несколько пользователей одновременно).
-- Поддержка нескольких комнат / нескольких Claude-сессий.
+- Multi-room/multi-session — Phase 3.
 - Аутентификация, ACL.
 - Облачный хостинг.
-- Поддержка sequence/state/mindmap диаграмм Mermaid — MVP только flowchart (`graph LR/TD`). Остальное — Phase 3 (когда стабилизируется `@tldraw/mermaid`).
-- Ad-hoc free-form рисунки (sticky-notes, заметки) — Phase 3.
-- Push canvas → Claude — Phase 2.
-- Headless tldraw на сервере — пока не нужен (всё в браузере).
+- Экспорт обратно в Mermaid/D2/SVG — Phase 3 (если потребуется).
+- Headless tldraw на сервере — пока не нужен.
+- Поддержка всех типов Mermaid — что парсит `@tldraw/mermaid`, то и работает (flowchart точно; sequence/state/mindmap — best-effort).
+- Версионирование / undo на уровне UI (op-log есть, но кнопок Undo/Redo пока нет — Phase 1.6 polish если успеваем).
 
-## 9. Открытые вопросы (для пользователя)
+## 9. Открытые вопросы / решённые умолчания
 
-1. **Порт backend** — предлагается 7777 (как у madstudio, чтобы держать единую "сетку" локальных сервисов). Подтверждение?
-2. **Phase 2 (push)** — обязательно ли его включить в "минимально интересное демо", или MVP с lazy-read достаточно для первого впечатления?
-3. **Mode коммита `pendingUserDeltas`**: (a) только AI решает, когда консумировать (через `set_mermaid`); (b) добавить ручную кнопку "Commit to Mermaid" в UI, которая шлёт AI запрос "перепиши mermaid с учётом deltas". Текущая спека — (a), но (b) может быть UX-улучшением.
-4. **Поддерживаемые типы Mermaid в MVP** — ограничиваемся `graph LR/TD` flowchart (как зафиксировано в §8), или сразу пробуем sequence/state?
+**Зафиксировано как дефолт (можно поменять одним замечанием):**
 
-**Закрытые ранее уточнениями пользователя:**
-- DSL = Mermaid (tldraw имеет официальный `@tldraw/mermaid`).
-- Лицензия tldraw — hobby/watermark, личное использование, не риск.
+- **Порт backend = 8787** (env `DIDRAW_PORT` для override).
+- **Push canvas → Claude — двухуровневый**: Phase 1.5 (PreToolUse hook, всегда работает) + Phase 2 (Channels, реальный push).
+- **Mermaid — convenience-entry, не SSOT.** Используется только когда AI вызывает `canvas_import_mermaid`. Дальше canvas-state ведёт сам себя.
+- **Поддерживаемые формы в MVP**: rect, ellipse, diamond, sticky, text, freeform, edges. Без ограничений по типу диаграммы.
+
+**Реально открытое:**
+
+1. **Persistence в Phase 1 или Phase 3?** Сейчас Phase 3. Если хочешь, чтобы canvas переживал перезапуск с MVP, поднимаем в 1.6 (+0.5 дня — `bun:sqlite` или JSON-dump).
+2. **Storage формат для Phase 3:** один JSON-файл vs SQLite vs git-friendly текстовый. Имеет смысл выбрать после первого живого использования.
 
 ---
 
