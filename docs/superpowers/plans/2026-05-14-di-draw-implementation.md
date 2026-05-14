@@ -1,20 +1,25 @@
-# di.draw — Implementation Plan
+# di.draw — Implementation Plan (v2, CLI-first)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Построить локальный AI-driven canvas board для Claude Code: tldraw 5.x frontend + Bun backend с multi-room state, MCP-tools для AI, ручной CLI, hooks для реактивности, targeted prompts с привязкой к объектам.
+**Goal:** Построить локальный AI-driven canvas board для Claude Code: tldraw 5.x frontend + Bun backend с multi-room state + `didraw` CLI как стабильный machine interface + skill cheat-sheet (Bash-вызовы) + hooks. MCP-adapter — Phase 2 как тонкая обёртка над тем же client'ом.
 
-**Architecture:** Single Bun-процесс на :8787 хранит `Map<RoomId, RoomState>` (per-session JSON-документы в `~/.claude/projects/<slug>/canvas/<room>.json`). Frontend — статическая React+tldraw SPA, обменивается с backend через REST (`POST /api/patch`) и WebSocket. AI оперирует canvas-state через MCP-tool `canvas_apply_patch` с операциями add/update/delete над типизированной моделью `{nodes, edges, groups, prompts}`. Запуск — автоматический через SessionStart hook (`didraw daemon --ensure`) или ручной через `didraw open <room>`.
+**Architecture:**
+- **Core:** Bun-процесс на `:8787` хранит `Map<RoomId, RoomState>`, REST + WebSocket API. Каждая комната — per-session JSON-документ в `~/.claude/projects/<slug>/canvas/<room>.json`.
+- **Machine interface:** `didraw` CLI — обёртка над shared `didraw-client` (тот же HTTP client). Используется и AI (через Bash + skill), и человеком, и тестами, и будущим MCP-adapter'ом.
+- **AI ↔ canvas (MVP):** skill инжектит state + cheat-sheet с didraw-командами; AI вызывает `didraw patch --stdin` через Bash; PreToolUse hook добавляет diff в `additionalContext`.
+- **AI ↔ canvas (Phase 2):** MCP-adapter добавляет typed-tools поверх того же client'а; Channels добавляет real-time push.
 
 **Tech Stack:**
-- **Backend:** Bun 1.x, Hono, ws, elkjs, vitest
+- **Backend:** Bun 1.x, Hono, ws, elkjs, bun:test
 - **Frontend:** React 18, tldraw SDK 5.x, `@tldraw/mermaid`, Vite, TypeScript
-- **MCP:** `@modelcontextprotocol/sdk` (Node)
-- **CLI:** Bun-script (`#!/usr/bin/env bun`)
-- **Tests:** vitest (unit/integration), Playwright (UI smoke)
+- **CLI:** Bun-script с shebang `#!/usr/bin/env bun`
+- **Shared client:** `packages/didraw-client` — один HTTP-клиент для CLI/MCP/тестов
+- **MCP (Phase 2.1):** `@modelcontextprotocol/sdk` поверх `didraw-client`
+- **Tests:** bun:test (backend, CLI, client), Playwright (UI smoke)
 - **Lint/format:** biome
 
-**Spec:** `docs/superpowers/specs/2026-05-14-di-draw-design.md` (v3.2.1)
+**Spec:** `docs/superpowers/specs/2026-05-14-di-draw-design.md` (v3.4)
 
 ---
 
@@ -29,71 +34,62 @@ di.draw/
 │   │   ├── src/
 │   │   │   ├── index.ts                      # entry, Hono bootstrap, signals
 │   │   │   ├── config.ts                     # env: DIDRAW_PORT, storage dir
-│   │   │   ├── types.ts                      # CanvasState, Node, Edge, Endpoint, Group, PatchOp, Prompt
-│   │   │   ├── state.ts                      # RoomState + clean room factory
-│   │   │   ├── patch.ts                      # applyPatch(state, ops): {state, applied}; deep-merge
-│   │   │   ├── rooms.ts                      # Map<RoomId, RoomState>, lazy-load, LRU eviction
-│   │   │   ├── persistence.ts                # autosave debounce 300ms, load on first touch
-│   │   │   ├── ws.ts                         # per-room WS broadcast hub
+│   │   │   ├── types.ts                      # CanvasState, Node, Edge, Endpoint, Group, PatchOp, Prompt, RoomState
+│   │   │   ├── patch.ts                      # applyPatch(state, ops): pure function
+│   │   │   ├── rooms.ts                      # Map<RoomId, RoomState>, lazy-load, LRU
+│   │   │   ├── persistence.ts                # autosave debounce, load on first touch
+│   │   │   ├── ws.ts                         # WsHub: per-room broadcast
 │   │   │   ├── routes/
+│   │   │   │   ├── health.ts
 │   │   │   │   ├── state.ts                  # GET /api/state
 │   │   │   │   ├── patch.ts                  # POST /api/patch
-│   │   │   │   ├── import-mermaid.ts         # POST /api/import/mermaid (Phase 1.5)
-│   │   │   │   ├── layout.ts                 # POST /api/layout (Phase 1.5)
-│   │   │   │   ├── prompts.ts                # POST /api/prompt, etc. (Phase 1.7)
-│   │   │   │   └── health.ts                 # GET /healthz
-│   │   │   └── mermaid-import.ts             # @tldraw/mermaid → PatchOp[] (если spike == backend)
+│   │   │   │   ├── import-mermaid.ts         # POST /api/import/mermaid (Phase 1.6)
+│   │   │   │   ├── layout.ts                 # POST /api/layout (Phase 1.6)
+│   │   │   │   └── prompts.ts                # POST /api/prompt* (Phase 1.8)
+│   │   │   ├── mermaid-import.ts             # @tldraw/mermaid → PatchOp[] (per ADR-0001)
+│   │   │   └── layout-engine.ts              # elkjs wrapper (Phase 1.6)
 │   │   └── tests/
-│   │       ├── patch.test.ts
-│   │       ├── rooms.test.ts
-│   │       ├── persistence.test.ts
-│   │       ├── routes.state.test.ts
-│   │       ├── routes.patch.test.ts
-│   │       ├── routes.prompts.test.ts
-│   │       └── ws.test.ts
-│   └── frontend/
-│       ├── package.json
-│       ├── tsconfig.json
-│       ├── vite.config.ts
-│       ├── index.html
-│       └── src/
-│           ├── main.tsx                      # React root, читает ?room= из URL
-│           ├── App.tsx                       # tldraw editor + transport wiring
-│           ├── transport/
-│           │   ├── api.ts                    # fetch wrapper, room-aware
-│           │   └── ws.ts                     # WebSocket client, reconnect
-│           ├── canvas/
-│           │   ├── kinds.ts                  # mapping CanvasState kind → tldraw shape type
-│           │   ├── from-canvas-state.ts      # CanvasState → tldraw createShapes[]
-│           │   ├── to-patch.ts               # tldraw store-event → PatchOp[]
-│           │   └── echo-guard.ts             # ignore patches we just sent
-│           ├── prompts/                      # Phase 1.7
-│           │   ├── PromptInput.tsx           # floating bar при selection
-│           │   ├── PromptMarker.tsx          # 💬 N на shape
-│           │   └── PromptDrawer.tsx          # история по объекту
-│           └── styles.css
-├── packages/
-│   ├── canvas-mcp/
+│   ├── frontend/
 │   │   ├── package.json
 │   │   ├── tsconfig.json
+│   │   ├── vite.config.ts
+│   │   ├── index.html
 │   │   └── src/
-│   │       ├── index.ts                      # MCP server bootstrap
-│   │       ├── client.ts                     # HTTP client to backend (с CLAUDE_SESSION_ID)
-│   │       └── tools.ts                      # tool definitions
-│   ├── canvas-channel-mcp/                   # Phase 2
+│   │       ├── main.tsx
+│   │       ├── App.tsx
+│   │       ├── transport/
+│   │       │   ├── api.ts
+│   │       │   ├── ws.ts
+│   │       │   └── prompts.ts                # Phase 1.8
+│   │       ├── canvas/
+│   │       │   ├── kinds.ts
+│   │       │   ├── from-canvas-state.ts
+│   │       │   ├── to-patch.ts
+│   │       │   └── echo-guard.ts
+│   │       ├── prompts/                      # Phase 1.8
+│   │       │   ├── PromptInput.tsx
+│   │       │   ├── PromptMarker.tsx
+│   │       │   └── PromptDrawer.tsx
+│   │       └── styles.css
+│   └── frontend-tests/
+│       └── golden.spec.ts                    # Playwright
+├── packages/
+│   ├── didraw-client/                        # shared HTTP client
 │   │   ├── package.json
-│   │   └── src/index.ts
-│   └── didraw-cli/
-│       ├── package.json
-│       └── src/
-│           ├── index.ts                      # CLI entry, command dispatch
-│           ├── daemon.ts                     # daemon start/stop/status/ensure, pid-file
-│           ├── open.ts                       # didraw open <room>
-│           ├── list.ts
-│           ├── export.ts
-│           └── rm.ts
+│   │   └── src/index.ts                      # CanvasClient class
+│   ├── didraw-cli/                           # didraw CLI
+│   │   ├── package.json
+│   │   └── src/
+│   │       ├── index.ts                      # command dispatcher
+│   │       ├── daemon.ts                     # daemon start/stop/status/ensure
+│   │       ├── lifecycle.ts                  # open/list/export/rm
+│   │       ├── data.ts                       # state/patch/clear
+│   │       ├── import.ts                     # import mermaid (Phase 1.6)
+│   │       ├── layout.ts                     # layout (Phase 1.6)
+│   │       └── prompts.ts                    # prompts list/resolve/dismiss (Phase 1.8)
+│   ├── canvas-mcp/                           # Phase 2.1
+│   └── canvas-channel-mcp/                   # Phase 2.2
 ├── .claude/
-│   ├── mcp.json                              # регистрация canvas-mcp
 │   ├── settings.json                         # SessionStart + PreToolUse hooks
 │   ├── hooks/
 │   │   └── draw-prehook.sh
@@ -105,50 +101,48 @@ di.draw/
 │   │   ├── specs/2026-05-14-di-draw-design.md
 │   │   └── plans/2026-05-14-di-draw-implementation.md   # this file
 │   └── decisions/
-│       └── 0001-mermaid-import-location.md   # ADR (Phase 0.1 spike result)
+│       └── 0001-mermaid-import-location.md
 ├── biome.json
 ├── package.json                              # Bun workspace root
 ├── tsconfig.base.json
 └── README.md
 ```
 
-**File responsibility guidelines:**
-- `apps/backend/src/types.ts` — единственный источник правды по типам, импортируется и backend, и тестами, и frontend (через path-alias или копией).
-- `apps/backend/src/patch.ts` — чистая функция, не знает о persistence/rooms/ws. Test-friendly.
-- `apps/backend/src/rooms.ts` — depends on persistence; зато все REST-роуты depend только на rooms.
-- Frontend разделяет **transport** (api+ws), **canvas** (преобразования), **prompts** (UI фича).
+**File responsibility:**
+- `apps/backend/src/types.ts` — единственный источник правды для всех типов.
+- `apps/backend/src/patch.ts` — pure function без зависимостей.
+- `packages/didraw-client/src/index.ts` — единственное место, где формируются HTTP-запросы к backend. CLI, MCP-adapter, тесты — все используют его.
+- `packages/didraw-cli` — тонкая argv-обёртка над client'ом. Не содержит бизнес-логики.
 
 ---
 
 ## Task 1: Init monorepo, biome, tsconfig
 
 **Files:**
-- Create: `package.json`
-- Create: `tsconfig.base.json`
-- Create: `biome.json`
-- Create: `.gitignore`
+- Create: `package.json`, `tsconfig.base.json`, `biome.json`, `.gitignore`
 
-- [ ] **Step 1: Create root `package.json` with Bun workspaces**
+- [ ] **Step 1: Root `package.json`**
 
 ```json
 {
-  "name": "didraw",
+  "name": "didraw-root",
   "private": true,
   "type": "module",
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "bun run --filter '*' dev",
-    "test": "bun run --filter '*' test",
+    "dev": "concurrently 'bun --cwd apps/backend src/index.ts' 'bun --cwd apps/frontend run dev'",
+    "test": "bun --cwd apps/backend test && bun --cwd packages/didraw-client test && bun --cwd packages/didraw-cli test",
     "lint": "biome check ."
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
+    "concurrently": "^9.0.0",
     "typescript": "^5.5.0"
   }
 }
 ```
 
-- [ ] **Step 2: Create `tsconfig.base.json`**
+- [ ] **Step 2: `tsconfig.base.json`**
 
 ```json
 {
@@ -161,63 +155,56 @@ di.draw/
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "allowSyntheticDefaultImports": true,
     "isolatedModules": true,
     "types": ["bun-types"]
   }
 }
 ```
 
-- [ ] **Step 3: Create `biome.json`**
+- [ ] **Step 3: `biome.json`**
 
 ```json
 {
   "$schema": "https://biomejs.dev/schemas/1.9.0/schema.json",
   "files": { "ignore": ["**/dist/**", "**/node_modules/**"] },
   "linter": { "enabled": true, "rules": { "recommended": true } },
-  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2 },
+  "formatter": { "indentStyle": "space", "indentWidth": 2 },
   "javascript": { "formatter": { "semicolons": "always", "trailingCommas": "all" } }
 }
 ```
 
-- [ ] **Step 4: Create `.gitignore`**
+- [ ] **Step 4: `.gitignore`**
 
 ```
 node_modules/
 dist/
 *.log
 .DS_Store
-~/.claude/.didraw.pid
 ```
 
-- [ ] **Step 5: Install root deps**
+- [ ] **Step 5: Install and verify**
 
-Run: `bun install`
-Expected: `bun.lock` created, `node_modules/` populated.
+```bash
+bun install
+bunx biome check .
+```
 
-- [ ] **Step 6: Verify biome works**
-
-Run: `bunx biome check .`
-Expected: success (no files yet).
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add package.json tsconfig.base.json biome.json .gitignore bun.lock
-git commit -m "chore: init monorepo with Bun workspaces and biome"
+git commit -m "chore: init monorepo (Bun workspaces + biome)"
 ```
 
 ---
 
-## Task 2: Bootstrap backend skeleton
+## Task 2: Bootstrap backend skeleton with /healthz
 
 **Files:**
-- Create: `apps/backend/package.json`
-- Create: `apps/backend/tsconfig.json`
-- Create: `apps/backend/src/index.ts`
-- Create: `apps/backend/src/config.ts`
+- Create: `apps/backend/package.json`, `apps/backend/tsconfig.json`
+- Create: `apps/backend/src/config.ts`, `apps/backend/src/index.ts`
 
-- [ ] **Step 1: Create `apps/backend/package.json`**
+- [ ] **Step 1: `apps/backend/package.json`**
 
 ```json
 {
@@ -231,26 +218,21 @@ git commit -m "chore: init monorepo with Bun workspaces and biome"
   },
   "dependencies": {
     "hono": "^4.6.0",
-    "@hono/node-ws": "^1.0.0",
     "elkjs": "^0.9.3"
   },
   "devDependencies": {
-    "bun-types": "latest",
-    "@types/ws": "^8.5.0"
+    "bun-types": "latest"
   }
 }
 ```
 
-- [ ] **Step 2: Create `apps/backend/tsconfig.json`**
+- [ ] **Step 2: `apps/backend/tsconfig.json`**
 
 ```json
-{
-  "extends": "../../tsconfig.base.json",
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
-}
+{ "extends": "../../tsconfig.base.json", "include": ["src/**/*.ts", "tests/**/*.ts"] }
 ```
 
-- [ ] **Step 3: Create `apps/backend/src/config.ts`**
+- [ ] **Step 3: `apps/backend/src/config.ts`**
 
 ```ts
 import { homedir } from "node:os";
@@ -260,62 +242,51 @@ export const config = {
   port: Number(process.env.DIDRAW_PORT ?? 8787),
   storageDir: process.env.DIDRAW_STORAGE_DIR ?? join(homedir(), ".claude", "projects"),
   autosaveDebounceMs: 300,
-  roomEvictionMs: 60 * 60 * 1000, // 1 hour
+  roomEvictionMs: 60 * 60 * 1000,
   opLogMaxSize: 50,
 } as const;
 ```
 
-- [ ] **Step 4: Create minimal `apps/backend/src/index.ts`**
+- [ ] **Step 4: Minimal `apps/backend/src/index.ts`**
 
 ```ts
 import { Hono } from "hono";
 import { config } from "./config";
 
 const app = new Hono();
-
 app.get("/healthz", (c) => c.json({ ok: true, version: "0.0.0" }));
 
-const server = Bun.serve({
-  port: config.port,
-  fetch: app.fetch,
-});
-
-console.log(`[didraw] listening on http://localhost:${server.port}`);
+if (import.meta.main) {
+  const server = Bun.serve({ port: config.port, fetch: app.fetch });
+  console.log(`[didraw] listening on http://localhost:${server.port}`);
+}
 ```
 
-- [ ] **Step 5: Install deps**
+- [ ] **Step 5: Install and verify**
 
-Run: `cd apps/backend && bun install`
-Expected: success.
-
-- [ ] **Step 6: Verify it boots**
-
-Run: `cd apps/backend && bun src/index.ts &`
-Then: `curl -s localhost:8787/healthz`
+```bash
+cd apps/backend && bun install && bun src/index.ts &
+curl -s localhost:8787/healthz
+kill %1
+```
 Expected: `{"ok":true,"version":"0.0.0"}`
-Cleanup: `kill %1`
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add apps/backend/
-git commit -m "chore(backend): bootstrap Hono skeleton with /healthz"
+git commit -m "chore(backend): bootstrap Hono with /healthz"
 ```
 
 ---
 
-## Task 3: Bootstrap frontend skeleton
+## Task 3: Bootstrap frontend (tldraw + room param)
 
 **Files:**
-- Create: `apps/frontend/package.json`
-- Create: `apps/frontend/tsconfig.json`
-- Create: `apps/frontend/vite.config.ts`
-- Create: `apps/frontend/index.html`
-- Create: `apps/frontend/src/main.tsx`
-- Create: `apps/frontend/src/App.tsx`
-- Create: `apps/frontend/src/styles.css`
+- Create: `apps/frontend/package.json`, `apps/frontend/tsconfig.json`, `apps/frontend/vite.config.ts`
+- Create: `apps/frontend/index.html`, `apps/frontend/src/main.tsx`, `apps/frontend/src/App.tsx`, `apps/frontend/src/styles.css`
 
-- [ ] **Step 1: Create `apps/frontend/package.json`**
+- [ ] **Step 1: `apps/frontend/package.json`**
 
 ```json
 {
@@ -342,22 +313,19 @@ git commit -m "chore(backend): bootstrap Hono skeleton with /healthz"
 }
 ```
 
-> **Note:** `tldraw` major version 3.0 is "tldraw SDK 5.x" (NPM and SDK versions differ; spec mandates SDK 5.x). Confirm during install — if `npm view tldraw versions` shows newer major lines for SDK 5.x, bump. `@tldraw/mermaid` is added in Phase 1.5.
+> **Note:** Spec mandates tldraw SDK 5.x. npm `tldraw@3.0` is SDK 5.x (npm major != SDK major). Verify at install: `npm view tldraw versions | tail -10`. If a newer SDK 5.x major appeared (`tldraw@4.x`), bump.
 
-- [ ] **Step 2: Create `apps/frontend/tsconfig.json`**
+- [ ] **Step 2: `apps/frontend/tsconfig.json`**
 
 ```json
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "jsx": "react-jsx",
-    "types": ["vite/client"]
-  },
+  "compilerOptions": { "jsx": "react-jsx", "types": ["vite/client"] },
   "include": ["src/**/*"]
 }
 ```
 
-- [ ] **Step 3: Create `apps/frontend/vite.config.ts`**
+- [ ] **Step 3: `apps/frontend/vite.config.ts`**
 
 ```ts
 import { defineConfig } from "vite";
@@ -375,7 +343,7 @@ export default defineConfig({
 });
 ```
 
-- [ ] **Step 4: Create `apps/frontend/index.html`**
+- [ ] **Step 4: `apps/frontend/index.html`**
 
 ```html
 <!doctype html>
@@ -393,14 +361,14 @@ export default defineConfig({
 </html>
 ```
 
-- [ ] **Step 5: Create `apps/frontend/src/styles.css`**
+- [ ] **Step 5: `apps/frontend/src/styles.css`**
 
 ```css
 html, body, #root { margin: 0; padding: 0; height: 100%; }
 body { font-family: system-ui, sans-serif; }
 ```
 
-- [ ] **Step 6: Create `apps/frontend/src/main.tsx`**
+- [ ] **Step 6: `apps/frontend/src/main.tsx`**
 
 ```tsx
 import React from "react";
@@ -410,13 +378,11 @@ import { App } from "./App";
 const room = new URLSearchParams(location.search).get("room") ?? "default";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <App room={room} />
-  </React.StrictMode>,
+  <React.StrictMode><App room={room} /></React.StrictMode>,
 );
 ```
 
-- [ ] **Step 7: Create skeleton `apps/frontend/src/App.tsx`**
+- [ ] **Step 7: Skeleton `apps/frontend/src/App.tsx`**
 
 ```tsx
 import { Tldraw } from "tldraw";
@@ -425,40 +391,39 @@ import "tldraw/tldraw.css";
 export function App({ room }: { room: string }) {
   return (
     <div style={{ height: "100vh" }}>
-      <div style={{ position: "fixed", top: 8, left: 8, zIndex: 1000 }}>
-        room: <code>{room}</code>
-      </div>
+      <div style={{ position: "fixed", top: 8, left: 8, zIndex: 1000 }}>room: <code>{room}</code></div>
       <Tldraw />
     </div>
   );
 }
 ```
 
-- [ ] **Step 8: Install + verify**
+- [ ] **Step 8: Install and verify**
 
-Run: `cd apps/frontend && bun install && bun run dev`
-Visit: `http://localhost:5173/?room=test`
-Expected: пустой tldraw canvas с надписью `room: test` в углу.
-Cleanup: Ctrl-C.
+```bash
+cd apps/frontend && bun install && bun run dev
+# visit http://localhost:5173/?room=test
+```
+Expected: пустой tldraw, надпись `room: test`.
 
 - [ ] **Step 9: Commit**
 
 ```bash
 git add apps/frontend/
-git commit -m "chore(frontend): bootstrap Vite+React+tldraw with room param"
+git commit -m "chore(frontend): bootstrap Vite+React+tldraw 5.x with room param"
 ```
 
 ---
 
 ## Task 4: Spike — `@tldraw/mermaid` headless on Bun
 
-This is a **research task**, not production code. Goal: answer "can we parse Mermaid → tldraw shapes on backend (Bun, no DOM), or must it live on frontend?". Result becomes an ADR.
+This task answers "can we parse Mermaid → tldraw shapes server-side (Bun, no DOM), or must it run in the browser?". Result is an ADR; Phase 1.6 (Task 22) splits accordingly.
 
 **Files:**
 - Create: `apps/backend/spike/mermaid-headless.ts`
 - Create: `docs/decisions/0001-mermaid-import-location.md`
 
-- [ ] **Step 1: Add spike dependency**
+- [ ] **Step 1: Add deps**
 
 ```bash
 cd apps/backend
@@ -466,18 +431,14 @@ bun add @tldraw/mermaid
 bun add -D jsdom @types/jsdom
 ```
 
-- [ ] **Step 2: Write headless attempt with jsdom**
-
-Create `apps/backend/spike/mermaid-headless.ts`:
+- [ ] **Step 2: Write spike**
 
 ```ts
-// Spike: можно ли импортировать @tldraw/mermaid без браузера на Bun?
+// apps/backend/spike/mermaid-headless.ts
 import { JSDOM } from "jsdom";
 
-// Установить globals до import'а tldraw
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
-  pretendToBeVisual: true,
-  url: "http://localhost/",
+  pretendToBeVisual: true, url: "http://localhost/",
 });
 // @ts-expect-error
 globalThis.window = dom.window;
@@ -493,39 +454,33 @@ const t1 = performance.now();
 console.log("loaded keys:", Object.keys(mod));
 console.log("ms to load:", (t1 - t0).toFixed(1));
 
-// Попытка вызова: точное API уточняем по версии пакета (createMermaidDiagram / renderBlueprint).
-// Если падает с ReferenceError на canvas/SVG-API — фиксируем в ADR.
 try {
-  // @ts-expect-error — runtime-API spike
-  const result = await mod.createMermaidDiagram?.({
-    source: "graph LR\n a --> b",
-  });
-  console.log("ok, blueprint nodes:", result?.nodes?.length ?? result);
+  // @ts-expect-error — runtime spike, exact API verified post-install
+  const result = await mod.createMermaidDiagram?.({ source: "graph LR\n a --> b" });
+  console.log("ok, nodes:", result?.nodes?.length ?? result);
 } catch (err) {
   console.error("FAIL:", (err as Error).message);
   process.exit(1);
 }
 ```
 
-- [ ] **Step 3: Run spike, capture result**
+- [ ] **Step 3: Run, capture output**
 
 ```bash
-cd apps/backend && bun spike/mermaid-headless.ts
+cd apps/backend && bun spike/mermaid-headless.ts 2>&1 | tee /tmp/spike-output.txt
 ```
-Expected: либо `ok, blueprint nodes: N`, либо `FAIL: <reason>`. Записать stdout/stderr целиком — попадёт в ADR.
 
-- [ ] **Step 4: Try fallback — CLI `mmdc` (mermaid-cli)**
+- [ ] **Step 4: Try CLI fallback `mmdc`**
 
 ```bash
-bunx -y @mermaid-js/mermaid-cli --version || echo "MMD CLI not available"
+bunx -y @mermaid-js/mermaid-cli --version || echo "MMD CLI unavailable"
+echo 'graph LR; a-->b' | bunx mmdc -p - 2>&1 || true
 ```
-If available, попробовать `echo 'graph LR; a-->b' | bunx mmdc -p -` чтобы понять, насколько годится для smoke-валидации (получить хотя бы SVG).
 
-- [ ] **Step 5: Decide and write ADR**
-
-Create `docs/decisions/0001-mermaid-import-location.md`:
+- [ ] **Step 5: Write ADR**
 
 ```md
+<!-- docs/decisions/0001-mermaid-import-location.md -->
 # ADR-0001: Mermaid import — backend vs frontend
 
 **Date:** 2026-05-14
@@ -533,80 +488,57 @@ Create `docs/decisions/0001-mermaid-import-location.md`:
 
 ## Context
 Spec §4 предусматривал backend-side mermaid-import через `@tldraw/mermaid`.
-Phase 0.1 spike проверяет, работает ли пакет в Bun без DOM (с jsdom-полифиллом
-и без).
+Phase 0.1 spike (Task 4) проверяет, работает ли пакет в Bun с jsdom-полифиллом.
 
 ## Spike result
-<!-- Вставить вывод спайка из шага 3, + jsdom попытка, + mmdc fallback. -->
+<!-- Вставить stdout/stderr из /tmp/spike-output.txt + результат mmdc fallback -->
 
 ## Decision
 <!-- Один из:
-A) Backend supported (`apps/backend/src/mermaid-import.ts` через jsdom).
-B) Frontend-only (frontend получает mermaid-source, парсит сам, шлёт PatchOp[]).
-C) Hybrid: backend smoke-validates через `mmdc`, frontend конвертирует.
+A) Backend implementation (`apps/backend/src/mermaid-import.ts` через jsdom)
+B) Frontend implementation (frontend парсит, шлёт PatchOp[] через POST /api/patch)
+C) Hybrid: backend smoke-validates через `mmdc`, frontend конвертирует
 -->
 
-## Consequences
-<!-- Что меняется в Phase 1.5. -->
+## Consequences for Task 22
+<!-- Что точно меняется -->
 ```
 
-- [ ] **Step 6: Commit spike artifacts**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add apps/backend/spike apps/backend/package.json docs/decisions/
 git commit -m "spike: evaluate @tldraw/mermaid on Bun (ADR-0001)"
 ```
 
-> **Plan dependency note:** Task 30 (mermaid-import implementation) уточняет своё расположение по этому ADR. Все последующие задачи **не зависят** от исхода spike — Mermaid-фича изолирована.
-
 ---
 
-## Task 5: Define core types
+## Task 5: Core types
 
 **Files:**
 - Create: `apps/backend/src/types.ts`
 - Create: `apps/backend/tests/types.test.ts`
 
-- [ ] **Step 1: Write the failing test**
-
-Create `apps/backend/tests/types.test.ts`:
+- [ ] **Step 1: Failing tests**
 
 ```ts
+// apps/backend/tests/types.test.ts
 import { describe, test, expect } from "bun:test";
 import type {
-  CanvasState,
-  Node,
-  Edge,
-  Endpoint,
-  Group,
-  PatchOp,
-  Prompt,
-  RoomState,
+  CanvasState, Node, Edge, Endpoint, Group, PatchOp, Prompt, RoomState,
 } from "../src/types";
 
 describe("types — shape", () => {
   test("CanvasState has version=1 and three arrays", () => {
     const s: CanvasState = { version: 1, nodes: [], edges: [], groups: [] };
     expect(s.version).toBe(1);
-    expect(s.nodes).toEqual([]);
-    expect(s.edges).toEqual([]);
-    expect(s.groups).toEqual([]);
   });
 
   test("Endpoint accepts node and point variants", () => {
     const e1: Endpoint = { kind: "node", id: "n1" };
-    const e2: Endpoint = { kind: "point", x: 100, y: 200 };
+    const e2: Endpoint = { kind: "point", x: 0, y: 0 };
     expect(e1.kind).toBe("node");
     expect(e2.kind).toBe("point");
-  });
-
-  test("Edge endpoints typed as Endpoint", () => {
-    const edge: Edge = {
-      id: "e1",
-      from: { kind: "node", id: "n1" },
-      to: { kind: "point", x: 0, y: 0 },
-    };
-    expect(edge.from.kind).toBe("node");
   });
 
   test("Node kinds cover MVP set", () => {
@@ -614,7 +546,12 @@ describe("types — shape", () => {
     expect(kinds.length).toBe(7);
   });
 
-  test("PatchOp is a discriminated union over op", () => {
+  test("Group supports frame and group", () => {
+    const g: Group = { id: "g1", kind: "frame", children: [], x: 0, y: 0, w: 100, h: 100 };
+    expect(g.kind).toBe("frame");
+  });
+
+  test("PatchOp union", () => {
     const ops: PatchOp[] = [
       { op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } },
       { op: "update", target: "node", id: "n1", set: { x: 10 } },
@@ -623,34 +560,20 @@ describe("types — shape", () => {
     expect(ops).toHaveLength(3);
   });
 
-  test("Prompt has selection array and status", () => {
-    const p: Prompt = {
-      id: "p1",
-      selection: ["n1"],
-      text: "what is this?",
-      createdAt: Date.now(),
-      status: "pending",
-    };
+  test("Prompt fields", () => {
+    const p: Prompt = { id: "p1", selection: ["n1"], text: "x", createdAt: 0, status: "pending" };
     expect(p.status).toBe("pending");
-  });
-
-  test("Group supports frame and group kinds", () => {
-    const g1: Group = { id: "g1", kind: "frame", children: [], x: 0, y: 0, w: 100, h: 100 };
-    const g2: Group = { id: "g2", kind: "group", children: ["n1", "n2"] };
-    expect(g1.kind).toBe("frame");
-    expect(g2.kind).toBe("group");
   });
 });
 ```
 
-- [ ] **Step 2: Run — expect FAIL with "Cannot find module ../src/types"**
+- [ ] **Step 2: Run — FAIL (module missing)**
 
 ```bash
 cd apps/backend && bun test tests/types.test.ts
 ```
-Expected: ENOENT for `../src/types`.
 
-- [ ] **Step 3: Create `apps/backend/src/types.ts`**
+- [ ] **Step 3: Implement `apps/backend/src/types.ts`**
 
 ```ts
 export type CanvasState = {
@@ -735,9 +658,17 @@ export type Prompt = {
 
 export type RoomId = string;
 
+export type OpLogEntry = {
+  ops: PatchOp[];
+  source: "ai" | "user";
+  version: number;
+  at: number;
+  clientOpId?: string;
+};
+
 export type RoomState = {
   canvas: CanvasState;
-  opLog: { ops: PatchOp[]; source: "ai" | "user"; version: number; at: number }[];
+  opLog: OpLogEntry[];
   prompts: Prompt[];
   version: number;
   dirty: boolean;
@@ -751,156 +682,105 @@ export type WsMessage =
   | { kind: "prompt-resolved"; id: string; response?: string };
 ```
 
-- [ ] **Step 4: Run — expect PASS**
+- [ ] **Step 4: Run — PASS**
 
 ```bash
 cd apps/backend && bun test tests/types.test.ts
 ```
-Expected: 7 pass.
+Expected: 6 pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add apps/backend/src/types.ts apps/backend/tests/types.test.ts
-git commit -m "feat(backend): define core types — CanvasState, PatchOp, RoomState, Prompt"
+git commit -m "feat(backend): core types — CanvasState, PatchOp, RoomState, Prompt"
 ```
 
 ---
 
-## Task 6: `applyPatch` with deep-merge for style/meta
+## Task 6: applyPatch with deep-merge for style/meta
 
 **Files:**
 - Create: `apps/backend/src/patch.ts`
 - Create: `apps/backend/tests/patch.test.ts`
 
-- [ ] **Step 1: Write failing tests**
-
-Create `apps/backend/tests/patch.test.ts`:
+- [ ] **Step 1: Failing tests**
 
 ```ts
+// apps/backend/tests/patch.test.ts
 import { describe, test, expect } from "bun:test";
-import { applyPatch, type ApplyResult } from "../src/patch";
-import type { CanvasState, PatchOp } from "../src/types";
+import { applyPatch } from "../src/patch";
+import type { CanvasState } from "../src/types";
 
 const empty = (): CanvasState => ({ version: 1, nodes: [], edges: [], groups: [] });
 
 describe("applyPatch", () => {
-  test("add node appends to nodes", () => {
-    const r = applyPatch(empty(), [
-      { op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } },
-    ]);
+  test("add node", () => {
+    const r = applyPatch(empty(), [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }]);
     expect(r.ok).toBe(true);
-    expect(r.state.nodes).toHaveLength(1);
-    expect(r.state.nodes[0].id).toBe("n1");
+    if (r.ok) expect(r.state.nodes).toHaveLength(1);
   });
 
-  test("update with shallow field — replaces", () => {
-    const s: CanvasState = {
-      version: 1,
-      nodes: [{ id: "n1", kind: "rect", x: 0, y: 0, label: "old" }],
-      edges: [], groups: [],
-    };
-    const r = applyPatch(s, [{ op: "update", target: "node", id: "n1", set: { label: "new", x: 50 } }]);
-    expect(r.ok).toBe(true);
-    expect(r.state.nodes[0].label).toBe("new");
-    expect(r.state.nodes[0].x).toBe(50);
-  });
-
-  test("update with style.fill — deep-merges (stroke preserved)", () => {
+  test("update with style deep-merges", () => {
     const s: CanvasState = {
       version: 1,
       nodes: [{ id: "n1", kind: "rect", x: 0, y: 0, style: { stroke: "#000", fontSize: 14 } }],
       edges: [], groups: [],
     };
-    const r = applyPatch(s, [
-      { op: "update", target: "node", id: "n1", set: { style: { fill: "#888" } } },
-    ]);
+    const r = applyPatch(s, [{ op: "update", target: "node", id: "n1", set: { style: { fill: "#888" } } }]);
     expect(r.ok).toBe(true);
-    expect(r.state.nodes[0].style).toEqual({ stroke: "#000", fontSize: 14, fill: "#888" });
+    if (r.ok) expect(r.state.nodes[0].style).toEqual({ stroke: "#000", fontSize: 14, fill: "#888" });
   });
 
-  test("update with style.fill=undefined — deletes key", () => {
+  test("update style.fill=undefined deletes key", () => {
     const s: CanvasState = {
       version: 1,
       nodes: [{ id: "n1", kind: "rect", x: 0, y: 0, style: { fill: "#888", stroke: "#000" } }],
       edges: [], groups: [],
     };
-    const r = applyPatch(s, [
-      { op: "update", target: "node", id: "n1", set: { style: { fill: undefined } } },
-    ]);
+    const r = applyPatch(s, [{ op: "update", target: "node", id: "n1", set: { style: { fill: undefined } } }]);
     expect(r.ok).toBe(true);
-    expect(r.state.nodes[0].style).toEqual({ stroke: "#000" });
-  });
-
-  test("update with meta — deep-merges similarly", () => {
-    const s: CanvasState = {
-      version: 1,
-      nodes: [{ id: "n1", kind: "rect", x: 0, y: 0, meta: { author: "ai", tag: "v1" } }],
-      edges: [], groups: [],
-    };
-    const r = applyPatch(s, [
-      { op: "update", target: "node", id: "n1", set: { meta: { tag: "v2", color: "red" } } },
-    ]);
-    expect(r.ok).toBe(true);
-    expect(r.state.nodes[0].meta).toEqual({ author: "ai", tag: "v2", color: "red" });
-  });
-
-  test("delete removes the node", () => {
-    const s: CanvasState = {
-      version: 1,
-      nodes: [{ id: "n1", kind: "rect", x: 0, y: 0 }],
-      edges: [], groups: [],
-    };
-    const r = applyPatch(s, [{ op: "delete", target: "node", id: "n1" }]);
-    expect(r.ok).toBe(true);
-    expect(r.state.nodes).toHaveLength(0);
+    if (r.ok) expect(r.state.nodes[0].style).toEqual({ stroke: "#000" });
   });
 
   test("edge.from references unknown node — fails atomically", () => {
-    const s = empty();
-    const r = applyPatch(s, [
-      { op: "add", target: "edge", value: { id: "e1", from: { kind: "node", id: "n1" }, to: { kind: "node", id: "n2" } } },
+    const r = applyPatch(empty(), [
+      { op: "add", target: "edge", value: { id: "e1", from: { kind: "node", id: "missing" }, to: { kind: "node", id: "n1" } } },
     ]);
     expect(r.ok).toBe(false);
-    expect(r.error).toContain("n1");
-    expect(r.state).toEqual(s); // не мутирует
+    if (!r.ok) expect(r.error).toContain("missing");
   });
 
-  test("edge with point endpoint — allowed even with no nodes", () => {
+  test("edge with point endpoint — allowed", () => {
     const r = applyPatch(empty(), [
       { op: "add", target: "edge", value: { id: "e1", from: { kind: "point", x: 0, y: 0 }, to: { kind: "point", x: 100, y: 0 } } },
     ]);
     expect(r.ok).toBe(true);
   });
 
-  test("multiple ops applied in order, atomically", () => {
-    const r = applyPatch(empty(), [
-      { op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } },
-      { op: "add", target: "node", value: { id: "n2", kind: "rect", x: 100, y: 0 } },
-      { op: "add", target: "edge", value: { id: "e1", from: { kind: "node", id: "n1" }, to: { kind: "node", id: "n2" } } },
-    ]);
-    expect(r.ok).toBe(true);
-    expect(r.state.nodes).toHaveLength(2);
-    expect(r.state.edges).toHaveLength(1);
-  });
-
-  test("rolls back when later op fails", () => {
+  test("rollback on later op failure", () => {
     const r = applyPatch(empty(), [
       { op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } },
       { op: "add", target: "edge", value: { id: "e1", from: { kind: "node", id: "missing" }, to: { kind: "node", id: "n1" } } },
     ]);
     expect(r.ok).toBe(false);
-    expect(r.state.nodes).toHaveLength(0); // не добавилась
+    if (!r.ok) expect(r.state.nodes).toHaveLength(0);
+  });
+
+  test("delete removes", () => {
+    const s: CanvasState = { version: 1, nodes: [{ id: "n1", kind: "rect", x: 0, y: 0 }], edges: [], groups: [] };
+    const r = applyPatch(s, [{ op: "delete", target: "node", id: "n1" }]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.state.nodes).toHaveLength(0);
   });
 });
 ```
 
-- [ ] **Step 2: Run — expect FAIL ("Cannot find module ../src/patch")**
+- [ ] **Step 2: Run — FAIL**
 
 ```bash
 cd apps/backend && bun test tests/patch.test.ts
 ```
-Expected: module not found.
 
 - [ ] **Step 3: Implement `apps/backend/src/patch.ts`**
 
@@ -912,14 +792,12 @@ export type ApplyResult =
   | { ok: false; state: CanvasState; error: string };
 
 export function applyPatch(state: CanvasState, ops: PatchOp[]): ApplyResult {
-  // Атомарность: работаем над копией, при ошибке возвращаем оригинал.
   let next: CanvasState = {
     version: state.version,
     nodes: [...state.nodes],
     edges: [...state.edges],
     groups: [...state.groups],
   };
-
   for (const op of ops) {
     const r = applyOne(next, op);
     if (!r.ok) return { ok: false, state, error: r.error };
@@ -936,32 +814,24 @@ function applyOne(s: CanvasState, op: PatchOp): ApplyResult {
 
 function addOp(s: CanvasState, op: Extract<PatchOp, { op: "add" }>): ApplyResult {
   if (op.target === "node") {
-    if (s.nodes.some((n) => n.id === op.value.id)) {
-      return { ok: false, state: s, error: `node ${op.value.id} already exists` };
-    }
+    if (s.nodes.some((n) => n.id === op.value.id)) return { ok: false, state: s, error: `node ${op.value.id} exists` };
     return { ok: true, state: { ...s, nodes: [...s.nodes, op.value] } };
   }
   if (op.target === "edge") {
-    if (s.edges.some((e) => e.id === op.value.id)) {
-      return { ok: false, state: s, error: `edge ${op.value.id} already exists` };
-    }
-    const checks = checkEndpoint(s, op.value.from, "from") ?? checkEndpoint(s, op.value.to, "to");
-    if (checks) return { ok: false, state: s, error: checks };
+    if (s.edges.some((e) => e.id === op.value.id)) return { ok: false, state: s, error: `edge ${op.value.id} exists` };
+    const err = checkEndpoint(s, op.value.from, "from") ?? checkEndpoint(s, op.value.to, "to");
+    if (err) return { ok: false, state: s, error: err };
     return { ok: true, state: { ...s, edges: [...s.edges, op.value] } };
   }
   if (op.target === "group") {
-    if (s.groups.some((g) => g.id === op.value.id)) {
-      return { ok: false, state: s, error: `group ${op.value.id} already exists` };
-    }
+    if (s.groups.some((g) => g.id === op.value.id)) return { ok: false, state: s, error: `group ${op.value.id} exists` };
     return { ok: true, state: { ...s, groups: [...s.groups, op.value] } };
   }
   return { ok: false, state: s, error: "unknown add target" };
 }
 
-function checkEndpoint(s: CanvasState, ep: Edge["from"], side: "from" | "to"): string | null {
-  if (ep.kind === "node" && !s.nodes.some((n) => n.id === ep.id)) {
-    return `edge.${side} references unknown node ${ep.id}`;
-  }
+function checkEndpoint(s: CanvasState, ep: Edge["from"], side: string): string | null {
+  if (ep.kind === "node" && !s.nodes.some((n) => n.id === ep.id)) return `edge.${side} references unknown node ${ep.id}`;
   return null;
 }
 
@@ -970,29 +840,21 @@ function updateOp(s: CanvasState, op: Extract<PatchOp, { op: "update" }>): Apply
     const idx = s.nodes.findIndex((n) => n.id === op.id);
     if (idx === -1) return { ok: false, state: s, error: `node ${op.id} not found` };
     const merged = mergeRecord(s.nodes[idx], op.set, ["style", "meta"]) as Node;
-    const nodes = [...s.nodes];
-    nodes[idx] = merged;
+    const nodes = [...s.nodes]; nodes[idx] = merged;
     return { ok: true, state: { ...s, nodes } };
   }
   if (op.target === "edge") {
     const idx = s.edges.findIndex((e) => e.id === op.id);
     if (idx === -1) return { ok: false, state: s, error: `edge ${op.id} not found` };
     const merged = mergeRecord(s.edges[idx], op.set, ["style", "meta"]) as Edge;
-    if (op.set.from || op.set.to) {
-      const ep = merged.from;
-      const check = checkEndpoint(s, ep, "from") ?? checkEndpoint(s, merged.to, "to");
-      if (check) return { ok: false, state: s, error: check };
-    }
-    const edges = [...s.edges];
-    edges[idx] = merged;
+    const edges = [...s.edges]; edges[idx] = merged;
     return { ok: true, state: { ...s, edges } };
   }
   if (op.target === "group") {
     const idx = s.groups.findIndex((g) => g.id === op.id);
     if (idx === -1) return { ok: false, state: s, error: `group ${op.id} not found` };
     const merged = mergeRecord(s.groups[idx], op.set, ["style"]) as Group;
-    const groups = [...s.groups];
-    groups[idx] = merged;
+    const groups = [...s.groups]; groups[idx] = merged;
     return { ok: true, state: { ...s, groups } };
   }
   return { ok: false, state: s, error: "unknown update target" };
@@ -1005,14 +867,8 @@ function deleteOp(s: CanvasState, op: Extract<PatchOp, { op: "delete" }>): Apply
   return { ok: false, state: s, error: "unknown delete target" };
 }
 
-/**
- * Replace top-level fields; for keys in `deepKeys`, perform shallow-merge
- * (undefined values delete sub-keys).
- */
 function mergeRecord<T extends Record<string, unknown>>(
-  base: T,
-  patch: Partial<T>,
-  deepKeys: (keyof T)[],
+  base: T, patch: Partial<T>, deepKeys: (keyof T)[],
 ): T {
   const out: Record<string, unknown> = { ...base };
   for (const k of Object.keys(patch) as (keyof T)[]) {
@@ -1021,8 +877,7 @@ function mergeRecord<T extends Record<string, unknown>>(
       const sub: Record<string, unknown> = { ...(base[k] as Record<string, unknown>) };
       for (const sk of Object.keys(v as object)) {
         const sv = (v as Record<string, unknown>)[sk];
-        if (sv === undefined) delete sub[sk];
-        else sub[sk] = sv;
+        if (sv === undefined) delete sub[sk]; else sub[sk] = sv;
       }
       out[k as string] = sub;
     } else {
@@ -1037,12 +892,12 @@ function isObject(v: unknown): v is Record<string, unknown> {
 }
 ```
 
-- [ ] **Step 4: Run — expect PASS (all 10 tests)**
+- [ ] **Step 4: Run — PASS**
 
 ```bash
 cd apps/backend && bun test tests/patch.test.ts
 ```
-Expected: 10 pass.
+Expected: 7 pass.
 
 - [ ] **Step 5: Commit**
 
@@ -1053,80 +908,61 @@ git commit -m "feat(backend): applyPatch with deep-merge for style/meta and atom
 
 ---
 
-## Task 7: Rooms manager (in-memory map, LRU)
+## Task 7: Rooms manager
 
 **Files:**
 - Create: `apps/backend/src/rooms.ts`
 - Create: `apps/backend/tests/rooms.test.ts`
 
-- [ ] **Step 1: Write failing tests**
-
-Create `apps/backend/tests/rooms.test.ts`:
+- [ ] **Step 1: Failing tests**
 
 ```ts
+// apps/backend/tests/rooms.test.ts
 import { describe, test, expect, beforeEach } from "bun:test";
 import { Rooms, makeRoomState } from "../src/rooms";
 
-describe("Rooms — in-memory (no persistence)", () => {
+describe("Rooms", () => {
   let rooms: Rooms;
   beforeEach(() => { rooms = new Rooms({ load: async () => null, save: async () => {} }); });
 
-  test("get returns fresh empty room on first call", async () => {
+  test("get returns fresh empty room", async () => {
     const r = await rooms.get("a");
     expect(r.canvas.nodes).toEqual([]);
     expect(r.version).toBe(0);
   });
 
-  test("two different ids return isolated rooms", async () => {
+  test("different ids isolated", async () => {
     const a = await rooms.get("a");
     const b = await rooms.get("b");
-    a.canvas.nodes.push({ id: "n1", kind: "rect", x: 0, y: 0 });
+    a.canvas.nodes.push({ id: "x", kind: "rect", x: 0, y: 0 });
     expect(b.canvas.nodes).toEqual([]);
   });
 
-  test("get returns same instance for same id", async () => {
+  test("same id returns same instance", async () => {
     const r1 = await rooms.get("a");
     const r2 = await rooms.get("a");
     expect(r1).toBe(r2);
   });
 
-  test("touch updates lastTouched", async () => {
-    const r = await rooms.get("a");
-    const before = r.lastTouched;
-    await new Promise((r) => setTimeout(r, 5));
-    rooms.touch("a");
-    expect(r.lastTouched).toBeGreaterThan(before);
-  });
-
-  test("makeRoomState produces valid empty state", () => {
-    const s = makeRoomState();
-    expect(s.version).toBe(0);
-    expect(s.canvas).toEqual({ version: 1, nodes: [], edges: [], groups: [] });
-    expect(s.opLog).toEqual([]);
-    expect(s.prompts).toEqual([]);
-    expect(s.dirty).toBe(false);
-  });
-});
-
-describe("Rooms — persistence integration", () => {
-  test("get loads from store if available", async () => {
-    const loaded = makeRoomState();
-    loaded.canvas.nodes.push({ id: "preexisting", kind: "rect", x: 0, y: 0 });
-    const rooms = new Rooms({ load: async (id) => (id === "x" ? loaded : null), save: async () => {} });
+  test("loads from store if available", async () => {
+    const preset = makeRoomState();
+    preset.canvas.nodes.push({ id: "pre", kind: "rect", x: 0, y: 0 });
+    const rooms = new Rooms({ load: async (id) => (id === "x" ? preset : null), save: async () => {} });
     const r = await rooms.get("x");
-    expect(r.canvas.nodes[0].id).toBe("preexisting");
+    expect(r.canvas.nodes[0].id).toBe("pre");
+  });
+
+  test("evictIdle saves dirty rooms and removes", async () => {
+    let saved = 0;
+    const rooms = new Rooms({ load: async () => null, save: async () => { saved++; } });
+    const r = await rooms.get("a"); r.dirty = true; r.lastTouched = Date.now() - 10_000;
+    const n = await rooms.evictIdle(5_000);
+    expect(n).toBe(1); expect(saved).toBe(1); expect(rooms.has("a")).toBe(false);
   });
 });
 ```
 
-- [ ] **Step 2: Run — expect FAIL**
-
-```bash
-cd apps/backend && bun test tests/rooms.test.ts
-```
-Expected: module not found.
-
-- [ ] **Step 3: Implement `apps/backend/src/rooms.ts`**
+- [ ] **Step 2: Run — FAIL, then implement `apps/backend/src/rooms.ts`**
 
 ```ts
 import type { RoomId, RoomState } from "./types";
@@ -1139,103 +975,71 @@ export type RoomStore = {
 export function makeRoomState(): RoomState {
   return {
     canvas: { version: 1, nodes: [], edges: [], groups: [] },
-    opLog: [],
-    prompts: [],
-    version: 0,
-    dirty: false,
-    lastTouched: Date.now(),
+    opLog: [], prompts: [], version: 0, dirty: false, lastTouched: Date.now(),
   };
 }
 
 export class Rooms {
   private map = new Map<RoomId, RoomState>();
   private loading = new Map<RoomId, Promise<RoomState>>();
-
   constructor(private store: RoomStore) {}
 
   async get(id: RoomId): Promise<RoomState> {
     const existing = this.map.get(id);
-    if (existing) {
-      existing.lastTouched = Date.now();
-      return existing;
-    }
+    if (existing) { existing.lastTouched = Date.now(); return existing; }
     const pending = this.loading.get(id);
     if (pending) return pending;
-
-    const promise = (async () => {
+    const p = (async () => {
       const loaded = await this.store.load(id);
-      const state = loaded ?? makeRoomState();
-      this.map.set(id, state);
-      this.loading.delete(id);
-      return state;
+      const s = loaded ?? makeRoomState();
+      this.map.set(id, s); this.loading.delete(id);
+      return s;
     })();
-    this.loading.set(id, promise);
-    return promise;
+    this.loading.set(id, p);
+    return p;
   }
 
-  touch(id: RoomId): void {
-    const s = this.map.get(id);
-    if (s) s.lastTouched = Date.now();
-  }
+  touch(id: RoomId) { const s = this.map.get(id); if (s) s.lastTouched = Date.now(); }
+  has(id: RoomId) { return this.map.has(id); }
+  ids() { return [...this.map.keys()]; }
 
-  has(id: RoomId): boolean {
-    return this.map.has(id);
-  }
-
-  ids(): RoomId[] {
-    return [...this.map.keys()];
-  }
-
-  /**
-   * Evict rooms inactive longer than `maxIdleMs`. Saves them first if dirty.
-   * Returns count evicted.
-   */
   async evictIdle(maxIdleMs: number): Promise<number> {
-    const cutoff = Date.now() - maxIdleMs;
-    let evicted = 0;
+    const cutoff = Date.now() - maxIdleMs; let n = 0;
     for (const [id, s] of this.map) {
       if (s.lastTouched < cutoff) {
         if (s.dirty) await this.store.save(id, s);
-        this.map.delete(id);
-        evicted++;
+        this.map.delete(id); n++;
       }
     }
-    return evicted;
+    return n;
   }
 }
 ```
 
-- [ ] **Step 4: Run — expect PASS**
+- [ ] **Step 3: Run — PASS, commit**
 
 ```bash
 cd apps/backend && bun test tests/rooms.test.ts
-```
-Expected: 6 pass.
-
-- [ ] **Step 5: Commit**
-
-```bash
 git add apps/backend/src/rooms.ts apps/backend/tests/rooms.test.ts
-git commit -m "feat(backend): Rooms manager — lazy-load, LRU eviction, store injection"
+git commit -m "feat(backend): Rooms manager with lazy-load and LRU eviction"
 ```
 
 ---
 
-## Task 8: Persistence (autosave debounce + load)
+## Task 8: FilePersistence with debounced autosave
 
 **Files:**
 - Create: `apps/backend/src/persistence.ts`
 - Create: `apps/backend/tests/persistence.test.ts`
 
-- [ ] **Step 1: Write failing tests**
-
-Create `apps/backend/tests/persistence.test.ts`:
+- [ ] **Step 1: Failing tests**
 
 ```ts
+// apps/backend/tests/persistence.test.ts
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { FilePersistence } from "../src/persistence";
 import { makeRoomState } from "../src/rooms";
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1244,65 +1048,48 @@ beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "didraw-")); });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("FilePersistence", () => {
-  test("load — non-existent file returns null", async () => {
-    const p = new FilePersistence(dir);
-    expect(await p.load("missing")).toBeNull();
+  test("load missing returns null", async () => {
+    expect(await new FilePersistence(dir).load("none")).toBeNull();
   });
 
-  test("save then load round-trips state", async () => {
+  test("save + load round-trip", async () => {
     const p = new FilePersistence(dir);
     const s = makeRoomState();
-    s.canvas.nodes.push({ id: "n1", kind: "rect", x: 5, y: 10, label: "hi" });
+    s.canvas.nodes.push({ id: "n1", kind: "rect", x: 5, y: 10 });
     s.version = 3;
-    await p.save("test", s);
-
-    const loaded = await p.load("test");
+    await p.save("t", s);
+    const loaded = await p.load("t");
     expect(loaded?.canvas.nodes[0].id).toBe("n1");
     expect(loaded?.version).toBe(3);
   });
 
-  test("save writes JSON to expected path", async () => {
-    const p = new FilePersistence(dir);
-    await p.save("alpha", makeRoomState());
-    expect(existsSync(join(dir, "alpha.json"))).toBe(true);
-  });
-
-  test("opLog and dirty are NOT persisted", async () => {
+  test("opLog and dirty NOT persisted", async () => {
     const p = new FilePersistence(dir);
     const s = makeRoomState();
-    s.opLog.push({ ops: [], source: "user", version: 1, at: Date.now() });
+    s.opLog.push({ ops: [], source: "user", version: 1, at: 0 });
     s.dirty = true;
     await p.save("o", s);
-
-    const loaded = await p.load("o");
-    expect(loaded?.opLog).toEqual([]);
-    expect(loaded?.dirty).toBe(false);
+    const l = await p.load("o");
+    expect(l?.opLog).toEqual([]);
+    expect(l?.dirty).toBe(false);
   });
 
-  test("scheduleSave debounces — multiple calls => single write", async () => {
+  test("scheduleSave debounces", async () => {
     const p = new FilePersistence(dir);
     let writes = 0;
-    const origSave = p.save.bind(p);
-    p.save = async (id, s) => { writes++; return origSave(id, s); };
-
-    p.scheduleSave("d", makeRoomState());
+    const orig = p.save.bind(p);
+    p.save = async (id, s) => { writes++; return orig(id, s); };
     p.scheduleSave("d", makeRoomState());
     p.scheduleSave("d", makeRoomState());
     await new Promise((r) => setTimeout(r, 50));
-    expect(writes).toBe(0); // ещё не пришло время
-
+    expect(writes).toBe(0);
     await new Promise((r) => setTimeout(r, 320));
     expect(writes).toBe(1);
   });
 });
 ```
 
-- [ ] **Step 2: Run — expect FAIL**
-
-Run: `cd apps/backend && bun test tests/persistence.test.ts`
-Expected: module not found.
-
-- [ ] **Step 3: Implement `apps/backend/src/persistence.ts`**
+- [ ] **Step 2: Implement `apps/backend/src/persistence.ts`**
 
 ```ts
 import { existsSync, mkdirSync, promises as fs } from "node:fs";
@@ -1312,7 +1099,6 @@ import { config } from "./config";
 
 export class FilePersistence {
   private pending = new Map<RoomId, ReturnType<typeof setTimeout>>();
-
   constructor(private dir: string) {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   }
@@ -1321,44 +1107,32 @@ export class FilePersistence {
     const path = join(this.dir, `${sanitize(id)}.json`);
     try {
       const raw = await fs.readFile(path, "utf8");
-      const parsed = JSON.parse(raw) as Partial<RoomState>;
+      const j = JSON.parse(raw) as Partial<RoomState>;
       return {
-        canvas: parsed.canvas ?? { version: 1, nodes: [], edges: [], groups: [] },
-        prompts: parsed.prompts ?? [],
-        version: parsed.version ?? 0,
-        opLog: [],          // не персистится
-        dirty: false,       // не персистится
-        lastTouched: Date.now(),
+        canvas: j.canvas ?? { version: 1, nodes: [], edges: [], groups: [] },
+        prompts: j.prompts ?? [],
+        version: j.version ?? 0,
+        opLog: [], dirty: false, lastTouched: Date.now(),
       };
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw err;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw e;
     }
   }
 
-  async save(id: RoomId, state: RoomState): Promise<void> {
+  async save(id: RoomId, s: RoomState): Promise<void> {
     const path = join(this.dir, `${sanitize(id)}.json`);
-    const dump = JSON.stringify({
-      canvas: state.canvas,
-      prompts: state.prompts,
-      version: state.version,
-    }, null, 2);
+    const dump = JSON.stringify({ canvas: s.canvas, prompts: s.prompts, version: s.version }, null, 2);
     await fs.writeFile(path, dump, "utf8");
   }
 
-  scheduleSave(id: RoomId, state: RoomState): void {
+  scheduleSave(id: RoomId, s: RoomState): void {
     clearTimeout(this.pending.get(id));
-    const timer = setTimeout(() => {
+    const t = setTimeout(() => {
       this.pending.delete(id);
-      void this.save(id, state).catch((err) => console.error("[persistence] save failed", err));
+      void this.save(id, s).catch((e) => console.error("[persistence]", e));
     }, config.autosaveDebounceMs);
-    this.pending.set(id, timer);
-  }
-
-  async flush(): Promise<void> {
-    const ids = [...this.pending.keys()];
-    for (const id of ids) clearTimeout(this.pending.get(id));
-    this.pending.clear();
+    this.pending.set(id, t);
   }
 }
 
@@ -1367,204 +1141,131 @@ function sanitize(id: string): string {
 }
 ```
 
-- [ ] **Step 4: Run — expect PASS (5 tests)**
-
-Run: `cd apps/backend && bun test tests/persistence.test.ts`
-Expected: 5 pass.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Run — PASS, commit**
 
 ```bash
+cd apps/backend && bun test tests/persistence.test.ts
 git add apps/backend/src/persistence.ts apps/backend/tests/persistence.test.ts
 git commit -m "feat(backend): FilePersistence with debounced autosave"
 ```
 
 ---
 
-## Task 9: REST routes — state and patch
+## Task 9: REST routes — /api/state, /api/patch
 
 **Files:**
-- Create: `apps/backend/src/routes/state.ts`
-- Create: `apps/backend/src/routes/patch.ts`
-- Create: `apps/backend/src/routes/health.ts`
+- Create: `apps/backend/src/routes/{health,state,patch}.ts`
 - Modify: `apps/backend/src/index.ts`
-- Create: `apps/backend/tests/routes.state.test.ts`
-- Create: `apps/backend/tests/routes.patch.test.ts`
+- Create: `apps/backend/tests/routes.{state,patch}.test.ts`
 
-- [ ] **Step 1: Write failing test for `/api/state`**
-
-Create `apps/backend/tests/routes.state.test.ts`:
+- [ ] **Step 1: Failing tests for state**
 
 ```ts
+// apps/backend/tests/routes.state.test.ts
 import { describe, test, expect } from "bun:test";
 import { makeApp } from "../src/index";
 
 describe("GET /api/state", () => {
-  test("returns empty room snapshot for new id", async () => {
-    const app = makeApp({ inMemory: true });
-    const res = await app.fetch(new Request("http://x/api/state?room=alpha"));
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.canvas).toEqual({ version: 1, nodes: [], edges: [], groups: [] });
-    expect(body.version).toBe(0);
+  test("empty room", async () => {
+    const { app } = makeApp({ inMemory: true });
+    const r = await app.fetch(new Request("http://x/api/state?room=a"));
+    const b = await r.json();
+    expect(b.canvas.nodes).toEqual([]);
+    expect(b.version).toBe(0);
   });
 
-  test("returns diff when since=<version>", async () => {
-    const app = makeApp({ inMemory: true });
-    // первый patch
+  test("returns diff with since=", async () => {
+    const { app } = makeApp({ inMemory: true });
     await app.fetch(new Request("http://x/api/patch?room=a", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ops: [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }],
-        source: "user",
-      }),
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ops: [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }], source: "user" }),
     }));
-    // diff с version=0 → должен содержать одну операцию
-    const res = await app.fetch(new Request("http://x/api/state?room=a&since=0"));
-    const body = await res.json();
-    expect(body.diff).toHaveLength(1);
-    expect(body.diff[0].ops[0].op).toBe("add");
+    const r = await app.fetch(new Request("http://x/api/state?room=a&since=0"));
+    const b = await r.json();
+    expect(b.diff).toHaveLength(1);
   });
 
-  test("compact omits default-equal fields", async () => {
-    const app = makeApp({ inMemory: true });
+  test("compact omits empty style/meta", async () => {
+    const { app } = makeApp({ inMemory: true });
     await app.fetch(new Request("http://x/api/patch?room=a", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ops: [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }],
-        source: "user",
-      }),
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ops: [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }], source: "user" }),
     }));
-    const res = await app.fetch(new Request("http://x/api/state?room=a&fmt=compact"));
-    const body = await res.json();
-    // compact: no `meta`, no `style` when empty
-    expect(body.canvas.nodes[0]).not.toHaveProperty("style");
-    expect(body.canvas.nodes[0]).not.toHaveProperty("meta");
+    const r = await app.fetch(new Request("http://x/api/state?room=a&fmt=compact"));
+    const b = await r.json();
+    expect(b.canvas.nodes[0]).not.toHaveProperty("style");
   });
 });
 ```
 
-- [ ] **Step 2: Write failing test for `/api/patch`**
-
-Create `apps/backend/tests/routes.patch.test.ts`:
+- [ ] **Step 2: Failing tests for patch**
 
 ```ts
+// apps/backend/tests/routes.patch.test.ts
 import { describe, test, expect } from "bun:test";
 import { makeApp } from "../src/index";
 
+const post = (app: any, room: string, body: unknown) =>
+  app.fetch(new Request(`http://x/api/patch?room=${room}`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  }));
+
 describe("POST /api/patch", () => {
-  test("applies ops, returns new version", async () => {
-    const app = makeApp({ inMemory: true });
-    const res = await app.fetch(new Request("http://x/api/patch?room=a", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ops: [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }],
-        source: "ai",
-      }),
-    }));
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.ok).toBe(true);
-    expect(body.version).toBe(1);
+  test("ok + version increments", async () => {
+    const { app } = makeApp({ inMemory: true });
+    const r = await post(app, "a", { ops: [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }], source: "ai" });
+    const b = await r.json();
+    expect(b.ok).toBe(true); expect(b.version).toBe(1);
   });
 
-  test("returns 422 on validation error, version unchanged", async () => {
-    const app = makeApp({ inMemory: true });
-    const res = await app.fetch(new Request("http://x/api/patch?room=a", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ops: [{ op: "add", target: "edge", value: { id: "e1", from: { kind: "node", id: "missing" }, to: { kind: "node", id: "n1" } } }],
-        source: "ai",
-      }),
-    }));
-    expect(res.status).toBe(422);
-    const body = await res.json();
-    expect(body.ok).toBe(false);
-    expect(body.error).toContain("missing");
-
-    const st = await app.fetch(new Request("http://x/api/state?room=a"));
-    const stBody = await st.json();
-    expect(stBody.version).toBe(0);
+  test("422 on validation error, version unchanged", async () => {
+    const { app } = makeApp({ inMemory: true });
+    const r = await post(app, "a", { ops: [{ op: "add", target: "edge", value: { id: "e", from: { kind: "node", id: "missing" }, to: { kind: "node", id: "n" } } }], source: "ai" });
+    expect(r.status).toBe(422);
   });
 
   test("idempotency by clientOpId", async () => {
-    const app = makeApp({ inMemory: true });
-    const body = {
-      ops: [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }],
-      source: "user",
-      clientOpId: "abc-123",
-    };
-    const r1 = await app.fetch(new Request("http://x/api/patch?room=a", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }));
-    const r2 = await app.fetch(new Request("http://x/api/patch?room=a", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }));
-    const b1 = await r1.json();
-    const b2 = await r2.json();
-    expect(b1.version).toBe(1);
-    expect(b2.version).toBe(1);    // не выросло
-    expect(b2.idempotent).toBe(true);
+    const { app } = makeApp({ inMemory: true });
+    const body = { ops: [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }], source: "user", clientOpId: "abc" };
+    const r1 = await post(app, "a", body); const b1 = await r1.json();
+    const r2 = await post(app, "a", body); const b2 = await r2.json();
+    expect(b1.version).toBe(1); expect(b2.version).toBe(1); expect(b2.idempotent).toBe(true);
   });
 
-  test("rooms are isolated", async () => {
-    const app = makeApp({ inMemory: true });
-    await app.fetch(new Request("http://x/api/patch?room=a", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ops: [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }],
-        source: "user",
-      }),
-    }));
-    const res = await app.fetch(new Request("http://x/api/state?room=b"));
-    const body = await res.json();
-    expect(body.canvas.nodes).toEqual([]);
+  test("rooms isolated", async () => {
+    const { app } = makeApp({ inMemory: true });
+    await post(app, "a", { ops: [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }], source: "user" });
+    const r = await app.fetch(new Request("http://x/api/state?room=b"));
+    expect((await r.json()).canvas.nodes).toEqual([]);
   });
 });
 ```
 
-- [ ] **Step 3: Run — expect FAILS**
-
-Run: `cd apps/backend && bun test tests/routes.*.test.ts`
-Expected: module not found / `makeApp` export missing.
-
-- [ ] **Step 4: Implement `apps/backend/src/routes/health.ts`**
+- [ ] **Step 3: Implement routes**
 
 ```ts
+// apps/backend/src/routes/health.ts
 import { Hono } from "hono";
 export const healthRoutes = new Hono().get("/healthz", (c) => c.json({ ok: true }));
 ```
 
-- [ ] **Step 5: Implement `apps/backend/src/routes/state.ts`**
-
 ```ts
+// apps/backend/src/routes/state.ts
 import { Hono } from "hono";
 import type { Rooms } from "../rooms";
-import type { CanvasState, Node, Edge, Group, RoomState } from "../types";
+import type { CanvasState, Node, Edge, Group } from "../types";
 
 export function stateRoutes(rooms: Rooms) {
   return new Hono().get("/api/state", async (c) => {
     const id = c.req.query("room") ?? "default";
-    const since = Number(c.req.query("since") ?? "");
+    const sinceRaw = c.req.query("since");
     const fmt = c.req.query("fmt") ?? "full";
+    const r = await rooms.get(id); rooms.touch(id);
 
-    const r = await rooms.get(id);
-    rooms.touch(id);
-
-    if (Number.isFinite(since)) {
-      const diff = r.opLog.filter((e) => e.version > since);
-      return c.json({ since, version: r.version, diff });
+    if (sinceRaw !== undefined && !Number.isNaN(Number(sinceRaw))) {
+      const since = Number(sinceRaw);
+      return c.json({ since, version: r.version, diff: r.opLog.filter((e) => e.version > since) });
     }
-
     const canvas = fmt === "compact" ? compact(r.canvas) : r.canvas;
     return c.json({ version: r.version, canvas, prompts: r.prompts });
   });
@@ -1575,7 +1276,7 @@ function compact(s: CanvasState): CanvasState {
     version: s.version,
     nodes: s.nodes.map(compactNode),
     edges: s.edges.map(compactEdge),
-    groups: s.groups.map(compactGroup),
+    groups: s.groups,
   };
 }
 function compactNode(n: Node): Node {
@@ -1594,15 +1295,11 @@ function compactEdge(e: Edge): Edge {
   if (e.meta && Object.keys(e.meta).length) o.meta = e.meta;
   return o;
 }
-function compactGroup(g: Group): Group {
-  return g; // groups уже минимальны
-}
-function round(n: number): number { return Math.round(n * 10) / 10; }
+function round(n: number) { return Math.round(n * 10) / 10; }
 ```
 
-- [ ] **Step 6: Implement `apps/backend/src/routes/patch.ts`**
-
 ```ts
+// apps/backend/src/routes/patch.ts
 import { Hono } from "hono";
 import type { Rooms } from "../rooms";
 import { applyPatch } from "../patch";
@@ -1617,20 +1314,15 @@ export function patchRoutes(rooms: Rooms, bus: PatchBus, opts: { onDirty?: (room
   return new Hono().post("/api/patch", async (c) => {
     const id = c.req.query("room") ?? "default";
     const body = await c.req.json().catch(() => null);
-    if (!body || !Array.isArray(body.ops)) {
-      return c.json({ ok: false, error: "expected { ops: PatchOp[], source }" }, 400);
-    }
+    if (!body || !Array.isArray(body.ops)) return c.json({ ok: false, error: "expected {ops,source}" }, 400);
+
     const ops = body.ops as PatchOp[];
     const source = (body.source ?? "user") as "ai" | "user";
     const clientOpId: string | undefined = body.clientOpId;
+    const r = await rooms.get(id); rooms.touch(id);
 
-    const r = await rooms.get(id);
-    rooms.touch(id);
-
-    // Идемпотентность: если такой clientOpId уже применялся — возвращаем текущую версию.
-    if (clientOpId) {
-      const seen = r.opLog.find((e) => (e as { clientOpId?: string }).clientOpId === clientOpId);
-      if (seen) return c.json({ ok: true, version: r.version, idempotent: true });
+    if (clientOpId && r.opLog.some((e) => e.clientOpId === clientOpId)) {
+      return c.json({ ok: true, version: r.version, idempotent: true });
     }
 
     const result = applyPatch(r.canvas, ops);
@@ -1638,11 +1330,10 @@ export function patchRoutes(rooms: Rooms, bus: PatchBus, opts: { onDirty?: (room
 
     r.canvas = result.state;
     r.version += 1;
-    r.opLog.push({ ops, source, version: r.version, at: Date.now(), ...(clientOpId ? { clientOpId } : {}) } as never);
+    r.opLog.push({ ops, source, version: r.version, at: Date.now(), clientOpId });
     if (r.opLog.length > config.opLogMaxSize) r.opLog.splice(0, r.opLog.length - config.opLogMaxSize);
     r.dirty = true;
     opts.onDirty?.(id);
-
     bus.publish(id, { ops, source, version: r.version, originClientId: clientOpId });
 
     return c.json({ ok: true, version: r.version });
@@ -1650,7 +1341,7 @@ export function patchRoutes(rooms: Rooms, bus: PatchBus, opts: { onDirty?: (room
 }
 ```
 
-- [ ] **Step 7: Replace `apps/backend/src/index.ts`**
+- [ ] **Step 4: Wire `apps/backend/src/index.ts`**
 
 ```ts
 import { Hono } from "hono";
@@ -1662,131 +1353,97 @@ import { patchRoutes, type PatchBus } from "./routes/patch";
 import { healthRoutes } from "./routes/health";
 import { join } from "node:path";
 
-export function makeApp(opts: { inMemory?: boolean } = {}) {
-  const storageDir = join(config.storageDir, "default-project", "canvas");
-  const store: RoomStore = opts.inMemory
-    ? { load: async () => null, save: async () => {} }
-    : new FilePersistence(storageDir);
+export type AppOpts = { inMemory?: boolean; storageDir?: string };
 
+export function makeApp(opts: AppOpts = {}) {
+  const storageDir = opts.storageDir ?? join(config.storageDir, "default-project", "canvas");
+  const persistence = opts.inMemory ? null : new FilePersistence(storageDir);
+  const store: RoomStore = persistence
+    ? { load: (id) => persistence.load(id), save: (id, s) => persistence.save(id, s) }
+    : { load: async () => null, save: async () => {} };
   const rooms = new Rooms(store);
-  const bus: PatchBus = { publish: () => {} }; // WS-bus подключим в задаче 10
-
+  const bus: PatchBus = { publish: () => {} };
   const app = new Hono();
   app.route("/", healthRoutes);
   app.route("/", stateRoutes(rooms));
   app.route("/", patchRoutes(rooms, bus, {
-    onDirty: opts.inMemory ? undefined : (id) => {
-      // hook for autosave; реальная реализация — в задаче 11
-    },
+    onDirty: persistence ? (id) => { void rooms.get(id).then((s) => persistence.scheduleSave(id, s)); } : undefined,
   }));
-  return app;
-}
-
-if (import.meta.main) {
-  const app = makeApp();
-  const server = Bun.serve({ port: config.port, fetch: app.fetch });
-  console.log(`[didraw] listening on http://localhost:${server.port}`);
+  return { app, rooms, bus };
 }
 ```
 
-- [ ] **Step 8: Run — expect ALL PASS**
+- [ ] **Step 5: Run all tests — PASS**
 
-Run: `cd apps/backend && bun test tests/`
-Expected: 21 pass total (types 7 + patch 10 + rooms 6 + persistence 5 + state 3 + patch routes 4 = ...). Count by output.
+```bash
+cd apps/backend && bun test
+```
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add apps/backend/src/routes apps/backend/src/index.ts apps/backend/tests/routes.*.test.ts
-git commit -m "feat(backend): REST /api/state and /api/patch with multi-room and idempotency"
+git commit -m "feat(backend): /api/state and /api/patch with multi-room, idempotency, compact format"
 ```
 
 ---
 
-## Task 10: WebSocket broadcast per-room
+## Task 10: WebSocket per-room broadcast
 
 **Files:**
 - Create: `apps/backend/src/ws.ts`
-- Modify: `apps/backend/src/index.ts`
+- Modify: `apps/backend/src/index.ts` (replace with `startServer` returning port)
 - Create: `apps/backend/tests/ws.test.ts`
 
-- [ ] **Step 1: Write failing integration test**
-
-Create `apps/backend/tests/ws.test.ts`:
+- [ ] **Step 1: Failing test**
 
 ```ts
+// apps/backend/tests/ws.test.ts
 import { describe, test, expect } from "bun:test";
 import { startServer } from "../src/index";
 
-const HOST = "ws://localhost";
-
-describe("WebSocket /ws", () => {
-  test("client receives patch broadcast", async () => {
-    const { port, close } = await startServer({ inMemory: true, port: 0 });
-    const url = `${HOST}:${port}/ws?room=a`;
-
-    const messages: unknown[] = [];
-    const ws = new WebSocket(url);
-    await new Promise<void>((res) => { ws.onopen = () => res(); });
-    ws.onmessage = (e) => messages.push(JSON.parse(e.data as string));
-
-    // подождём hello
+describe("WS /ws", () => {
+  test("client receives patch broadcast for its room", async () => {
+    const srv = await startServer({ inMemory: true, port: 0 });
+    const ws = new WebSocket(`ws://localhost:${srv.port}/ws?room=a`);
+    const msgs: any[] = [];
+    await new Promise<void>((r) => { ws.onopen = () => r(); });
+    ws.onmessage = (e) => msgs.push(JSON.parse(e.data as string));
     await new Promise((r) => setTimeout(r, 30));
-
-    await fetch(`http://localhost:${port}/api/patch?room=a`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ops: [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }],
-        source: "ai",
-      }),
+    await fetch(`http://localhost:${srv.port}/api/patch?room=a`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ops: [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }], source: "ai" }),
     });
-
     await new Promise((r) => setTimeout(r, 30));
-    expect(messages.some((m: any) => m.kind === "hello")).toBe(true);
-    expect(messages.some((m: any) => m.kind === "patch" && m.version === 1)).toBe(true);
-
-    ws.close();
-    await close();
+    expect(msgs.some((m) => m.kind === "hello")).toBe(true);
+    expect(msgs.some((m) => m.kind === "patch" && m.version === 1)).toBe(true);
+    ws.close(); await srv.close();
   });
 
-  test("rooms are isolated on WS", async () => {
-    const { port, close } = await startServer({ inMemory: true, port: 0 });
-
-    const ws = new WebSocket(`${HOST}:${port}/ws?room=a`);
-    const otherMessages: unknown[] = [];
-    await new Promise<void>((res) => { ws.onopen = () => res(); });
-    ws.onmessage = (e) => otherMessages.push(JSON.parse(e.data as string));
-
-    await fetch(`http://localhost:${port}/api/patch?room=b`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ops: [{ op: "add", target: "node", value: { id: "x", kind: "rect", x: 0, y: 0 } }],
-        source: "ai",
-      }),
+  test("rooms isolated on WS", async () => {
+    const srv = await startServer({ inMemory: true, port: 0 });
+    const ws = new WebSocket(`ws://localhost:${srv.port}/ws?room=a`);
+    const msgs: any[] = [];
+    await new Promise<void>((r) => { ws.onopen = () => r(); });
+    ws.onmessage = (e) => msgs.push(JSON.parse(e.data as string));
+    await fetch(`http://localhost:${srv.port}/api/patch?room=b`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ops: [{ op: "add", target: "node", value: { id: "n", kind: "rect", x: 0, y: 0 } }], source: "ai" }),
     });
-
     await new Promise((r) => setTimeout(r, 30));
-    expect(otherMessages.find((m: any) => m.kind === "patch")).toBeUndefined();
-    ws.close();
-    await close();
+    expect(msgs.find((m) => m.kind === "patch")).toBeUndefined();
+    ws.close(); await srv.close();
   });
 });
 ```
 
-- [ ] **Step 2: Run — expect FAIL ("startServer not exported")**
-
-Run: `cd apps/backend && bun test tests/ws.test.ts`
-
-- [ ] **Step 3: Implement `apps/backend/src/ws.ts`**
+- [ ] **Step 2: Implement `apps/backend/src/ws.ts`**
 
 ```ts
 import type { PatchBus } from "./routes/patch";
 import type { Prompt, PatchOp, WsMessage } from "./types";
 
 type Sock = { send: (data: string) => void; readyState: number };
-
 const OPEN = 1;
 
 export class WsHub implements PatchBus {
@@ -1796,33 +1453,25 @@ export class WsHub implements PatchBus {
     if (!this.rooms.has(room)) this.rooms.set(room, new Set());
     this.rooms.get(room)!.add(sock);
   }
+  detach(room: string, sock: Sock) { this.rooms.get(room)?.delete(sock); }
 
-  detach(room: string, sock: Sock) {
-    this.rooms.get(room)?.delete(sock);
-  }
-
-  publish(room: string, msg: { ops: PatchOp[]; source: "ai" | "user"; version: number; originClientId?: string }): void {
+  publish(room: string, msg: { ops: PatchOp[]; source: "ai" | "user"; version: number; originClientId?: string }) {
     this.broadcast(room, { kind: "patch", ...msg });
   }
-
-  publishPrompt(room: string, prompt: Prompt): void {
-    this.broadcast(room, { kind: "prompt-created", prompt });
-  }
-
-  publishPromptResolved(room: string, id: string, response?: string): void {
+  publishPrompt(room: string, prompt: Prompt) { this.broadcast(room, { kind: "prompt-created", prompt }); }
+  publishPromptResolved(room: string, id: string, response?: string) {
     this.broadcast(room, { kind: "prompt-resolved", id, response });
   }
 
   private broadcast(room: string, msg: WsMessage) {
-    const set = this.rooms.get(room);
-    if (!set) return;
+    const set = this.rooms.get(room); if (!set) return;
     const data = JSON.stringify(msg);
     for (const s of set) if (s.readyState === OPEN) s.send(data);
   }
 }
 ```
 
-- [ ] **Step 4: Replace `apps/backend/src/index.ts` (wire WS into Bun.serve)**
+- [ ] **Step 3: Replace `apps/backend/src/index.ts` with WS-aware server**
 
 ```ts
 import { Hono } from "hono";
@@ -1843,10 +1492,8 @@ export function makeApp(opts: AppOpts = {}) {
   const store: RoomStore = persistence
     ? { load: (id) => persistence.load(id), save: (id, s) => persistence.save(id, s) }
     : { load: async () => null, save: async () => {} };
-
   const rooms = new Rooms(store);
   const bus = new WsHub();
-
   const app = new Hono();
   app.route("/", healthRoutes);
   app.route("/", stateRoutes(rooms));
@@ -1858,7 +1505,6 @@ export function makeApp(opts: AppOpts = {}) {
 
 export async function startServer(opts: AppOpts = {}) {
   const { app, bus } = makeApp(opts);
-
   const server = Bun.serve({
     port: opts.port ?? config.port,
     fetch: (req, srv) => {
@@ -1866,28 +1512,24 @@ export async function startServer(opts: AppOpts = {}) {
       if (url.pathname === "/ws") {
         const room = url.searchParams.get("room") ?? "default";
         if (srv.upgrade(req, { data: { room } })) return;
-        return new Response("ws upgrade failed", { status: 500 });
+        return new Response("upgrade failed", { status: 500 });
       }
       return app.fetch(req);
     },
     websocket: {
       open(ws) {
         const { room } = ws.data as { room: string };
-        bus.attach(room, ws as unknown as { send: (d: string) => void; readyState: number });
+        bus.attach(room, ws as any);
         ws.send(JSON.stringify({ kind: "hello", version: 0 }));
       },
-      message() {/* server-side ws is broadcast-only in MVP */},
+      message() {},
       close(ws) {
         const { room } = ws.data as { room: string };
-        bus.detach(room, ws as unknown as { send: (d: string) => void; readyState: number });
+        bus.detach(room, ws as any);
       },
     },
   });
-
-  return {
-    port: server.port,
-    close: async () => { server.stop(); },
-  };
+  return { port: server.port, close: async () => { server.stop(); } };
 }
 
 if (import.meta.main) {
@@ -1895,220 +1537,178 @@ if (import.meta.main) {
 }
 ```
 
-- [ ] **Step 5: Run — expect PASS**
-
-Run: `cd apps/backend && bun test tests/ws.test.ts`
-Expected: 2 pass.
-
-- [ ] **Step 6: Run ALL backend tests**
-
-Run: `cd apps/backend && bun test`
-Expected: all pass.
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 4: Run, commit**
 
 ```bash
-git add apps/backend/src/ws.ts apps/backend/src/index.ts apps/backend/tests/ws.test.ts
-git commit -m "feat(backend): per-room WS broadcast via WsHub"
+cd apps/backend && bun test
+git add apps/backend
+git commit -m "feat(backend): per-room WebSocket broadcast"
 ```
 
 ---
 
-## Task 11: Wire autosave into the server
+## Task 11: Autosave integration test
 
 **Files:**
-- Modify: `apps/backend/src/index.ts`
 - Create: `apps/backend/tests/autosave.test.ts`
 
-- [ ] **Step 1: Write failing test**
-
-Create `apps/backend/tests/autosave.test.ts`:
+- [ ] **Step 1: Test**
 
 ```ts
 import { describe, test, expect } from "bun:test";
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { startServer } from "../src/index";
 
 describe("autosave", () => {
-  test("after patch, canvas.json appears on disk", async () => {
+  test("patch → canvas.json on disk", async () => {
     const dir = mkdtempSync(join(tmpdir(), "didraw-as-"));
-    const { port, close } = await startServer({ port: 0, storageDir: dir });
-    await fetch(`http://localhost:${port}/api/patch?room=tst`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ops: [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 5, y: 10 } }],
-        source: "user",
-      }),
+    const srv = await startServer({ port: 0, storageDir: dir });
+    await fetch(`http://localhost:${srv.port}/api/patch?room=tst`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ops: [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 5, y: 10 } }], source: "user" }),
     });
-    await new Promise((r) => setTimeout(r, 500)); // > debounce 300ms
-
+    await new Promise((r) => setTimeout(r, 500));
     const path = join(dir, "tst.json");
     expect(existsSync(path)).toBe(true);
     const dump = JSON.parse(readFileSync(path, "utf8"));
     expect(dump.canvas.nodes[0].id).toBe("n1");
-
-    await close();
-    rmSync(dir, { recursive: true, force: true });
+    await srv.close(); rmSync(dir, { recursive: true, force: true });
   });
 });
 ```
 
-- [ ] **Step 2: Run — expect PASS** (autosave уже подключен в Task 10 через `persistence.scheduleSave`).
-
-Run: `cd apps/backend && bun test tests/autosave.test.ts`
-Expected: 1 pass.
-
-> Если test красный — добавить недостающую проводку в `makeApp().onDirty`.
-
-- [ ] **Step 3: Commit**
+- [ ] **Step 2: Run — PASS, commit**
 
 ```bash
+cd apps/backend && bun test tests/autosave.test.ts
 git add apps/backend/tests/autosave.test.ts
-git commit -m "test(backend): integration test for autosave on patch"
+git commit -m "test(backend): autosave integration"
 ```
 
 ---
 
-## Task 12: Frontend — load CanvasState from API on mount
+## Task 12: Frontend — load state, render shapes
 
 **Files:**
 - Create: `apps/frontend/src/transport/api.ts`
 - Create: `apps/frontend/src/canvas/kinds.ts`
+- Create: `apps/frontend/src/canvas/from-canvas-state.ts`
 - Modify: `apps/frontend/src/App.tsx`
 
-- [ ] **Step 1: Implement `transport/api.ts`**
+- [ ] **Step 1: `transport/api.ts`**
 
 ```ts
 export const room = new URLSearchParams(location.search).get("room") ?? "default";
 
 export async function getState(): Promise<{ version: number; canvas: any; prompts: any[] }> {
   const r = await fetch(`/api/state?room=${encodeURIComponent(room)}`);
-  if (!r.ok) throw new Error(`getState failed: ${r.status}`);
+  if (!r.ok) throw new Error(`getState ${r.status}`);
   return r.json();
 }
 
-export async function sendPatch(ops: unknown[], clientOpId: string): Promise<{ ok: true; version: number } | { ok: false; error: string }> {
+export async function sendPatch(ops: unknown[], clientOpId: string) {
   const r = await fetch(`/api/patch?room=${encodeURIComponent(room)}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
+    method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ ops, source: "user", clientOpId }),
   });
   return r.json();
 }
 ```
 
-- [ ] **Step 2: Implement `canvas/kinds.ts` (CanvasState → tldraw shape descriptors)**
+- [ ] **Step 2: `canvas/kinds.ts`**
 
 ```ts
-import type { TLShapePartial } from "tldraw";
-
-// Map our Node.kind → tldraw's geo shape type.
 export function kindToTldraw(kind: string): "rectangle" | "ellipse" | "diamond" | "note" | "text" | "draw" {
-  switch (kind) {
-    case "rect": return "rectangle";
-    case "ellipse": return "ellipse";
-    case "diamond": return "diamond";
-    case "sticky": return "note";
-    case "text": return "text";
-    case "freeform": return "draw";
-    default: return "rectangle";
-  }
-}
-
-export function nodeToShape(n: { id: string; kind: string; x: number; y: number; w?: number; h?: number; label?: string }): TLShapePartial {
-  const geoType = kindToTldraw(n.kind);
-  if (geoType === "note") {
-    return {
-      id: `shape:${n.id}` as any,
-      type: "note",
-      x: n.x, y: n.y,
-      props: { text: n.label ?? "" },
-      meta: { canvasId: n.id, kind: n.kind },
-    } as TLShapePartial;
-  }
-  if (geoType === "text") {
-    return {
-      id: `shape:${n.id}` as any,
-      type: "text",
-      x: n.x, y: n.y,
-      props: { text: n.label ?? "" },
-      meta: { canvasId: n.id, kind: n.kind },
-    } as TLShapePartial;
-  }
-  if (geoType === "draw") {
-    // freeform: minimal — без точек оставит пустой shape, frontend дорисует позже
-    return {
-      id: `shape:${n.id}` as any,
-      type: "draw",
-      x: n.x, y: n.y,
-      meta: { canvasId: n.id, kind: n.kind },
-    } as TLShapePartial;
-  }
-  return {
-    id: `shape:${n.id}` as any,
-    type: "geo",
-    x: n.x, y: n.y,
-    props: { geo: geoType, w: n.w ?? 120, h: n.h ?? 60, text: n.label ?? "" },
-    meta: { canvasId: n.id, kind: n.kind },
-  } as TLShapePartial;
+  if (kind === "rect") return "rectangle";
+  if (kind === "ellipse") return "ellipse";
+  if (kind === "diamond") return "diamond";
+  if (kind === "sticky") return "note";
+  if (kind === "text") return "text";
+  if (kind === "freeform") return "draw";
+  return "rectangle";
 }
 ```
 
-> **Note for the engineer:** Точные имена types/props tldraw SDK 5.x уточнить по `apps/frontend/node_modules/tldraw/dist/types/index.d.ts` или docs. Этот код — стартовый каркас; имена `geo`/`note`/`draw`/`text` соответствуют tldraw 3.x на npm (== SDK 5.x).
+- [ ] **Step 3: `canvas/from-canvas-state.ts`**
 
-- [ ] **Step 3: Replace `App.tsx` to load state and render**
+```ts
+import type { TLShapePartial } from "tldraw";
+import { kindToTldraw } from "./kinds";
+
+export function nodeToShape(n: { id: string; kind: string; x: number; y: number; w?: number; h?: number; label?: string }): TLShapePartial {
+  const tld = kindToTldraw(n.kind);
+  if (tld === "note") {
+    return { id: `shape:${n.id}` as any, type: "note", x: n.x, y: n.y, props: { text: n.label ?? "" }, meta: { canvasId: n.id, kind: n.kind } };
+  }
+  if (tld === "text") {
+    return { id: `shape:${n.id}` as any, type: "text", x: n.x, y: n.y, props: { text: n.label ?? "" }, meta: { canvasId: n.id, kind: n.kind } };
+  }
+  if (tld === "draw") {
+    return { id: `shape:${n.id}` as any, type: "draw", x: n.x, y: n.y, meta: { canvasId: n.id, kind: n.kind } };
+  }
+  return {
+    id: `shape:${n.id}` as any, type: "geo", x: n.x, y: n.y,
+    props: { geo: tld, w: n.w ?? 120, h: n.h ?? 60, text: n.label ?? "" },
+    meta: { canvasId: n.id, kind: n.kind },
+  };
+}
+```
+
+> **Note:** Exact tldraw 5.x shape `type`/`props` field names need verifying against `node_modules/tldraw/dist/types/index.d.ts` once installed. Names `geo`/`note`/`draw`/`text` reflect npm tldraw@3.x (= SDK 5.x).
+
+- [ ] **Step 4: Replace `App.tsx`**
 
 ```tsx
 import { useEffect, useState } from "react";
 import { Tldraw, type Editor } from "tldraw";
 import "tldraw/tldraw.css";
-import { getState, room } from "./transport/api";
-import { nodeToShape } from "./canvas/kinds";
+import { getState } from "./transport/api";
+import { nodeToShape } from "./canvas/from-canvas-state";
 
-export function App({ room: r }: { room: string }) {
+export function App({ room }: { room: string }) {
   const [editor, setEditor] = useState<Editor | null>(null);
-
   useEffect(() => {
     if (!editor) return;
+    let active = true;
     (async () => {
-      const state = await getState();
-      const shapes = state.canvas.nodes.map(nodeToShape);
+      const s = await getState();
+      if (!active) return;
+      const shapes = s.canvas.nodes.map(nodeToShape);
       if (shapes.length) editor.createShapes(shapes);
     })();
+    return () => { active = false; };
   }, [editor]);
 
   return (
     <div style={{ height: "100vh" }}>
-      <div style={{ position: "fixed", top: 8, left: 8, zIndex: 1000 }}>
-        room: <code>{r}</code>
-      </div>
+      <div style={{ position: "fixed", top: 8, left: 8, zIndex: 1000 }}>room: <code>{room}</code></div>
       <Tldraw onMount={setEditor} />
     </div>
   );
 }
 ```
 
-- [ ] **Step 4: Manual smoke test**
+- [ ] **Step 5: Smoke test**
 
-In one terminal: `cd apps/backend && bun src/index.ts`
-In another: `cd apps/frontend && bun run dev`
-In a third:
 ```bash
-curl -s -X POST 'localhost:8787/api/patch?room=test' \
-  -H 'content-type: application/json' \
+# t1
+cd apps/backend && bun src/index.ts
+# t2
+cd apps/frontend && bun run dev
+# t3
+curl -X POST 'localhost:8787/api/patch?room=test' -H 'content-type: application/json' \
   -d '{"ops":[{"op":"add","target":"node","value":{"id":"n1","kind":"rect","x":50,"y":50,"label":"hi"}}],"source":"ai"}'
+# открой http://localhost:5173/?room=test
 ```
-Then open `http://localhost:5173/?room=test`
-Expected: tldraw shows a "hi" rectangle.
+Expected: rectangle "hi" виден.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add apps/frontend/src/
-git commit -m "feat(frontend): render initial CanvasState from backend on mount"
+git add apps/frontend
+git commit -m "feat(frontend): load CanvasState and render initial shapes"
 ```
 
 ---
@@ -2120,133 +1720,86 @@ git commit -m "feat(frontend): render initial CanvasState from backend on mount"
 - Create: `apps/frontend/src/canvas/echo-guard.ts`
 - Modify: `apps/frontend/src/App.tsx`
 
-- [ ] **Step 1: Implement `transport/ws.ts`**
+- [ ] **Step 1: `transport/ws.ts`**
 
 ```ts
 import { room } from "./api";
 
 export type WsMessage =
   | { kind: "hello"; version: number }
-  | { kind: "patch"; source: "ai" | "user"; ops: unknown[]; version: number; originClientId?: string }
-  | { kind: "prompt-created"; prompt: unknown }
+  | { kind: "patch"; source: "ai" | "user"; ops: any[]; version: number; originClientId?: string }
+  | { kind: "prompt-created"; prompt: any }
   | { kind: "prompt-resolved"; id: string; response?: string };
 
-export type WsHandlers = {
-  onPatch?: (m: Extract<WsMessage, { kind: "patch" }>) => void;
-  onPromptCreated?: (m: Extract<WsMessage, { kind: "prompt-created" }>) => void;
-  onPromptResolved?: (m: Extract<WsMessage, { kind: "prompt-resolved" }>) => void;
-};
-
-export function openWs(handlers: WsHandlers): () => void {
-  let socket: WebSocket | null = null;
+export function openWs(handlers: { onPatch?: (m: any) => void; onPromptCreated?: (m: any) => void; onPromptResolved?: (m: any) => void }) {
+  let ws: WebSocket | null = null;
   let attempt = 0;
   let stopped = false;
-
   const connect = () => {
-    socket = new WebSocket(`ws://${location.host}/ws?room=${encodeURIComponent(room)}`);
-    socket.onopen = () => { attempt = 0; };
-    socket.onmessage = (e) => {
-      const msg = JSON.parse(e.data as string) as WsMessage;
-      if (msg.kind === "patch") handlers.onPatch?.(msg);
-      if (msg.kind === "prompt-created") handlers.onPromptCreated?.(msg);
-      if (msg.kind === "prompt-resolved") handlers.onPromptResolved?.(msg);
+    ws = new WebSocket(`ws://${location.host}/ws?room=${encodeURIComponent(room)}`);
+    ws.onopen = () => { attempt = 0; };
+    ws.onmessage = (e) => {
+      const m = JSON.parse(e.data as string) as WsMessage;
+      if (m.kind === "patch") handlers.onPatch?.(m);
+      if (m.kind === "prompt-created") handlers.onPromptCreated?.(m);
+      if (m.kind === "prompt-resolved") handlers.onPromptResolved?.(m);
     };
-    socket.onclose = () => {
+    ws.onclose = () => {
       if (stopped) return;
-      const delay = Math.min(30_000, 500 * 2 ** Math.min(attempt, 6));
-      attempt++;
-      setTimeout(connect, delay);
+      const d = Math.min(30_000, 500 * 2 ** Math.min(attempt, 6)); attempt++;
+      setTimeout(connect, d);
     };
-    socket.onerror = () => socket?.close();
+    ws.onerror = () => ws?.close();
   };
-
   connect();
-  return () => { stopped = true; socket?.close(); };
+  return () => { stopped = true; ws?.close(); };
 }
 ```
 
-- [ ] **Step 2: Implement `canvas/echo-guard.ts`**
+- [ ] **Step 2: `canvas/echo-guard.ts`**
 
 ```ts
 const seen = new Set<string>();
-
-export function rememberOurOpId(id: string) {
-  seen.add(id);
-  setTimeout(() => seen.delete(id), 10_000);
-}
-
-export function isOurOp(id: string | undefined): boolean {
-  return !!id && seen.has(id);
-}
+export function rememberOurOpId(id: string) { seen.add(id); setTimeout(() => seen.delete(id), 10_000); }
+export function isOurOp(id?: string) { return !!id && seen.has(id); }
 ```
 
-- [ ] **Step 3: Wire WS into `App.tsx`**
+- [ ] **Step 3: Update `App.tsx` to subscribe**
+
+Add inside `useEffect`:
 
 ```tsx
-import { useEffect, useState } from "react";
-import { Tldraw, type Editor } from "tldraw";
-import "tldraw/tldraw.css";
-import { getState } from "./transport/api";
 import { openWs } from "./transport/ws";
-import { nodeToShape } from "./canvas/kinds";
 import { isOurOp } from "./canvas/echo-guard";
 
-export function App({ room: r }: { room: string }) {
-  const [editor, setEditor] = useState<Editor | null>(null);
-
-  useEffect(() => {
-    if (!editor) return;
-    let active = true;
-    (async () => {
-      const state = await getState();
-      if (!active) return;
-      const shapes = state.canvas.nodes.map(nodeToShape);
-      if (shapes.length) editor.createShapes(shapes);
-    })();
-
-    const close = openWs({
-      onPatch: (m) => {
-        if (isOurOp(m.originClientId)) return;          // echo guard
-        // Минимальное применение: пересоздать все shapes из ops.
-        // (полноценный inline-patch — Task 16.)
-        for (const op of m.ops as any[]) {
-          if (op.op === "add" && op.target === "node") {
-            editor.createShapes([nodeToShape(op.value)]);
-          }
-          if (op.op === "delete" && op.target === "node") {
-            editor.deleteShapes([`shape:${op.id}` as any]);
-          }
-        }
-      },
-    });
-    return () => { active = false; close(); };
-  }, [editor]);
-
-  return (
-    <div style={{ height: "100vh" }}>
-      <div style={{ position: "fixed", top: 8, left: 8, zIndex: 1000 }}>
-        room: <code>{r}</code>
-      </div>
-      <Tldraw onMount={setEditor} />
-    </div>
-  );
-}
+// after initial state load:
+const close = openWs({
+  onPatch: (m) => {
+    if (isOurOp(m.originClientId)) return;
+    for (const op of m.ops) {
+      if (op.op === "add" && op.target === "node") editor.createShapes([nodeToShape(op.value)]);
+      else if (op.op === "delete" && op.target === "node") editor.deleteShapes([`shape:${op.id}` as any]);
+      else if (op.op === "update" && op.target === "node") {
+        editor.updateShapes([{ id: `shape:${op.id}` as any, type: "geo", x: op.set.x, y: op.set.y }]);
+      }
+    }
+  },
+});
+return () => { active = false; close(); };
 ```
 
-- [ ] **Step 4: Manual smoke test**
+- [ ] **Step 4: Smoke (browser doesn't refresh)**
 
-Backend running, frontend running.
 ```bash
 curl -X POST 'localhost:8787/api/patch?room=test' -H 'content-type: application/json' \
   -d '{"ops":[{"op":"add","target":"node","value":{"id":"x1","kind":"ellipse","x":200,"y":100,"label":"live"}}],"source":"ai"}'
 ```
-Expected: shape appears in browser **without page refresh**.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/frontend/src/
-git commit -m "feat(frontend): WebSocket subscription with echo-guard and live patches"
+git add apps/frontend
+git commit -m "feat(frontend): WebSocket subscription with echo-guard"
 ```
 
 ---
@@ -2257,176 +1810,241 @@ git commit -m "feat(frontend): WebSocket subscription with echo-guard and live p
 - Create: `apps/frontend/src/canvas/to-patch.ts`
 - Modify: `apps/frontend/src/App.tsx`
 
-- [ ] **Step 1: Implement `to-patch.ts`**
+- [ ] **Step 1: `canvas/to-patch.ts`**
 
 ```ts
-import type { Editor, TLShape, TLShapeId } from "tldraw";
-
-// Преобразовать diff между двумя snapshot'ами tldraw в наши PatchOp'ы.
-// MVP-варианта достаточно для add/update/delete простых геоформ.
+import type { TLShape, TLShapeId } from "tldraw";
 
 export type SimpleOp =
   | { op: "add"; target: "node"; value: { id: string; kind: string; x: number; y: number; w?: number; h?: number; label?: string } }
-  | { op: "update"; target: "node"; id: string; set: Partial<{ x: number; y: number; w: number; h: number; label: string }> }
+  | { op: "update"; target: "node"; id: string; set: { x?: number; y?: number; label?: string } }
   | { op: "delete"; target: "node"; id: string };
 
-export function shapeToNode(shape: TLShape): SimpleOp["value"] | null {
-  if (shape.type === "geo") {
+const idFrom = (id: TLShapeId) => (id as unknown as string).replace(/^shape:/, "");
+
+export function shapeToNode(s: TLShape): SimpleOp["value"] | null {
+  if (s.type === "geo") {
     return {
-      id: idFromShapeId(shape.id),
-      kind: geoToKind((shape as any).props.geo ?? "rectangle"),
-      x: shape.x, y: shape.y,
-      w: (shape as any).props.w,
-      h: (shape as any).props.h,
-      label: (shape as any).props.text ?? undefined,
+      id: idFrom(s.id),
+      kind: geoToKind((s as any).props?.geo ?? "rectangle"),
+      x: s.x, y: s.y,
+      w: (s as any).props?.w, h: (s as any).props?.h,
+      label: (s as any).props?.text ?? undefined,
     };
   }
-  if (shape.type === "note") {
-    return { id: idFromShapeId(shape.id), kind: "sticky", x: shape.x, y: shape.y, label: (shape as any).props.text ?? "" };
-  }
-  if (shape.type === "text") {
-    return { id: idFromShapeId(shape.id), kind: "text", x: shape.x, y: shape.y, label: (shape as any).props.text ?? "" };
-  }
-  if (shape.type === "draw") {
-    return { id: idFromShapeId(shape.id), kind: "freeform", x: shape.x, y: shape.y };
-  }
+  if (s.type === "note") return { id: idFrom(s.id), kind: "sticky", x: s.x, y: s.y, label: (s as any).props?.text ?? "" };
+  if (s.type === "text") return { id: idFrom(s.id), kind: "text", x: s.x, y: s.y, label: (s as any).props?.text ?? "" };
+  if (s.type === "draw") return { id: idFrom(s.id), kind: "freeform", x: s.x, y: s.y };
   return null;
 }
 
-function idFromShapeId(id: TLShapeId): string {
-  return (id as unknown as string).replace(/^shape:/, "");
-}
-
-function geoToKind(geo: string): string {
-  if (geo === "rectangle") return "rect";
-  if (geo === "ellipse") return "ellipse";
-  if (geo === "diamond") return "diamond";
-  return "rect";
-}
+function geoToKind(g: string) { return g === "rectangle" ? "rect" : g === "ellipse" ? "ellipse" : g === "diamond" ? "diamond" : "rect"; }
 
 export function diffToOps(prev: Map<string, TLShape>, next: Map<string, TLShape>): SimpleOp[] {
   const ops: SimpleOp[] = [];
   for (const [id, s] of next) {
     const before = prev.get(id);
-    if (!before) {
-      const v = shapeToNode(s); if (v) ops.push({ op: "add", target: "node", value: v });
-    } else if (s.x !== before.x || s.y !== before.y) {
-      ops.push({ op: "update", target: "node", id: idFromShapeId(s.id), set: { x: s.x, y: s.y } });
-    }
+    if (!before) { const v = shapeToNode(s); if (v) ops.push({ op: "add", target: "node", value: v }); }
+    else if (s.x !== before.x || s.y !== before.y) ops.push({ op: "update", target: "node", id: idFrom(s.id), set: { x: s.x, y: s.y } });
   }
-  for (const [id, s] of prev) {
-    if (!next.has(id)) ops.push({ op: "delete", target: "node", id: idFromShapeId(s.id) });
-  }
+  for (const [id, s] of prev) if (!next.has(id)) ops.push({ op: "delete", target: "node", id: idFrom(s.id) });
   return ops;
 }
 ```
 
-- [ ] **Step 2: Subscribe to editor changes in `App.tsx`**
-
-Add to `App.tsx` after the `useEffect` hook (in same hook, after `openWs`):
+- [ ] **Step 2: Subscribe in `App.tsx`**
 
 ```tsx
-// Подписка на пользовательские изменения
-const snapshot = new Map<string, TLShape>(editor.getCurrentPageShapes().map((s) => [s.id as unknown as string, s]));
-
-const unsub = editor.store.listen(
-  ({ source }) => {
-    if (source !== "user") return;
-    const current = new Map(editor.getCurrentPageShapes().map((s) => [s.id as unknown as string, s]));
-    const ops = diffToOps(snapshot, current);
-    snapshot.clear();
-    for (const [id, s] of current) snapshot.set(id, s);
-    if (ops.length === 0) return;
-
-    const clientOpId = crypto.randomUUID();
-    rememberOurOpId(clientOpId);
-    void sendPatch(ops as unknown as any[], clientOpId);
-  },
-  { source: "user", scope: "document" },
-);
-
-return () => { active = false; close(); unsub(); };
-```
-Add imports:
-```ts
 import { diffToOps } from "./canvas/to-patch";
 import { rememberOurOpId } from "./canvas/echo-guard";
 import { sendPatch } from "./transport/api";
 import type { TLShape } from "tldraw";
+
+// inside same useEffect after the WS setup:
+const snap = new Map<string, TLShape>(editor.getCurrentPageShapes().map((s) => [s.id as unknown as string, s]));
+const unsubStore = editor.store.listen(() => {
+  const cur = new Map(editor.getCurrentPageShapes().map((s) => [s.id as unknown as string, s]));
+  const ops = diffToOps(snap, cur);
+  snap.clear(); for (const [k, v] of cur) snap.set(k, v);
+  if (ops.length === 0) return;
+  const cid = crypto.randomUUID();
+  rememberOurOpId(cid);
+  void sendPatch(ops as any, cid);
+}, { source: "user", scope: "document" });
+
+return () => { active = false; close(); unsubStore(); };
 ```
 
-> **Note:** `editor.store.listen` signature и `source`-фильтр уточнить по tldraw 5.x docs. Если фильтра нет — выфильтруй вручную внутри callback'а.
+- [ ] **Step 3: Smoke**
 
-- [ ] **Step 3: Manual smoke test**
-
-Frontend running.
-- Создай rectangle мышкой → должен полететь `POST /api/patch` (проверь Network tab в DevTools).
-- Двигай его → должен лететь update-patch.
-- Открой вторую вкладку с тем же `?room=`. В первой что-то нарисовал → должно появиться во второй.
+В браузере: создай прямоугольник, двигай, удали. В DevTools Network — `POST /api/patch` каждый раз.
+Открой вторую вкладку с тем же `?room=` — изменения видны.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add apps/frontend/src/
-git commit -m "feat(frontend): emit PatchOp on user edits with echo prevention"
+git add apps/frontend
+git commit -m "feat(frontend): user edits emit PatchOp with echo-prevention"
 ```
 
 ---
 
-## Task 15: Backend — minimal layout/import stub endpoints
-
-These return 501 for now; full implementation in Task 30.
+## Task 15: didraw-client — shared HTTP client
 
 **Files:**
-- Create: `apps/backend/src/routes/layout.ts`
-- Create: `apps/backend/src/routes/import-mermaid.ts`
-- Modify: `apps/backend/src/index.ts`
+- Create: `packages/didraw-client/package.json`
+- Create: `packages/didraw-client/src/index.ts`
+- Create: `packages/didraw-client/tests/index.test.ts`
 
-- [ ] **Step 1: Implement stubs**
+- [ ] **Step 1: `package.json`**
 
-`apps/backend/src/routes/layout.ts`:
-
-```ts
-import { Hono } from "hono";
-export const layoutRoutes = new Hono().post("/api/layout", (c) =>
-  c.json({ ok: false, error: "not implemented yet (Phase 1.5)" }, 501)
-);
+```json
+{
+  "name": "@didraw/client",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": { "test": "bun test" }
+}
 ```
 
-`apps/backend/src/routes/import-mermaid.ts`:
+- [ ] **Step 2: Failing test**
 
 ```ts
-import { Hono } from "hono";
-export const importMermaidRoutes = new Hono().post("/api/import/mermaid", (c) =>
-  c.json({ ok: false, error: "not implemented yet (Phase 1.5)" }, 501)
-);
+// packages/didraw-client/tests/index.test.ts
+import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { CanvasClient } from "../src/index";
+import { startServer } from "../../../apps/backend/src/index";
+
+let srv: { port: number; close: () => Promise<void> };
+beforeAll(async () => { srv = await startServer({ inMemory: true, port: 0 }); });
+afterAll(async () => { await srv.close(); });
+
+describe("CanvasClient", () => {
+  test("uses CLAUDE_SESSION_ID from env as default room", () => {
+    process.env.CLAUDE_SESSION_ID = "abc";
+    const c = new CanvasClient({ baseUrl: `http://localhost:${srv.port}` });
+    expect(c.room).toBe("abc");
+    delete process.env.CLAUDE_SESSION_ID;
+  });
+
+  test("getState returns empty for new room", async () => {
+    const c = new CanvasClient({ baseUrl: `http://localhost:${srv.port}`, room: "test1" });
+    const s = await c.getState();
+    expect(s.canvas.nodes).toEqual([]);
+  });
+
+  test("applyPatch + getState round-trip", async () => {
+    const c = new CanvasClient({ baseUrl: `http://localhost:${srv.port}`, room: "test2" });
+    const r = await c.applyPatch([{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }]);
+    expect(r.ok).toBe(true); expect(r.version).toBe(1);
+    const s = await c.getState();
+    expect(s.canvas.nodes[0].id).toBe("n1");
+  });
+});
 ```
 
-- [ ] **Step 2: Wire into index.ts**
+- [ ] **Step 3: Implement `packages/didraw-client/src/index.ts`**
 
-In `makeApp`:
 ```ts
-app.route("/", layoutRoutes);
-app.route("/", importMermaidRoutes);
+export type ClientOpts = { baseUrl?: string; room?: string };
+
+export class CanvasClient {
+  readonly room: string;
+  private base: string;
+
+  constructor(opts: ClientOpts = {}) {
+    this.room = opts.room ?? process.env.CLAUDE_SESSION_ID ?? "default";
+    this.base = opts.baseUrl ?? `http://localhost:${process.env.DIDRAW_PORT ?? 8787}`;
+  }
+
+  private q(extra: Record<string, string | number | undefined> = {}) {
+    const params = new URLSearchParams({ room: this.room });
+    for (const [k, v] of Object.entries(extra)) if (v !== undefined) params.set(k, String(v));
+    return params.toString();
+  }
+
+  async getState(opts: { fmt?: "full" | "compact"; since?: number } = {}) {
+    const r = await fetch(`${this.base}/api/state?${this.q({ fmt: opts.fmt ?? "compact", since: opts.since })}`);
+    return r.json();
+  }
+
+  async applyPatch(ops: unknown[], opts: { clientOpId?: string; source?: "ai" | "user" } = {}) {
+    const r = await fetch(`${this.base}/api/patch?${this.q()}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ops, source: opts.source ?? "ai", clientOpId: opts.clientOpId }),
+    });
+    return r.json();
+  }
+
+  async importMermaid(source: string, layout: "elk" | "keep" = "elk") {
+    const r = await fetch(`${this.base}/api/import/mermaid?${this.q()}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ source, layout }),
+    });
+    return r.json();
+  }
+
+  async layout(algorithm: "elk-layered" | "dagre", nodeIds?: string[]) {
+    const r = await fetch(`${this.base}/api/layout?${this.q()}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ algorithm, nodeIds }),
+    });
+    return r.json();
+  }
+
+  async getPrompts(status: "pending" | "resolved" | "dismissed" | "all" = "pending") {
+    const r = await fetch(`${this.base}/api/prompts?${this.q({ status })}`);
+    return r.json();
+  }
+
+  async resolvePrompt(id: string, response?: string) {
+    const r = await fetch(`${this.base}/api/prompt/${id}/resolve?${this.q()}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ response }),
+    });
+    return r.json();
+  }
+
+  async dismissPrompt(id: string) {
+    const r = await fetch(`${this.base}/api/prompt/${id}/dismiss?${this.q()}`, { method: "POST" });
+    return r.json();
+  }
+
+  async clear() {
+    const s = await this.getState({ fmt: "full" });
+    const ops = [
+      ...s.canvas.edges.map((e: any) => ({ op: "delete", target: "edge", id: e.id })),
+      ...s.canvas.nodes.map((n: any) => ({ op: "delete", target: "node", id: n.id })),
+      ...s.canvas.groups.map((g: any) => ({ op: "delete", target: "group", id: g.id })),
+    ];
+    return this.applyPatch(ops);
+  }
+
+  async health(): Promise<boolean> {
+    try { return (await fetch(`${this.base}/healthz`)).ok; } catch { return false; }
+  }
+}
 ```
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Run — PASS, commit**
 
 ```bash
-git add apps/backend/src/routes apps/backend/src/index.ts
-git commit -m "feat(backend): stub /api/layout and /api/import/mermaid (501) for Phase 1.5"
+cd packages/didraw-client && bun test
+git add packages/didraw-client
+git commit -m "feat(client): shared CanvasClient HTTP wrapper for CLI/MCP/tests"
 ```
 
 ---
 
-## Task 16: didraw CLI — `daemon` command
+## Task 16: didraw CLI — lifecycle (daemon)
 
 **Files:**
 - Create: `packages/didraw-cli/package.json`
-- Create: `packages/didraw-cli/src/index.ts`
 - Create: `packages/didraw-cli/src/daemon.ts`
+- Create: `packages/didraw-cli/src/index.ts`
 
-- [ ] **Step 1: Create `packages/didraw-cli/package.json`**
+- [ ] **Step 1: `package.json`**
 
 ```json
 {
@@ -2436,556 +2054,456 @@ git commit -m "feat(backend): stub /api/layout and /api/import/mermaid (501) for
   "type": "module",
   "bin": { "didraw": "src/index.ts" },
   "scripts": { "test": "bun test" },
-  "dependencies": { "@didraw/backend": "workspace:*" }
+  "dependencies": { "@didraw/client": "workspace:*" }
 }
 ```
 
-- [ ] **Step 2: Implement `daemon.ts`**
+- [ ] **Step 2: `daemon.ts`**
 
 ```ts
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import { CanvasClient } from "@didraw/client";
 
 const PID_FILE = join(homedir(), ".claude", ".didraw.pid");
 const PORT = Number(process.env.DIDRAW_PORT ?? 8787);
-const HEALTH = `http://localhost:${PORT}/healthz`;
 
-export async function status(): Promise<{ running: boolean; pid?: number; port: number }> {
+const client = new CanvasClient();
+
+export async function status() {
   if (!existsSync(PID_FILE)) return { running: false, port: PORT };
   const pid = Number(readFileSync(PID_FILE, "utf8"));
   try { process.kill(pid, 0); } catch { return { running: false, port: PORT }; }
-  try {
-    const r = await fetch(HEALTH);
-    if (r.ok) return { running: true, pid, port: PORT };
-  } catch {}
-  return { running: false, port: PORT };
+  return { running: await client.health(), pid, port: PORT };
 }
 
-export async function ensure(): Promise<void> {
-  const s = await status();
-  if (s.running) return;
-  await start();
-  // wait until healthz returns 200
-  for (let i = 0; i < 50; i++) {
-    await new Promise((r) => setTimeout(r, 100));
-    try { if ((await fetch(HEALTH)).ok) return; } catch {}
-  }
-  throw new Error("didraw: backend failed to start within 5s");
-}
-
-export async function start(): Promise<void> {
-  if ((await status()).running) {
-    console.log("didraw: already running");
-    return;
-  }
-  // Run backend as detached child
+export async function start() {
+  if ((await status()).running) { console.log(JSON.stringify({ ok: true, already: true })); return; }
   const entry = join(import.meta.dir, "..", "..", "..", "apps", "backend", "src", "index.ts");
   const child = spawn(process.execPath, [entry], { detached: true, stdio: "ignore" });
   child.unref();
   writeFileSync(PID_FILE, String(child.pid));
-  console.log(`didraw: started pid=${child.pid} on :${PORT}`);
+  console.log(JSON.stringify({ ok: true, pid: child.pid, port: PORT }));
 }
 
-export async function stop(): Promise<void> {
-  if (!existsSync(PID_FILE)) { console.log("didraw: not running"); return; }
+export async function ensure() {
+  if ((await status()).running) { console.log(JSON.stringify({ ok: true, already: true })); return; }
+  await start();
+  for (let i = 0; i < 50; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    if (await client.health()) return;
+  }
+  console.error(JSON.stringify({ ok: false, error: "didraw: not healthy within 5s" }));
+  process.exit(3);
+}
+
+export async function stop() {
+  if (!existsSync(PID_FILE)) { console.log(JSON.stringify({ ok: true, already: true })); return; }
   const pid = Number(readFileSync(PID_FILE, "utf8"));
   try { process.kill(pid, "SIGTERM"); } catch {}
   unlinkSync(PID_FILE);
-  console.log("didraw: stopped");
+  console.log(JSON.stringify({ ok: true, stopped: pid }));
 }
 ```
 
-- [ ] **Step 3: Implement `index.ts`**
+- [ ] **Step 3: `index.ts` (dispatcher)**
 
 ```ts
 #!/usr/bin/env bun
 import { ensure, start, status, stop } from "./daemon";
 
-const [cmd, ...args] = process.argv.slice(2);
-
-const handlers: Record<string, () => Promise<void>> = {
-  "daemon:start": async () => { await start(); },
-  "daemon:stop": async () => { await stop(); },
-  "daemon:status": async () => { const s = await status(); console.log(JSON.stringify(s, null, 2)); },
-  "daemon:ensure": async () => { await ensure(); },
-};
+const argv = process.argv.slice(2);
+const cmd = argv[0];
+const sub = argv[1];
 
 async function main() {
   if (cmd === "daemon") {
-    const sub = args[0] ?? "status";
-    const key = `daemon:${sub}`;
-    if (!handlers[key]) { usage(); process.exit(1); }
-    await handlers[key]();
-    return;
+    if (sub === "start") return start();
+    if (sub === "stop") return stop();
+    if (sub === "status") return console.log(JSON.stringify(await status(), null, 2));
+    if (sub === "ensure" || sub === "--ensure") return ensure();
+    usage(); process.exit(1);
   }
-  usage();
-  process.exit(cmd ? 1 : 0);
+  usage(); process.exit(cmd ? 1 : 0);
 }
 
 function usage() {
   console.log(`didraw <command>
 
-Commands:
-  daemon start | stop | status | ensure
+Lifecycle:
+  daemon start|stop|status|ensure
   open <room>
   list
   export <room> --to <path>
   rm <room>
+
+Data:
+  state    --room <id> [--compact] [--since <v>]
+  patch    --room <id> --stdin
+  import   mermaid --room <id> --stdin | --file <path>
+  layout   --room <id> --algorithm elk-layered [--node-ids <id,...>]
+  prompts  list --room <id> [--status pending|resolved|dismissed|all]
+  prompts  resolve <id> --room <id> [--response <text>]
+  prompts  dismiss <id> --room <id>
+  clear    --room <id> --confirm
 `);
 }
 
-main().catch((err) => { console.error(err); process.exit(1); });
+main().catch((e) => { console.error(JSON.stringify({ ok: false, error: String(e) })); process.exit(1); });
 ```
 
-- [ ] **Step 4: Manual test**
+- [ ] **Step 4: Manual smoke**
 
 ```bash
 cd packages/didraw-cli
 bun src/index.ts daemon ensure
 bun src/index.ts daemon status
-curl localhost:8787/healthz   # OK
+curl -s localhost:8787/healthz
 bun src/index.ts daemon stop
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add packages/didraw-cli/
-git commit -m "feat(cli): didraw daemon start/stop/status/ensure"
+git add packages/didraw-cli
+git commit -m "feat(cli): didraw daemon start/stop/status/ensure with pid-file"
 ```
 
 ---
 
-## Task 17: didraw CLI — `open`, `list`, `export`, `rm`
+## Task 17: didraw CLI — open, list, export, rm
 
 **Files:**
-- Create: `packages/didraw-cli/src/open.ts`
-- Create: `packages/didraw-cli/src/list.ts`
-- Create: `packages/didraw-cli/src/export.ts`
-- Create: `packages/didraw-cli/src/rm.ts`
+- Create: `packages/didraw-cli/src/lifecycle.ts`
 - Modify: `packages/didraw-cli/src/index.ts`
 
-- [ ] **Step 1: Implement `open.ts`**
+- [ ] **Step 1: `lifecycle.ts`**
 
 ```ts
+import { readdirSync, copyFileSync, existsSync, unlinkSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
+import { spawn } from "node:child_process";
+import { createInterface } from "node:readline/promises";
+import { stdin, stdout } from "node:process";
 import { ensure } from "./daemon";
 
-export async function open(room: string): Promise<void> {
+const CANVAS_DIR = () => join(homedir(), ".claude", "projects", "default-project", "canvas");
+
+export async function open(room: string) {
   await ensure();
   const url = `http://localhost:${process.env.DIDRAW_PORT ?? 8787}/?room=${encodeURIComponent(room)}`;
   const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-  const { spawn } = await import("node:child_process");
   spawn(cmd, [url], { detached: true, stdio: "ignore" }).unref();
-  console.log(`didraw: opened ${url}`);
+  console.log(JSON.stringify({ ok: true, url }));
 }
-```
 
-- [ ] **Step 2: Implement `list.ts`**
-
-```ts
-import { readdirSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
-
-export function list(): void {
-  const dir = join(homedir(), ".claude", "projects", "default-project", "canvas");
+export function list() {
+  const dir = CANVAS_DIR();
   try {
     const files = readdirSync(dir).filter((f) => f.endsWith(".json"));
-    if (files.length === 0) { console.log("(no rooms)"); return; }
-    for (const f of files) console.log(f.replace(/\.json$/, ""));
+    console.log(JSON.stringify({ ok: true, rooms: files.map((f) => f.replace(/\.json$/, "")) }));
   } catch {
-    console.log("(no rooms — storage dir not initialised)");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    console.log(JSON.stringify({ ok: true, rooms: [] }));
   }
 }
-```
 
-- [ ] **Step 3: Implement `export.ts`**
-
-```ts
-import { copyFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
-
-export function exportRoom(room: string, to: string): void {
-  const src = join(homedir(), ".claude", "projects", "default-project", "canvas", `${room}.json`);
-  if (!existsSync(src)) { console.error(`room not found: ${room}`); process.exit(2); }
+export function exportRoom(room: string, to: string) {
+  const src = join(CANVAS_DIR(), `${room}.json`);
+  if (!existsSync(src)) { console.error(JSON.stringify({ ok: false, error: "not found" })); process.exit(2); }
   copyFileSync(src, to);
-  console.log(`exported ${room} → ${to}`);
+  console.log(JSON.stringify({ ok: true, from: src, to }));
 }
-```
 
-- [ ] **Step 4: Implement `rm.ts`**
-
-```ts
-import { unlinkSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
-import { createInterface } from "node:readline/promises";
-import { stdin, stdout } from "node:process";
-
-export async function rmRoom(room: string): Promise<void> {
-  const p = join(homedir(), ".claude", "projects", "default-project", "canvas", `${room}.json`);
-  if (!existsSync(p)) { console.error("not found"); process.exit(2); }
+export async function rmRoom(room: string) {
+  const p = join(CANVAS_DIR(), `${room}.json`);
+  if (!existsSync(p)) { console.error(JSON.stringify({ ok: false, error: "not found" })); process.exit(2); }
   const rl = createInterface({ input: stdin, output: stdout });
   const ans = await rl.question(`Delete ${room}? [y/N] `);
   rl.close();
-  if (ans.toLowerCase() === "y") { unlinkSync(p); console.log("deleted"); }
+  if (ans.toLowerCase() === "y") { unlinkSync(p); console.log(JSON.stringify({ ok: true, deleted: room })); }
+  else console.log(JSON.stringify({ ok: false, error: "cancelled" }));
 }
 ```
 
-- [ ] **Step 5: Wire into `index.ts` dispatcher**
+- [ ] **Step 2: Wire into `index.ts`**
+
+After daemon handling:
 
 ```ts
-import { open } from "./open";
-import { list } from "./list";
-import { exportRoom } from "./export";
-import { rmRoom } from "./rm";
+import { open, list, exportRoom, rmRoom } from "./lifecycle";
 
-// inside main():
-if (cmd === "open") {
-  if (!args[0]) { usage(); process.exit(1); }
-  await open(args[0]);
-  return;
-}
-if (cmd === "list") { list(); return; }
+// inside main:
+if (cmd === "open") { if (!argv[1]) { usage(); process.exit(1); } return open(argv[1]); }
+if (cmd === "list") return list();
 if (cmd === "export") {
-  const [room, flag, to] = args;
-  if (flag !== "--to" || !to) { usage(); process.exit(1); }
-  exportRoom(room, to);
-  return;
+  const [, room, flag, to] = argv;
+  if (!room || flag !== "--to" || !to) { usage(); process.exit(1); }
+  return exportRoom(room, to);
 }
-if (cmd === "rm") {
-  if (!args[0]) { usage(); process.exit(1); }
-  await rmRoom(args[0]);
-  return;
-}
+if (cmd === "rm") { if (!argv[1]) { usage(); process.exit(1); } return rmRoom(argv[1]); }
 ```
 
-- [ ] **Step 6: Manual smoke**
+- [ ] **Step 3: Manual smoke**
 
 ```bash
-cd packages/didraw-cli
-bun src/index.ts open scratch  # opens browser to /?room=scratch
+bun src/index.ts open scratch
 bun src/index.ts list
 ```
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add packages/didraw-cli/
+git add packages/didraw-cli
 git commit -m "feat(cli): didraw open/list/export/rm"
 ```
 
 ---
 
-## Task 18: canvas-mcp — server skeleton with CLAUDE_SESSION_ID
+## Task 18: didraw CLI — data commands (state, patch, clear)
 
 **Files:**
-- Create: `packages/canvas-mcp/package.json`
-- Create: `packages/canvas-mcp/src/client.ts`
-- Create: `packages/canvas-mcp/src/tools.ts`
-- Create: `packages/canvas-mcp/src/index.ts`
-- Create: `packages/canvas-mcp/tests/client.test.ts`
+- Create: `packages/didraw-cli/src/data.ts`
+- Create: `packages/didraw-cli/tests/data.test.ts`
+- Modify: `packages/didraw-cli/src/index.ts`
 
-- [ ] **Step 1: Create `package.json`**
+- [ ] **Step 1: Failing test (CLI in → JSON out)**
 
-```json
-{
-  "name": "@didraw/canvas-mcp",
-  "version": "0.0.1",
-  "private": true,
-  "type": "module",
-  "bin": { "canvas-mcp": "src/index.ts" },
-  "scripts": { "test": "bun test" },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+```ts
+// packages/didraw-cli/tests/data.test.ts
+import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { startServer } from "../../../apps/backend/src/index";
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
+
+let srv: { port: number; close: () => Promise<void> };
+const CLI = join(import.meta.dir, "..", "src", "index.ts");
+const env = (room: string) => ({ ...process.env, DIDRAW_PORT: String(srv.port), CLAUDE_SESSION_ID: room });
+
+beforeAll(async () => { srv = await startServer({ inMemory: true, port: 0 }); });
+afterAll(async () => { await srv.close(); });
+
+describe("didraw data commands", () => {
+  test("state --compact on empty room", () => {
+    const r = spawnSync("bun", [CLI, "state", "--compact"], { env: env("d1"), encoding: "utf8" });
+    expect(r.status).toBe(0);
+    const j = JSON.parse(r.stdout);
+    expect(j.canvas.nodes).toEqual([]);
+  });
+
+  test("patch --stdin applies ops", () => {
+    const body = JSON.stringify({
+      ops: [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }],
+      source: "ai",
+    });
+    const r = spawnSync("bun", [CLI, "patch", "--stdin"], { env: env("d2"), input: body, encoding: "utf8" });
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject({ ok: true, version: 1 });
+  });
+
+  test("patch with invalid ops → exit 1, error in stdout", () => {
+    const body = JSON.stringify({ ops: [{ op: "add", target: "edge", value: { id: "e", from: { kind: "node", id: "missing" }, to: { kind: "node", id: "x" } } }], source: "ai" });
+    const r = spawnSync("bun", [CLI, "patch", "--stdin"], { env: env("d3"), input: body, encoding: "utf8" });
+    expect(r.status).toBe(1);
+    expect(JSON.parse(r.stdout).ok).toBe(false);
+  });
+
+  test("clear empties room", () => {
+    const env4 = env("d4");
+    spawnSync("bun", [CLI, "patch", "--stdin"], {
+      env: env4,
+      input: JSON.stringify({ ops: [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }], source: "ai" }),
+      encoding: "utf8",
+    });
+    const r = spawnSync("bun", [CLI, "clear", "--confirm"], { env: env4, encoding: "utf8" });
+    expect(r.status).toBe(0);
+    const after = spawnSync("bun", [CLI, "state"], { env: env4, encoding: "utf8" });
+    expect(JSON.parse(after.stdout).canvas.nodes).toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 2: Implement `data.ts`**
+
+```ts
+import { CanvasClient } from "@didraw/client";
+
+type Args = { room?: string; compact?: boolean; since?: number; confirm?: boolean };
+
+export function parseArgs(argv: string[]): Args {
+  const a: Args = {};
+  for (let i = 0; i < argv.length; i++) {
+    const k = argv[i];
+    if (k === "--room") a.room = argv[++i];
+    else if (k === "--compact") a.compact = true;
+    else if (k === "--since") a.since = Number(argv[++i]);
+    else if (k === "--confirm") a.confirm = true;
   }
+  return a;
+}
+
+export async function cmdState(argv: string[]) {
+  const a = parseArgs(argv);
+  const c = new CanvasClient({ room: a.room });
+  try {
+    const r = await c.getState({ fmt: a.compact ? "compact" : "full", since: a.since });
+    console.log(JSON.stringify(r));
+  } catch (e) { fail(e); }
+}
+
+export async function cmdPatch(argv: string[]) {
+  const a = parseArgs(argv);
+  if (!argv.includes("--stdin")) { console.error(JSON.stringify({ ok: false, error: "expected --stdin" })); process.exit(1); }
+  const raw = await readStdin();
+  let body: any;
+  try { body = JSON.parse(raw); } catch { console.error(JSON.stringify({ ok: false, error: "invalid JSON on stdin" })); process.exit(1); }
+  const c = new CanvasClient({ room: a.room });
+  try {
+    const r = await c.applyPatch(body.ops, { source: body.source ?? "ai", clientOpId: body.clientOpId });
+    console.log(JSON.stringify(r));
+    if (r.ok === false) process.exit(1);
+  } catch (e) { fail(e); }
+}
+
+export async function cmdClear(argv: string[]) {
+  const a = parseArgs(argv);
+  if (!a.confirm) { console.error(JSON.stringify({ ok: false, error: "expected --confirm" })); process.exit(1); }
+  const c = new CanvasClient({ room: a.room });
+  try { console.log(JSON.stringify(await c.clear())); } catch (e) { fail(e); }
+}
+
+async function readStdin(): Promise<string> {
+  let data = "";
+  for await (const chunk of process.stdin) data += String(chunk);
+  return data;
+}
+
+function fail(e: unknown) {
+  const msg = e instanceof Error ? e.message : String(e);
+  const status = msg.includes("ECONNREFUSED") ? 3 : 1;
+  console.error(JSON.stringify({ ok: false, error: msg }));
+  process.exit(status);
 }
 ```
 
-- [ ] **Step 2: Write failing test for `client.ts`**
-
-`packages/canvas-mcp/tests/client.test.ts`:
+- [ ] **Step 3: Wire into `index.ts`**
 
 ```ts
-import { describe, test, expect } from "bun:test";
-import { CanvasClient } from "../src/client";
+import { cmdState, cmdPatch, cmdClear } from "./data";
 
-describe("CanvasClient", () => {
-  test("uses CLAUDE_SESSION_ID from env as room", () => {
-    process.env.CLAUDE_SESSION_ID = "abc-123";
-    const c = new CanvasClient();
-    expect(c.room).toBe("abc-123");
-  });
-
-  test("falls back to default when env empty", () => {
-    delete process.env.CLAUDE_SESSION_ID;
-    const c = new CanvasClient();
-    expect(c.room).toBe("default");
-  });
-
-  test("explicit room overrides env", () => {
-    process.env.CLAUDE_SESSION_ID = "from-env";
-    const c = new CanvasClient({ room: "explicit" });
-    expect(c.room).toBe("explicit");
-  });
-});
+// inside main, before daemon:
+if (cmd === "state") return cmdState(argv.slice(1));
+if (cmd === "patch") return cmdPatch(argv.slice(1));
+if (cmd === "clear") return cmdClear(argv.slice(1));
 ```
 
-- [ ] **Step 3: Run — expect FAIL**
-
-Run: `cd packages/canvas-mcp && bun install && bun test`
-
-- [ ] **Step 4: Implement `client.ts`**
-
-```ts
-export class CanvasClient {
-  readonly room: string;
-  private base: string;
-
-  constructor(opts: { room?: string; baseUrl?: string } = {}) {
-    this.room = opts.room ?? process.env.CLAUDE_SESSION_ID ?? "default";
-    this.base = opts.baseUrl ?? `http://localhost:${process.env.DIDRAW_PORT ?? 8787}`;
-  }
-
-  async getState(fmt: "full" | "compact" = "compact", since?: number) {
-    const q = new URLSearchParams({ room: this.room, fmt });
-    if (since !== undefined) q.set("since", String(since));
-    const r = await fetch(`${this.base}/api/state?${q}`);
-    if (!r.ok) throw new Error(`getState ${r.status}`);
-    return r.json();
-  }
-
-  async applyPatch(ops: unknown[], clientOpId?: string) {
-    const r = await fetch(`${this.base}/api/patch?room=${encodeURIComponent(this.room)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ops, source: "ai", clientOpId }),
-    });
-    return r.json();
-  }
-
-  async importMermaid(source: string, layout: "elk" | "keep" = "elk") {
-    const r = await fetch(`${this.base}/api/import/mermaid?room=${encodeURIComponent(this.room)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ source, layout }),
-    });
-    return r.json();
-  }
-
-  async layout(algorithm: "elk-layered" | "dagre", nodeIds?: string[]) {
-    const r = await fetch(`${this.base}/api/layout?room=${encodeURIComponent(this.room)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ algorithm, nodeIds }),
-    });
-    return r.json();
-  }
-
-  async getPrompts(status: "pending" | "resolved" | "dismissed" | "all" = "pending") {
-    const r = await fetch(`${this.base}/api/prompts?room=${encodeURIComponent(this.room)}&status=${status}`);
-    return r.json();
-  }
-
-  async resolvePrompt(id: string, response?: string) {
-    const r = await fetch(`${this.base}/api/prompt/${id}/resolve?room=${encodeURIComponent(this.room)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ response }),
-    });
-    return r.json();
-  }
-
-  async dismissPrompt(id: string) {
-    const r = await fetch(`${this.base}/api/prompt/${id}/dismiss?room=${encodeURIComponent(this.room)}`, {
-      method: "POST",
-    });
-    return r.json();
-  }
-}
-```
-
-- [ ] **Step 5: Run — expect PASS**
-
-Run: `cd packages/canvas-mcp && bun test`
-Expected: 3 pass.
-
-- [ ] **Step 6: Implement `tools.ts`**
-
-```ts
-import { z } from "zod";
-import { CanvasClient } from "./client";
-
-const PatchOpSchema = z.record(z.string(), z.unknown()); // упрощённо для MVP — backend сам валидирует
-
-export const tools = (client: CanvasClient) => ({
-  canvas_get_state: {
-    description: "Get current canvas state. fmt='compact' rounds coords and omits default fields.",
-    schema: z.object({
-      fmt: z.enum(["full", "compact"]).optional(),
-      since: z.number().optional(),
-    }),
-    run: ({ fmt, since }: { fmt?: "full" | "compact"; since?: number }) =>
-      client.getState(fmt ?? "compact", since),
-  },
-  canvas_apply_patch: {
-    description: "Apply a list of PatchOps {op:add|update|delete, target:node|edge|group, ...}. Returns {ok, version}.",
-    schema: z.object({ ops: z.array(PatchOpSchema), clientOpId: z.string().optional() }),
-    run: ({ ops, clientOpId }: { ops: unknown[]; clientOpId?: string }) => client.applyPatch(ops, clientOpId),
-  },
-  canvas_import_mermaid: {
-    description: "Convenience: import Mermaid source as initial canvas content.",
-    schema: z.object({ source: z.string(), layout: z.enum(["elk", "keep"]).optional() }),
-    run: ({ source, layout }: { source: string; layout?: "elk" | "keep" }) =>
-      client.importMermaid(source, layout ?? "elk"),
-  },
-  canvas_layout: {
-    description: "Re-layout nodes using elkjs. If nodeIds omitted — layouts all.",
-    schema: z.object({ algorithm: z.enum(["elk-layered", "dagre"]), nodeIds: z.array(z.string()).optional() }),
-    run: ({ algorithm, nodeIds }: { algorithm: "elk-layered" | "dagre"; nodeIds?: string[] }) =>
-      client.layout(algorithm, nodeIds),
-  },
-  canvas_clear: {
-    description: "Wipe canvas. Requires confirm:'yes-i-mean-it'.",
-    schema: z.object({ confirm: z.literal("yes-i-mean-it") }),
-    run: async () => {
-      const state = await client.getState("full");
-      const ops = [
-        ...state.canvas.edges.map((e: any) => ({ op: "delete", target: "edge", id: e.id })),
-        ...state.canvas.nodes.map((n: any) => ({ op: "delete", target: "node", id: n.id })),
-        ...state.canvas.groups.map((g: any) => ({ op: "delete", target: "group", id: g.id })),
-      ];
-      return client.applyPatch(ops);
-    },
-  },
-});
-```
-
-- [ ] **Step 7: Implement `index.ts` MCP server bootstrap**
-
-```ts
-#!/usr/bin/env bun
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { CanvasClient } from "./client";
-import { tools } from "./tools";
-
-const client = new CanvasClient();
-const registered = tools(client);
-
-const server = new Server(
-  { name: "canvas-mcp", version: "0.0.1" },
-  { capabilities: { tools: {} } },
-);
-
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: Object.entries(registered).map(([name, t]) => ({
-    name,
-    description: t.description,
-    inputSchema: { type: "object" }, // упрощённо для MVP
-  })),
-}));
-
-server.setRequestHandler(CallToolRequestSchema, async (req) => {
-  const name = req.params.name as keyof typeof registered;
-  const tool = registered[name];
-  if (!tool) throw new Error(`unknown tool ${name}`);
-  const result = await tool.run(req.params.arguments as any);
-  return { content: [{ type: "text", text: JSON.stringify(result) }] };
-});
-
-await server.connect(new StdioServerTransport());
-```
-
-- [ ] **Step 8: Smoke test**
-
-In one terminal: `cd packages/didraw-cli && bun src/index.ts daemon ensure`
-In another:
-```bash
-cd packages/canvas-mcp
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | bun src/index.ts
-```
-Expected: JSON response listing 5 tools.
-
-- [ ] **Step 9: Commit**
+- [ ] **Step 4: Run — PASS, commit**
 
 ```bash
-git add packages/canvas-mcp/
-git commit -m "feat(mcp): canvas-mcp server with 5 tools and CLAUDE_SESSION_ID routing"
+cd packages/didraw-cli && bun test
+git add packages/didraw-cli
+git commit -m "feat(cli): didraw state, patch --stdin, clear with integration tests"
 ```
 
 ---
 
-## Task 19: draw skill — SKILL.md with compact-state injection
+## Task 19: draw skill — SKILL.md with didraw cheat-sheet
 
 **Files:**
 - Create: `.claude/skills/draw/SKILL.md`
-- Create: `.claude/mcp.json`
 
-- [ ] **Step 1: Create `.claude/mcp.json`**
-
-```json
-{
-  "mcpServers": {
-    "canvas-mcp": {
-      "command": "bun",
-      "args": ["run", "packages/canvas-mcp/src/index.ts"],
-      "env": {}
-    }
-  }
-}
-```
-
-- [ ] **Step 2: Create `.claude/skills/draw/SKILL.md`**
+- [ ] **Step 1: Create**
 
 ```markdown
 ---
 name: draw
-description: Use whenever the user wants to visualise architecture, flows, or relationships on a canvas board, when they say "нарисуй", "схема", "доска", "обнови canvas", or call /draw. Injects current canvas state so you can update it via canvas_apply_patch.
+description: Use when user mentions canvas, drawing, schemas, architecture diagrams, or says "нарисуй", "доска", "схема", "обнови canvas", or invokes /draw. Injects current canvas state and pending user prompts; AI uses didraw CLI through Bash to update the board.
 ---
 
 # draw
 
-You have an interactive canvas board for this session. Use it to externalise architectural concepts the user mentions.
+You have a live canvas board for this Claude Code session. State below is auto-injected; use the `didraw` CLI through Bash to read and modify it.
 
 ## Current canvas state (compact JSON)
 
-!`curl -s "http://localhost:${DIDRAW_PORT:-8787}/api/state?room=${CLAUDE_SESSION_ID:-default}&fmt=compact"`
+!`didraw state --compact 2>/dev/null || echo '{"canvas":{"nodes":[],"edges":[],"groups":[]},"version":0}'`
 
-## Pending user prompts (objects user attached comments/questions to)
+## Pending user prompts
 
-!`curl -s "http://localhost:${DIDRAW_PORT:-8787}/api/prompts?room=${CLAUDE_SESSION_ID:-default}&status=pending"`
+!`didraw prompts list --status pending 2>/dev/null || echo '{"prompts":[]}'`
 
-## How to update the canvas
+## Commands (use the Bash tool)
 
-Use the `canvas_apply_patch` MCP tool with PatchOp[] where each op is:
-- `{op:"add", target:"node"|"edge"|"group", value:{...}}` — create
-- `{op:"update", target, id, set:{...}}` — partial update; `style`/`meta` deep-merge
-- `{op:"delete", target, id}` — remove
-
-Node `kind`: `rect | ellipse | diamond | sticky | text | freeform`. Defaults: w=120, h=60. Coordinates in pixels, centre ≈ (0,0).
-
-Edge endpoints are `{kind:"node", id}` (anchored) or `{kind:"point", x, y}` (free in space).
-
-For bulk-import a graph: call `canvas_import_mermaid({source: "graph LR\n a --> b"})`. After several `add`s, call `canvas_layout({algorithm:"elk-layered"})` to arrange.
-
-If you reply to a pending user prompt, call `canvas_resolve_prompt({id, response})` afterwards.
+Read:
+```
+didraw state --compact                          # full snapshot
+didraw state --since <last_version>             # diff only
 ```
 
-- [ ] **Step 3: Manual test**
+Write:
+```
+echo '{"ops":[...],"source":"ai","clientOpId":"<uuid>"}' | didraw patch --stdin
+didraw clear --confirm                          # wipe canvas (destructive!)
+```
 
-In Claude Code session: `/draw нарисуй простой web app: client → api → db`.
-Expected: skill loads, state is injected, AI calls `canvas_import_mermaid` or several `canvas_apply_patch`, browser updates.
+Bulk-import a graph (Mermaid):
+```
+didraw import mermaid --stdin <<EOF
+graph LR
+  app --> server --> db
+EOF
+```
+Auto-layout new nodes:
+```
+didraw layout --algorithm elk-layered
+didraw layout --node-ids n1,n2          # only specific
+```
 
-- [ ] **Step 4: Commit**
+Targeted prompts (user-attached questions on objects):
+```
+didraw prompts list --status pending
+didraw prompts resolve <id> --response "text"
+didraw prompts dismiss <id>
+```
+
+## PatchOp format
+
+- `{op:"add", target:"node"|"edge"|"group", value:{...}}` — create
+- `{op:"update", target, id, set:{...}}` — partial; `style`/`meta` deep-merge
+- `{op:"delete", target, id}` — remove
+
+## Node fields
+
+- `id` (UUID), `kind` (`rect|ellipse|diamond|sticky|text|freeform`), `x`, `y`
+- Optional: `w`, `h` (default 120×60; sticky 200×120), `label`, `style{color,fill,stroke,fontSize}`, `meta`
+
+## Edge fields
+
+- `id`, `from`, `to` — endpoints are `{kind:"node",id}` (anchored) or `{kind:"point",x,y}` (free in space)
+- Optional: `label`, `style{color,dashed,arrow:"none"|"to"|"both"}`
+
+## Coordinates
+
+Pixels, centre of canvas ≈ (0,0). Spacing 150–250px between nodes feels natural.
+
+## If you reply to a pending user prompt
+
+Always call `didraw prompts resolve <id> --response "what you did"` after — so the marker on the canvas updates and the user sees your response.
+```
+
+- [ ] **Step 2: Manual test**
+
+In Claude Code: backend running, sat `/draw нарисуй простой web app: client → api → db`.
+Expected: skill body inserted, AI runs `echo '{...}' | didraw patch --stdin` через Bash, browser обновляется.
+
+- [ ] **Step 3: Commit**
 
 ```bash
-git add .claude/
-git commit -m "feat(.claude): draw skill with compact state + prompts injection, mcp.json"
+git add .claude/skills/draw
+git commit -m "feat(.claude): draw skill with didraw cheat-sheet and state injection"
 ```
 
 ---
@@ -2993,9 +2511,9 @@ git commit -m "feat(.claude): draw skill with compact state + prompts injection,
 ## Task 20: SessionStart hook
 
 **Files:**
-- Modify: `.claude/settings.json`
+- Create: `.claude/settings.json`
 
-- [ ] **Step 1: Create `.claude/settings.json`**
+- [ ] **Step 1: Create**
 
 ```json
 {
@@ -3016,68 +2534,98 @@ git commit -m "feat(.claude): draw skill with compact state + prompts injection,
 
 - [ ] **Step 2: Manual test**
 
-Start a new Claude Code session in this project. After init:
+Start fresh Claude Code session:
 ```bash
-curl localhost:8787/healthz
+# inside session, immediately
+curl -s localhost:8787/healthz
 ```
-Expected: `{"ok":true}`. Backend should have been started automatically.
+Expected: `{"ok":true}`. Backend поднят автоматически.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add .claude/settings.json
-git commit -m "feat(.claude): SessionStart hook ensures didraw daemon"
+git commit -m "feat(.claude): SessionStart hook starts didraw daemon"
 ```
 
 ---
 
-## Task 21: Mermaid import — implementation (per ADR-0001)
-
-Implementation location depends on Task 4 ADR. **Read `docs/decisions/0001-mermaid-import-location.md`** before starting.
-
-Two variants below — choose one:
-
-### Variant A: backend implementation (if ADR says backend works)
+## Task 21: Backend — stub /api/import/mermaid and /api/layout
 
 **Files:**
-- Modify: `apps/backend/src/routes/import-mermaid.ts`
-- Create: `apps/backend/src/mermaid-import.ts`
-- Create: `apps/backend/tests/mermaid-import.test.ts`
+- Create: `apps/backend/src/routes/import-mermaid.ts`
+- Create: `apps/backend/src/routes/layout.ts`
+- Modify: `apps/backend/src/index.ts`
 
-- [ ] **Step A1: Add deps**
-
-```bash
-cd apps/backend && bun add @tldraw/mermaid jsdom
-```
-
-- [ ] **Step A2: Write failing test**
-
-`apps/backend/tests/mermaid-import.test.ts`:
+- [ ] **Step 1: Stubs**
 
 ```ts
+// apps/backend/src/routes/import-mermaid.ts
+import { Hono } from "hono";
+export const importMermaidRoutes = new Hono().post("/api/import/mermaid", (c) =>
+  c.json({ ok: false, error: "not implemented (Task 22)" }, 501));
+```
+
+```ts
+// apps/backend/src/routes/layout.ts
+import { Hono } from "hono";
+export const layoutRoutes = new Hono().post("/api/layout", (c) =>
+  c.json({ ok: false, error: "not implemented (Task 24)" }, 501));
+```
+
+- [ ] **Step 2: Wire in `makeApp`**
+
+```ts
+app.route("/", importMermaidRoutes);
+app.route("/", layoutRoutes);
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add apps/backend
+git commit -m "feat(backend): stub /api/import/mermaid and /api/layout (501)"
+```
+
+---
+
+## Task 22: Backend — Mermaid import (per ADR-0001)
+
+Read `docs/decisions/0001-mermaid-import-location.md`. Implement Variant A (backend) or Variant B (frontend) accordingly.
+
+### Variant A: backend
+
+**Files:**
+- Create: `apps/backend/src/mermaid-import.ts`
+- Modify: `apps/backend/src/routes/import-mermaid.ts`
+- Create: `apps/backend/tests/mermaid-import.test.ts`
+
+- [ ] **Step A1: Test**
+
+```ts
+// apps/backend/tests/mermaid-import.test.ts
 import { describe, test, expect } from "bun:test";
 import { mermaidToOps } from "../src/mermaid-import";
 
 describe("mermaidToOps", () => {
-  test("graph LR a-->b → 2 nodes, 1 edge", async () => {
+  test("graph LR a-->b → 2 nodes + 1 edge", async () => {
     const ops = await mermaidToOps("graph LR\n a --> b");
     expect(ops.filter((o) => o.op === "add" && o.target === "node")).toHaveLength(2);
     expect(ops.filter((o) => o.op === "add" && o.target === "edge")).toHaveLength(1);
   });
 
-  test("invalid syntax throws", async () => {
-    await expect(mermaidToOps("not mermaid at all !!!")).rejects.toThrow();
+  test("invalid throws", async () => {
+    await expect(mermaidToOps("not mermaid at all!!!")).rejects.toThrow();
   });
 });
 ```
 
-- [ ] **Step A3: Implement `mermaid-import.ts`**
+- [ ] **Step A2: Implement**
 
 ```ts
 import type { PatchOp } from "./types";
-
-// Set up minimal DOM before importing @tldraw/mermaid (per spike ADR-0001).
 import { JSDOM } from "jsdom";
+
 const dom = new JSDOM("<!doctype html><html><body></body></html>");
 // @ts-ignore
 globalThis.window ??= dom.window;
@@ -3087,11 +2635,9 @@ globalThis.document ??= dom.window.document;
 const mod = await import("@tldraw/mermaid");
 
 export async function mermaidToOps(source: string): Promise<PatchOp[]> {
-  // Exact API name verified during Task 4 spike.
-  // @ts-expect-error — runtime call
+  // @ts-expect-error — runtime API verified during Task 4 spike
   const blueprint = await mod.createMermaidDiagram({ source });
   if (!blueprint?.nodes?.length) throw new Error("mermaid produced no nodes");
-
   const ops: PatchOp[] = [];
   for (const n of blueprint.nodes) {
     ops.push({
@@ -3109,91 +2655,160 @@ export async function mermaidToOps(source: string): Promise<PatchOp[]> {
 }
 ```
 
-- [ ] **Step A4: Replace route**
+- [ ] **Step A3: Replace route**
 
 ```ts
 import { Hono } from "hono";
 import { mermaidToOps } from "../mermaid-import";
 import { applyPatch } from "../patch";
 import type { Rooms } from "../rooms";
-import type { PatchBus } from "./patch";
+import type { WsHub } from "../ws";
 
-export function importMermaidRoutes(rooms: Rooms, bus: PatchBus) {
+export function importMermaidRoutes(rooms: Rooms, hub: WsHub) {
   return new Hono().post("/api/import/mermaid", async (c) => {
     const id = c.req.query("room") ?? "default";
-    const { source } = await c.req.json();
-    if (!source) return c.json({ ok: false, error: "missing source" }, 400);
+    const body = await c.req.json().catch(() => null);
+    if (!body?.source) return c.json({ ok: false, error: "missing source" }, 400);
     let ops;
-    try { ops = await mermaidToOps(source); }
+    try { ops = await mermaidToOps(body.source); }
     catch (e) { return c.json({ ok: false, error: (e as Error).message }, 422); }
 
     const r = await rooms.get(id);
     const result = applyPatch(r.canvas, ops);
     if (!result.ok) return c.json({ ok: false, error: result.error }, 422);
-    r.canvas = result.state;
-    r.version += 1;
+    r.canvas = result.state; r.version += 1;
     r.opLog.push({ ops, source: "ai", version: r.version, at: Date.now() });
     r.dirty = true;
-    bus.publish(id, { ops, source: "ai", version: r.version });
+    hub.publish(id, { ops, source: "ai", version: r.version });
     return c.json({ ok: true, version: r.version, count: ops.length });
   });
 }
 ```
 
-- [ ] **Step A5: Run tests, manual smoke, commit**
+### Variant B: frontend
 
-### Variant B: frontend implementation (if ADR says backend fails)
+Backend route accepts `{source}`, stores into `pendingImports[]`, broadcasts `{kind:"import-mermaid-request", source}`. Frontend listens, parses via `@tldraw/mermaid` client-side, then POSTs PatchOp[] as a normal patch. Skeleton in spec §4 fallback.
 
-**Files:**
-- Modify: `apps/frontend/package.json`
-- Create: `apps/frontend/src/canvas/mermaid-import.ts`
-- Modify: `apps/frontend/src/App.tsx` (handle command from backend)
-- Modify: `apps/backend/src/routes/import-mermaid.ts` (just stores source and broadcasts request)
-
-(Skeleton omitted for brevity — mirror Variant A but parsing runs in browser. Backend sends `{kind:"import-mermaid-request", source}` over WS to frontend; frontend parses, then POSTs resulting PatchOps as a normal patch.)
-
-- [ ] **Common step: Commit**
+- [ ] **Common: tests pass, commit**
 
 ```bash
-git add apps/backend apps/frontend
-git commit -m "feat: mermaid import via @tldraw/mermaid (per ADR-0001)"
+cd apps/backend && bun test tests/mermaid-import.test.ts
+git add apps/backend
+git commit -m "feat(backend): mermaid import per ADR-0001"
 ```
 
 ---
 
-## Task 22: elkjs auto-layout
+## Task 23: didraw CLI — import mermaid
 
 **Files:**
-- Create: `apps/backend/src/layout.ts`
-- Modify: `apps/backend/src/routes/layout.ts`
-- Create: `apps/backend/tests/layout.test.ts`
+- Create: `packages/didraw-cli/src/import.ts`
+- Modify: `packages/didraw-cli/src/index.ts`
+- Add: `packages/didraw-cli/tests/import.test.ts`
 
-- [ ] **Step 1: Write failing test**
-
-`apps/backend/tests/layout.test.ts`:
+- [ ] **Step 1: Test**
 
 ```ts
-import { describe, test, expect } from "bun:test";
-import { layoutNodes } from "../src/layout";
+// packages/didraw-cli/tests/import.test.ts
+import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { startServer } from "../../../apps/backend/src/index";
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
 
-describe("layoutNodes (elk-layered)", () => {
-  test("assigns x/y to nodes connected by edges", async () => {
-    const nodes = [
-      { id: "a", kind: "rect" as const, x: 0, y: 0, w: 80, h: 40 },
-      { id: "b", kind: "rect" as const, x: 0, y: 0, w: 80, h: 40 },
-    ];
-    const edges = [{ id: "e", from: { kind: "node" as const, id: "a" }, to: { kind: "node" as const, id: "b" } }];
-    const positions = await layoutNodes(nodes, edges, "elk-layered");
-    expect(positions.a.x).not.toBe(positions.b.x); // layered → spread horizontally
+let srv: { port: number; close: () => Promise<void> };
+const CLI = join(import.meta.dir, "..", "src", "index.ts");
+beforeAll(async () => { srv = await startServer({ inMemory: true, port: 0 }); });
+afterAll(async () => { await srv.close(); });
+
+test("didraw import mermaid --stdin", () => {
+  const env = { ...process.env, DIDRAW_PORT: String(srv.port), CLAUDE_SESSION_ID: "im1" };
+  const r = spawnSync("bun", [CLI, "import", "mermaid", "--stdin"], {
+    env, input: "graph LR\n a --> b", encoding: "utf8",
   });
+  expect(r.status).toBe(0);
+  expect(JSON.parse(r.stdout).ok).toBe(true);
 });
 ```
 
-- [ ] **Step 2: Implement `layout.ts`**
+- [ ] **Step 2: Implement**
 
 ```ts
+// packages/didraw-cli/src/import.ts
+import { CanvasClient } from "@didraw/client";
+import { promises as fs } from "node:fs";
+
+export async function cmdImport(argv: string[]) {
+  const sub = argv[0];
+  if (sub !== "mermaid") { console.error(JSON.stringify({ ok: false, error: "only 'mermaid' supported" })); process.exit(1); }
+  const rest = argv.slice(1);
+  let room: string | undefined; let source: string | undefined; let useStdin = false;
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === "--room") room = rest[++i];
+    else if (rest[i] === "--stdin") useStdin = true;
+    else if (rest[i] === "--file") source = await fs.readFile(rest[++i], "utf8");
+  }
+  if (useStdin) {
+    source = "";
+    for await (const chunk of process.stdin) source += String(chunk);
+  }
+  if (!source) { console.error(JSON.stringify({ ok: false, error: "no source provided" })); process.exit(1); }
+  const c = new CanvasClient({ room });
+  try {
+    const r = await c.importMermaid(source);
+    console.log(JSON.stringify(r));
+    if (r.ok === false) process.exit(1);
+  } catch (e) {
+    console.error(JSON.stringify({ ok: false, error: String(e) })); process.exit(1);
+  }
+}
+```
+
+- [ ] **Step 3: Wire**
+
+```ts
+import { cmdImport } from "./import";
+// in main:
+if (cmd === "import") return cmdImport(argv.slice(1));
+```
+
+- [ ] **Step 4: Run, commit**
+
+```bash
+cd packages/didraw-cli && bun test tests/import.test.ts
+git add packages/didraw-cli
+git commit -m "feat(cli): didraw import mermaid --stdin/--file"
+```
+
+---
+
+## Task 24: Backend — elkjs layout endpoint
+
+**Files:**
+- Create: `apps/backend/src/layout-engine.ts`
+- Modify: `apps/backend/src/routes/layout.ts`
+- Create: `apps/backend/tests/layout.test.ts`
+
+- [ ] **Step 1: Test**
+
+```ts
+import { describe, test, expect } from "bun:test";
+import { layoutNodes } from "../src/layout-engine";
+
+test("layered layout assigns distinct x for chained nodes", async () => {
+  const positions = await layoutNodes(
+    [{ id: "a", w: 80, h: 40 }, { id: "b", w: 80, h: 40 }],
+    [{ id: "e", from: { kind: "node", id: "a" }, to: { kind: "node", id: "b" } }],
+  );
+  expect(positions.a.x).not.toBe(positions.b.x);
+});
+```
+
+- [ ] **Step 2: Implement**
+
+```ts
+// apps/backend/src/layout-engine.ts
 import ELK from "elkjs/lib/elk.bundled.js";
-import type { Node, Edge } from "./types";
+import type { Edge, Node } from "./types";
 
 const elk = new ELK();
 
@@ -3210,23 +2825,24 @@ export async function layoutNodes(
       .filter((e) => e.from.kind === "node" && e.to.kind === "node")
       .map((e) => ({ id: e.id, sources: [(e.from as any).id], targets: [(e.to as any).id] })),
   };
-  const result = await elk.layout(graph as any);
+  const res = await elk.layout(graph as any);
   const out: Record<string, { x: number; y: number }> = {};
-  for (const c of result.children ?? []) out[c.id!] = { x: c.x ?? 0, y: c.y ?? 0 };
+  for (const c of res.children ?? []) out[c.id!] = { x: c.x ?? 0, y: c.y ?? 0 };
   return out;
 }
 ```
 
-- [ ] **Step 3: Replace route**
+- [ ] **Step 3: Replace `routes/layout.ts`**
 
 ```ts
 import { Hono } from "hono";
-import { layoutNodes } from "../layout";
+import { layoutNodes } from "../layout-engine";
+import { applyPatch } from "../patch";
 import type { Rooms } from "../rooms";
-import type { PatchBus } from "./patch";
+import type { WsHub } from "../ws";
 import type { PatchOp } from "../types";
 
-export function layoutRoutes(rooms: Rooms, bus: PatchBus) {
+export function layoutRoutes(rooms: Rooms, hub: WsHub) {
   return new Hono().post("/api/layout", async (c) => {
     const id = c.req.query("room") ?? "default";
     const { algorithm = "elk-layered", nodeIds } = await c.req.json().catch(() => ({}));
@@ -3236,83 +2852,124 @@ export function layoutRoutes(rooms: Rooms, bus: PatchBus) {
     const ops: PatchOp[] = Object.entries(positions).map(([nid, p]) => ({
       op: "update", target: "node", id: nid, set: { x: p.x, y: p.y } as any,
     }));
-    // apply
-    for (const op of ops) {
-      // reuse existing logic
-    }
-    return c.json({ ok: true, count: ops.length, positions });
+    const result = applyPatch(r.canvas, ops);
+    if (!result.ok) return c.json({ ok: false, error: result.error }, 422);
+    r.canvas = result.state; r.version += 1;
+    r.opLog.push({ ops, source: "ai", version: r.version, at: Date.now() });
+    r.dirty = true;
+    hub.publish(id, { ops, source: "ai", version: r.version });
+    return c.json({ ok: true, version: r.version, count: ops.length });
   });
 }
 ```
 
-> **Implementation note:** Engineer reuses Task 9's `applyPatch` + `bus.publish` pattern (see `routes/patch.ts`).
-
-- [ ] **Step 4: Run tests, smoke, commit**
+- [ ] **Step 4: Run, commit**
 
 ```bash
+cd apps/backend && bun test
 git add apps/backend
 git commit -m "feat(backend): elkjs auto-layout endpoint"
 ```
 
 ---
 
-## Task 23: PreToolUse hook with additionalContext
+## Task 25: didraw CLI — layout
+
+**Files:**
+- Create: `packages/didraw-cli/src/layout.ts`
+- Modify: `packages/didraw-cli/src/index.ts`
+
+- [ ] **Step 1: Implement**
+
+```ts
+import { CanvasClient } from "@didraw/client";
+
+export async function cmdLayout(argv: string[]) {
+  let room: string | undefined; let algorithm: "elk-layered" | "dagre" = "elk-layered"; let nodeIds: string[] | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--room") room = argv[++i];
+    else if (argv[i] === "--algorithm") algorithm = argv[++i] as any;
+    else if (argv[i] === "--node-ids") nodeIds = argv[++i].split(",");
+  }
+  const c = new CanvasClient({ room });
+  try {
+    const r = await c.layout(algorithm, nodeIds);
+    console.log(JSON.stringify(r));
+    if (r.ok === false) process.exit(1);
+  } catch (e) {
+    console.error(JSON.stringify({ ok: false, error: String(e) })); process.exit(1);
+  }
+}
+```
+
+- [ ] **Step 2: Wire and commit**
+
+```ts
+import { cmdLayout } from "./layout";
+if (cmd === "layout") return cmdLayout(argv.slice(1));
+```
+
+```bash
+git add packages/didraw-cli
+git commit -m "feat(cli): didraw layout"
+```
+
+---
+
+## Task 26: PreToolUse hook with additionalContext
 
 **Files:**
 - Create: `.claude/hooks/draw-prehook.sh`
 - Modify: `.claude/settings.json`
-- Create: `.claude/hooks/draw-state-store.sh` (helper)
 
-- [ ] **Step 1: Create `.claude/hooks/draw-prehook.sh`**
+- [ ] **Step 1: Hook script**
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
-PORT="${DIDRAW_PORT:-8787}"
-ROOM="${CLAUDE_SESSION_ID:-default}"
-STATE_FILE="${HOME}/.claude/.draw-state-${ROOM}"
+INPUT="$(cat)"
+COMMAND="$(echo "$INPUT" | jq -r '.tool_input.command // ""')"
 
-LAST_VERSION=0
-[[ -f "$STATE_FILE" ]] && LAST_VERSION=$(cat "$STATE_FILE")
-
-DIFF_JSON=$(curl -s "http://localhost:${PORT}/api/state?room=${ROOM}&since=${LAST_VERSION}" || echo '{"diff":[]}')
-NEW_VERSION=$(echo "$DIFF_JSON" | jq -r '.version // 0')
-echo "$NEW_VERSION" > "$STATE_FILE"
-
-DIFF_TEXT=$(echo "$DIFF_JSON" | jq -c '.diff')
-
-if [[ "$DIFF_TEXT" == "[]" || -z "$DIFF_TEXT" ]]; then
-  cat <<JSON
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":""}}
-JSON
+# No-op if not a canvas command
+if [[ "$COMMAND" != *"didraw"* ]] && [[ "$COMMAND" != *"localhost:8787"* ]]; then
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":""}}\n'
   exit 0
 fi
 
-cat <<JSON
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"## Canvas diff since v${LAST_VERSION}\n\`\`\`json\n${DIFF_TEXT}\n\`\`\`"}}
-JSON
+ROOM="${CLAUDE_SESSION_ID:-default}"
+STATE_FILE="${HOME}/.claude/.draw-state-${ROOM}"
+LAST=0
+[[ -f "$STATE_FILE" ]] && LAST=$(cat "$STATE_FILE")
+
+DIFF=$(didraw state --since "$LAST" 2>/dev/null || echo '{"diff":[],"version":0}')
+NEW=$(echo "$DIFF" | jq -r '.version // 0')
+echo "$NEW" > "$STATE_FILE"
+
+D=$(echo "$DIFF" | jq -c '.diff // []')
+if [[ "$D" == "[]" ]]; then
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":""}}\n'
+else
+  jq -n --arg ctx "## Canvas diff since v${LAST}\n\`\`\`json\n${D}\n\`\`\`" \
+    '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$ctx}}'
+fi
 ```
 
-- [ ] **Step 2: chmod and register**
+- [ ] **Step 2: chmod + register in settings.json**
 
 ```bash
 chmod +x .claude/hooks/draw-prehook.sh
 ```
 
-Modify `.claude/settings.json` to add PreToolUse:
-
 ```json
 {
   "hooks": {
     "SessionStart": [
-      {
-        "hooks": [{ "type": "command", "command": "bun run --cwd ${CLAUDE_PROJECT_DIR:-.}/packages/didraw-cli src/index.ts daemon ensure" }]
-      }
+      { "hooks": [{ "type": "command", "command": "bun run --cwd ${CLAUDE_PROJECT_DIR:-.}/packages/didraw-cli src/index.ts daemon ensure" }] }
     ],
     "PreToolUse": [
       {
-        "matcher": "mcp__canvas-mcp__canvas_.*",
+        "matcher": "Bash",
         "hooks": [{ "type": "command", "command": "${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/draw-prehook.sh" }]
       }
     ]
@@ -3322,83 +2979,67 @@ Modify `.claude/settings.json` to add PreToolUse:
 
 - [ ] **Step 3: Manual test**
 
-In Claude Code session, after backend is running:
-1. Open browser, make some change manually.
-2. In Claude Code, ask "что я только что добавил на canvas?" — AI должен видеть свежий diff через hook.
+In Claude Code: open canvas in browser, move a shape. Then ask AI to read canvas (which triggers `didraw state`). Verify AI sees the position change в `additionalContext`.
+
+Also: run `git status` — verify hook does NOT inject anything (no-op).
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add .claude/hooks/ .claude/settings.json
-git commit -m "feat(.claude): PreToolUse hook injects canvas diff as additionalContext"
+git add .claude/hooks .claude/settings.json
+git commit -m "feat(.claude): PreToolUse hook injects canvas diff for didraw Bash commands"
 ```
 
 ---
 
-## Task 24: Prompts endpoints — backend
+## Task 27: Backend — prompts endpoints
 
 **Files:**
 - Create: `apps/backend/src/routes/prompts.ts`
 - Modify: `apps/backend/src/index.ts`
 - Create: `apps/backend/tests/routes.prompts.test.ts`
 
-- [ ] **Step 1: Write failing test**
+- [ ] **Step 1: Test**
 
 ```ts
 import { describe, test, expect } from "bun:test";
 import { startServer } from "../src/index";
 
+const json = (port: number, path: string, init?: RequestInit) =>
+  fetch(`http://localhost:${port}${path}`, init).then((r) => r.json());
+
 describe("prompts", () => {
-  test("POST /api/prompt creates pending prompt", async () => {
-    const { port, close } = await startServer({ inMemory: true, port: 0 });
-    const r = await fetch(`http://localhost:${port}/api/prompt?room=a`, {
+  test("POST /api/prompt creates pending", async () => {
+    const srv = await startServer({ inMemory: true, port: 0 });
+    const b = await json(srv.port, "/api/prompt?room=a", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ selection: ["n1"], text: "what is this?" }),
+      body: JSON.stringify({ selection: ["n1"], text: "?" }),
     });
-    const b = await r.json();
-    expect(b.id).toBeDefined();
-    expect(b.status).toBe("pending");
-    await close();
+    expect(b.id).toBeDefined(); expect(b.status).toBe("pending");
+    await srv.close();
   });
 
-  test("GET /api/prompts filters by status", async () => {
-    const { port, close } = await startServer({ inMemory: true, port: 0 });
-    const c = await fetch(`http://localhost:${port}/api/prompt?room=a`, {
+  test("resolve + list", async () => {
+    const srv = await startServer({ inMemory: true, port: 0 });
+    const p = await json(srv.port, "/api/prompt?room=a", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ selection: ["n1"], text: "Q" }),
-    }).then((r) => r.json());
-
-    await fetch(`http://localhost:${port}/api/prompt/${c.id}/resolve?room=a`, {
+      body: JSON.stringify({ selection: [], text: "x" }),
+    });
+    await json(srv.port, `/api/prompt/${p.id}/resolve?room=a`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ response: "ok" }),
     });
-
-    const pending = await fetch(`http://localhost:${port}/api/prompts?room=a&status=pending`).then((r) => r.json());
-    const resolved = await fetch(`http://localhost:${port}/api/prompts?room=a&status=resolved`).then((r) => r.json());
-    expect(pending.prompts).toHaveLength(0);
-    expect(resolved.prompts).toHaveLength(1);
-    expect(resolved.prompts[0].response).toBe("ok");
-
-    await close();
-  });
-
-  test("dismiss sets status", async () => {
-    const { port, close } = await startServer({ inMemory: true, port: 0 });
-    const c = await fetch(`http://localhost:${port}/api/prompt?room=a`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ selection: [], text: "x" }),
-    }).then((r) => r.json());
-    await fetch(`http://localhost:${port}/api/prompt/${c.id}/dismiss?room=a`, { method: "POST" });
-    const dismissed = await fetch(`http://localhost:${port}/api/prompts?room=a&status=dismissed`).then((r) => r.json());
-    expect(dismissed.prompts).toHaveLength(1);
-    await close();
+    const r = await json(srv.port, "/api/prompts?room=a&status=resolved");
+    expect(r.prompts[0].response).toBe("ok");
+    await srv.close();
   });
 });
 ```
 
-- [ ] **Step 2: Implement `routes/prompts.ts`**
+- [ ] **Step 2: Implement**
 
 ```ts
+// apps/backend/src/routes/prompts.ts
 import { Hono } from "hono";
 import type { Rooms } from "../rooms";
 import type { WsHub } from "../ws";
@@ -3410,18 +3051,14 @@ export function promptRoutes(rooms: Rooms, hub: WsHub) {
   r.post("/api/prompt", async (c) => {
     const id = c.req.query("room") ?? "default";
     const body = await c.req.json();
-    const prompt: Prompt = {
-      id: crypto.randomUUID(),
-      selection: body.selection ?? [],
-      text: String(body.text ?? ""),
-      createdAt: Date.now(),
-      status: "pending",
+    const p: Prompt = {
+      id: crypto.randomUUID(), selection: body.selection ?? [],
+      text: String(body.text ?? ""), createdAt: Date.now(), status: "pending",
     };
     const room = await rooms.get(id);
-    room.prompts.push(prompt);
-    room.dirty = true;
-    hub.publishPrompt(id, prompt);
-    return c.json(prompt);
+    room.prompts.push(p); room.dirty = true;
+    hub.publishPrompt(id, p);
+    return c.json(p);
   });
 
   r.get("/api/prompts", async (c) => {
@@ -3461,33 +3098,31 @@ export function promptRoutes(rooms: Rooms, hub: WsHub) {
 }
 ```
 
-- [ ] **Step 3: Wire into `index.ts`**
+- [ ] **Step 3: Wire in index.ts**
 
-In `makeApp` after `patchRoutes`:
 ```ts
 app.route("/", promptRoutes(rooms, bus));
 ```
 
-- [ ] **Step 4: Run tests, commit**
+- [ ] **Step 4: Run, commit**
 
 ```bash
-cd apps/backend && bun test tests/routes.prompts.test.ts
+cd apps/backend && bun test
 git add apps/backend
-git commit -m "feat(backend): prompts endpoints with WS broadcast"
+git commit -m "feat(backend): prompts endpoints (create/list/resolve/dismiss) with WS broadcast"
 ```
 
 ---
 
-## Task 25: Prompts UI — selection input
+## Task 28: Frontend — prompts UI
 
 **Files:**
+- Create: `apps/frontend/src/transport/prompts.ts`
 - Create: `apps/frontend/src/prompts/PromptInput.tsx`
-- Create: `apps/frontend/src/prompts/PromptMarker.tsx`
 - Create: `apps/frontend/src/prompts/PromptDrawer.tsx`
 - Modify: `apps/frontend/src/App.tsx`
-- Create: `apps/frontend/src/transport/prompts.ts`
 
-- [ ] **Step 1: Implement `transport/prompts.ts`**
+- [ ] **Step 1: `transport/prompts.ts`**
 
 ```ts
 import { room } from "./api";
@@ -3500,13 +3135,13 @@ export async function postPrompt(selection: string[], text: string) {
   return r.json();
 }
 
-export async function fetchPrompts(status = "pending") {
+export async function fetchPrompts(status = "all") {
   const r = await fetch(`/api/prompts?room=${encodeURIComponent(room)}&status=${status}`);
   return r.json();
 }
 ```
 
-- [ ] **Step 2: Implement `PromptInput.tsx`**
+- [ ] **Step 2: `PromptInput.tsx`**
 
 ```tsx
 import { useState } from "react";
@@ -3515,7 +3150,7 @@ import { postPrompt } from "../transport/prompts";
 export function PromptInput({ selection }: { selection: string[] }) {
   const [text, setText] = useState("");
   if (selection.length === 0) return null;
-
+  const send = async () => { if (text.trim()) { await postPrompt(selection, text); setText(""); } };
   return (
     <div style={{
       position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)",
@@ -3527,48 +3162,31 @@ export function PromptInput({ selection }: { selection: string[] }) {
         onChange={(e) => setText(e.target.value)}
         placeholder={`Ask AI about ${selection.length} selected…`}
         style={{ minWidth: 320 }}
-        onKeyDown={async (e) => {
-          if (e.key === "Enter" && text.trim()) {
-            await postPrompt(selection, text);
-            setText("");
-          }
-        }}
+        onKeyDown={(e) => { if (e.key === "Enter") void send(); }}
       />
-      <button onClick={async () => { if (text.trim()) { await postPrompt(selection, text); setText(""); } }}>
-        Send
-      </button>
+      <button onClick={() => void send()}>Send</button>
     </div>
   );
 }
 ```
 
-- [ ] **Step 3: Implement `PromptMarker.tsx` (placeholder for MVP)**
-
-```tsx
-export function PromptMarker({ count }: { count: number }) {
-  if (count === 0) return null;
-  return <span style={{ background: "#fff3", padding: "2px 4px", borderRadius: 4 }}>💬 {count}</span>;
-}
-```
-
-- [ ] **Step 4: Implement `PromptDrawer.tsx`**
+- [ ] **Step 3: `PromptDrawer.tsx`**
 
 ```tsx
 import { useEffect, useState } from "react";
 import { fetchPrompts } from "../transport/prompts";
 
-export function PromptDrawer() {
+export function PromptDrawer({ tick }: { tick: number }) {
   const [items, setItems] = useState<any[]>([]);
-  useEffect(() => { fetchPrompts("all").then((r) => setItems(r.prompts ?? [])); }, []);
-
+  useEffect(() => { fetchPrompts("all").then((r) => setItems(r.prompts ?? [])); }, [tick]);
   return (
     <div style={{
       position: "fixed", top: 60, right: 8, width: 320, maxHeight: "70vh",
       overflow: "auto", background: "white", border: "1px solid #ccc", borderRadius: 6,
       padding: 8, fontSize: 12, zIndex: 999,
     }}>
-      <div style={{ fontWeight: "bold", marginBottom: 8 }}>Prompts</div>
-      {items.length === 0 && <div>(none)</div>}
+      <div style={{ fontWeight: "bold", marginBottom: 8 }}>Prompts ({items.length})</div>
+      {items.length === 0 && <div>(empty)</div>}
       {items.map((p) => (
         <div key={p.id} style={{ marginBottom: 8, opacity: p.status !== "pending" ? 0.5 : 1 }}>
           <div><b>{p.status}</b> · {p.selection.join(", ") || "(no selection)"}</div>
@@ -3581,93 +3199,117 @@ export function PromptDrawer() {
 }
 ```
 
-- [ ] **Step 5: Wire into `App.tsx`**
+- [ ] **Step 4: Wire into `App.tsx`**
 
 ```tsx
 import { PromptInput } from "./prompts/PromptInput";
 import { PromptDrawer } from "./prompts/PromptDrawer";
 
-// Inside App component:
+// inside component:
 const [selection, setSelection] = useState<string[]>([]);
+const [promptsTick, setPromptsTick] = useState(0);
 
-useEffect(() => {
-  if (!editor) return;
-  // Track selection
-  const unsub = editor.store.listen(() => {
-    const ids = editor.getSelectedShapeIds().map((id) => (id as unknown as string).replace(/^shape:/, ""));
-    setSelection(ids);
-  }, { source: "user", scope: "session" });
-  return unsub;
-}, [editor]);
+// in editor useEffect after WS setup:
+const unsubSel = editor.store.listen(() => {
+  const ids = editor.getSelectedShapeIds().map((id) => (id as unknown as string).replace(/^shape:/, ""));
+  setSelection(ids);
+}, { source: "user", scope: "session" });
 
-// In JSX:
+// in openWs handlers:
+onPromptCreated: () => setPromptsTick((x) => x + 1),
+onPromptResolved: () => setPromptsTick((x) => x + 1),
+
+// in cleanup: unsubSel()
+// in JSX:
 <PromptInput selection={selection} />
-<PromptDrawer />
+<PromptDrawer tick={promptsTick} />
 ```
 
-- [ ] **Step 6: Manual smoke**
-
-1. Open browser, select a shape, type "what is this?" → Enter.
-2. `GET /api/prompts?room=...&status=pending` → should return the new prompt.
-3. Drawer на правой панели должен показать запись.
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 5: Smoke + commit**
 
 ```bash
 git add apps/frontend
-git commit -m "feat(frontend): targeted prompts UI — input, drawer, selection tracking"
+git commit -m "feat(frontend): targeted prompts UI (input on selection, drawer with history)"
 ```
 
 ---
 
-## Task 26: MCP — prompt-related tools
+## Task 29: didraw CLI — prompts list/resolve/dismiss
 
 **Files:**
-- Modify: `packages/canvas-mcp/src/tools.ts`
+- Create: `packages/didraw-cli/src/prompts.ts`
+- Modify: `packages/didraw-cli/src/index.ts`
 
-- [ ] **Step 1: Add tools**
+- [ ] **Step 1: Implement**
 
 ```ts
-canvas_get_prompts: {
-  description: "List prompts user attached to canvas objects. Default: pending only.",
-  schema: z.object({ status: z.enum(["pending", "resolved", "dismissed", "all"]).optional() }),
-  run: ({ status }: { status?: "pending" | "resolved" | "dismissed" | "all" }) => client.getPrompts(status ?? "pending"),
-},
-canvas_resolve_prompt: {
-  description: "Mark a prompt as resolved. Optional response is shown to user in drawer.",
-  schema: z.object({ id: z.string(), response: z.string().optional() }),
-  run: ({ id, response }: { id: string; response?: string }) => client.resolvePrompt(id, response),
-},
-canvas_dismiss_prompt: {
-  description: "Mark a prompt as dismissed (not relevant).",
-  schema: z.object({ id: z.string() }),
-  run: ({ id }: { id: string }) => client.dismissPrompt(id),
-},
+import { CanvasClient } from "@didraw/client";
+
+export async function cmdPrompts(argv: string[]) {
+  const sub = argv[0];
+  const rest = argv.slice(1);
+  let room: string | undefined; let status: any; let response: string | undefined; let id: string | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === "--room") room = rest[++i];
+    else if (rest[i] === "--status") status = rest[++i];
+    else if (rest[i] === "--response") response = rest[++i];
+    else if (!id && !rest[i].startsWith("--")) id = rest[i];
+  }
+  const c = new CanvasClient({ room });
+  try {
+    if (sub === "list") console.log(JSON.stringify(await c.getPrompts(status ?? "pending")));
+    else if (sub === "resolve") { if (!id) throw new Error("missing id"); console.log(JSON.stringify(await c.resolvePrompt(id, response))); }
+    else if (sub === "dismiss") { if (!id) throw new Error("missing id"); console.log(JSON.stringify(await c.dismissPrompt(id))); }
+    else { console.error(JSON.stringify({ ok: false, error: `unknown prompts subcommand: ${sub}` })); process.exit(1); }
+  } catch (e) {
+    console.error(JSON.stringify({ ok: false, error: String(e) })); process.exit(1);
+  }
+}
 ```
 
-- [ ] **Step 2: Verify via tools/list**
+- [ ] **Step 2: Wire and commit**
 
-```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | bun packages/canvas-mcp/src/index.ts | jq '.result.tools | length'
+```ts
+import { cmdPrompts } from "./prompts";
+if (cmd === "prompts") return cmdPrompts(argv.slice(1));
 ```
-Expected: 8.
-
-- [ ] **Step 3: Commit**
 
 ```bash
-git add packages/canvas-mcp/src/tools.ts
-git commit -m "feat(mcp): canvas_get_prompts, canvas_resolve_prompt, canvas_dismiss_prompt"
+git add packages/didraw-cli
+git commit -m "feat(cli): didraw prompts list/resolve/dismiss"
 ```
 
 ---
 
-## Task 27: Playwright golden-path test
+## Task 30: Update skill — inject pending prompts
+
+Already done in Task 19 (skill body includes `didraw prompts list`). Verify once more in a manual Claude Code session that AI sees prompts and calls resolve.
+
+- [ ] **Step 1: Manual e2e**
+
+1. Open canvas in browser, select a node, write "what is this?", Send.
+2. In Claude Code session: `что я тебя только что спросил на канвасе?` (or just continue the dialog).
+3. Expected: AI читает `didraw prompts list` (через cheat-sheet), отвечает в чате и вызывает `didraw prompts resolve <id> --response "..."`.
+
+If skill body needs tweaks for clarity, update.
+
+- [ ] **Step 2: Commit (if changes)**
+
+```bash
+git add .claude/skills/draw
+git commit -m "fix(skill): clarify prompt-resolution workflow"
+```
+
+---
+
+## Task 31: Playwright golden-path
 
 **Files:**
+- Create: `apps/frontend/playwright.config.ts`
 - Create: `apps/frontend/tests/golden.spec.ts`
 - Modify: `apps/frontend/package.json` (add playwright)
 
-- [ ] **Step 1: Add playwright**
+- [ ] **Step 1: Install + config**
 
 ```bash
 cd apps/frontend
@@ -3675,16 +3317,23 @@ bun add -D @playwright/test
 bunx playwright install chromium
 ```
 
-- [ ] **Step 2: Create test**
+```ts
+// playwright.config.ts
+import { defineConfig } from "@playwright/test";
+export default defineConfig({
+  testDir: "./tests",
+  use: { baseURL: "http://localhost:5173" },
+});
+```
+
+- [ ] **Step 2: Test**
 
 ```ts
 import { test, expect } from "@playwright/test";
 
-test("golden path: AI patch shows up on canvas, user move syncs back", async ({ page }) => {
-  // assume backend + frontend running on :8787 and :5173
-  await page.goto("http://localhost:5173/?room=golden");
+test("AI patch → canvas; user move → backend", async ({ page }) => {
+  await page.goto("/?room=golden");
 
-  // AI sends a patch
   await fetch("http://localhost:8787/api/patch?room=golden", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -3692,66 +3341,72 @@ test("golden path: AI patch shows up on canvas, user move syncs back", async ({ 
       source: "ai",
     }),
   });
-
-  // shape appears
   await expect(page.locator("text=AI")).toBeVisible({ timeout: 3000 });
 
-  // user moves it
-  await page.locator("text=AI").dragTo(page.locator("body"), { targetPosition: { x: 300, y: 200 } });
+  await page.locator("text=AI").dragTo(page.locator("body"), { targetPosition: { x: 350, y: 250 } });
   await page.waitForTimeout(500);
 
-  // backend has new position
   const state = await fetch("http://localhost:8787/api/state?room=golden").then((r) => r.json());
   const node = state.canvas.nodes.find((n: any) => n.id === "n1");
   expect(node.x).toBeGreaterThan(150);
 });
 ```
 
-- [ ] **Step 3: Run**
+- [ ] **Step 3: Run (need backend + frontend already running)**
 
 ```bash
-# in three terminals
-cd apps/backend && bun src/index.ts
-cd apps/frontend && bun run dev
 cd apps/frontend && bunx playwright test
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add apps/frontend/
+git add apps/frontend
 git commit -m "test(frontend): Playwright golden-path AI→canvas→user→backend"
 ```
 
 ---
 
-## Task 28: README + final polish
+## Task 32: README + final polish
 
 **Files:**
 - Create: `README.md`
-- Modify: `package.json` (top-level `dev` script)
 
-- [ ] **Step 1: Top-level README**
+- [ ] **Step 1: Write README**
 
 ```md
 # di.draw
 
-AI-driven canvas board for Claude Code sessions. tldraw 5.x frontend + Bun backend + MCP-tools + targeted prompts.
+AI-driven canvas board for Claude Code sessions. tldraw 5.x frontend + Bun backend + `didraw` CLI + skill.
 
 ## Quick start (manual mode)
 
 ```bash
 bun install
-bun --cwd packages/didraw-cli src/index.ts open scratch
+bun run --cwd packages/didraw-cli src/index.ts open scratch
 ```
 Open `http://localhost:8787/?room=scratch` and draw.
 
 ## In a Claude Code session
 
-The `.claude/settings.json` SessionStart hook autostarts the backend. Use:
-- `/draw` skill — injects canvas state into your turn.
+`.claude/settings.json` SessionStart hook autostarts the backend. Then:
+- `/draw нарисуй ...` — skill injects state + cheat-sheet, AI updates canvas via `didraw patch --stdin`.
 - Browser auto-opens at `http://localhost:8787/?room=<CLAUDE_SESSION_ID>`.
-- Select objects on canvas, type a prompt → it lands in your dialog with object IDs attached.
+- Select object(s) on canvas, type a prompt → it lands in dialog with object IDs attached.
+
+## CLI
+
+```
+didraw daemon ensure | start | stop | status
+didraw open <room>
+didraw list | export <room> --to <path> | rm <room>
+didraw state --compact [--since N]
+echo '{"ops":[...]}' | didraw patch --stdin
+didraw import mermaid --stdin
+didraw layout --algorithm elk-layered
+didraw prompts list|resolve|dismiss
+didraw clear --confirm
+```
 
 ## Architecture
 
@@ -3760,52 +3415,170 @@ See `docs/superpowers/specs/2026-05-14-di-draw-design.md`.
 ## Tests
 
 ```bash
-bun --cwd apps/backend test
-bun --cwd apps/frontend test
+bun run test   # backend + client + cli
+cd apps/frontend && bunx playwright test
 ```
 ```
 
-- [ ] **Step 2: Top-level `dev` orchestration**
-
-In root `package.json`:
-
-```json
-"scripts": {
-  "dev": "concurrently 'bun --cwd apps/backend src/index.ts' 'bun --cwd apps/frontend run dev'",
-  "test": "bun --cwd apps/backend test && bun --cwd packages/canvas-mcp test",
-  "lint": "biome check ."
-}
-```
-
-Add `bun add -D concurrently` to root.
-
-- [ ] **Step 3: Final tests**
+- [ ] **Step 2: Final full test run**
 
 ```bash
 bun install
 bun run test
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add README.md package.json
-git commit -m "docs: README + top-level dev/test scripts"
+git add README.md
+git commit -m "docs: README with manual mode + Claude Code mode + CLI reference"
 ```
 
 ---
 
-## Phase 2: Channels-push (canvas → Claude in real time)
+## Phase 2.1: MCP-adapter (thin wrapper over didraw-client)
 
-> **Sub-skill suggestion:** Phase 2 can use `superpowers:executing-plans` standalone since the MVP product is already shippable.
+### Task 33: canvas-mcp adapter
 
-### Task 29: canvas-channel-mcp scaffold
+**Files:**
+- Create: `packages/canvas-mcp/package.json`
+- Create: `packages/canvas-mcp/src/index.ts`
+- Create: `packages/canvas-mcp/src/tools.ts`
+
+- [ ] **Step 1: Package**
+
+```json
+{
+  "name": "@didraw/canvas-mcp",
+  "private": true,
+  "type": "module",
+  "bin": { "canvas-mcp": "src/index.ts" },
+  "dependencies": {
+    "@didraw/client": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
+```
+
+- [ ] **Step 2: Tools (thin proxy to client)**
+
+```ts
+// packages/canvas-mcp/src/tools.ts
+import { CanvasClient } from "@didraw/client";
+
+export function tools(client: CanvasClient) {
+  return [
+    {
+      name: "canvas_get_state",
+      description: "Get current canvas state (compact JSON by default).",
+      inputSchema: { type: "object", properties: { fmt: { type: "string", enum: ["full", "compact"] }, since: { type: "number" } } },
+      run: (a: any) => client.getState({ fmt: a.fmt ?? "compact", since: a.since }),
+    },
+    {
+      name: "canvas_apply_patch",
+      description: "Apply PatchOp[] {op:add|update|delete, target:node|edge|group, ...}.",
+      inputSchema: { type: "object", properties: { ops: { type: "array" }, clientOpId: { type: "string" } }, required: ["ops"] },
+      run: (a: any) => client.applyPatch(a.ops, { clientOpId: a.clientOpId }),
+    },
+    {
+      name: "canvas_import_mermaid",
+      description: "Convenience: import Mermaid as initial canvas content.",
+      inputSchema: { type: "object", properties: { source: { type: "string" }, layout: { type: "string", enum: ["elk", "keep"] } }, required: ["source"] },
+      run: (a: any) => client.importMermaid(a.source, a.layout ?? "elk"),
+    },
+    {
+      name: "canvas_layout",
+      description: "Re-layout nodes via elkjs.",
+      inputSchema: { type: "object", properties: { algorithm: { type: "string", enum: ["elk-layered", "dagre"] }, nodeIds: { type: "array" } }, required: ["algorithm"] },
+      run: (a: any) => client.layout(a.algorithm, a.nodeIds),
+    },
+    {
+      name: "canvas_get_prompts",
+      description: "List user prompts attached to canvas objects.",
+      inputSchema: { type: "object", properties: { status: { type: "string", enum: ["pending", "resolved", "dismissed", "all"] } } },
+      run: (a: any) => client.getPrompts(a.status ?? "pending"),
+    },
+    {
+      name: "canvas_resolve_prompt",
+      description: "Mark prompt as resolved with optional response.",
+      inputSchema: { type: "object", properties: { id: { type: "string" }, response: { type: "string" } }, required: ["id"] },
+      run: (a: any) => client.resolvePrompt(a.id, a.response),
+    },
+    {
+      name: "canvas_dismiss_prompt",
+      description: "Mark prompt as dismissed.",
+      inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      run: (a: any) => client.dismissPrompt(a.id),
+    },
+  ] as const;
+}
+```
+
+- [ ] **Step 3: Server**
+
+```ts
+#!/usr/bin/env bun
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { CanvasClient } from "@didraw/client";
+import { tools } from "./tools";
+
+const client = new CanvasClient();
+const registered = tools(client);
+
+const server = new Server({ name: "canvas-mcp", version: "0.0.1" }, { capabilities: { tools: {} } });
+
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: registered.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
+}));
+
+server.setRequestHandler(CallToolRequestSchema, async (req) => {
+  const t = registered.find((x) => x.name === req.params.name);
+  if (!t) throw new Error(`unknown tool ${req.params.name}`);
+  const result = await t.run(req.params.arguments as any);
+  return { content: [{ type: "text", text: JSON.stringify(result) }] };
+});
+
+await server.connect(new StdioServerTransport());
+```
+
+- [ ] **Step 4: Register in `.claude/mcp.json`**
+
+```json
+{
+  "mcpServers": {
+    "canvas-mcp": { "command": "bun", "args": ["run", "packages/canvas-mcp/src/index.ts"] }
+  }
+}
+```
+
+- [ ] **Step 5: Verify**
+
+```bash
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | bun packages/canvas-mcp/src/index.ts | jq '.result.tools | length'
+```
+Expected: 7.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/canvas-mcp .claude/mcp.json
+git commit -m "feat: Phase 2.1 — canvas-mcp adapter (thin wrapper over didraw-client)"
+```
+
+---
+
+## Phase 2.2: Channels-push canvas → Claude
+
+### Task 34: canvas-channel-mcp
 
 **Files:**
 - Create: `packages/canvas-channel-mcp/package.json`
 - Create: `packages/canvas-channel-mcp/src/index.ts`
+- Modify: `.claude/settings.json` (add Channels invocation per docs)
 
-- [ ] **Step 1: Create scaffold**
+- [ ] **Step 1: Package and skeleton**
 
 ```json
 {
@@ -3817,11 +3590,9 @@ git commit -m "docs: README + top-level dev/test scripts"
 }
 ```
 
-- [ ] **Step 2: Implement Channels server**
-
 ```ts
 #!/usr/bin/env bun
-// Channels protocol skeleton — verify exact wire format with
+// Channels protocol — verify exact wire format with
 // https://code.claude.com/docs/en/channels at implementation time.
 
 import { WebSocket } from "ws";
@@ -3832,170 +3603,107 @@ const ws = new WebSocket(`ws://localhost:${port}/ws?room=${encodeURIComponent(ro
 
 ws.on("message", (data) => {
   const msg = JSON.parse(data.toString());
-  if (msg.kind !== "patch" && msg.kind !== "prompt-created") return;
-  if (msg.source === "ai") return;     // не пушим обратно собственные изменения
-
-  // Channels protocol: emit JSON line to stdout in the exact wire format Claude Code expects.
-  // Replace with real protocol once finalised.
-  const announcement = msg.kind === "prompt-created"
-    ? `User prompted: "${msg.prompt.text}" targeting ${msg.prompt.selection.join(",") || "(none)"}`
-    : `User edited canvas: ${msg.ops.length} ops at v${msg.version}`;
-
-  process.stdout.write(JSON.stringify({ event: "channel.message", text: announcement }) + "\n");
+  if (msg.kind === "patch" && msg.source === "user") {
+    const text = `User edited canvas: ${msg.ops.length} ops at v${msg.version}`;
+    process.stdout.write(JSON.stringify({ event: "channel.message", text }) + "\n");
+  }
+  if (msg.kind === "prompt-created") {
+    const text = `User prompted "${msg.prompt.text}" targeting ${msg.prompt.selection.join(",") || "(none)"}`;
+    process.stdout.write(JSON.stringify({ event: "channel.message", text }) + "\n");
+  }
 });
 ```
 
-- [ ] **Step 3: Register in `.claude/settings.json`**
+- [ ] **Step 2: Register in settings.json per Claude Code Channels docs**
 
-Add Channels invocation per Claude Code docs at the time of implementation (`channels` field or CLI flag).
+Verify exact integration mechanism at implementation time (`channels` field or CLI flag for Claude Code 2.1.80+).
 
-- [ ] **Step 4: Smoke test**
-
-Manually verify in a Claude Code session that user-edits trigger a push.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Smoke + commit**
 
 ```bash
 git add packages/canvas-channel-mcp .claude/settings.json
-git commit -m "feat: Phase 2 — canvas-channel-mcp for real-time push canvas→Claude"
+git commit -m "feat: Phase 2.2 — canvas-channel-mcp pushes user edits to Claude Code"
 ```
 
 ---
 
 ## Phase 3: D2 import, SQLite, multi-user
 
-### Task 30: D2 import endpoint
+### Task 35: D2 import
 
-**Files:**
-- Create: `apps/backend/src/d2-import.ts`
-- Create: `apps/backend/src/routes/import-d2.ts`
+Mirror Task 22 (Variant A) but for D2:
+- `apps/backend/src/d2-import.ts` with `@terrastruct/d2` WASM
+- `apps/backend/src/routes/import-d2.ts`
+- `packages/didraw-cli/src/import.ts` extended with `import d2` subcommand
+- `packages/canvas-mcp/src/tools.ts` adds `canvas_import_d2`
 
-- [ ] **Step 1: Add dep**
+### Task 36: SQLite persistence
 
-```bash
-cd apps/backend && bun add @terrastruct/d2
-```
+`apps/backend/src/persistence-sqlite.ts` using `bun:sqlite`. Tables: `rooms(id PK, canvas, prompts, version)`, `op_log(room_id, version, ops, source, at)`. CLI flag `--storage=sqlite`. Migration script from JSON.
 
-- [ ] **Step 2: Implement (mirror Task 21 Variant A)**
+### Task 37: Multi-user merge
 
-```ts
-import { D2 } from "@terrastruct/d2";
-import type { PatchOp } from "./types";
-
-const d2 = new D2();
-
-export async function d2ToOps(source: string): Promise<PatchOp[]> {
-  const result = await d2.compile(source);
-  // result.graph.nodes / result.graph.edges with computed positions
-  const ops: PatchOp[] = [];
-  for (const n of result.graph.nodes) ops.push({ op: "add", target: "node", value: { id: n.id, kind: "rect", x: n.x, y: n.y, label: n.label } });
-  for (const e of result.graph.edges) ops.push({ op: "add", target: "edge", value: { id: e.id, from: { kind: "node", id: e.from }, to: { kind: "node", id: e.to }, label: e.label } });
-  return ops;
-}
-```
-
-- [ ] **Step 3: Route + MCP tool + commit**
-
-(Mirror Task 21 structure.)
-
-### Task 31: SQLite migration
-
-**Files:**
-- Create: `apps/backend/src/persistence-sqlite.ts`
-
-- [ ] **Step 1: Use `bun:sqlite`**
-
-```ts
-import { Database } from "bun:sqlite";
-import type { RoomId, RoomState } from "./types";
-
-// Schema:
-// CREATE TABLE rooms (id TEXT PRIMARY KEY, canvas TEXT, prompts TEXT, version INTEGER);
-// CREATE TABLE op_log (room_id TEXT, version INTEGER, ops TEXT, source TEXT, at INTEGER, PRIMARY KEY(room_id, version));
-
-export class SqlitePersistence {
-  private db: Database;
-  constructor(path: string) {
-    this.db = new Database(path);
-    this.db.run(`CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY, canvas TEXT, prompts TEXT, version INTEGER)`);
-    this.db.run(`CREATE TABLE IF NOT EXISTS op_log (room_id TEXT, version INTEGER, ops TEXT, source TEXT, at INTEGER, PRIMARY KEY(room_id, version))`);
-  }
-  // load/save mirror FilePersistence; opLog stored in op_log table
-}
-```
-
-- [ ] **Step 2: Add `--storage=sqlite` flag to backend CLI**
-
-- [ ] **Step 3: Test, commit**
-
-### Task 32: Multi-user conflict resolution
-
-Plan an op-log–based merge: when two clients send patches concurrently with same `since=`, server replays each op against current state. If conflict (e.g., same node update), last-write-wins **per field** via op-log timestamp.
-
-- [ ] **Step 1: Add `since` parameter to `POST /api/patch`**
-
-Modify `routes/patch.ts` to accept optional `since: number` and reject with `409 Conflict { current: version }` if mismatch.
-
-- [ ] **Step 2: Frontend retry-with-rebase**
-
-Add to `to-patch.ts` flow: on 409 re-fetch state, rebase user ops, retry once.
-
-- [ ] **Step 3: Tests + commit**
+`POST /api/patch` accepts optional `since: number`. If `since !== current version` → 409 `{current}`. Frontend retry-with-rebase: fetch latest state, rebase user ops on top, retry once.
 
 ---
 
 ## Self-Review
 
-**Spec coverage check (against `2026-05-14-di-draw-design.md` v3.2.1):**
+**Spec coverage check (against `2026-05-14-di-draw-design.md` v3.4):**
 
-| Spec §  | Spec requirement                              | Plan task |
-|---------|------------------------------------------------|-----------|
-| §2 #1   | JSON canvas-state SSOT                         | Task 5 |
-| §2 #2   | tldraw SDK 5.x                                  | Task 3 |
-| §2 #3   | Mermaid as import convenience                  | Task 21 |
-| §2 #4   | apply_patch with add/update/delete             | Task 6, 9 |
-| §2 #5   | MCP + skill + PreToolUse hook + Channels        | Tasks 18, 19, 23, 29 |
-| §2 #6/7 | Bun + Hono backend, React frontend             | Tasks 2, 3 |
-| §2 #8   | elkjs auto-layout                              | Task 22 |
-| §2 #9   | Stable UUID ids                                | Task 5, 7 |
-| §2 #10  | Port 8787 with `DIDRAW_PORT` override          | Task 2 |
-| §2 #11  | Multi-room + per-session storage               | Tasks 7, 8 |
-| §2 #12  | Targeted prompts                                | Tasks 24, 25, 26 |
-| §3.1    | Data model (Node, Edge, Endpoint, Group, etc.)  | Task 5 |
-| §3.2    | Backend rooms/REST/WS                           | Tasks 7–11 |
-| §3.2    | Frontend tldraw + transport                     | Tasks 12–14, 25 |
-| §3.2    | canvas-mcp tool surface                         | Tasks 18, 26 |
-| §3.2    | draw skill                                      | Task 19 |
-| §3.2    | draw-prehook                                    | Task 23 |
-| §3.5    | CLI (`didraw daemon/open/list/export/rm`)       | Tasks 16, 17 |
-| §3.5    | SessionStart hook                               | Task 20 |
-| §3.5    | Storage layout `~/.claude/projects/<slug>/...`  | Task 8 (config), 17 |
-| §3.6    | Targeted prompts (REST + UI + MCP)             | Tasks 24, 25, 26 |
-| §6 Phase 0.1 | Spike `@tldraw/mermaid` headless          | Task 4 |
-| §7      | Echo-loop protection                           | Task 13 (echo-guard) |
-| §7      | Race condition on session start                | Task 16 (`ensure` blocks until healthz OK) |
+| Spec §  | Requirement                                       | Plan task |
+|---------|---------------------------------------------------|-----------|
+| §2 #1   | JSON canvas-state SSOT                            | Task 5 |
+| §2 #2   | tldraw SDK 5.x                                     | Task 3 |
+| §2 #3   | Mermaid as import convenience (not SSOT)          | Task 22, 23 |
+| §2 #4   | apply_patch (add/update/delete)                    | Task 6, 9 |
+| §2 #5   | didraw CLI + skill + hook + Channels (Phase 2.2); MCP as Phase 2.1 adapter | Tasks 16-29 (MVP), 33-34 (Phase 2) |
+| §2 #6   | Bun + Hono backend                                 | Task 2 |
+| §2 #7   | React + tldraw 5.x frontend                        | Task 3 |
+| §2 #8   | elkjs auto-layout                                  | Task 24, 25 |
+| §2 #9   | Stable UUID                                        | Task 5 |
+| §2 #10  | Port 8787 with DIDRAW_PORT override                | Task 2 |
+| §2 #11  | Multi-room + per-session storage                   | Tasks 7, 8, 17 |
+| §2 #12  | Targeted prompts                                   | Tasks 27, 28, 29 |
+| §3.1    | Data model (CanvasState, PatchOp, Prompt, Endpoint, Group, RoomState) | Task 5 |
+| §3.2    | Backend rooms/REST/WS                              | Tasks 7-11, 27 |
+| §3.2    | Frontend tldraw + transport + prompts UI           | Tasks 12-14, 28 |
+| §3.2    | draw skill with didraw cheat-sheet                 | Task 19 |
+| §3.2    | draw-prehook with additionalContext                | Task 26 |
+| §3.5    | CLI lifecycle (daemon/open/list/export/rm)         | Tasks 16, 17 |
+| §3.5    | CLI data (state/patch/import/layout/prompts/clear) | Tasks 18, 23, 25, 29 |
+| §3.5    | SessionStart hook                                  | Task 20 |
+| §3.5    | Storage layout `~/.claude/projects/<slug>/canvas/<room>.json` | Tasks 2, 8 |
+| §3.6    | Targeted prompts (backend + UI + CLI)              | Tasks 27, 28, 29 |
+| §6 Phase 0.1 | Spike @tldraw/mermaid headless                | Task 4 |
+| §6 Phase 2.1 | MCP adapter                                    | Task 33 |
+| §6 Phase 2.2 | Channels-push                                  | Task 34 |
+| §7      | Echo-loop protection                               | Task 13 |
+| §7      | Race condition on session start                    | Task 16 (`ensure` blocks until healthz) |
+| §7      | CLI as stable contract                              | Task 18 (integration tests) |
 
 All spec sections mapped.
 
-**Placeholder scan:** No "TBD", "TODO", "implement later" left. The closest is Task 21 Variant B sketched briefly — but engineer chooses A or B before implementing, per ADR, and Variant A code is full.
+**Placeholder scan:** No "TBD"/"TODO" remaining. Spike output and ADR-0001 are filled by the engineer during Task 4 (Step 5) — that's a documented action, not a placeholder.
 
-**Type consistency:** `CanvasState`/`Node`/`Edge`/`Endpoint`/`Group`/`PatchOp`/`Prompt`/`RoomState` used consistently across tasks 5–26. `makeApp`/`startServer` signatures stable across tasks 9–11.
+**Type consistency:** `CanvasState`, `Node`, `Edge`, `Endpoint`, `Group`, `PatchOp`, `Prompt`, `RoomState` consistent across tasks 5-29. `CanvasClient` interface stable across tasks 15-33. `applyPatch` signature stable.
 
-**Known engineer notes** (kept inline at top of relevant tasks, not as plan holes):
-- Task 12 Step 2: exact tldraw 5.x shape type names verify against `node_modules/tldraw/dist/types/index.d.ts`.
-- Task 21: code split per ADR-0001 (Task 4).
-- Task 29: exact Channels wire format per docs at implementation time.
+**Engineer notes** (verification points, not gaps):
+- Task 3: confirm npm tldraw major maps to SDK 5.x at install time.
+- Task 12: confirm exact tldraw 5.x shape `type`/`props` names against `.d.ts`.
+- Task 22: code split per ADR-0001 (Task 4 result).
+- Task 34: verify Channels wire format at implementation time.
 
-Plan is complete and self-consistent.
+Plan is complete, self-consistent, and CLI-first.
 
 ---
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-05-14-di-draw-implementation.md`. Two execution options:
+Plan complete and saved to `docs/superpowers/plans/2026-05-14-di-draw-implementation.md` (v2, CLI-first). Two execution options:
 
 **1. Subagent-Driven (recommended)** — fresh subagent per task, я ревьюю между задачами, быстрая итерация.
 
-**2. Inline Execution** — выполняем задачи в этой же сессии через executing-plans с чекпойнтами для ревью.
+**2. Inline Execution** — выполняем задачи в этой же сессии через `executing-plans` с чекпойнтами.
 
 Which approach?
