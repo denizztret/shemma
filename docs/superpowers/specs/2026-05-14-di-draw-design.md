@@ -2,7 +2,7 @@
 
 - **Дата:** 2026-05-14
 - **Автор:** brainstorm-сессия (Claude Code + Денис Третьяков)
-- **Статус:** Draft v3.5, одобрено пользователем после ревью
+- **Статус:** Draft v3.6, одобрено пользователем после ревью
 - **Цель документа:** зафиксировать архитектурное решение прототипа, по которому далее будет составлен implementation plan.
 
 ## История ревизий
@@ -15,7 +15,8 @@
 - **v3.2.1** — финальные правки консистентности: статус → v3.2; §3.2 переписан с `rooms: Map<RoomId, RoomState>` и всеми endpoints через `?room=`; §8 — `Multi-user collaborative editing` (не путать с multi-room, который уже в MVP); §9 — открытый вопрос про storage переформулирован как "когда мигрировать с JSON на SQLite".
 - **v3.3** — MCP убран из MVP, заменён на Bash+skill с curl-cheat-sheet'ом. (Эта ревизия — промежуточная; в v3.4 заменена.)
 - **v3.4** — **CLI-first architecture**. Ядро — `CanvasState + PatchOp` REST/WS API. `didraw` CLI как стабильный machine-interface. MCP-adapter — Phase 2 тонкой обёрткой над тем же backend/client.
-- **v3.5 (текущая, одобрено)** — добавлен раздел **§3.7 Distribution, Runtime Modes & Updates**. Чтобы продукт перестал быть "репо с исходниками" и стал распространяемой утилитой. Конкретно: **release/dev/debug profiles** (разные порты и storage namespaces, не конфликтуют), **`bun build --compile` single-binary** с embedded frontend (один файл `didraw` для пользователя), **release manifest** + `didraw version` / `didraw update --check` / `didraw update` (manual, без auto-update), **UI banner** при наличии новой версии. Phase 1.9 (Release packaging) и Phase 1.10 (Update flow) добавлены в MVP-цикл. Phase 2.x перенумерован. MVP-оценка: 11–12 дней (+2 дня на packaging/update).
+- **v3.5** — добавлен §3.7 Distribution, Runtime Modes & Updates.
+- **v3.6 (текущая, одобрено)** — P1/P2-патч по результатам ревью v3.5: (1) `cascade-delete` при `delete node`/`delete group` (см. §3.1 patch semantics, §3.4 edge cases); (2) update flow переформулирован как "**manual update, controlled daemon restart**" (consistency §3.7.5); (3) golden path §3.3 переписан под `didraw` CLI вместо MCP-вызовов; (4) curl-примеры явно помечены как fallback; (5) `cleanup-on-stop` (FilePersistence.flush + SIGTERM handler) — устранить data loss между stop/update.
 
 ## 1. Проблема и цель
 
@@ -129,6 +130,12 @@ type Group = {
      - `set.style` и `set.meta` применяются как **deep-merge**: shallow merge на уровне ключей, undefined-значения удаляют ключ. Например, `set: { style: { fill: "#888" } }` обновит `fill`, оставив `stroke` и `fontSize` нетронутыми.
      - Остальные поля (`x`, `y`, `label`, `kind`, `from`, `to`, ...) — **replace**.
      - Это явное расхождение, чтобы AI и frontend могли посылать частичные стилевые правки без знания полного состояния.
+   - **Cascade-семантика `op: "delete"`:**
+     - `delete node id=X` → также удаляются **все edges**, у которых `from.kind=="node" && from.id==X` или `to.kind=="node" && to.id==X`; X удаляется из всех `group.children`.
+     - `delete group id=G` → удаляется группа; **дети не удаляются** (они становятся "плавающими" верхнего уровня), но G исчезает из всех `parentGroup.children` (если когда-нибудь добавим nested groups).
+     - `delete edge id=E` → просто удаляет edge.
+     - Каскад выполняется в **той же атомарной транзакции** — если каскадная часть валидируется (нечего валидировать в простом случае), всё применяется одним патчем; полученный effective patch включает дополнительные `delete edge` операции и попадает в `opLog` и WS broadcast.
+     - Frontend и MCP могут опираться на этот эффект: после `delete node` им НЕ нужно дополнительно слать `delete edge` — backend сам разошлёт.
 
 2. **tldraw-frontend** — React SPA, отдаётся бэкендом по `/`.
    - При connect: `GET /api/state?fmt=full` → строит tldraw shapes из CanvasState. Каждому shape `meta = { canvasId, kind }`.
@@ -220,19 +227,29 @@ type Group = {
 ### 3.3 Поток данных (золотой путь, обновлённый)
 
 1. Пользователь в Claude Code: *"Нарисуй: приложение → сервер → терминал"*.
-2. Skill `draw` срабатывает, инжектит current state (пустой).
-3. Claude вызывает `canvas_import_mermaid({ source: "graph LR\n  app --> server --> terminal", layout: "elk" })` — самый короткий путь, AI знает Mermaid.
-4. Backend парсит через `@tldraw/mermaid`, запускает elk-layered layout, конвертирует в PatchOp'ы, применяет, broadcast'ит по WS.
+2. Skill `draw` срабатывает, инжектит current state (пустой mermaidSource).
+3. Claude через `Bash` вызывает (по cheat-sheet'у из skill'а):
+   ```
+   didraw import mermaid --stdin <<EOF
+   graph LR
+     app --> server --> terminal
+   EOF
+   ```
+4. CLI → `client.importMermaid` → `POST /api/import/mermaid`. Backend парсит через `@tldraw/mermaid`, прогоняет elk-layered layout, конвертирует в PatchOp'ы, применяет, broadcast'ит по WS.
 5. Frontend рисует три узла + две стрелки.
-6. Пользователь руками двигает "server" вверх, красит в красный. Frontend → `POST /api/patch` `[{op:"update", target:"node", id:"<uuid_server>", set:{y:..., style:{fill:"red"}}}]`. Broadcast обратно — других клиентов нет, но `version` инкрементируется.
+6. Пользователь руками двигает "server" вверх, красит в красный. Frontend → `POST /api/patch` `[{op:"update", target:"node", id:"<uuid_server>", set:{y:..., style:{fill:"red"}}}]`. `version` инкрементируется.
 7. Пользователь руками добавляет на canvas ноду "cache" между server и terminal, рисует две новые стрелки, удаляет старую server→terminal.
-8. Frontend конвертирует в `PatchOp[]` (1 add node, 2 add edge, 1 delete edge), шлёт `POST /api/patch`.
-9. *(Phase 1.5+)* `PreToolUse` хук на следующем шаге AI подгружает diff с `since=<last_known_version>` — AI видит, что появились новые узлы и связи. *(Phase 2)* — Channels пушит это **сразу**, AI комментирует не дожидаясь user'а.
+8. Frontend конвертирует в `PatchOp[]` (1 add node, 2 add edge, 1 delete edge) и шлёт `POST /api/patch`.
+9. *(Phase 1.7+)* `PreToolUse` хук на следующем `didraw …`-вызове AI подгружает diff с `since=<last_known_version>` через `additionalContext` — AI видит, что появились новые узлы и связи. *(Phase 2.2)* — Channels пушит это **сразу**, AI комментирует не дожидаясь user'а.
 10. Пользователь: *"Хорошо. Назови этот cache 'edge-cache' и сделай его блёкло-серым."*
-11. Claude вызывает `canvas_apply_patch({ ops: [{op:"update", target:"node", id:"<uuid_cache>", set:{label:"edge-cache", style:{fill:"#888"}}}] })`.
-12. Бэкенд применяет, WS push, canvas обновляется.
+11. Claude через `Bash`:
+    ```
+    echo '{"ops":[{"op":"update","target":"node","id":"<uuid_cache>","set":{"label":"edge-cache","style":{"fill":"#888"}}}],"source":"ai","clientOpId":"<uuid>"}' \
+      | didraw patch --stdin
+    ```
+12. CLI → `client.applyPatch` → backend применяет (style — deep-merge), WS push, canvas обновляется.
 
-Заметь: **никаких pending-deltas, никаких mermaid-roundtrip'ов, никакого overlay-слоя**. Одна модель, один формат, идём в обе стороны через `apply_patch`.
+Заметь: **никаких pending-deltas, никаких mermaid-roundtrip'ов, никакого overlay-слоя**. Одна модель, один формат, идём в обе стороны через `apply_patch` / `didraw patch`. Curl-вариант (`curl -X POST http://localhost:8787/api/patch …`) — только fallback, если `didraw` недоступен; обычно AI использует CLI.
 
 ### 3.4 Обработка ошибок и edge-cases
 
@@ -243,6 +260,9 @@ type Group = {
 | Одновременный patch user+AI | Last-write-wins на уровне отдельных полей. Op-log из 50 операций → Undo стек. |
 | Mermaid-import не парсится | `/api/import/mermaid` → 422 с текстом. AI получает feedback. |
 | Свободная shape (free-form draw) от пользователя | Сохраняется как `kind: "freeform"` с массивом точек в `meta.points`. AI видит её, но обычно не модифицирует — может только удалить или прокомментировать. |
+| Удаление node, на которое ссылается edge | **Cascade**: edge удаляется автоматически (см. §3.1 cascade-семантика). Effective patch включает оригинальный `delete node` плюс синтетические `delete edge` и попадает в opLog. |
+| Удаление node, входящего в `group.children` | Cascade: id удаляется из всех `group.children`. Group сама остаётся (может стать пустой — это валидно). |
+| Persistence во время shutdown | На SIGTERM/SIGINT backend вызывает `persistence.flushAll()` — записывает все pending debounce'нутые saves немедленно. `didraw daemon --stop` сначала шлёт SIGTERM, ждёт до 2с graceful shutdown, потом SIGKILL. Update flow стартует с `daemon --stop`, не с kill -9 — данные не теряются. |
 | Backend упал | Frontend: баннер "disconnected", экспоненциальный backoff. MCP-tool → ошибка, модель видит. |
 | Несколько Claude-сессий на один backend | Phase 1: одна "комната" по умолчанию, обе сессии разделяют state и conflict-resolve через op-log. Phase 3: `room_id` параметр. |
 | Сессия Claude Code не Pro/v2.1.80+ | Channels недоступен → Phase 1.5 fallback (`PreToolUse` hook) даёт ~90% эффекта реактивности. |
@@ -526,26 +546,32 @@ Manifest-check кешируется на 1 час (in-memory), не дёргае
 
 URL manifest'а вшит в release-binary как константа `MANIFEST_URL`. По умолчанию: `https://github.com/<user>/di.draw/releases/download/latest/release-manifest.json` (или raw-файл в репозитории, если GitHub Releases не настроен — в MVP это нормально).
 
-#### 3.7.5 Update flow (manual, no auto-restart)
+#### 3.7.5 Update flow (manual update, controlled daemon restart)
 
-Без silent auto-update — пользователь явно нажимает.
+**Manual** означает: пользователь явно даёт команду `didraw update`. **Никакого silent / scheduled / "background" auto-update** не предусмотрено. Но в рамках этой команды CLI **сам контролирует daemon restart** — это часть атомарной операции, без неё новая версия binary не подхватится.
 
 ```
 didraw update --check          # GET manifest, semver-compare, печатает {current, latest, available, channel}
-didraw update                  # 1. download asset для текущей платформы (по uname/process.platform+arch)
-                               # 2. sha256 verify (соответствие manifest'у)
-                               # 3. atomic swap:
+                               # daemon не трогает.
+didraw update                  # 1. graceful stop: didraw daemon --stop (SIGTERM → flush → exit)
+                               # 2. download asset для текущей платформы (по process.platform + arch)
+                               # 3. sha256 verify (соответствие manifest'у)
+                               # 4. atomic swap:
                                #      tmpfile → didraw.new → rename(didraw, didraw.old) → rename(didraw.new, didraw)
-                               # 4. didraw daemon --stop && didraw daemon --start
-                               # 5. canvas-документы в storage не трогает (compatibility check
-                               #    через manifest.schema_version если в будущем поменяется формат)
+                               # 5. didraw daemon --start (поднимается уже новый binary)
+                               # 6. canvas-документы в storage не трогает
+                               #    (schema_version в manifest для будущей миграции, см. risk #13)
 didraw update --channel X      # сменить active channel (записывается в ~/.claude/.didraw-config.json)
+                               # daemon не трогает; на следующем `update` подхватит новый channel
 ```
 
+Critical sequencing: **stop ДО swap**, иначе старый процесс держит файл (на Linux — нет, но семантика и поведение Windows должны быть консистентны). На Windows возможна доп. логика `MoveFileEx(MOVEFILE_DELAY_UNTIL_REBOOT)` для редкого случая залоченного binary — Phase 3.
+
 Edge cases:
-- **Download/verify провал** → откат: исходный binary не тронут, временные файлы удаляются.
-- **Daemon не подхватился после рестарта** → пользователь видит ошибку, может вручную запустить `didraw.old` или `didraw daemon`.
-- **Active session с открытой доской** → WebSocket клиенты увидят disconnect, переподключатся к новому daemon с тем же state (canvas-документ на диске).
+- **Download/verify провал** → откат: оригинальный binary не тронут (swap ещё не начат); pending download удаляется.
+- **Swap провал** (rename race) → попытка восстановить из `didraw.old`; ошибка возвращается пользователю.
+- **Daemon не подхватился после рестарта** → пользователь видит ошибку из шага 5, может вручную запустить `didraw.old daemon` или диагностировать.
+- **Active session с открытой доской** → WebSocket клиенты увидят disconnect (от шага 1), переподключатся к новому daemon (шаг 5) с тем же state — canvas-документ на диске не трогается. Re-connect через exponential backoff на frontend'е.
 
 #### 3.7.6 UI banner и version footer
 
