@@ -1,0 +1,16 @@
+{
+  "name": "didraw-root",
+  "private": true,
+  "type": "module",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "concurrently 'DIDRAW_PROFILE=dev bun --cwd apps/backend src/index.ts' 'bun --cwd apps/frontend run dev'",
+    "test": "bun --cwd apps/backend test && bun --cwd packages/didraw-client test && bun --cwd packages/didraw-cli test",
+    "lint": "biome check ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "concurrently": "^9.0.0",
+    "typescript": "^5.5.0"
+  }
+}
