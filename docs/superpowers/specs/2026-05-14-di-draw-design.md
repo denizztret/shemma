@@ -2,7 +2,7 @@
 
 - **Дата:** 2026-05-14
 - **Автор:** brainstorm-сессия (Claude Code + Денис Третьяков)
-- **Статус:** Draft v3.4, одобрено пользователем после ревью
+- **Статус:** Draft v3.5, одобрено пользователем после ревью
 - **Цель документа:** зафиксировать архитектурное решение прототипа, по которому далее будет составлен implementation plan.
 
 ## История ревизий
@@ -14,7 +14,8 @@
 - **v3.2** — добавлены **два больших блока**: (1) **multi-room backend + per-session storage** (документ canvas живёт в `~/.claude/projects/<slug>/canvas/<room>.json`; CLI `didraw daemon|open|list|export|rm` для ручного режима; SessionStart hook для автоматического; multi-room с MVP); (2) **targeted prompts** (выделение объекта на canvas → prompt с привязкой → AI получает в контексте через injection/hook/Channels). MVP-оценка: 9.5–10 дней.
 - **v3.2.1** — финальные правки консистентности: статус → v3.2; §3.2 переписан с `rooms: Map<RoomId, RoomState>` и всеми endpoints через `?room=`; §8 — `Multi-user collaborative editing` (не путать с multi-room, который уже в MVP); §9 — открытый вопрос про storage переформулирован как "когда мигрировать с JSON на SQLite".
 - **v3.3** — MCP убран из MVP, заменён на Bash+skill с curl-cheat-sheet'ом. (Эта ревизия — промежуточная; в v3.4 заменена.)
-- **v3.4 (текущая, одобрено)** — **CLI-first architecture**. Ядро — `CanvasState + PatchOp` REST/WS API в backend'е. Над ним — **`didraw` CLI как стабильный machine-interface** (`didraw state`, `didraw patch --stdin`, `didraw import mermaid --stdin`, `didraw prompts list/resolve/dismiss`, `didraw layout`, `didraw daemon/open/list/export/rm`). Этот CLI используется людьми, AI (через Bash + skill cheat-sheet'ом из didraw-команд), тестами, будущими интеграциями (Codex, scripts). **MCP-adapter — Phase 2** как тонкая обёртка над тем же backend/client; добавляется когда захочется schema-tools, чистый transcript и меньше shell-quoting. Plus сравнения с v3.3 (curl-only): меньше escape-проблем у AI (heredoc через stdin), один интерфейс для всех клиентов, DRY, легче тесты. MVP-оценка: 8.5–9 дней.
+- **v3.4** — **CLI-first architecture**. Ядро — `CanvasState + PatchOp` REST/WS API. `didraw` CLI как стабильный machine-interface. MCP-adapter — Phase 2 тонкой обёрткой над тем же backend/client.
+- **v3.5 (текущая, одобрено)** — добавлен раздел **§3.7 Distribution, Runtime Modes & Updates**. Чтобы продукт перестал быть "репо с исходниками" и стал распространяемой утилитой. Конкретно: **release/dev/debug profiles** (разные порты и storage namespaces, не конфликтуют), **`bun build --compile` single-binary** с embedded frontend (один файл `didraw` для пользователя), **release manifest** + `didraw version` / `didraw update --check` / `didraw update` (manual, без auto-update), **UI banner** при наличии новой версии. Phase 1.9 (Release packaging) и Phase 1.10 (Update flow) добавлены в MVP-цикл. Phase 2.x перенумерован. MVP-оценка: 11–12 дней (+2 дня на packaging/update).
 
 ## 1. Проблема и цель
 
@@ -43,6 +44,8 @@
 | 10 | Backend port — **8787** (`/api`, `/ws`, `/`) | 7777 (занят у пользователя), 3000 (типовое для dev) | Свободен по умолчанию, легко запомнить, конфигурируется через env `DIDRAW_PORT`. |
 | 11 | **Multi-room backend с MVP**, документ canvas хранится в `~/.claude/projects/<slug>/canvas/<room>.json`; ключ комнаты = `CLAUDE_SESSION_ID` (auto) или произвольное имя (manual через `didraw open <room>`) | single-canvas; разные процессы backend на сессию; хранение в `<project>/.claude/canvas/` | Документ привязан к сессии Claude Code (живёт в той же папке, что `session.jsonl`), но backend единый. Ручной режим через CLI даёт скетч-комнаты вне сессий. |
 | 12 | **Targeted prompts** — user выделяет shapes на canvas и пишет prompt; AI получает его с привязкой к объектам через injection / hook / Channels | Только текстовый диалог в Claude Code; комментарии-on-shape без AI-обработки | Превращает доску в input-channel, не только output. Объект-attached prompt'ы радикально упрощают "что ты имел в виду под этим узлом?". |
+| 13 | **Distribution — single-binary через `bun build --compile`** с embedded frontend; release manifest (GitHub Releases в MVP, brew tap/npm — позже); `didraw version` / `didraw update --check` / `didraw update`; manual update (без auto-restart) | Запуск из исходников (`bun --cwd …`); npm-пакет; Docker image | Один файл `didraw` → распространение в команду одной ссылкой. Bun officially supports [single-file executables](https://bun.sh/docs/bundler/executables) including bundled frontend assets. Manual update — безопаснее для MVP, чем silent auto-update. |
+| 14 | **Runtime profiles** — `--profile dev\|release\|debug`, разные порты (release 8787, dev 8788) и storage namespaces; release-binary читает `--profile` или env `DIDRAW_PROFILE` | Один глобальный mode по env; разные binary под профили | Dev из репо и release-binary могут работать **параллельно на одной машине**, не затирая canvas-файлы друг друга. Debug — release-binary с verbose logs и UI badge. |
 
 ## 3. Архитектура
 
@@ -110,6 +113,7 @@ type Group = {
      - `POST /api/import/mermaid?room=<id>` — `{ source: string, layout?: "elk"|"keep" }`. Парсит через `@tldraw/mermaid`, конвертирует в CanvasState-операции, применяет.
      - `POST /api/layout?room=<id>` — `{ algorithm: "elk-layered" | "dagre", nodeIds?: string[] }`. Пересчитывает координаты для указанных узлов через elkjs, отдаёт diff.
      - Endpoints для targeted prompts (см. §3.6): `POST /api/prompt`, `GET /api/prompts`, `POST /api/prompt/:id/resolve`, `POST /api/prompt/:id/dismiss` — все также с `?room=<id>`.
+     - `GET /api/version` — вшитые в build значения + check на доступную новую версию (см. §3.7): `{ version, channel, gitSha, buildDate, profile, updateAvailable, latest? }`. Глобальный (не per-room).
      - `GET /healthz` — глобальный, без `room`.
    - **WebSocket `/ws`:**
      - Сообщение `{ kind: "patch", source: "ai"|"user", ops: PatchOp[], version }` — broadcast после каждого применённого patch'а.
@@ -297,10 +301,11 @@ CLI `didraw` — это **полный machine interface** для canvas. Два
 
 ```
 # Lifecycle
-didraw daemon                       # запустить backend в фоне на 8787
+didraw daemon                       # запустить backend в фоне (default --profile release, port 8787)
+didraw daemon --profile dev|release|debug
 didraw daemon --ensure              # idempotent: блокирует пока healthz не ответит
 didraw daemon --stop
-didraw daemon --status              # PID, аптайм, открытые комнаты
+didraw daemon --status              # PID, аптайм, профиль, открытые комнаты
 
 didraw open <room>                  # открыть комнату в браузере (auto-start daemon)
                                     # <room> = session-id или имя из _manual/
@@ -309,6 +314,12 @@ didraw open --file <path>           # открыть произвольный ca
 didraw list                         # список всех комнат
 didraw export <room> --to <path>    # копия canvas комнаты в файл проекта
 didraw rm <room>                    # удалить комнату (с подтверждением)
+
+# Version & Updates (см. §3.7)
+didraw version                      # текущая версия, gitSha, buildDate, channel, profile
+didraw update --check               # проверить manifest; печатает {current, latest, available}
+didraw update                       # скачать новую версию, проверить sha256, атомарно заменить binary, перезапустить daemon
+didraw update --channel stable|nightly|dev   # выбрать канал
 
 # Data (machine interface для AI и тестов)
 didraw state --room <id> [--compact] [--since <version>]   # JSON snapshot или diff
@@ -424,6 +435,132 @@ WebSocket events:
 | User написал prompt, перезагрузил браузер | Prompt сохранён на бэкенде и в `canvas.json` — увидит при reload в drawer'е. |
 | AI не отреагировал на prompt | Висит в `pending` неограниченно. User может вручную dismiss через UI или повторить prompt новым текстом. |
 
+### 3.7 Distribution, Runtime Modes & Updates
+
+Чтобы продукт перестал быть "репозиторием с исходниками" и стал распространяемой утилитой — три темы: **runtime profiles**, **single-binary packaging**, **update flow**.
+
+#### 3.7.1 Runtime profiles
+
+Один и тот же код умеет работать в трёх режимах. Профиль выбирается флагом `--profile <name>` или env `DIDRAW_PROFILE`; default = `release`.
+
+| Profile | Запуск | Backend port | Frontend | Storage namespace | Logs | UI badge |
+|---------|--------|--------------|----------|-------------------|------|----------|
+| `dev` | `bun --cwd apps/backend src/index.ts` + `vite` отдельно | **8788** | Vite HMR на `:5173` (proxy `/api`, `/ws` к 8788) | `~/.claude/projects/<slug>/canvas-dev/` | verbose | "dev" |
+| `release` | один single-file binary `didraw daemon` | **8787** | Embedded assets, отдаются backend'ом по `/` | `~/.claude/projects/<slug>/canvas/` | info | none |
+| `debug` | release-binary с `--profile debug` или `DIDRAW_LOG_LEVEL=debug` | 8787 | Embedded | как release | verbose | "debug" |
+
+Ключевая инвариантa: **dev и release могут работать параллельно** на одной машине, не затирая friend'a (разные порты и storage namespaces). Это критично для самого процесса разработки утилиты — рисуешь схему в release-копии, фиксишь баг в dev-копии.
+
+#### 3.7.2 Single-binary packaging через `bun build --compile`
+
+Release-сборка собирает **один исполняемый файл** `didraw`, в который вшито всё: backend, embedded frontend assets, CLI dispatcher.
+
+```bash
+# scripts/build-release.sh (упрощённо)
+cd apps/frontend && bun run build                        # → apps/frontend/dist/
+cd ../.. && bun build packages/didraw-cli/src/index.ts \
+  --compile \
+  --target=bun-darwin-arm64 \    # повторить для других target'ов
+  --outfile=release/didraw-darwin-arm64 \
+  --define DIDRAW_VERSION=$(jq -r .version package.json) \
+  --define DIDRAW_GIT_SHA=$(git rev-parse --short HEAD) \
+  --define DIDRAW_BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+  --define DIDRAW_CHANNEL=stable
+```
+
+Внутри backend есть статический обработчик: если `profile === "release"` — отдаёт embedded assets через `Bun.file()` поверх вшитых файлов (через `import "./frontend-dist/index.html" with { type: "file" }` или эквивалент по Bun docs).
+
+Targets — `bun-darwin-arm64`, `bun-darwin-x64`, `bun-linux-x64`, `bun-windows-x64` (см. [Bun single-file executables](https://bun.sh/docs/bundler/executables)).
+
+#### 3.7.3 Version metadata
+
+Каждая release-сборка вшивает (через `--define` macros):
+
+```ts
+// apps/backend/src/version.ts
+export const VERSION = {
+  version: process.env.DIDRAW_VERSION ?? "0.0.0-dev",
+  channel: (process.env.DIDRAW_CHANNEL ?? "dev") as "dev" | "stable" | "nightly",
+  gitSha: process.env.DIDRAW_GIT_SHA ?? "unknown",
+  buildDate: process.env.DIDRAW_BUILD_DATE ?? new Date().toISOString(),
+};
+```
+
+`GET /api/version` отдаёт это плюс результат lazy-проверки manifest'а:
+
+```json
+{
+  "version": "0.3.1",
+  "channel": "stable",
+  "gitSha": "abc123d",
+  "buildDate": "2026-05-15T10:00:00Z",
+  "profile": "release",
+  "updateAvailable": true,
+  "latest": "0.3.2"
+}
+```
+
+Manifest-check кешируется на 1 час (in-memory), не дёргается на каждый запрос.
+
+#### 3.7.4 Release manifest
+
+В MVP — статический файл на GitHub Releases (`release-manifest.json` в latest-release assets):
+
+```json
+{
+  "channels": {
+    "stable": {
+      "version": "0.3.2",
+      "released": "2026-05-14T18:00:00Z",
+      "notes": "https://github.com/<user>/di.draw/releases/tag/v0.3.2",
+      "assets": [
+        { "platform": "darwin-arm64", "url": "https://.../didraw-darwin-arm64", "sha256": "..." },
+        { "platform": "darwin-x64",   "url": "https://.../didraw-darwin-x64",   "sha256": "..." },
+        { "platform": "linux-x64",    "url": "https://.../didraw-linux-x64",    "sha256": "..." }
+      ]
+    },
+    "nightly": { /* … */ }
+  }
+}
+```
+
+URL manifest'а вшит в release-binary как константа `MANIFEST_URL`. По умолчанию: `https://github.com/<user>/di.draw/releases/download/latest/release-manifest.json` (или raw-файл в репозитории, если GitHub Releases не настроен — в MVP это нормально).
+
+#### 3.7.5 Update flow (manual, no auto-restart)
+
+Без silent auto-update — пользователь явно нажимает.
+
+```
+didraw update --check          # GET manifest, semver-compare, печатает {current, latest, available, channel}
+didraw update                  # 1. download asset для текущей платформы (по uname/process.platform+arch)
+                               # 2. sha256 verify (соответствие manifest'у)
+                               # 3. atomic swap:
+                               #      tmpfile → didraw.new → rename(didraw, didraw.old) → rename(didraw.new, didraw)
+                               # 4. didraw daemon --stop && didraw daemon --start
+                               # 5. canvas-документы в storage не трогает (compatibility check
+                               #    через manifest.schema_version если в будущем поменяется формат)
+didraw update --channel X      # сменить active channel (записывается в ~/.claude/.didraw-config.json)
+```
+
+Edge cases:
+- **Download/verify провал** → откат: исходный binary не тронут, временные файлы удаляются.
+- **Daemon не подхватился после рестарта** → пользователь видит ошибку, может вручную запустить `didraw.old` или `didraw daemon`.
+- **Active session с открытой доской** → WebSocket клиенты увидят disconnect, переподключатся к новому daemon с тем же state (canvas-документ на диске).
+
+#### 3.7.6 UI banner и version footer
+
+Frontend (Phase 1.10):
+- В status-bar / footer — `v0.3.1 · stable · profile: release` (читает `/api/version`).
+- При `updateAvailable: true` — неблокирующий banner сверху: `"v0.3.2 available — run didraw update"`. Никаких авто-кнопок в MVP (для безопасности).
+- В `dev` profile — visible badge `"DEV"` (плюс надпись `v: 0.0.0-dev · sha:<short>`).
+- В `debug` profile — badge `"DEBUG"`.
+
+#### 3.7.7 Distribution channels (роадмап)
+
+- **MVP (Phase 1.10):** GitHub Releases + `release-manifest.json`. Пользователь скачивает binary вручную одной командой, дальше `didraw update` сам.
+- **Phase 2.3:** Homebrew tap (`brew install <user>/didraw/didraw`).
+- **Phase 3.x:** npm package (`bunx didraw`), private registry для команды, code-signed binaries (Apple notarization для macOS).
+
 ## 4. Технологический стек
 
 - **Backend:** Bun 1.x, Hono (HTTP/WS), `crypto.randomUUID()` для id, elkjs для layout.
@@ -463,11 +600,27 @@ di.draw/
 │       │   └── transport/ws.ts
 │       └── tests/
 ├── packages/
-│   ├── didraw-client/      # Shared HTTP client to backend (используется CLI, MCP, тестами)
-│   │   └── src/index.ts    # CanvasClient: getState, applyPatch, importMermaid, prompts*, etc.
-│   ├── didraw-cli/         # CLI: lifecycle (daemon/open/list/export/rm) + data (state/patch/import/layout/prompts/clear)
-│   ├── canvas-mcp/         # Phase 2: тонкий MCP-adapter поверх didraw-client
-│   └── canvas-channel-mcp/ # Phase 2: Channels-протокол push canvas → Claude
+│   ├── didraw-client/      # Shared HTTP client (используется CLI, MCP, тестами)
+│   │   └── src/index.ts    # CanvasClient
+│   ├── didraw-cli/         # CLI: lifecycle + data + version + update
+│   │   └── src/
+│   │       ├── index.ts
+│   │       ├── daemon.ts
+│   │       ├── lifecycle.ts
+│   │       ├── data.ts
+│   │       ├── import.ts
+│   │       ├── layout.ts
+│   │       ├── prompts.ts
+│   │       ├── version.ts      # didraw version (Phase 1.9)
+│   │       ├── update.ts       # didraw update --check / update (Phase 1.10)
+│   │       └── profile.ts      # --profile dev|release|debug routing
+│   ├── canvas-mcp/         # Phase 2.1: тонкий MCP-adapter поверх didraw-client
+│   └── canvas-channel-mcp/ # Phase 2.2: Channels-протокол push canvas → Claude
+├── scripts/
+│   ├── build-release.sh    # bun build --compile для всех target'ов (Phase 1.9)
+│   ├── generate-manifest.sh    # release-manifest.json с sha256 sums (Phase 1.10)
+│   └── publish-release.sh  # tag + GitHub Release upload (Phase 1.10)
+├── release/                # build outputs (gitignored): didraw-darwin-arm64, *.json
 ├── .claude/
 │   ├── mcp.json            # регистрация canvas-mcp
 │   ├── hooks/
@@ -495,14 +648,17 @@ di.draw/
 | **1.6 Mermaid-import + elkjs layout** | реализация `didraw import mermaid` (по итогам ADR-0001) и `didraw layout` через elkjs | 1 | `didraw import mermaid --room x --stdin <<< "graph LR\n a-->b"` — два узла со стрелкой, авто-layout |
 | **1.7 PreToolUse hook** | hook-script с правильным `hookSpecificOutput.additionalContext`, matcher `Bash`, фильтр по `didraw`/`localhost:8787` в `tool_input.command`, persist `DRAW_LAST_VERSION` per-session | 0.5 | Пользователь сдвинул узел → на следующем `didraw`-вызове AI видит изменение через `additionalContext`; на `git status` хук no-op |
 | **1.8 Targeted prompts** | backend endpoints `/api/prompt`, frontend selection-input + drawer + 💬 маркер, skill инжектит pending prompts | 1 | User выделил узел, написал prompt → AI получил через инъекцию, ответил в Claude Code и вызвал `didraw prompts resolve` → маркер обновился |
-| **1.9 Polish + tests** | golden-path Playwright (auto-mode + manual-mode + targeted prompts), README, demo-gif | 1 | Видеодемо: совместная сессия user + AI; параллельно ручная комната; targeted prompt'ы работают |
+| **1.9 Release packaging** | runtime profiles (`--profile dev\|release\|debug`), version metadata (`apps/backend/src/version.ts` через `--define`), `GET /api/version`, `scripts/build-release.sh` для `bun build --compile` (embedded frontend), `didraw version` CLI | 1.5 | `./release/didraw-darwin-arm64 daemon` стартует release-сборку на 8787 с embedded UI; `didraw version` показывает version/channel/gitSha; `curl /api/version` корректен |
+| **1.10 Update flow** | release manifest schema, `scripts/generate-manifest.sh` + `publish-release.sh`, `didraw update --check`, `didraw update` (download + sha256 + atomic swap + restart), UI footer + update banner на основе `/api/version`, lazy-cache manifest-check'а | 1.5 | Имитация upgrade: publish v0.0.2, на машине с v0.0.1 — `didraw update` скачивает, заменяет, перезапускает, UI banner исчезает |
+| **1.11 Polish + tests** | golden-path Playwright (auto + manual + targeted prompts + release-binary), README, demo-gif, install-script одной строкой | 1 | Видеодемо: совместная сессия user + AI; параллельно ручная комната; targeted prompts работают; новый пользователь устанавливает одной командой |
 | **Phase 2.1: MCP-adapter** | тонкая обёртка `canvas-mcp` поверх `didraw-client`, регистрация в `.claude/mcp.json`, MCP-tools (`canvas_get_state`, `canvas_apply_patch`, `canvas_import_mermaid`, `canvas_layout`, `canvas_prompts_*`) | +1 | AI в новой сессии может работать через typed MCP-tools параллельно со старым skill-каналом |
 | **Phase 2.2: Channels-push** | canvas-channel-mcp, регистрация `--channels plugin:canvas-channel-mcp`, переадресация WS-событий → Claude session ([docs](https://code.claude.com/docs/en/channels)) | +2 | User меняет canvas — Claude получает событие без waiting; AI может комментировать без user-prompt'а |
-| **Phase 3: D2-import, история, расширенный multi-user** | `didraw import d2`, миграция persistence на SQLite (история op-log), conflict resolution для одновременного редактирования двумя пользователями, export Mermaid/SVG | +3 | D2-импорт работает; история patch'ей доступна; два пользователя в одной комнате не затирают друг друга |
+| **Phase 2.3: Homebrew tap** | `<user>/homebrew-didraw` repo, formula, CI publish | +1 | `brew install <user>/didraw/didraw` работает |
+| **Phase 3: D2-import, история, расширенный multi-user, signed binaries** | `didraw import d2`, миграция persistence на SQLite, conflict resolution, Apple notarization, npm-publish | +3 | D2-импорт; история op-log; два пользователя в одной комнате; macOS Gatekeeper не блокирует |
 
-**MVP до Phase 1.9: 9.5–10.5 рабочих дней.** Стек: CLI как machine-interface, skill как контракт-инструкция для AI.
+**MVP до Phase 1.11: 11–12.5 рабочих дней.** Включает release packaging и update flow — продукт распространяется как `didraw` binary, обновляется одной командой.
 
-**Phase 2 (MCP-adapter + Channels): +3 дня = ~13 дней.** Полное "доска живёт" demo.
+**Phase 2 (MCP-adapter + Channels + Homebrew): +4 дня = ~15–16 дней.** Полное "доска живёт" demo + удобная установка.
 
 **Почему CLI-first выгоднее MCP-first:**
 1. CLI отлаживается локально без Claude Code — `didraw patch` руками за секунды.
@@ -522,7 +678,11 @@ di.draw/
 8. **Stale prompts queue.** Если AI игнорирует prompts (не вызывает resolve/dismiss), очередь растёт и раздувает skill-инъект. Митигация: compact-injection обрезает до 5 последних; GC через 24 часа для `resolved/dismissed`; user может вручную dismiss из drawer'а.
 9. **CLAUDE_SESSION_ID может быть недоступен в env.** Если переменная не передаётся в Bash-окружение tool-call'а (зависит от версии Claude Code), CLI fallback'нется на `default`-room. Phase 0.1 spike включает проверку этой переменной.
 10. **Race condition при первом запуске сессии.** SessionStart hook поднимает backend → требуется ~100ms на старт. Если skill-инъект срабатывает раньше → CLI-команда вернёт `exit 3` (server unreachable). Митигация: `didraw daemon --ensure` блокирует до health-check'а; skill инжектит state **после** ensure, не параллельно.
-11. **CLI как чужой контракт.** Если кто-то начнёт зависеть от внутреннего формата output'а CLI — менять output больно. Митигация: integration-тесты в Phase 1.4 закрепляют контракт; semver-like заметки в `CHANGELOG.md` для CLI с Phase 1.9.
+11. **CLI как чужой контракт.** Если кто-то начнёт зависеть от внутреннего формата output'а CLI — менять output больно. Митигация: integration-тесты в Phase 1.4 закрепляют контракт; semver-like заметки в `CHANGELOG.md` для CLI с Phase 1.11.
+12. **Update flow ломает рабочую копию.** Если atomic swap прервался посередине (kill -9 во время rename) — daemon может не подняться. Митигация: `didraw.old` всегда остаётся до конца, явный rollback при ошибке, `didraw update --check` не трогает binary.
+13. **Compatibility между версиями canvas.json формата.** Если v0.4 поменяет PatchOp schema, старые canvas.json могут не загрузиться. Митигация: `canvas.json` имеет `version: 1`; в Phase 3 — migration-функции при load, схема прирастает совместимо (новые optional-поля) пока возможно.
+14. **Code-signing на macOS.** Без notarization Gatekeeper будет ругаться. MVP — пользователь делает `xattr -d com.apple.quarantine ./didraw`. Phase 3 — Apple Developer ID + notarytool.
+15. **Manifest spoofing / supply-chain.** В MVP manifest на GitHub Releases — доверяем HTTPS + sha256 чекам в самом manifest'е. Phase 3 — GPG-подпись manifest'а.
 
 ## 8. Что **не** делаем в MVP (зафиксировать)
 
@@ -546,6 +706,9 @@ di.draw/
 - **Mermaid — convenience-entry, не SSOT.** Используется только когда AI вызывает `didraw import mermaid`. Дальше canvas-state ведёт сам себя.
 - **Поддерживаемые формы в MVP**: rect, ellipse, diamond, sticky, text, freeform, edges (с Endpoint:node|point).
 - **Targeted prompts с MVP** (Phase 1.8): user выделяет shapes, пишет prompt, AI получает в контекст и резолвит через `didraw prompts resolve`.
+- **Runtime profiles**: `release` (default, port 8787, embedded UI) / `dev` (port 8788, Vite HMR) / `debug` (release + verbose logs). Dev и release могут работать параллельно — разные порты и storage namespaces.
+- **Distribution**: single-binary `didraw` через `bun build --compile` для darwin-arm64 / darwin-x64 / linux-x64 / windows-x64. GitHub Releases + `release-manifest.json` для MVP. Homebrew tap, npm, signed binaries — Phase 2.3 и далее.
+- **Update flow**: manual через `didraw update`. Без silent auto-restart. UI banner при `updateAvailable`, кнопок auto-update в MVP нет.
 
 **Реально открытое:**
 
