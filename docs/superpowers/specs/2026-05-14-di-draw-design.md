@@ -10,7 +10,8 @@
 - **v1** — D2 как SSOT, d2oracle для bidirectional edit.
 - **v2** — Mermaid как SSOT, LLM-делегированный roundtrip через pending-deltas; tldraw watermark принят.
 - **v3** — **canvas-state (JSON) как SSOT**, Mermaid — convenience entry-point; push canvas → Claude обязателен для MVP; свободные shapes (sticky/text/free-form) с MVP.
-- **v3.1 (текущая)** — точечные правки по ревью: tldraw зафиксирован на 5.x, Edge endpoints поддерживают свободные точки в пространстве, Group обогащён (frame|group, координаты, collapsed), PreToolUse hook через `hookSpecificOutput.additionalContext`, deep-merge для style/meta, autosave-persistence поднят в MVP (Phase 1.6), D2-импорт явно вынесен в Phase 3, добавлен spike `@tldraw/mermaid` headless как Phase 0.1.
+- **v3.1** — точечные правки по ревью: tldraw 5.x, Edge endpoints (свободные точки), Group обогащён, PreToolUse через `additionalContext`, deep-merge для style/meta, autosave в MVP, D2 в Phase 3, spike `@tldraw/mermaid` headless как Phase 0.1.
+- **v3.2 (текущая)** — добавлены **два больших блока**: (1) **multi-room backend + per-session storage** (документ canvas живёт в `~/.claude/projects/<slug>/canvas/<room>.json`; CLI `didraw daemon|open|list|export|rm` для ручного режима; SessionStart hook для автоматического; multi-room с MVP); (2) **targeted prompts** (выделение объекта на canvas → prompt с привязкой → AI получает в контексте через injection/hook/Channels). MVP-оценка: 9.5–10 дней.
 
 ## 1. Проблема и цель
 
@@ -37,6 +38,8 @@
 | 8 | Auto-layout — **elkjs (layered) опционально, по запросу** | Всегда AI считает координаты; всегда auto-layout | AI обычно знает где расположить новые узлы; но при импорте Mermaid и при `apply_patch({layout: "elk"})` бэкенд считает координаты. Свободные shapes пользователь и AI размещают сами. |
 | 9 | Stable ids — **внутренние UUID v4** для каждого node/edge/group | Использовать `mermaid-id` напрямую; client-generated nice-ids | UUID живут вне DSL'а, не страдают при rename, переживают import/export через Mermaid. |
 | 10 | Backend port — **8787** (`/api`, `/ws`, `/`) | 7777 (занят у пользователя), 3000 (типовое для dev) | Свободен по умолчанию, легко запомнить, конфигурируется через env `DIDRAW_PORT`. |
+| 11 | **Multi-room backend с MVP**, документ canvas хранится в `~/.claude/projects/<slug>/canvas/<room>.json`; ключ комнаты = `CLAUDE_SESSION_ID` (auto) или произвольное имя (manual через `didraw open <room>`) | single-canvas; разные процессы backend на сессию; хранение в `<project>/.claude/canvas/` | Документ привязан к сессии Claude Code (живёт в той же папке, что `session.jsonl`), но backend единый. Ручной режим через CLI даёт скетч-комнаты вне сессий. |
+| 12 | **Targeted prompts** — user выделяет shapes на canvas и пишет prompt; AI получает его с привязкой к объектам через injection / hook / Channels | Только текстовый диалог в Claude Code; комментарии-on-shape без AI-обработки | Превращает доску в input-channel, не только output. Объект-attached prompt'ы радикально упрощают "что ты имел в виду под этим узлом?". |
 
 ## 3. Архитектура
 
@@ -219,6 +222,166 @@ type Group = {
 | Backend упал | Frontend: баннер "disconnected", экспоненциальный backoff. MCP-tool → ошибка, модель видит. |
 | Несколько Claude-сессий на один backend | Phase 1: одна "комната" по умолчанию, обе сессии разделяют state и conflict-resolve через op-log. Phase 3: `room_id` параметр. |
 | Сессия Claude Code не Pro/v2.1.80+ | Channels недоступен → Phase 1.5 fallback (`PreToolUse` hook) даёт ~90% эффекта реактивности. |
+| Backend поднят, sessionId не определён (нет env) | Используется `default` room. Ручной запуск без сессии работает. |
+| Несколько Claude-сессий → несколько комнат | Backend multi-room с MVP: каждая комната = отдельный `CanvasState` + `opLog`, изоляция полная. |
+
+### 3.5 Запуск и хранение документов
+
+**Документ canvas привязан к сессии Claude Code** и живёт в той же папке, что и `session.jsonl`. Backend — единый процесс на порту 8787, но с **multi-room state**: `Map<RoomId, RoomState>`. RoomId = либо `$CLAUDE_SESSION_ID` (автоматический режим), либо имя свободной комнаты (ручной режим).
+
+#### Storage layout
+
+```
+~/.claude/projects/<project-slug>/
+├── session.jsonl                            # стандартный Claude Code state
+└── canvas/                                  # di.draw documents
+    ├── <session-id-1>.json                  # canvas одной сессии
+    ├── <session-id-2>.json
+    └── _manual/                             # свободные комнаты (ручной режим)
+        ├── scratchpad.json
+        └── architecture.json
+```
+
+- Backend на каждый принятый patch делает debounced autosave (300ms) в соответствующий файл.
+- Старт backend'а лениво подгружает комнату при первом обращении к ней (`GET /api/state?room=X` или WS `?room=X`).
+- Файл — компактный JSON `CanvasState` (без opLog'а — он живёт только в памяти).
+
+#### Режим 1: автоматический (из сессии Claude Code)
+
+Регистрируется через `SessionStart` hook в `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "didraw daemon --ensure"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+- `didraw daemon --ensure` проверяет, запущен ли backend (по pid-файлу `~/.claude/.didraw.pid` и `lsof -i:8787`). Если нет — поднимает в фоне.
+- При первом обращении из MCP-tool / skill backend подхватывает `$CLAUDE_SESSION_ID` (передаётся через query-параметр или X-header в API-вызовах от MCP-сервера) и создаёт/загружает соответствующую комнату.
+- Draw skill дополнительно автоматически открывает `http://localhost:8787/?room=$CLAUDE_SESSION_ID` в браузере (один раз за сессию).
+
+#### Режим 2: ручной (без сессии Claude Code)
+
+CLI `didraw`:
+
+```
+didraw daemon              # запустить backend в фоне на 8787 (если не запущен)
+didraw daemon --ensure     # idempotent: запустить, если не запущен; иначе ничего
+didraw daemon --stop       # остановить backend
+didraw daemon --status     # PID, аптайм, открытые комнаты
+
+didraw open <room>         # открыть указанную комнату в браузере
+                           # <room> = session-id ИЛИ имя из _manual/
+                           # если не существует — создаст пустую в _manual/<room>.json
+didraw open --file <path>  # открыть произвольный canvas.json по пути
+didraw list                # список всех комнат (sessions/ и _manual/)
+didraw export <room> --to <path>   # копирование canvas комнаты в файл проекта
+didraw rm <room>           # удалить комнату (с подтверждением)
+```
+
+- При ручном запуске Hook'и и MCP не задействованы. Пользователь рисует руками. Это просто tldraw-доска с сохранением.
+- `didraw open architecture` (без расширения) при отсутствии комнаты создаёт `_manual/architecture.json` — лёгкий way для скетча "только для меня".
+
+#### Передача sessionId в MCP / Skill / Hook
+
+- **MCP-сервер** (`canvas-mcp`): при инициализации читает env `CLAUDE_SESSION_ID`. Каждый tool-call автоматически добавляет `?room=$CLAUDE_SESSION_ID` к API-запросам. Fallback — `default`.
+- **draw skill**: подставляет `$CLAUDE_SESSION_ID` в `curl`:
+  ```
+  !`curl -s "http://localhost:8787/api/state?fmt=compact&room=$CLAUDE_SESSION_ID"`
+  ```
+- **draw-prehook**: читает `$CLAUDE_SESSION_ID` из env, передаёт в запрос, обновляет `~/.claude/.draw-state-$CLAUDE_SESSION_ID` (per-session).
+
+#### Backend multi-room — деталь реализации
+
+- `Map<RoomId, { canvas: CanvasState, opLog: PatchOp[], prompts: Prompt[], version: number, dirty: boolean, lastTouched: number }>`.
+- LRU-выгрузка: если комната не трогалась >1 часа и не подключён WS — выгружается из памяти (автосейв перед выгрузкой).
+- Все REST endpoints принимают `?room=<id>` query (default = `"default"`).
+- WS-сообщения роутятся по комнатам: `connect /ws?room=X` → клиент получает события только своей комнаты.
+
+### 3.6 Targeted prompts — promt'ы с привязкой к объекту
+
+Пользователь может выделить один или несколько объектов на canvas, написать рядом prompt — и AI получит этот prompt в своём контексте, зная, к каким именно объектам он относится. Это превращает доску в **входной канал для AI**, а не только в выходной.
+
+#### Модель
+
+```ts
+type Prompt = {
+  id: string,                              // UUID
+  selection: string[],                     // ids of nodes / edges / groups
+  text: string,
+  createdAt: number,
+  status: "pending" | "resolved" | "dismissed",
+  response?: string,                       // что AI ответил (если решил записать)
+  resolvedAt?: number,
+}
+```
+
+`prompts: Prompt[]` живёт в `RoomState` вместе с `canvas` и `opLog`, сохраняется в `canvas.json` (только `pending` и недавние `resolved` — старые `resolved/dismissed` GC через 24 часа).
+
+#### Backend
+
+REST:
+- `POST /api/prompt?room=<id>` — `{ selection, text }` → создаёт `Prompt` со `status:"pending"`. Возвращает `{ id }`.
+- `GET /api/prompts?room=<id>&status=pending` — список.
+- `POST /api/prompt/:id/resolve?room=<id>` — `{ response? }` → `status:"resolved"`.
+- `POST /api/prompt/:id/dismiss?room=<id>` → `status:"dismissed"`.
+
+WebSocket events:
+- `{ kind: "prompt-created", prompt }` — broadcast при создании.
+- `{ kind: "prompt-resolved", id, response? }` — при resolve/dismiss.
+
+#### Frontend (UI)
+
+- При **selection** одного или нескольких shapes — появляется floating-bar над выделением с input "Ask AI about this..." + кнопка Send.
+- Enter / Send → `POST /api/prompt` с текущим selection.
+- На выделенных объектах рисуется маркер `💬 N` если есть unresolved prompts. Клик по маркеру — drawer с историей prompt'ов/ответов по этому объекту.
+- Когда приходит `prompt-resolved` по WS — маркер обновляется/исчезает, response (если есть) показывается в drawer'е.
+
+#### Передача prompt'а в AI
+
+- **Phase 1 (skill-injection):** в каждом `draw` skill-инъекте после `compact JSON` идёт секция:
+  ```
+  ## Pending prompts (user-promt'ы с привязкой к объектам)
+  !`curl -s "$DIDRAW_URL/api/prompts?room=$CLAUDE_SESSION_ID&status=pending" | jq -c`
+  ```
+  AI видит `[{id, selection, text, createdAt}]`. Когда отвечает — вызывает `canvas_resolve_prompt({id, response?})`.
+- **Phase 1.6 (PreToolUse hook):** hook'инг свежих prompts в `additionalContext` перед каждым `canvas_*` tool-call'ом (тот же механизм, что для canvas-diff).
+- **Phase 2 (Channels):** новый prompt → push в активную сессию **мгновенно** через canvas-channel-mcp, без waiting и без скилла. AI прямо в середине ответа может прерваться "Пользователь спросил про сервер: ...".
+
+#### MCP-tools
+
+- `canvas_get_prompts({ status?: "pending"|"resolved"|"dismissed"|"all" })` — список.
+- `canvas_resolve_prompt({ id, response?: string })` — пометить done. Опциональный `response` сохраняется и показывается user'у в drawer'е.
+- `canvas_dismiss_prompt({ id })` — "не отвечу" / "не релевантно".
+
+#### Сценарий использования
+
+1. AI нарисовал архитектурную схему (через Mermaid-import).
+2. User выделил узел "PaymentService", написал в input'е: *"А что если он упадёт? Покажи fallback path."*
+3. Frontend → `POST /api/prompt` → backend сохраняет, WS-push.
+4. Skill / hook / channel — AI узнаёт о новом prompt'е (зависит от Phase).
+5. AI отвечает в Claude Code: "Если PaymentService падает, идёт fallback через RetryQueue → ManualReview. Добавляю эти узлы." + вызывает `canvas_apply_patch` + `canvas_resolve_prompt({id, response: "Добавил fallback path через RetryQueue."})`.
+6. User видит на canvas: новые узлы, маркер 💬 на PaymentService обновился, в drawer'е появился response.
+
+#### Edge cases
+
+| Сценарий | Поведение |
+|---|---|
+| Объект из selection удалён до resolve | Prompt остаётся в очереди; в UI selection отображается как orphan ("targeted object deleted"). AI всё равно получает текст, но без рендеринга связи. |
+| Очередь prompt'ов разрослась (10+ pending) | Compact-injection включает только последние 5; AI может попросить `canvas_get_prompts({status:"all"})` для полного списка. |
+| User написал prompt, перезагрузил браузер | Prompt сохранён на бэкенде и в `canvas.json` — увидит при reload в drawer'е. |
+| AI не отреагировал на prompt | Висит в `pending` неограниченно. User может вручную dismiss через UI или повторить prompt новым текстом. |
 
 ## 4. Технологический стек
 
@@ -238,30 +401,34 @@ di.draw/
 │   ├── backend/
 │   │   ├── src/
 │   │   │   ├── index.ts
-│   │   │   ├── state.ts           # CanvasState, opLog, version
-│   │   │   ├── patch.ts           # apply PatchOp, validation
+│   │   │   ├── rooms.ts           # Map<RoomId, RoomState>, LRU, lazy-load из файлов
+│   │   │   ├── state.ts           # CanvasState, opLog, version (per-room)
+│   │   │   ├── persistence.ts     # autosave debounce, load on first touch
+│   │   │   ├── patch.ts           # apply PatchOp, validation, deep-merge
 │   │   │   ├── mermaid-import.ts  # @tldraw/mermaid → PatchOp[]
 │   │   │   ├── layout.ts          # elkjs обёртка
-│   │   │   ├── ws.ts              # broadcast
+│   │   │   ├── ws.ts              # broadcast per-room
 │   │   │   └── routes.ts
 │   │   └── tests/
 │   └── frontend/
 │       ├── src/
-│       │   ├── App.tsx
+│       │   ├── App.tsx                       # читает ?room= из URL
 │       │   ├── canvas/
 │       │   │   ├── editor.tsx
-│       │   │   ├── from-canvas-state.ts   # CanvasState → tldraw shapes
-│       │   │   ├── to-patch.ts            # tldraw store-event → PatchOp[]
-│       │   │   └── kinds.ts               # node-kinds → tldraw shape types
+│       │   │   ├── from-canvas-state.ts      # CanvasState → tldraw shapes
+│       │   │   ├── to-patch.ts               # tldraw store-event → PatchOp[]
+│       │   │   └── kinds.ts                  # node-kinds → tldraw shape types
 │       │   └── transport/ws.ts
 │       └── tests/
 ├── packages/
-│   ├── canvas-mcp/         # write/read MCP-сервер
-│   └── canvas-channel-mcp/ # Phase 2: Channels-протокол
+│   ├── canvas-mcp/         # write/read MCP-сервер (читает CLAUDE_SESSION_ID)
+│   ├── canvas-channel-mcp/ # Phase 2: Channels-протокол
+│   └── didraw-cli/         # CLI: didraw daemon | open | list | export | rm
 ├── .claude/
-│   ├── mcp.json
-│   ├── hooks/draw-prehook.sh
-│   ├── settings.json       # hook registration
+│   ├── mcp.json            # регистрация canvas-mcp
+│   ├── hooks/
+│   │   └── draw-prehook.sh
+│   ├── settings.json       # SessionStart + PreToolUse hooks
 │   └── skills/draw/SKILL.md
 ├── docs/superpowers/specs/
 │   └── 2026-05-14-di-draw-design.md
@@ -276,19 +443,20 @@ di.draw/
 |---|---|---|---|
 | **0. Bootstrap** | monorepo (Bun workspaces), biome, tsconfig, скелеты apps/packages, port=8787 (env) | 0.5 | `bun run dev` поднимает backend+frontend |
 | **0.1 Spike: `@tldraw/mermaid` headless** | прототип-эксперимент: парсится ли пакет на Bun без DOM (через jsdom/playwright/CLI mmdc); если нет — фиксируем перенос конвертации на frontend | 0.5 | Решение и benchmark зафиксированы в `docs/decisions/0001-mermaid-import-location.md` |
-| **1.1 Backend MVP** | CanvasState (Node/Edge/Endpoint/Group по §3.1), apply_patch с deep-merge для style/meta, REST, WS, op-log, version, idempotency | 1 | curl POST /api/patch добавляет узел → WS broadcast, GET /api/state?since=N отдаёт diff |
-| **1.2 Frontend MVP** | tldraw 5.x, render CanvasState → shapes (включая frame/group), store.listen → POST /api/patch, WS-patch, free-form shapes (sticky/text/draw), свободные стрелки (Endpoint:point) | 2 | Браузер рисует, пользовательские правки сразу летят в backend и обратно; стрелки можно тянуть "в пустоту" |
-| **1.3 MCP + Skill** | canvas-mcp (`get_state`/`apply_patch`/`import_mermaid`/`layout`/`clear`), draw skill с инъекцией compact JSON | 1 | В Claude Code "Нарисуй a→b" → на canvas появляются узлы |
-| **1.4 Mermaid-import + layout** | `@tldraw/mermaid` → PatchOp[] (по итогам spike — на backend или frontend), elkjs auto-layout, обработка ошибок парсинга | 1 | AI вызывает import_mermaid с `graph LR` или `sequenceDiagram` — canvas корректно отрисовывает |
-| **1.5 PreToolUse hook** | hook-script с правильным `hookSpecificOutput.additionalContext` форматом, регистрация в `.claude/settings.json` с вложенным `hooks: [{type:"command",...}]`, persist `DRAW_LAST_VERSION` | 0.5 | Пользователь сдвинул узел — на следующем canvas_* tool-call'е AI видит изменение через `additionalContext` |
-| **1.6 Persistence (autosave)** | `canvas.json` в корне проекта; autosave debounce-300ms на каждый принятый patch; load при старте; idempotency после restore | 0.5 | Сделал правку → выключил backend → запустил → canvas на месте |
-| **1.7 Polish + tests** | golden-path Playwright, README, demo-gif | 1 | Видеодемо: совместная сессия user + AI создаёт неравномерную схему с произвольными формами |
+| **1.1 Backend MVP + multi-room** | `Map<RoomId, RoomState>`, lazy-load из `~/.claude/projects/<slug>/canvas/<room>.json`, apply_patch с deep-merge, REST/WS с `?room=`, op-log, version, idempotency | 1.5 | curl POST /api/patch?room=test добавляет узел в комнату test; GET /api/state?room=test отдаёт состояние; вторая комната `?room=other` изолирована |
+| **1.2 Frontend MVP** | tldraw 5.x, читает `?room=` из URL, render CanvasState → shapes (включая frame/group), store.listen → POST /api/patch, WS-patch, free-form shapes (sticky/text/draw), свободные стрелки (Endpoint:point) | 2 | Браузер рисует, разные комнаты в разных табах изолированы, стрелки можно тянуть "в пустоту" |
+| **1.3 didraw CLI** | команды `daemon` (start/stop/status/ensure), `open <room>`, `list`, `export`, `rm`; pid-файл, idempotent запуск, открытие браузера | 1 | `didraw open scratch` → backend поднимается, браузер открывается на `?room=scratch`, через 5 мин остановки — autosave на диск |
+| **1.4 MCP + Skill + SessionStart hook** | canvas-mcp с автоматической подстановкой `CLAUDE_SESSION_ID` как room, draw skill с инъекцией compact JSON, SessionStart hook вызывает `didraw daemon --ensure` | 1 | В Claude Code "Нарисуй a→b" → на canvas конкретной сессии появляются узлы; в параллельной сессии — отдельная доска |
+| **1.5 Mermaid-import + layout** | `@tldraw/mermaid` → PatchOp[] (по итогам spike — на backend или frontend), elkjs auto-layout, обработка ошибок парсинга | 1 | AI вызывает `canvas_import_mermaid` — canvas корректно отрисовывает |
+| **1.6 PreToolUse hook** | hook-script с правильным `hookSpecificOutput.additionalContext`, регистрация в `.claude/settings.json`, persist `DRAW_LAST_VERSION` per-session | 0.5 | Пользователь сдвинул узел → на следующем canvas_* tool-call'е AI видит изменение через `additionalContext` |
+| **1.7 Targeted prompts** | backend endpoints `/api/prompt`, frontend selection-input + drawer + 💬 маркер, skill инжектит pending prompts, MCP tools `resolve_prompt`/`dismiss_prompt` | 1 | User выделил узел, написал prompt → AI получил, ответил в Claude Code и вызвал resolve → маркер обновился |
+| **1.8 Polish + tests** | golden-path Playwright (auto-mode + manual-mode + targeted prompts), README, demo-gif | 1 | Видеодемо: совместная сессия user + AI; параллельно ручная комната; targeted prompt'ы работают |
 | **Phase 2: Channels-push** | canvas-channel-mcp, регистрация `--channels plugin:canvas-channel-mcp`, переадресация WS-событий → Claude session ([docs](https://code.claude.com/docs/en/channels)) | +2 | User меняет canvas — Claude получает событие без waiting; AI может комментировать без user-prompt'а |
-| **Phase 3: D2-import, SQLite, multi-room** | `POST /api/import/d2`, миграция autosave на SQLite (если нужна история), `room_id` в URL, export Mermaid/SVG | +3 | D2-импорт работает; несколько комнат изолированы; история patch'ей доступна |
+| **Phase 3: D2-import, история, расширенный multi-user** | `POST /api/import/d2`, миграция persistence на SQLite (история op-log), conflict resolution для одновременного редактирования двумя пользователями, export Mermaid/SVG | +3 | D2-импорт работает; история patch'ей доступна; два пользователя в одной комнате не затирают друг друга |
 
-**MVP до Phase 1.7: 7.5–8 рабочих дней** (включает spike + autosave persistence + правильный hooks-формат с `additionalContext`).
+**MVP до Phase 1.8: 9.5–10 рабочих дней** (+1 день на targeted prompts; multi-room и persistence теперь вместе в 1.1).
 
-**Минимальное интересное демо = MVP + Phase 2 = ~10 дней.** Phase 2 обязательна для эффекта "доска живёт".
+**Минимальное интересное демо = MVP + Phase 2 = ~12 дней.** Phase 2 особенно важна для targeted prompts: с Channels AI узнаёт о новом prompt'е мгновенно, без waiting на следующий tool-call.
 
 ## 7. Известные риски
 
@@ -299,6 +467,9 @@ di.draw/
 5. **Echo-loop через WS.** Если patch применяется и шлётся обратно — клиент применит снова. Защита через `source` + `clientOpId`-fingerprint; в тестах эту проверку покрываем явно.
 6. **Layout-конфликты при ELK + ручные правки.** Если пользователь сдвинул узел, а потом AI запросил `canvas_layout` для всех — координаты пользователя затрутся. Митигация: `canvas_layout` принимает `nodeIds?` — можно лейаутить только новые узлы.
 7. **Размер MCP-tool responses.** `canvas_get_state({fmt:"full"})` для большого canvas может быть тяжёлым. Митигация: `fmt:"compact"` по умолчанию + `since` для дельт.
+8. **Stale prompts queue.** Если AI игнорирует prompts (не вызывает resolve/dismiss), очередь растёт и раздувает skill-инъект. Митигация: compact-injection обрезает до 5 последних; GC через 24 часа для `resolved/dismissed`; user может вручную dismiss из drawer'а.
+9. **CLAUDE_SESSION_ID может быть недоступен в env.** Если переменная не передаётся в MCP-сервер (зависит от версии Claude Code), MCP попросит её через `request_meta` от клиента или fallback на `default`. Spike в Phase 0.1 включает проверку этой переменной.
+10. **Race condition при первом запуске сессии.** SessionStart hook поднимает backend → требуется ~100ms на старт. Если skill-инъект срабатывает раньше → 502. Митигация: `didraw daemon --ensure` блокирует до health-check'а; skill ловит 502 и ретраит.
 
 ## 8. Что **не** делаем в MVP (зафиксировать)
 
@@ -316,9 +487,12 @@ di.draw/
 **Зафиксировано как дефолт (можно поменять одним замечанием):**
 
 - **Порт backend = 8787** (env `DIDRAW_PORT` для override).
-- **Push canvas → Claude — двухуровневый**: Phase 1.5 (PreToolUse hook, всегда работает) + Phase 2 (Channels, реальный push).
+- **Backend — single process, multi-room.** Каждая комната = `CLAUDE_SESSION_ID` (auto) или произвольное имя (manual). Документы — `~/.claude/projects/<slug>/canvas/<room>.json`.
+- **Два режима запуска**: автоматический (SessionStart hook → `didraw daemon --ensure`) и ручной (`didraw open <room>` или `didraw open --file <path>`).
+- **Push canvas → Claude — двухуровневый**: Phase 1.6 (PreToolUse hook, всегда работает) + Phase 2 (Channels, реальный push).
 - **Mermaid — convenience-entry, не SSOT.** Используется только когда AI вызывает `canvas_import_mermaid`. Дальше canvas-state ведёт сам себя.
-- **Поддерживаемые формы в MVP**: rect, ellipse, diamond, sticky, text, freeform, edges. Без ограничений по типу диаграммы.
+- **Поддерживаемые формы в MVP**: rect, ellipse, diamond, sticky, text, freeform, edges (с Endpoint:node|point). Без ограничений по типу диаграммы.
+- **Targeted prompts с MVP** (Phase 1.7): user выделяет shapes, пишет prompt, AI получает в контекст и резолвит через MCP.
 
 **Реально открытое:**
 
