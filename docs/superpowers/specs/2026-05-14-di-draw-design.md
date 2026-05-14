@@ -2,7 +2,7 @@
 
 - **Дата:** 2026-05-14
 - **Автор:** brainstorm-сессия (Claude Code + Денис Третьяков)
-- **Статус:** Draft v3, ожидает финального ревью пользователя
+- **Статус:** Draft v3.2, одобрено пользователем после ревью
 - **Цель документа:** зафиксировать архитектурное решение прототипа, по которому далее будет составлен implementation plan.
 
 ## История ревизий
@@ -11,7 +11,8 @@
 - **v2** — Mermaid как SSOT, LLM-делегированный roundtrip через pending-deltas; tldraw watermark принят.
 - **v3** — **canvas-state (JSON) как SSOT**, Mermaid — convenience entry-point; push canvas → Claude обязателен для MVP; свободные shapes (sticky/text/free-form) с MVP.
 - **v3.1** — точечные правки по ревью: tldraw 5.x, Edge endpoints (свободные точки), Group обогащён, PreToolUse через `additionalContext`, deep-merge для style/meta, autosave в MVP, D2 в Phase 3, spike `@tldraw/mermaid` headless как Phase 0.1.
-- **v3.2 (текущая)** — добавлены **два больших блока**: (1) **multi-room backend + per-session storage** (документ canvas живёт в `~/.claude/projects/<slug>/canvas/<room>.json`; CLI `didraw daemon|open|list|export|rm` для ручного режима; SessionStart hook для автоматического; multi-room с MVP); (2) **targeted prompts** (выделение объекта на canvas → prompt с привязкой → AI получает в контексте через injection/hook/Channels). MVP-оценка: 9.5–10 дней.
+- **v3.2** — добавлены **два больших блока**: (1) **multi-room backend + per-session storage** (документ canvas живёт в `~/.claude/projects/<slug>/canvas/<room>.json`; CLI `didraw daemon|open|list|export|rm` для ручного режима; SessionStart hook для автоматического; multi-room с MVP); (2) **targeted prompts** (выделение объекта на canvas → prompt с привязкой → AI получает в контексте через injection/hook/Channels). MVP-оценка: 9.5–10 дней.
+- **v3.2.1 (текущая, одобрено)** — финальные правки консистентности: статус → v3.2; §3.2 переписан с `rooms: Map<RoomId, RoomState>` и всеми endpoints через `?room=`; §8 — `Multi-user collaborative editing` (не путать с multi-room, который уже в MVP); §9 — открытый вопрос про storage переформулирован как "когда мигрировать с JSON на SQLite".
 
 ## 1. Проблема и цель
 
@@ -100,16 +101,14 @@ type Group = {
 ### 3.2 Компоненты
 
 1. **canvas-backend** — Bun + Hono, единый локальный процесс на порту `8787`.
-   - **State:**
-     - `canvas: CanvasState` — единственная in-memory модель.
-     - `opLog: PatchOp[]` — последние ≤50 патчей для undo и для push-diff.
-     - `version: number` — монотонный счётчик; растёт на каждый принятый patch.
+   - **State:** `rooms: Map<RoomId, RoomState>`, где `RoomState = { canvas: CanvasState, opLog: PatchOp[], prompts: Prompt[], version: number, dirty: boolean, lastTouched: number }`. Подробности lazy-load'а, LRU-выгрузки и привязки `RoomId` к `CLAUDE_SESSION_ID` — см. §3.5. Все нижеперечисленные REST/WS endpoints принимают `?room=<id>` и работают в контексте конкретной комнаты.
    - **REST API:**
-     - `GET /api/state?fmt=full|compact&since=<version>` — snapshot. `compact` опускает дефолтные поля и округляет координаты. `since` — отдаёт только diff от указанной версии (через opLog).
-     - `POST /api/patch` — принимает `{ ops: PatchOp[], source: "ai"|"user", clientOpId?: string }`. Применяет, возвращает новый `version`. **Идемпотентность** по `clientOpId` (защита от double-apply).
-     - `POST /api/import/mermaid` — `{ source: string, layout?: "elk"|"keep" }`. Парсит через `@tldraw/mermaid`, конвертирует в CanvasState-операции, применяет.
-     - `POST /api/layout` — `{ algorithm: "elk-layered" | "dagre", nodeIds?: string[] }`. Пересчитывает координаты для указанных узлов через elkjs, отдаёт diff.
-     - `GET /healthz`.
+     - `GET /api/state?room=<id>&fmt=full|compact&since=<version>` — snapshot комнаты. `compact` опускает дефолтные поля и округляет координаты. `since` — отдаёт только diff от указанной версии (через opLog).
+     - `POST /api/patch?room=<id>` — принимает `{ ops: PatchOp[], source: "ai"|"user", clientOpId?: string }`. Применяет, возвращает новый `version`. **Идемпотентность** по `clientOpId` (защита от double-apply).
+     - `POST /api/import/mermaid?room=<id>` — `{ source: string, layout?: "elk"|"keep" }`. Парсит через `@tldraw/mermaid`, конвертирует в CanvasState-операции, применяет.
+     - `POST /api/layout?room=<id>` — `{ algorithm: "elk-layered" | "dagre", nodeIds?: string[] }`. Пересчитывает координаты для указанных узлов через elkjs, отдаёт diff.
+     - Endpoints для targeted prompts (см. §3.6): `POST /api/prompt`, `GET /api/prompts`, `POST /api/prompt/:id/resolve`, `POST /api/prompt/:id/dismiss` — все также с `?room=<id>`.
+     - `GET /healthz` — глобальный, без `room`.
    - **WebSocket `/ws`:**
      - Сообщение `{ kind: "patch", source: "ai"|"user", ops: PatchOp[], version }` — broadcast после каждого применённого patch'а.
      - `{ kind: "hello", version }` при connect.
@@ -473,8 +472,7 @@ di.draw/
 
 ## 8. Что **не** делаем в MVP (зафиксировать)
 
-- Коллаб (несколько пользователей одновременно).
-- Multi-room/multi-session — Phase 3.
+- **Multi-user collaborative editing** (одновременная работа двух+ пользователей в одной комнате с merge/CRDT) — Phase 3. *Multi-room (per-session) уже в MVP, см. §3.5.*
 - Аутентификация, ACL.
 - Облачный хостинг.
 - Импорт **D2** (только Mermaid в MVP); экспорт обратно в Mermaid/D2/SVG — Phase 3.
@@ -496,8 +494,8 @@ di.draw/
 
 **Реально открытое:**
 
-1. **Storage эволюция:** MVP — autosave одного `canvas.json` (Phase 1.6). Phase 3 — миграция на SQLite, если понадобится история, multi-room, или граф вырастет. Триггер миграции пока не выбран — решим по first use.
-2. **Spike-результат по `@tldraw/mermaid` headless.** Если на Bun не работает — Phase 1.4 переедет на frontend (parsing + конвертация в worker, бэкенд получает уже готовые PatchOp'ы). Уточняем по итогам Phase 0.1.
+1. **Эволюция persistence:** MVP — per-room JSON-файл (`canvas/<room>.json`, autosave debounce 300ms). Phase 3 — миграция на SQLite, если понадобится: история op-log за пределами 50 последних патчей, поиск по содержимому всех комнат, conflict-resolution для multi-user. Триггер миграции пока не выбран — решим по first use.
+2. **Spike-результат по `@tldraw/mermaid` headless.** Если на Bun не работает — Phase 1.5 переедет на frontend (parsing + конвертация в worker, бэкенд получает уже готовые PatchOp'ы). Уточняем по итогам Phase 0.1.
 
 ---
 
