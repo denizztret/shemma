@@ -1,4 +1,4 @@
-# di.draw — Implementation Plan (v3, CLI-first + distribution)
+# di.draw — Implementation Plan (v4, CLI-first + distribution + release-binary ready)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -19,7 +19,7 @@
 - **Tests:** bun:test (backend, CLI, client), Playwright (UI smoke)
 - **Lint/format:** biome
 
-**Spec:** `docs/superpowers/specs/2026-05-14-di-draw-design.md` (v3.5)
+**Spec:** `docs/superpowers/specs/2026-05-14-di-draw-design.md` (v3.6)
 
 ---
 
@@ -130,7 +130,7 @@ di.draw/
   "type": "module",
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "concurrently 'bun --cwd apps/backend src/index.ts' 'bun --cwd apps/frontend run dev'",
+    "dev": "concurrently 'DIDRAW_PROFILE=dev bun --cwd apps/backend src/index.ts' 'bun --cwd apps/frontend run dev'",
     "test": "bun --cwd apps/backend test && bun --cwd packages/didraw-client test && bun --cwd packages/didraw-cli test",
     "lint": "biome check ."
   },
@@ -234,18 +234,42 @@ git commit -m "chore: init monorepo (Bun workspaces + biome)"
 
 - [ ] **Step 3: `apps/backend/src/config.ts`**
 
+Profile-aware с самого начала: dev=8788 (vs Vite proxy), release=8787, отдельные storage namespaces. Сделать config **функцией**, не frozen constant — `--profile` flag меняет env до import'а в большинстве кейсов, но lazy-read через `getConfig()` страхует от race conditions.
+
 ```ts
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const config = {
-  port: Number(process.env.DIDRAW_PORT ?? 8787),
-  storageDir: process.env.DIDRAW_STORAGE_DIR ?? join(homedir(), ".claude", "projects"),
-  autosaveDebounceMs: 300,
-  roomEvictionMs: 60 * 60 * 1000,
-  opLogMaxSize: 50,
-} as const;
+export type Profile = "dev" | "release" | "debug";
+
+const portByProfile: Record<Profile, number> = { dev: 8788, release: 8787, debug: 8787 };
+const storageSubdir: Record<Profile, string> = { dev: "canvas-dev", release: "canvas", debug: "canvas" };
+
+export function getProfile(): Profile {
+  return (process.env.DIDRAW_PROFILE ?? "release") as Profile;
+}
+
+export function getConfig() {
+  const profile = getProfile();
+  return {
+    profile,
+    port: Number(process.env.DIDRAW_PORT ?? portByProfile[profile]),
+    storageDir: process.env.DIDRAW_STORAGE_DIR
+      ?? join(homedir(), ".claude", "projects", "default-project", storageSubdir[profile]),
+    logLevel: (process.env.DIDRAW_LOG_LEVEL
+      ?? (profile === "dev" || profile === "debug" ? "debug" : "info")) as "debug" | "info" | "error",
+    autosaveDebounceMs: 300,
+    roomEvictionMs: 60 * 60 * 1000,
+    opLogMaxSize: 50,
+    gracefulShutdownMs: 2000,
+  } as const;
+}
+
+// Convenience getter — для top-level reads после parse-args.
+export const config = new Proxy({} as ReturnType<typeof getConfig>, { get: (_, k) => (getConfig() as any)[k] });
 ```
+
+> **Why Proxy?** Top-level imports (Hono routes, Rooms, persistence) хватают `config.port` / `config.storageDir`. Если бы это был frozen object, читался бы DEFAULT профиль раньше, чем CLI применит `--profile`. Proxy lazy-делегирует к `getConfig()` при каждом обращении.
 
 - [ ] **Step 4: Minimal `apps/backend/src/index.ts`**
 
@@ -328,18 +352,23 @@ git commit -m "chore(backend): bootstrap Hono with /healthz"
 - [ ] **Step 3: `apps/frontend/vite.config.ts`**
 
 ```ts
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    port: 5173,
-    proxy: {
-      "/api": "http://localhost:8787",
-      "/ws": { target: "ws://localhost:8787", ws: true },
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
+  // Vite dev → ходит на backend profile=dev, default 8788. Можно переопределить env DIDRAW_PORT.
+  const backendPort = Number(env.DIDRAW_PORT ?? 8788);
+  return {
+    plugins: [react()],
+    server: {
+      port: 5173,
+      proxy: {
+        "/api": `http://localhost:${backendPort}`,
+        "/ws": { target: `ws://localhost:${backendPort}`, ws: true },
+      },
     },
-  },
+  };
 });
 ```
 
@@ -773,6 +802,51 @@ describe("applyPatch", () => {
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.state.nodes).toHaveLength(0);
   });
+
+  test("cascade: delete node removes referencing edges", () => {
+    const s: CanvasState = {
+      version: 1,
+      nodes: [{ id: "n1", kind: "rect", x: 0, y: 0 }, { id: "n2", kind: "rect", x: 100, y: 0 }],
+      edges: [
+        { id: "e1", from: { kind: "node", id: "n1" }, to: { kind: "node", id: "n2" } },
+        { id: "e2", from: { kind: "node", id: "n2" }, to: { kind: "point", x: 0, y: 0 } },
+      ],
+      groups: [],
+    };
+    const r = applyPatch(s, [{ op: "delete", target: "node", id: "n1" }]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.state.nodes.map((n) => n.id)).toEqual(["n2"]);
+      expect(r.state.edges.map((e) => e.id)).toEqual(["e2"]); // e1 удалён каскадом
+    }
+  });
+
+  test("cascade: delete node removes id from group.children", () => {
+    const s: CanvasState = {
+      version: 1,
+      nodes: [{ id: "n1", kind: "rect", x: 0, y: 0 }, { id: "n2", kind: "rect", x: 0, y: 0 }],
+      edges: [],
+      groups: [{ id: "g1", kind: "group", children: ["n1", "n2"] }],
+    };
+    const r = applyPatch(s, [{ op: "delete", target: "node", id: "n1" }]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.state.groups[0].children).toEqual(["n2"]);
+  });
+
+  test("cascade: delete group keeps children", () => {
+    const s: CanvasState = {
+      version: 1,
+      nodes: [{ id: "n1", kind: "rect", x: 0, y: 0 }],
+      edges: [],
+      groups: [{ id: "g1", kind: "group", children: ["n1"] }],
+    };
+    const r = applyPatch(s, [{ op: "delete", target: "group", id: "g1" }]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.state.groups).toHaveLength(0);
+      expect(r.state.nodes).toHaveLength(1); // node остался плавающим
+    }
+  });
 });
 ```
 
@@ -861,9 +935,26 @@ function updateOp(s: CanvasState, op: Extract<PatchOp, { op: "update" }>): Apply
 }
 
 function deleteOp(s: CanvasState, op: Extract<PatchOp, { op: "delete" }>): ApplyResult {
-  if (op.target === "node") return { ok: true, state: { ...s, nodes: s.nodes.filter((n) => n.id !== op.id) } };
-  if (op.target === "edge") return { ok: true, state: { ...s, edges: s.edges.filter((e) => e.id !== op.id) } };
-  if (op.target === "group") return { ok: true, state: { ...s, groups: s.groups.filter((g) => g.id !== op.id) } };
+  if (op.target === "node") {
+    // cascade: убрать edges, ссылающиеся на node; убрать id из всех group.children
+    const refsNode = (ep: { kind: string; id?: string }) => ep.kind === "node" && (ep as any).id === op.id;
+    return {
+      ok: true,
+      state: {
+        ...s,
+        nodes: s.nodes.filter((n) => n.id !== op.id),
+        edges: s.edges.filter((e) => !refsNode(e.from as any) && !refsNode(e.to as any)),
+        groups: s.groups.map((g) => g.children.includes(op.id) ? { ...g, children: g.children.filter((c) => c !== op.id) } : g),
+      },
+    };
+  }
+  if (op.target === "edge") {
+    return { ok: true, state: { ...s, edges: s.edges.filter((e) => e.id !== op.id) } };
+  }
+  if (op.target === "group") {
+    // group удаляется; дети остаются "плавающими"
+    return { ok: true, state: { ...s, groups: s.groups.filter((g) => g.id !== op.id) } };
+  }
   return { ok: false, state: s, error: "unknown delete target" };
 }
 
@@ -1086,6 +1177,17 @@ describe("FilePersistence", () => {
     await new Promise((r) => setTimeout(r, 320));
     expect(writes).toBe(1);
   });
+
+  test("flushAll writes pending immediately", async () => {
+    const p = new FilePersistence(dir);
+    const s = makeRoomState();
+    s.canvas.nodes.push({ id: "n1", kind: "rect", x: 0, y: 0 });
+    p.scheduleSave("urgent", s);
+    // sub-debounce — yet flushAll должен записать
+    await p.flushAll();
+    const loaded = await p.load("urgent");
+    expect(loaded?.canvas.nodes[0].id).toBe("n1");
+  });
 });
 ```
 
@@ -1098,7 +1200,8 @@ import type { RoomId, RoomState } from "./types";
 import { config } from "./config";
 
 export class FilePersistence {
-  private pending = new Map<RoomId, ReturnType<typeof setTimeout>>();
+  // pending хранит и timer, и сами данные — без этого flushAll не сможет записать debounce'нутые состояния
+  private pending = new Map<RoomId, { timer: ReturnType<typeof setTimeout>; state: RoomState }>();
   constructor(private dir: string) {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   }
@@ -1127,12 +1230,24 @@ export class FilePersistence {
   }
 
   scheduleSave(id: RoomId, s: RoomState): void {
-    clearTimeout(this.pending.get(id));
-    const t = setTimeout(() => {
+    const existing = this.pending.get(id);
+    if (existing) clearTimeout(existing.timer);
+    const timer = setTimeout(() => {
       this.pending.delete(id);
       void this.save(id, s).catch((e) => console.error("[persistence]", e));
     }, config.autosaveDebounceMs);
-    this.pending.set(id, t);
+    this.pending.set(id, { timer, state: s });
+  }
+
+  /**
+   * Immediately write all pending saves and clear the queue.
+   * Called on graceful shutdown (SIGTERM/SIGINT) so debounce-300ms losses don't happen.
+   */
+  async flushAll(): Promise<void> {
+    const entries = [...this.pending.entries()];
+    for (const [, { timer }] of entries) clearTimeout(timer);
+    this.pending.clear();
+    await Promise.all(entries.map(([id, { state }]) => this.save(id, state).catch((e) => console.error("[persistence] flush", id, e))));
   }
 }
 
@@ -1500,11 +1615,11 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", patchRoutes(rooms, bus, {
     onDirty: persistence ? (id) => { void rooms.get(id).then((s) => persistence.scheduleSave(id, s)); } : undefined,
   }));
-  return { app, rooms, bus };
+  return { app, rooms, bus, persistence };
 }
 
 export async function startServer(opts: AppOpts = {}) {
-  const { app, bus } = makeApp(opts);
+  const { app, bus, persistence } = makeApp(opts);
   const server = Bun.serve({
     port: opts.port ?? config.port,
     fetch: (req, srv) => {
@@ -1529,11 +1644,29 @@ export async function startServer(opts: AppOpts = {}) {
       },
     },
   });
-  return { port: server.port, close: async () => { server.stop(); } };
+
+  const shutdown = async (signal: string) => {
+    console.log(`[didraw] ${signal} received, flushing…`);
+    server.stop();
+    if (persistence) await persistence.flushAll();
+    process.exit(0);
+  };
+  if (import.meta.main) {
+    process.on("SIGTERM", () => void shutdown("SIGTERM"));
+    process.on("SIGINT", () => void shutdown("SIGINT"));
+  }
+
+  return {
+    port: server.port,
+    close: async () => {
+      server.stop();
+      if (persistence) await persistence.flushAll();
+    },
+  };
 }
 
 if (import.meta.main) {
-  void startServer().then((s) => console.log(`[didraw] listening on :${s.port}`));
+  void startServer().then((s) => console.log(`[didraw] listening on :${s.port} (profile=${config.profile})`));
 }
 ```
 
@@ -2037,14 +2170,21 @@ git commit -m "feat(client): shared CanvasClient HTTP wrapper for CLI/MCP/tests"
 
 ---
 
-## Task 16: didraw CLI — lifecycle (daemon)
+## Task 16: didraw CLI — lifecycle (daemon, self-spawn architecture)
 
 **Files:**
 - Create: `packages/didraw-cli/package.json`
+- Create: `packages/didraw-cli/src/profile.ts`
 - Create: `packages/didraw-cli/src/daemon.ts`
 - Create: `packages/didraw-cli/src/index.ts`
 
-- [ ] **Step 1: `package.json`**
+**Архитектура (важно — это решает release-binary проблему):**
+
+CLI и backend живут в **одном бинарнике** в release-сборке. `didraw daemon start` НЕ спавнит путь к `apps/backend/src/index.ts` (в release-binary такого файла нет). Вместо этого daemon spawn'ит **сам себя** (`process.execPath`) с командой `internal-server`. Эта команда импортирует `startServer()` из `@didraw/backend` и держит процесс. Так работает и для dev (запуск через `bun src/index.ts internal-server`), и для compiled binary (`./didraw internal-server`).
+
+PID-файл — **profile-specific** (`.didraw-${profile}.pid`), чтобы dev и release могли работать параллельно.
+
+- [ ] **Step 1: `package.json`** (depends on backend для импорта `startServer`)
 
 ```json
 {
@@ -2054,83 +2194,157 @@ git commit -m "feat(client): shared CanvasClient HTTP wrapper for CLI/MCP/tests"
   "type": "module",
   "bin": { "didraw": "src/index.ts" },
   "scripts": { "test": "bun test" },
-  "dependencies": { "@didraw/client": "workspace:*" }
+  "dependencies": {
+    "@didraw/client": "workspace:*",
+    "@didraw/backend": "workspace:*"
+  }
 }
 ```
 
-- [ ] **Step 2: `daemon.ts`**
+> **Note:** Workspace import позволяет `bun build --compile` (Task 34) вшить весь backend, frontend-dist и CLI в один binary.
+
+- [ ] **Step 2: `profile.ts`** (vendor-style helper, чтобы избежать import цикла)
+
+```ts
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+export type Profile = "dev" | "release" | "debug";
+
+export function parseProfile(argv: string[]): Profile {
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--profile") return argv[i + 1] as Profile;
+  }
+  return (process.env.DIDRAW_PROFILE ?? "release") as Profile;
+}
+
+export function applyProfile(p: Profile) {
+  process.env.DIDRAW_PROFILE = p;
+}
+
+export function pidFile(p: Profile): string {
+  return join(homedir(), ".claude", `.didraw-${p}.pid`);
+}
+
+export function portFor(p: Profile): number {
+  if (process.env.DIDRAW_PORT) return Number(process.env.DIDRAW_PORT);
+  return p === "dev" ? 8788 : 8787;
+}
+```
+
+- [ ] **Step 3: `daemon.ts`** (self-spawn, profile-aware)
 
 ```ts
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { CanvasClient } from "@didraw/client";
+import { type Profile, pidFile, portFor } from "./profile";
+import { getConfig } from "@didraw/backend/src/config";
 
-const PID_FILE = join(homedir(), ".claude", ".didraw.pid");
-const PORT = Number(process.env.DIDRAW_PORT ?? 8787);
-
-const client = new CanvasClient();
-
-export async function status() {
-  if (!existsSync(PID_FILE)) return { running: false, port: PORT };
-  const pid = Number(readFileSync(PID_FILE, "utf8"));
-  try { process.kill(pid, 0); } catch { return { running: false, port: PORT }; }
-  return { running: await client.health(), pid, port: PORT };
+async function isAlive(pid: number): Promise<boolean> {
+  try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-export async function start() {
-  if ((await status()).running) { console.log(JSON.stringify({ ok: true, already: true })); return; }
-  const entry = join(import.meta.dir, "..", "..", "..", "apps", "backend", "src", "index.ts");
-  const child = spawn(process.execPath, [entry], { detached: true, stdio: "ignore" });
+async function isHealthy(port: number): Promise<boolean> {
+  try { return (await fetch(`http://localhost:${port}/healthz`)).ok; } catch { return false; }
+}
+
+export async function status(profile: Profile) {
+  const port = portFor(profile);
+  const file = pidFile(profile);
+  if (!existsSync(file)) return { running: false, profile, port };
+  const pid = Number(readFileSync(file, "utf8"));
+  if (!(await isAlive(pid))) return { running: false, profile, port };
+  return { running: await isHealthy(port), pid, profile, port };
+}
+
+export async function start(profile: Profile) {
+  const s = await status(profile);
+  if (s.running) { console.log(JSON.stringify({ ok: true, already: true, ...s })); return; }
+  const port = portFor(profile);
+  // Self-spawn: тот же binary, с командой `internal-server` и явным --profile
+  const child = spawn(process.execPath, [process.argv[1], "internal-server", "--profile", profile], {
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env, DIDRAW_PROFILE: profile, DIDRAW_PORT: String(port) },
+  });
   child.unref();
-  writeFileSync(PID_FILE, String(child.pid));
-  console.log(JSON.stringify({ ok: true, pid: child.pid, port: PORT }));
+  writeFileSync(pidFile(profile), String(child.pid));
+  console.log(JSON.stringify({ ok: true, pid: child.pid, profile, port }));
 }
 
-export async function ensure() {
-  if ((await status()).running) { console.log(JSON.stringify({ ok: true, already: true })); return; }
-  await start();
+export async function ensure(profile: Profile) {
+  const s = await status(profile);
+  if (s.running) { console.log(JSON.stringify({ ok: true, already: true, ...s })); return; }
+  await start(profile);
+  const port = portFor(profile);
   for (let i = 0; i < 50; i++) {
     await new Promise((r) => setTimeout(r, 100));
-    if (await client.health()) return;
+    if (await isHealthy(port)) return;
   }
-  console.error(JSON.stringify({ ok: false, error: "didraw: not healthy within 5s" }));
+  console.error(JSON.stringify({ ok: false, error: `didraw: not healthy within 5s on :${port}` }));
   process.exit(3);
 }
 
-export async function stop() {
-  if (!existsSync(PID_FILE)) { console.log(JSON.stringify({ ok: true, already: true })); return; }
-  const pid = Number(readFileSync(PID_FILE, "utf8"));
+export async function stop(profile: Profile) {
+  const file = pidFile(profile);
+  if (!existsSync(file)) { console.log(JSON.stringify({ ok: true, already: true, profile })); return; }
+  const pid = Number(readFileSync(file, "utf8"));
   try { process.kill(pid, "SIGTERM"); } catch {}
-  unlinkSync(PID_FILE);
-  console.log(JSON.stringify({ ok: true, stopped: pid }));
+  // Ждём graceful exit до 2 секунд (синхронно с config.gracefulShutdownMs)
+  const deadline = Date.now() + getConfig().gracefulShutdownMs;
+  while (Date.now() < deadline) {
+    if (!(await isAlive(pid))) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  if (await isAlive(pid)) {
+    try { process.kill(pid, "SIGKILL"); } catch {}
+  }
+  unlinkSync(file);
+  console.log(JSON.stringify({ ok: true, stopped: pid, profile }));
 }
 ```
 
-- [ ] **Step 3: `index.ts` (dispatcher)**
+- [ ] **Step 4: `index.ts`** (dispatcher with internal-server)
 
 ```ts
 #!/usr/bin/env bun
 import { ensure, start, status, stop } from "./daemon";
+import { parseProfile, applyProfile } from "./profile";
 
 const argv = process.argv.slice(2);
+// Profile applied as early as possible, ДО import'ов config-зависимых модулей
+const profile = parseProfile(argv);
+applyProfile(profile);
+
 const cmd = argv[0];
 const sub = argv[1];
 
 async function main() {
+  // internal-server — приватная команда: spawn'ится из self при `daemon start`
+  if (cmd === "internal-server") {
+    const { startServer } = await import("@didraw/backend/src/index");
+    const { getConfig } = await import("@didraw/backend/src/config");
+    const c = getConfig();
+    const srv = await startServer({ port: c.port });
+    console.log(`[didraw] listening on :${srv.port} (profile=${c.profile})`);
+    // Hold process — SIGTERM handler в startServer обработает graceful shutdown
+    await new Promise(() => {});
+    return;
+  }
+
   if (cmd === "daemon") {
-    if (sub === "start") return start();
-    if (sub === "stop") return stop();
-    if (sub === "status") return console.log(JSON.stringify(await status(), null, 2));
-    if (sub === "ensure" || sub === "--ensure") return ensure();
+    if (sub === "start") return start(profile);
+    if (sub === "stop") return stop(profile);
+    if (sub === "status") return console.log(JSON.stringify(await status(profile), null, 2));
+    if (sub === "ensure" || sub === "--ensure") return ensure(profile);
     usage(); process.exit(1);
   }
   usage(); process.exit(cmd ? 1 : 0);
 }
 
 function usage() {
-  console.log(`didraw <command>
+  console.log(`didraw <command> [--profile dev|release|debug]
 
 Lifecycle:
   daemon start|stop|status|ensure
@@ -2148,27 +2362,43 @@ Data:
   prompts  resolve <id> --room <id> [--response <text>]
   prompts  dismiss <id> --room <id>
   clear    --room <id> --confirm
+
+Versioning:
+  version
+  update [--check] [--channel stable|nightly|dev]
+
+(internal-server: private subcommand used by daemon self-spawn)
 `);
 }
 
 main().catch((e) => { console.error(JSON.stringify({ ok: false, error: String(e) })); process.exit(1); });
 ```
 
-- [ ] **Step 4: Manual smoke**
+- [ ] **Step 5: Manual smoke (parallel dev + release)**
 
 ```bash
 cd packages/didraw-cli
+
+# Release on 8787
 bun src/index.ts daemon ensure
 bun src/index.ts daemon status
-curl -s localhost:8787/healthz
-bun src/index.ts daemon stop
-```
+# Dev on 8788
+bun src/index.ts daemon ensure --profile dev
+bun src/index.ts daemon status --profile dev
 
-- [ ] **Step 5: Commit**
+curl -s localhost:8787/healthz   # release
+curl -s localhost:8788/healthz   # dev
+
+bun src/index.ts daemon stop
+bun src/index.ts daemon stop --profile dev
+```
+Expected: оба профиля работают одновременно, не конфликтуют по pid-файлу или порту.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add packages/didraw-cli
-git commit -m "feat(cli): didraw daemon start/stop/status/ensure with pid-file"
+git commit -m "feat(cli): didraw daemon with self-spawn + profile-specific pid (release-binary ready)"
 ```
 
 ---
@@ -2179,50 +2409,51 @@ git commit -m "feat(cli): didraw daemon start/stop/status/ensure with pid-file"
 - Create: `packages/didraw-cli/src/lifecycle.ts`
 - Modify: `packages/didraw-cli/src/index.ts`
 
-- [ ] **Step 1: `lifecycle.ts`**
+- [ ] **Step 1: `lifecycle.ts`** (profile-aware paths и port)
 
 ```ts
 import { readdirSync, copyFileSync, existsSync, unlinkSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { ensure } from "./daemon";
+import { getConfig } from "@didraw/backend/src/config";
+import type { Profile } from "./profile";
+import { portFor } from "./profile";
 
-const CANVAS_DIR = () => join(homedir(), ".claude", "projects", "default-project", "canvas");
+const canvasDir = () => getConfig().storageDir;   // уважает текущий profile (canvas vs canvas-dev)
 
-export async function open(room: string) {
-  await ensure();
-  const url = `http://localhost:${process.env.DIDRAW_PORT ?? 8787}/?room=${encodeURIComponent(room)}`;
+export async function open(room: string, profile: Profile) {
+  await ensure(profile);
+  const url = `http://localhost:${portFor(profile)}/?room=${encodeURIComponent(room)}`;
   const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
   spawn(cmd, [url], { detached: true, stdio: "ignore" }).unref();
-  console.log(JSON.stringify({ ok: true, url }));
+  console.log(JSON.stringify({ ok: true, url, profile }));
 }
 
 export function list() {
-  const dir = CANVAS_DIR();
+  const dir = canvasDir();
   try {
     const files = readdirSync(dir).filter((f) => f.endsWith(".json"));
-    console.log(JSON.stringify({ ok: true, rooms: files.map((f) => f.replace(/\.json$/, "")) }));
+    console.log(JSON.stringify({ ok: true, rooms: files.map((f) => f.replace(/\.json$/, "")), dir }));
   } catch {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    console.log(JSON.stringify({ ok: true, rooms: [] }));
+    console.log(JSON.stringify({ ok: true, rooms: [], dir }));
   }
 }
 
 export function exportRoom(room: string, to: string) {
-  const src = join(CANVAS_DIR(), `${room}.json`);
+  const src = `${canvasDir()}/${room}.json`;
   if (!existsSync(src)) { console.error(JSON.stringify({ ok: false, error: "not found" })); process.exit(2); }
   copyFileSync(src, to);
   console.log(JSON.stringify({ ok: true, from: src, to }));
 }
 
 export async function rmRoom(room: string) {
-  const p = join(CANVAS_DIR(), `${room}.json`);
+  const p = `${canvasDir()}/${room}.json`;
   if (!existsSync(p)) { console.error(JSON.stringify({ ok: false, error: "not found" })); process.exit(2); }
   const rl = createInterface({ input: stdin, output: stdout });
-  const ans = await rl.question(`Delete ${room}? [y/N] `);
+  const ans = await rl.question(`Delete ${room} (profile=${getConfig().profile})? [y/N] `);
   rl.close();
   if (ans.toLowerCase() === "y") { unlinkSync(p); console.log(JSON.stringify({ ok: true, deleted: room })); }
   else console.log(JSON.stringify({ ok: false, error: "cancelled" }));
@@ -2236,8 +2467,8 @@ After daemon handling:
 ```ts
 import { open, list, exportRoom, rmRoom } from "./lifecycle";
 
-// inside main:
-if (cmd === "open") { if (!argv[1]) { usage(); process.exit(1); } return open(argv[1]); }
+// inside main (profile уже применён в начале файла):
+if (cmd === "open") { if (!argv[1]) { usage(); process.exit(1); } return open(argv[1], profile); }
 if (cmd === "list") return list();
 if (cmd === "export") {
   const [, room, flag, to] = argv;
@@ -3302,86 +3533,95 @@ git commit -m "fix(skill): clarify prompt-resolution workflow"
 
 ---
 
-## Task 31: Runtime profile dispatcher
+## Task 31: Runtime profiles — verification and isolation tests
+
+**Most of the profile mechanics already implemented:**
+- Task 2 Step 3 — profile-aware `getConfig()` + Proxy-config (lazy reads).
+- Task 3 Step 3 — Vite proxy читает `DIDRAW_PORT` (default 8788 → dev backend).
+- Task 1 Step 1 — root `dev` script запускает backend с `DIDRAW_PROFILE=dev`.
+- Task 16 — `parseProfile`/`applyProfile`, profile-specific pid-files, self-spawn architecture.
+- Task 17 — `lifecycle.ts` использует `getConfig().storageDir` (per-profile).
+
+This task ensures end-to-end isolation works.
 
 **Files:**
-- Modify: `apps/backend/src/config.ts`
-- Modify: `packages/didraw-cli/src/index.ts`
-- Modify: `packages/didraw-cli/src/daemon.ts`
-- Create: `packages/didraw-cli/src/profile.ts`
+- Create: `packages/didraw-cli/tests/profile.test.ts`
 
-- [ ] **Step 1: Extend `config.ts`**
+- [ ] **Step 1: Integration test — parallel dev + release**
 
 ```ts
-import { homedir } from "node:os";
+// packages/didraw-cli/tests/profile.test.ts
+import { describe, test, expect } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-export type Profile = "dev" | "release" | "debug";
-const profile = (process.env.DIDRAW_PROFILE ?? "release") as Profile;
+const CLI = join(import.meta.dir, "..", "src", "index.ts");
 
-const portByProfile: Record<Profile, number> = { dev: 8788, release: 8787, debug: 8787 };
-const storageSubdir: Record<Profile, string> = { dev: "canvas-dev", release: "canvas", debug: "canvas" };
+describe("runtime profiles", () => {
+  test("dev and release have different default ports", () => {
+    // Не запускаем настоящие daemons (вместо этого проверяем portFor)
+    const r = spawnSync("bun", ["-e", `
+      import { portFor } from "${join(import.meta.dir, "..", "src", "profile")}";
+      console.log(JSON.stringify({ dev: portFor("dev"), release: portFor("release") }));
+    `], { encoding: "utf8" });
+    expect(r.status).toBe(0);
+    const j = JSON.parse(r.stdout);
+    expect(j.dev).toBe(8788);
+    expect(j.release).toBe(8787);
+  });
 
-export const config = {
-  profile,
-  port: Number(process.env.DIDRAW_PORT ?? portByProfile[profile]),
-  storageDir: process.env.DIDRAW_STORAGE_DIR
-    ?? join(homedir(), ".claude", "projects", "default-project", storageSubdir[profile]),
-  logLevel: (process.env.DIDRAW_LOG_LEVEL ?? (profile === "dev" || profile === "debug" ? "debug" : "info")) as "debug" | "info" | "error",
-  autosaveDebounceMs: 300,
-  roomEvictionMs: 60 * 60 * 1000,
-  opLogMaxSize: 50,
-} as const;
+  test("pid files are profile-specific", () => {
+    const r = spawnSync("bun", ["-e", `
+      import { pidFile } from "${join(import.meta.dir, "..", "src", "profile")}";
+      console.log(JSON.stringify({ dev: pidFile("dev"), release: pidFile("release") }));
+    `], { encoding: "utf8" });
+    const j = JSON.parse(r.stdout);
+    expect(j.dev).not.toBe(j.release);
+    expect(j.dev).toContain("didraw-dev");
+    expect(j.release).toContain("didraw-release");
+  });
+
+  test("storage directory differs per profile", () => {
+    const r1 = spawnSync("bun", ["-e", `
+      process.env.DIDRAW_PROFILE = "dev";
+      const { getConfig } = await import("${join(import.meta.dir, "..", "..", "..", "apps", "backend", "src", "config")}");
+      console.log(getConfig().storageDir);
+    `], { encoding: "utf8" });
+    const r2 = spawnSync("bun", ["-e", `
+      process.env.DIDRAW_PROFILE = "release";
+      const { getConfig } = await import("${join(import.meta.dir, "..", "..", "..", "apps", "backend", "src", "config")}");
+      console.log(getConfig().storageDir);
+    `], { encoding: "utf8" });
+    expect(r1.stdout.trim()).toContain("canvas-dev");
+    expect(r2.stdout.trim()).toContain("canvas");
+    expect(r1.stdout).not.toBe(r2.stdout);
+  });
+});
 ```
 
-- [ ] **Step 2: `packages/didraw-cli/src/profile.ts`**
-
-```ts
-import type { Profile } from "@didraw/backend/src/config";
-
-export function parseProfile(argv: string[]): Profile | undefined {
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--profile") return argv[++i] as Profile;
-  }
-  return undefined;
-}
-
-export function applyProfileEnv(p: Profile | undefined) {
-  if (p) process.env.DIDRAW_PROFILE = p;
-}
-```
-
-- [ ] **Step 3: Wire into `daemon.ts` and `index.ts`**
-
-In `daemon.ts`, `PORT` becomes a function:
-```ts
-const port = () => Number(process.env.DIDRAW_PORT ?? (process.env.DIDRAW_PROFILE === "dev" ? 8788 : 8787));
-```
-Use `port()` everywhere instead of constant.
-
-In `index.ts` `main()`, before dispatching:
-```ts
-import { parseProfile, applyProfileEnv } from "./profile";
-const profileArg = parseProfile(argv);
-applyProfileEnv(profileArg);
-```
-
-- [ ] **Step 4: Smoke test parallel run**
+- [ ] **Step 2: Manual smoke — parallel daemons**
 
 ```bash
-DIDRAW_PROFILE=dev bun --cwd apps/backend src/index.ts &
-DIDRAW_PROFILE=release bun --cwd apps/backend src/index.ts &
-curl -s localhost:8787/healthz   # release
-curl -s localhost:8788/healthz   # dev
-kill %1 %2
-```
-Expected: both healthy on different ports.
+# Release on 8787
+bun packages/didraw-cli/src/index.ts daemon ensure
+# Dev on 8788 — должен подняться независимо
+bun packages/didraw-cli/src/index.ts daemon ensure --profile dev
 
-- [ ] **Step 5: Commit**
+curl -s localhost:8787/api/version  # profile=release
+curl -s localhost:8788/api/version  # profile=dev
+ls ~/.claude/.didraw-*.pid          # два разных pid-файла
+
+bun packages/didraw-cli/src/index.ts daemon stop
+bun packages/didraw-cli/src/index.ts daemon stop --profile dev
+```
+
+- [ ] **Step 3: Commit**
 
 ```bash
-git add apps/backend/src/config.ts packages/didraw-cli
-git commit -m "feat: runtime profiles (dev/release/debug) with separate ports and storage"
+git add packages/didraw-cli/tests/profile.test.ts
+git commit -m "test: parallel dev+release daemons, profile-isolated pid/port/storage"
 ```
 
 ---
@@ -3842,6 +4082,7 @@ import { tmpdir, platform, arch } from "node:os";
 import { join, dirname } from "node:path";
 import { spawn } from "node:child_process";
 import { stop, ensure } from "./daemon";
+import { parseProfile } from "./profile";
 
 function platformKey(): string {
   const p = platform(); const a = arch();
@@ -3904,11 +4145,14 @@ export async function cmdUpdate(argv: string[]) {
     return;
   }
 
-  await stop().catch(() => {});
-  await ensure();
+  // graceful stop → flushAll сработает в backend на SIGTERM
+  const profile = parseProfile(argv);
+  await stop(profile).catch(() => {});
+  // ensure поднимет новый binary (текущий процесс — старый CLI, новый binary уже на target path)
+  await ensure(profile);
 
   console.log(JSON.stringify({
-    ok: true, from: current, to: chData.version, channel,
+    ok: true, from: current, to: chData.version, channel, profile,
     rollback: `rename ${oldPath} → ${target}`,
   }));
 }
@@ -4385,7 +4629,7 @@ Mirror Task 22 (Variant A) but for D2:
 
 ## Self-Review
 
-**Spec coverage check (against `2026-05-14-di-draw-design.md` v3.5):**
+**Spec coverage check (against `2026-05-14-di-draw-design.md` v3.6):**
 
 | Spec §  | Requirement                                       | Plan task |
 |---------|---------------------------------------------------|-----------|
@@ -4430,6 +4674,11 @@ Mirror Task 22 (Variant A) but for D2:
 | §7      | Race condition on session start                    | Task 16 (`ensure` blocks until healthz) |
 | §7      | CLI as stable contract                              | Task 18 (integration tests) |
 | §7      | Update interruption                                  | Task 37 (atomic swap + rollback) |
+| §3.1    | Cascade-delete (node → edges, group.children)        | Task 6 (4 dedicated tests + impl) |
+| §3.4    | Graceful shutdown (SIGTERM → flushAll)               | Tasks 8 (flushAll), 10 (signal handlers) |
+| §3.4    | Daemon stop ≤ 2с graceful, fallback SIGKILL          | Task 16 (gracefulShutdownMs loop) |
+| §3.7.1  | Profile-specific pid + parallel dev/release          | Tasks 16, 31 |
+| §3.7.5  | Manual update + controlled daemon restart (stop→swap→start) | Task 37 |
 
 All spec sections mapped.
 
