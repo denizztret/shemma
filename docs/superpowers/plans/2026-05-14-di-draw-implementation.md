@@ -1,4 +1,4 @@
-# di.draw — Implementation Plan (v4, CLI-first + distribution + release-binary ready)
+# di.draw — Implementation Plan (v5, CLI-first + distribution + tldraw-native design shell)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -19,7 +19,9 @@
 - **Tests:** bun:test (backend, CLI, client), Playwright (UI smoke)
 - **Lint/format:** biome
 
-**Spec:** `docs/superpowers/specs/2026-05-14-di-draw-design.md` (v3.6)
+**Spec:** `docs/superpowers/specs/2026-05-14-di-draw-design.md` (v3.7)
+
+**Debug tooling note:** Для отладки UI в браузере executor может использовать `chrome-devtools` MCP tools (`mcp__chrome-devtools__navigate_page`, `take_screenshot`, `list_console_messages`, `click`, `take_snapshot`). Они упоминаются в Tasks 11.5, 28, 38, 39.
 
 ---
 
@@ -411,16 +413,18 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 );
 ```
 
-- [ ] **Step 7: Skeleton `apps/frontend/src/App.tsx`**
+- [ ] **Step 7: Skeleton `apps/frontend/src/App.tsx`** (clean, БЕЗ overlay'ев)
 
 ```tsx
 import { Tldraw } from "tldraw";
 import "tldraw/tldraw.css";
 
-export function App({ room }: { room: string }) {
+export function App({ room: _room }: { room: string }) {
+  // Design shell (room badge, version footer, prompts, banner) — Task 12.5.
+  // Здесь намеренно НЕТ position:fixed overlay'ев — они конфликтуют с tldraw UI.
+  // См. spec §3.8 UI Design Principles.
   return (
     <div style={{ height: "100vh" }}>
-      <div style={{ position: "fixed", top: 8, left: 8, zIndex: 1000 }}>room: <code>{room}</code></div>
       <Tldraw />
     </div>
   );
@@ -433,7 +437,7 @@ export function App({ room }: { room: string }) {
 cd apps/frontend && bun install && bun run dev
 # visit http://localhost:5173/?room=test
 ```
-Expected: пустой tldraw, надпись `room: test`.
+Expected: пустой tldraw editor, все стандартные controls работают (top-left menu, bottom toolbar). Кастомных overlay'ев нет — это правильно для Task 3, design shell придёт в Task 12.5.
 
 - [ ] **Step 9: Commit**
 
@@ -1722,6 +1726,192 @@ git commit -m "test(backend): autosave integration"
 
 ---
 
+## Task 11.5: Frontend design shell — AppChrome + design tokens + tldraw components mapping
+
+Implements spec §3.8. Создаёт **stable shell**, в который последующие задачи будут вставлять контент (room badge, prompt input, prompt drawer, version footer, update banner) — через **tldraw extension points**, не через произвольные `position:fixed`.
+
+**Files:**
+- Create: `apps/frontend/src/design-tokens.ts`
+- Create: `apps/frontend/src/chrome/AppChrome.tsx`
+- Create: `apps/frontend/src/chrome/RoomBadge.tsx`
+- Create: `apps/frontend/src/chrome/TldrawComponents.tsx`
+- Modify: `apps/frontend/src/App.tsx`
+
+- [ ] **Step 1: `design-tokens.ts`**
+
+```ts
+// Единственный источник правды для цветов/шрифтов/z-index.
+// Никаких inline констант в JSX по правилам §3.8.
+export const tokens = {
+  font: {
+    sm: 12, base: 13,
+    mono: "ui-monospace, SFMono-Regular, monospace",
+    sans: "system-ui, -apple-system, sans-serif",
+  },
+  color: {
+    text: "#1a1a1a",
+    textMuted: "#666",
+    border: "rgba(0,0,0,0.12)",
+    bgOverlay: "rgba(255,255,255,0.95)",
+    accent: "#0a7",
+    badgeDev: "#fc6",
+    badgeDebug: "#f66",
+    warnBg: "#fef3c7",
+    warnBorder: "#f59e0b",
+    warnText: "#78350f",
+  },
+  radius: { sm: 3, md: 6, lg: 8 },
+  z: { overlay: 90, banner: 100, modal: 1000 },
+} as const;
+```
+
+- [ ] **Step 2: `RoomBadge.tsx`** (renders в `components.SharePanel` слоте)
+
+```tsx
+import { tokens } from "../design-tokens";
+
+export function RoomBadge({ room }: { room: string }) {
+  return (
+    <div
+      style={{
+        // ВНИМАНИЕ: это контент tldraw SharePanel зоны, координат не задаём.
+        // Tldraw сам позиционирует SharePanel в top-right.
+        padding: "4px 8px",
+        fontFamily: tokens.font.mono,
+        fontSize: tokens.font.sm,
+        color: tokens.color.textMuted,
+        background: tokens.color.bgOverlay,
+        border: `1px solid ${tokens.color.border}`,
+        borderRadius: tokens.radius.sm,
+        pointerEvents: "auto",
+      }}
+    >
+      room: <span style={{ color: tokens.color.text }}>{room}</span>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 3: `TldrawComponents.tsx`** — мост между нашим контентом и tldraw slot'ами
+
+```tsx
+import type { TLComponents } from "tldraw";
+import { RoomBadge } from "./RoomBadge";
+
+/**
+ * Build tldraw `components` prop. New slots added as data slots are filled by later tasks
+ * (Task 28 will add Prompt UI here, Task 38 — VersionFooter, etc.).
+ *
+ * Tldraw docs: https://tldraw.dev/sdk-features/ui-components
+ */
+export function buildTldrawComponents(room: string): TLComponents {
+  return {
+    // SharePanel — top-right zone (рядом с style panel, но не перекрывает её).
+    // Подходит для room/profile badge.
+    SharePanel: () => <RoomBadge room={room} />,
+    // Остальные слоты (TopPanel, MenuPanel, HelpMenu, ContextMenu, ...)
+    // оставляем дефолтными — заполнятся в Tasks 28, 38.
+  };
+}
+```
+
+> **Note for engineer:** Если в tldraw 5.x точное имя слота `SharePanel` будет другим — проверить `node_modules/tldraw/dist/types/lib/ui/components/...d.ts` или [docs/sdk-features/ui-components](https://tldraw.dev/sdk-features/ui-components). Подходящие слоты для top-right badge: `SharePanel`, `TopPanel`. Если оба заняты внутренней tldraw логикой — fallback в Step 4 ниже.
+
+- [ ] **Step 4: `AppChrome.tsx`** — корневой layout с местами для banner / footer / floating overlays
+
+```tsx
+import type { ReactNode } from "react";
+import { tokens } from "../design-tokens";
+
+export function AppChrome({
+  banner,
+  footer,
+  floatingOverlays,
+  children,
+}: {
+  banner?: ReactNode;          // Task 38: UpdateBanner
+  footer?: ReactNode;          // Task 38: VersionFooter (если не попадёт в HelpMenu slot)
+  floatingOverlays?: ReactNode; // Task 28: PromptInput (anchored), PromptDrawer
+  children: ReactNode;          // <Tldraw … />
+}) {
+  return (
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
+      {banner ? <div style={{ zIndex: tokens.z.banner, position: "relative" }}>{banner}</div> : null}
+      <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
+        {children}
+        {floatingOverlays}
+      </div>
+      {footer ? (
+        <div
+          style={{
+            position: "absolute",
+            // bottom-right, выше tldraw help button (которое в bottom-right), но не перекрываем.
+            // tldraw help button обычно в дальнем углу — мы располагаемся слева от него.
+            right: 56,
+            bottom: 8,
+            zIndex: tokens.z.overlay,
+            pointerEvents: "auto",
+          }}
+        >
+          {footer}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+```
+
+- [ ] **Step 5: Update `App.tsx` to use AppChrome + components**
+
+```tsx
+import { Tldraw } from "tldraw";
+import "tldraw/tldraw.css";
+import { AppChrome } from "./chrome/AppChrome";
+import { buildTldrawComponents } from "./chrome/TldrawComponents";
+
+export function App({ room }: { room: string }) {
+  return (
+    <AppChrome
+      banner={null}            // Task 38 заменит на <UpdateBanner />
+      footer={null}            // Task 38 заменит на <VersionFooter />
+      floatingOverlays={null}  // Task 28 заменит на <PromptInput /><PromptDrawer />
+    >
+      <Tldraw components={buildTldrawComponents(room)} />
+    </AppChrome>
+  );
+}
+```
+
+- [ ] **Step 6: Manual visual check + Chrome DevTools для отладки**
+
+```bash
+cd apps/frontend && bun run dev
+# Open http://localhost:5173/?room=ui-test
+```
+
+Use **chrome-devtools MCP tools** для проверки (если доступны в окружении):
+- `mcp__chrome-devtools__navigate_page` — `http://localhost:5173/?room=ui-test`
+- `mcp__chrome-devtools__take_screenshot` — snapshot для зрительного контроля
+- `mcp__chrome-devtools__take_snapshot` — DOM-snapshot
+- `mcp__chrome-devtools__list_console_messages` — проверка ошибок
+
+Чек-лист:
+- [ ] Tldraw main menu в top-left открывается и работает.
+- [ ] Room badge виден в top-right (через SharePanel slot), не перекрывает style panel.
+- [ ] Bottom-left navigation panel (zoom controls) виден.
+- [ ] Bottom toolbar работает.
+- [ ] Bottom-right help menu работает.
+- [ ] Никаких console errors / warnings.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add apps/frontend/src/design-tokens.ts apps/frontend/src/chrome apps/frontend/src/App.tsx
+git commit -m "feat(frontend): AppChrome + design tokens + tldraw components mapping (§3.8)"
+```
+
+---
+
 ## Task 12: Frontend — load state, render shapes
 
 **Files:**
@@ -1791,7 +1981,7 @@ export function nodeToShape(n: { id: string; kind: string; x: number; y: number;
 
 > **Note:** Exact tldraw 5.x shape `type`/`props` field names need verifying against `node_modules/tldraw/dist/types/index.d.ts` once installed. Names `geo`/`note`/`draw`/`text` reflect npm tldraw@3.x (= SDK 5.x).
 
-- [ ] **Step 4: Replace `App.tsx`**
+- [ ] **Step 4: Replace `App.tsx`** (room badge уже в AppChrome через Task 11.5)
 
 ```tsx
 import { useEffect, useState } from "react";
@@ -1799,6 +1989,8 @@ import { Tldraw, type Editor } from "tldraw";
 import "tldraw/tldraw.css";
 import { getState } from "./transport/api";
 import { nodeToShape } from "./canvas/from-canvas-state";
+import { AppChrome } from "./chrome/AppChrome";
+import { buildTldrawComponents } from "./chrome/TldrawComponents";
 
 export function App({ room }: { room: string }) {
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -1815,10 +2007,9 @@ export function App({ room }: { room: string }) {
   }, [editor]);
 
   return (
-    <div style={{ height: "100vh" }}>
-      <div style={{ position: "fixed", top: 8, left: 8, zIndex: 1000 }}>room: <code>{room}</code></div>
-      <Tldraw onMount={setEditor} />
-    </div>
+    <AppChrome banner={null} footer={null} floatingOverlays={null}>
+      <Tldraw onMount={setEditor} components={buildTldrawComponents(room)} />
+    </AppChrome>
   );
 }
 ```
@@ -3372,95 +3563,219 @@ export async function fetchPrompts(status = "all") {
 }
 ```
 
-- [ ] **Step 2: `PromptInput.tsx`**
+Per spec §3.8: PromptInput **anchored к bounding box selection'а** (НЕ `position:fixed bottom-center`). PromptDrawer — collapsible side-panel из tldraw zone (не `position:fixed right:8`). Все стили — через `tokens`.
+
+- [ ] **Step 2: `PromptInput.tsx`** — anchored к выделению, не fixed-bottom
 
 ```tsx
 import { useState } from "react";
+import type { Editor } from "tldraw";
 import { postPrompt } from "../transport/prompts";
+import { tokens } from "../design-tokens";
 
-export function PromptInput({ selection }: { selection: string[] }) {
+export function PromptInput({ editor, selection }: { editor: Editor | null; selection: string[] }) {
   const [text, setText] = useState("");
-  if (selection.length === 0) return null;
+  if (!editor || selection.length === 0) return null;
+
+  // Anchor по bounding box selection'а. tldraw API:
+  // editor.getSelectionPageBounds() → {x, y, w, h} in page coords;
+  // editor.pageToScreen(point) → {x, y} in viewport coords.
+  const bounds = editor.getSelectionPageBounds();
+  if (!bounds) return null;
+  const anchorPage = { x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h + 8 };
+  const screen = editor.pageToScreen(anchorPage);
+
   const send = async () => { if (text.trim()) { await postPrompt(selection, text); setText(""); } };
+
   return (
-    <div style={{
-      position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)",
-      zIndex: 1000, background: "white", padding: 8, borderRadius: 8,
-      boxShadow: "0 2px 12px rgba(0,0,0,0.15)", display: "flex", gap: 8,
-    }}>
+    <div
+      style={{
+        position: "absolute",
+        left: screen.x,
+        top: screen.y,
+        transform: "translate(-50%, 0)",
+        zIndex: tokens.z.overlay,
+        background: tokens.color.bgOverlay,
+        border: `1px solid ${tokens.color.border}`,
+        borderRadius: tokens.radius.md,
+        padding: 6,
+        display: "flex",
+        gap: 6,
+        fontFamily: tokens.font.sans,
+        fontSize: tokens.font.base,
+        pointerEvents: "auto",
+      }}
+    >
       <input
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder={`Ask AI about ${selection.length} selected…`}
-        style={{ minWidth: 320 }}
+        style={{
+          minWidth: 280, padding: "4px 6px",
+          border: `1px solid ${tokens.color.border}`,
+          borderRadius: tokens.radius.sm,
+          fontSize: tokens.font.base,
+          fontFamily: tokens.font.sans,
+          outline: "none",
+        }}
         onKeyDown={(e) => { if (e.key === "Enter") void send(); }}
       />
-      <button onClick={() => void send()}>Send</button>
+      <button
+        onClick={() => void send()}
+        style={{
+          padding: "4px 10px",
+          fontSize: tokens.font.sm,
+          border: `1px solid ${tokens.color.border}`,
+          borderRadius: tokens.radius.sm,
+          background: "white",
+          cursor: "pointer",
+        }}
+      >
+        Send
+      </button>
     </div>
   );
 }
 ```
 
-- [ ] **Step 3: `PromptDrawer.tsx`**
+> **Note for engineer:** Подписаться на `editor.store.listen` со scope: "session" чтобы PromptInput пересчитывал anchor при изменении viewport (pan/zoom). Простейший способ — `useEffect` с `editor.store.listen(() => forceUpdate(), { source: "user", scope: "session" })`. Если перформанс окажется проблемой — переключиться на decorator-API через tldraw `components.OnTheCanvas` (spec §3.8 mapping).
+
+- [ ] **Step 3: `PromptDrawer.tsx`** — collapsible right-side panel, **не** перекрывает tldraw style panel
 
 ```tsx
 import { useEffect, useState } from "react";
 import { fetchPrompts } from "../transport/prompts";
+import { tokens } from "../design-tokens";
 
 export function PromptDrawer({ tick }: { tick: number }) {
   const [items, setItems] = useState<any[]>([]);
+  const [open, setOpen] = useState(false);
   useEffect(() => { fetchPrompts("all").then((r) => setItems(r.prompts ?? [])); }, [tick]);
+  const pending = items.filter((p) => p.status === "pending").length;
+
   return (
-    <div style={{
-      position: "fixed", top: 60, right: 8, width: 320, maxHeight: "70vh",
-      overflow: "auto", background: "white", border: "1px solid #ccc", borderRadius: 6,
-      padding: 8, fontSize: 12, zIndex: 999,
-    }}>
-      <div style={{ fontWeight: "bold", marginBottom: 8 }}>Prompts ({items.length})</div>
-      {items.length === 0 && <div>(empty)</div>}
-      {items.map((p) => (
-        <div key={p.id} style={{ marginBottom: 8, opacity: p.status !== "pending" ? 0.5 : 1 }}>
-          <div><b>{p.status}</b> · {p.selection.join(", ") || "(no selection)"}</div>
-          <div>{p.text}</div>
-          {p.response && <div style={{ marginTop: 4, paddingLeft: 8, borderLeft: "2px solid #0a0" }}>{p.response}</div>}
+    <div
+      style={{
+        position: "absolute",
+        // Левый край, чтобы НЕ конфликтовать с tldraw style panel (top-right).
+        // Высота — около середины, чтобы не пересекаться с zoom-controls (bottom-left).
+        left: 8,
+        top: "30%",
+        zIndex: tokens.z.overlay,
+        pointerEvents: "auto",
+        fontFamily: tokens.font.sans,
+        fontSize: tokens.font.sm,
+      }}
+    >
+      {!open && (
+        <button
+          onClick={() => setOpen(true)}
+          style={{
+            background: tokens.color.bgOverlay,
+            border: `1px solid ${tokens.color.border}`,
+            borderRadius: tokens.radius.sm,
+            padding: "4px 8px",
+            cursor: "pointer",
+            fontSize: tokens.font.sm,
+          }}
+        >
+          💬 {pending}
+        </button>
+      )}
+      {open && (
+        <div
+          style={{
+            width: 280,
+            maxHeight: "50vh",
+            overflow: "auto",
+            background: tokens.color.bgOverlay,
+            border: `1px solid ${tokens.color.border}`,
+            borderRadius: tokens.radius.md,
+            padding: 8,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+            <span style={{ fontWeight: "bold" }}>Prompts ({items.length})</span>
+            <button onClick={() => setOpen(false)} style={{ border: "none", background: "transparent", cursor: "pointer" }}>×</button>
+          </div>
+          {items.length === 0 && <div style={{ color: tokens.color.textMuted }}>(empty)</div>}
+          {items.map((p) => (
+            <div key={p.id} style={{ marginBottom: 8, opacity: p.status !== "pending" ? 0.5 : 1 }}>
+              <div style={{ color: tokens.color.textMuted, fontSize: tokens.font.sm }}>
+                <b>{p.status}</b> · {p.selection.join(", ") || "(no selection)"}
+              </div>
+              <div>{p.text}</div>
+              {p.response && (
+                <div style={{
+                  marginTop: 4, paddingLeft: 8,
+                  borderLeft: `2px solid ${tokens.color.accent}`,
+                  color: tokens.color.text,
+                }}>
+                  {p.response}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
-      ))}
+      )}
     </div>
   );
 }
 ```
 
-- [ ] **Step 4: Wire into `App.tsx`**
+- [ ] **Step 4: Wire into `App.tsx`** через AppChrome `floatingOverlays` slot
 
 ```tsx
 import { PromptInput } from "./prompts/PromptInput";
 import { PromptDrawer } from "./prompts/PromptDrawer";
 
-// inside component:
+// inside App component:
 const [selection, setSelection] = useState<string[]>([]);
 const [promptsTick, setPromptsTick] = useState(0);
 
-// in editor useEffect after WS setup:
-const unsubSel = editor.store.listen(() => {
-  const ids = editor.getSelectedShapeIds().map((id) => (id as unknown as string).replace(/^shape:/, ""));
-  setSelection(ids);
-}, { source: "user", scope: "session" });
+useEffect(() => {
+  if (!editor) return;
+  const unsubSel = editor.store.listen(() => {
+    const ids = editor.getSelectedShapeIds().map((id) => (id as unknown as string).replace(/^shape:/, ""));
+    setSelection(ids);
+  }, { source: "user", scope: "session" });
+  return unsubSel;
+}, [editor]);
 
-// in openWs handlers:
-onPromptCreated: () => setPromptsTick((x) => x + 1),
-onPromptResolved: () => setPromptsTick((x) => x + 1),
+// In openWs handlers add:
+//   onPromptCreated: () => setPromptsTick((x) => x + 1),
+//   onPromptResolved: () => setPromptsTick((x) => x + 1),
 
-// in cleanup: unsubSel()
-// in JSX:
-<PromptInput selection={selection} />
-<PromptDrawer tick={promptsTick} />
+// AppChrome rendering:
+return (
+  <AppChrome
+    banner={null}
+    footer={null}
+    floatingOverlays={
+      <>
+        <PromptInput editor={editor} selection={selection} />
+        <PromptDrawer tick={promptsTick} />
+      </>
+    }
+  >
+    <Tldraw onMount={setEditor} components={buildTldrawComponents(room)} />
+  </AppChrome>
+);
 ```
 
-- [ ] **Step 5: Smoke + commit**
+- [ ] **Step 5: Visual check (Chrome DevTools MCP)**
+
+Open `http://localhost:5173/?room=ui-prompts`, select a shape, write a prompt:
+- `mcp__chrome-devtools__navigate_page` → URL
+- `mcp__chrome-devtools__click` → select shape
+- `mcp__chrome-devtools__take_screenshot` → подтвердить что input появился под shape, не перекрывает tldraw toolbar или style panel
+- `mcp__chrome-devtools__click` на 💬-badge → drawer открылся слева, **не** перекрывает tldraw style panel справа
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add apps/frontend
-git commit -m "feat(frontend): targeted prompts UI (input on selection, drawer with history)"
+git commit -m "feat(frontend): prompts UI — anchored input, collapsible left-drawer, tokens-based"
 ```
 
 ---
@@ -4210,37 +4525,55 @@ export async function fetchVersion() {
 }
 ```
 
-- [ ] **Step 2: `VersionFooter.tsx`**
+Per spec §3.8: компоненты используют `tokens`, рендерятся через `AppChrome` slots (`banner`, `footer`), а не через `position:fixed`.
+
+- [ ] **Step 2: `chrome/VersionFooter.tsx`** (path moved from `components/` → `chrome/`)
 
 ```tsx
 import { useEffect, useState } from "react";
 import { fetchVersion } from "../transport/version";
+import { tokens } from "../design-tokens";
 
 export function VersionFooter() {
   const [v, setV] = useState<any>(null);
   useEffect(() => { fetchVersion().then(setV); }, []);
   if (!v) return null;
-  const badge = v.profile === "dev" ? "DEV" : v.profile === "debug" ? "DEBUG" : null;
+  const badgeText = v.profile === "dev" ? "DEV" : v.profile === "debug" ? "DEBUG" : null;
+  const badgeBg = v.profile === "dev" ? tokens.color.badgeDev : tokens.color.badgeDebug;
   return (
     <div style={{
-      position: "fixed", bottom: 4, right: 8, zIndex: 999,
-      fontSize: 11, color: "#666", fontFamily: "monospace",
+      padding: "2px 8px",
+      fontSize: tokens.font.sm,
+      fontFamily: tokens.font.mono,
+      color: tokens.color.textMuted,
+      background: tokens.color.bgOverlay,
+      border: `1px solid ${tokens.color.border}`,
+      borderRadius: tokens.radius.sm,
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 6,
     }}>
-      v{v.version} · {v.channel} · profile: {v.profile}
-      {badge && <span style={{
-        marginLeft: 8, background: "#fc6", color: "#000",
-        padding: "1px 6px", borderRadius: 3, fontWeight: "bold",
-      }}>{badge}</span>}
+      <span>v{v.version}</span>
+      <span style={{ opacity: 0.6 }}>·</span>
+      <span>{v.channel}</span>
+      {badgeText && (
+        <span style={{
+          background: badgeBg, color: "#000",
+          padding: "0 6px", borderRadius: tokens.radius.sm,
+          fontWeight: "bold", fontSize: 10,
+        }}>{badgeText}</span>
+      )}
     </div>
   );
 }
 ```
 
-- [ ] **Step 3: `UpdateBanner.tsx`**
+- [ ] **Step 3: `chrome/UpdateBanner.tsx`**
 
 ```tsx
 import { useEffect, useState } from "react";
 import { fetchVersion } from "../transport/version";
+import { tokens } from "../design-tokens";
 
 export function UpdateBanner() {
   const [v, setV] = useState<any>(null);
@@ -4248,36 +4581,69 @@ export function UpdateBanner() {
   if (!v?.updateAvailable) return null;
   return (
     <div style={{
-      position: "fixed", top: 0, left: 0, right: 0, zIndex: 1000,
-      background: "#fef3c7", borderBottom: "1px solid #f59e0b",
-      padding: "6px 12px", fontSize: 13, textAlign: "center",
+      background: tokens.color.warnBg,
+      borderBottom: `1px solid ${tokens.color.warnBorder}`,
+      padding: "6px 12px",
+      fontSize: tokens.font.base,
+      fontFamily: tokens.font.sans,
+      color: tokens.color.warnText,
+      textAlign: "center",
     }}>
-      <strong>v{v.latest}</strong> available — run <code style={{ background: "#fbbf24", padding: "1px 4px" }}>didraw update</code> to upgrade
+      <strong>v{v.latest}</strong> available — run{" "}
+      <code style={{ background: tokens.color.warnBorder, color: "#fff", padding: "1px 6px", borderRadius: tokens.radius.sm }}>
+        didraw update
+      </code>{" "}
+      to upgrade
     </div>
   );
 }
 ```
 
-- [ ] **Step 4: Wire into `App.tsx`**
+- [ ] **Step 4: Wire into `App.tsx`** через AppChrome `banner`/`footer` slots
 
 ```tsx
-import { VersionFooter } from "./components/VersionFooter";
-import { UpdateBanner } from "./components/UpdateBanner";
+import { VersionFooter } from "./chrome/VersionFooter";
+import { UpdateBanner } from "./chrome/UpdateBanner";
 
-// in JSX:
-<UpdateBanner />
-<VersionFooter />
+// In App return:
+return (
+  <AppChrome
+    banner={<UpdateBanner />}
+    footer={<VersionFooter />}
+    floatingOverlays={
+      <>
+        <PromptInput editor={editor} selection={selection} />
+        <PromptDrawer tick={promptsTick} />
+      </>
+    }
+  >
+    <Tldraw onMount={setEditor} components={buildTldrawComponents(room)} />
+  </AppChrome>
+);
 ```
 
-- [ ] **Step 5: Smoke test**
+- [ ] **Step 5: Visual smoke (Chrome DevTools MCP)**
 
-Stub `/api/version` to return `{updateAvailable: true, latest: "9.9.9"}` (modify backend temporarily or use proxy). Open browser → banner появляется. Reset stub → banner исчезает.
+Backend in dev mode, temporarily stub `/api/version` to return `{updateAvailable:true, latest:"9.9.9"}` (либо force через env `DIDRAW_LATEST_STUB=9.9.9` если backend поддержит).
+
+```
+mcp__chrome-devtools__navigate_page → http://localhost:5173/?room=ui-version
+mcp__chrome-devtools__take_screenshot
+mcp__chrome-devtools__list_console_messages
+```
+
+Чек-лист (per spec §3.8):
+- [ ] UpdateBanner — наверху, **не перекрывает** tldraw page menu и main menu.
+- [ ] VersionFooter — bottom-right, левее help button, не перекрывает его.
+- [ ] DEV badge виден когда `?profile=dev` (или dev backend), не виден в release.
+- [ ] Tldraw zone style panel (top-right) свободна — наш RoomBadge в `SharePanel` не мешает.
+- [ ] Никаких console errors.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/frontend
-git commit -m "feat(frontend): version footer and update banner"
+git add apps/frontend/src/chrome apps/frontend/src/transport/version.ts
+git commit -m "feat(frontend): version footer and update banner (AppChrome slots, tokens-based)"
 ```
 
 ---
@@ -4629,7 +4995,7 @@ Mirror Task 22 (Variant A) but for D2:
 
 ## Self-Review
 
-**Spec coverage check (against `2026-05-14-di-draw-design.md` v3.6):**
+**Spec coverage check (against `2026-05-14-di-draw-design.md` v3.7):**
 
 | Spec §  | Requirement                                       | Plan task |
 |---------|---------------------------------------------------|-----------|
@@ -4679,6 +5045,12 @@ Mirror Task 22 (Variant A) but for D2:
 | §3.4    | Daemon stop ≤ 2с graceful, fallback SIGKILL          | Task 16 (gracefulShutdownMs loop) |
 | §3.7.1  | Profile-specific pid + parallel dev/release          | Tasks 16, 31 |
 | §3.7.5  | Manual update + controlled daemon restart (stop→swap→start) | Task 37 |
+| §3.8    | UI tldraw-native, no own toolbar, components via SharePanel | Task 11.5 |
+| §3.8    | Design tokens (no inline colors/sizes)                | Task 11.5 |
+| §3.8    | PromptInput anchored к selection bounds (не fixed-bottom) | Task 28 |
+| §3.8    | PromptDrawer collapsible left (не перекрывает style panel) | Task 28 |
+| §3.8    | Banner/footer через AppChrome slots                  | Task 38 |
+| §3.8    | Visual verification via chrome-devtools MCP          | Tasks 11.5, 28, 38, 39 |
 
 All spec sections mapped.
 
