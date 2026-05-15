@@ -8,10 +8,13 @@
     "test": "bun test"
   },
   "dependencies": {
-    "hono": "^4.6.0",
-    "elkjs": "^0.9.3"
+    "@tldraw/mermaid": "^5.0.0",
+    "elkjs": "^0.9.3",
+    "hono": "^4.6.0"
   },
   "devDependencies": {
-    "bun-types": "latest"
+    "@types/jsdom": "^28.0.3",
+    "bun-types": "latest",
+    "jsdom": "^29.1.1"
   }
 }
