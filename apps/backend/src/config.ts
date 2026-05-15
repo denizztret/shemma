@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 const VALID_PROFILES = ["dev", "release", "debug"] as const;
 export type Profile = (typeof VALID_PROFILES)[number];
@@ -41,6 +42,28 @@ function parsePort(raw: string | undefined, fallback: number): number {
   return n;
 }
 
+export function slugifyProject(input: string | undefined): string {
+  if (!input) return "default-project";
+  const base = basename(input.replace(/[\\/]+$/, "")) || input;
+  const body = base
+    .toLowerCase()
+    .replace(/[\\/]+/g, "-")
+    .replace(/[^a-z0-9_-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!body) return "default-project";
+  const hash = createHash("sha1").update(input).digest("hex").slice(0, 8);
+  return `${body}-${hash}`;
+}
+
+export function resolveProjectSlug(): string {
+  return slugifyProject(
+    process.env.DIDRAW_PROJECT_DIR ??
+      process.env.CLAUDE_PROJECT_DIR ??
+      process.cwd(),
+  );
+}
+
 export function getConfig() {
   const profile = getProfile();
   return {
@@ -52,7 +75,7 @@ export function getConfig() {
         homedir(),
         ".claude",
         "projects",
-        "default-project",
+        resolveProjectSlug(),
         storageSubdir[profile],
       ),
     logLevel: (process.env.DIDRAW_LOG_LEVEL ?? logLevelByProfile[profile]) as
