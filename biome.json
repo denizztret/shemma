@@ -7,7 +7,9 @@
       ".claude/settings*.json",
       "**/frontend-dist/**",
       "apps/frontend/src/**/*.js",
-      "release/**"
+      "release/**",
+      "**/test-results/**",
+      "**/playwright-report/**"
     ]
   },
   "linter": { "enabled": true, "rules": { "recommended": true } },
