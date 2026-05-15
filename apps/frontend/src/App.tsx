@@ -3,29 +3,37 @@ import { type Editor, type TLShape, Tldraw } from "tldraw";
 import "tldraw/tldraw.css";
 import { isOurOp, rememberOurOpId } from "./canvas/echo-guard";
 import { nodeToShape } from "./canvas/from-canvas-state";
-import { toShapeId } from "./canvas/id-prefix";
+import { fromShapeId, toShapeId } from "./canvas/id-prefix";
 import { mermaidToOps } from "./canvas/mermaid-import";
 import { labelToRichText } from "./canvas/richtext";
 import { diffToOps } from "./canvas/to-patch";
 import { AppChrome } from "./chrome/AppChrome";
 import { buildTldrawComponents } from "./chrome/TldrawComponents";
+import { PromptDrawer } from "./prompts/PromptDrawer";
+import { PromptInput } from "./prompts/PromptInput";
 import { getState, sendPatch } from "./transport/api";
 import { openWs } from "./transport/ws";
 
 export function App({ room }: { room: string }) {
   const [editor, setEditor] = useState<Editor | null>(null);
+  const [selection, setSelection] = useState<string[]>([]);
+  const [promptsTick, setPromptsTick] = useState(0);
+  const [cameraTick, setCameraTick] = useState(0);
 
   useEffect(() => {
     if (!editor) return;
     let active = true;
     let close: (() => void) | undefined;
     let unsubStore: (() => void) | undefined;
+    let unsubSel: (() => void) | undefined;
     (async () => {
       const s = await getState();
       if (!active) return;
       const shapes = s.canvas.nodes.map(nodeToShape);
       if (shapes.length) editor.createShapes(shapes);
       close = openWs({
+        onPromptCreated: () => setPromptsTick((x) => x + 1),
+        onPromptResolved: () => setPromptsTick((x) => x + 1),
         onPatch: (m) => {
           if (isOurOp(m.originClientId)) return;
           for (const op of m.ops) {
@@ -83,6 +91,17 @@ export function App({ room }: { room: string }) {
         { source: "user", scope: "document" },
       );
 
+      // Selection + camera listener: fires on any user interaction (including pan/zoom).
+      // Both selection and cameraTick are updated so PromptInput always re-anchors correctly.
+      unsubSel = editor.store.listen(
+        () => {
+          const ids = editor.getSelectedShapeIds().map((id) => fromShapeId(id));
+          setSelection(ids);
+          setCameraTick((x) => x + 1);
+        },
+        { source: "user", scope: "session" },
+      );
+
       // biome-ignore lint/suspicious/noExplicitAny: attaching helper to window for AI/dev console use
       (window as any).didrawImportMermaid = async (source: string) => {
         const ops = await mermaidToOps(editor, source);
@@ -97,6 +116,7 @@ export function App({ room }: { room: string }) {
       active = false;
       close?.();
       unsubStore?.();
+      unsubSel?.();
       // biome-ignore lint/suspicious/noExplicitAny: cleaning up window helper
       // biome-ignore lint/performance/noDelete: intentional property removal from window
       delete (window as any).didrawImportMermaid;
@@ -104,7 +124,20 @@ export function App({ room }: { room: string }) {
   }, [editor]);
 
   return (
-    <AppChrome banner={null} footer={null} floatingOverlays={null}>
+    <AppChrome
+      banner={null}
+      footer={null}
+      floatingOverlays={
+        <>
+          <PromptInput
+            editor={editor}
+            selection={selection}
+            cameraTick={cameraTick}
+          />
+          <PromptDrawer tick={promptsTick} />
+        </>
+      }
+    >
       <Tldraw onMount={setEditor} components={buildTldrawComponents(room)} />
     </AppChrome>
   );
