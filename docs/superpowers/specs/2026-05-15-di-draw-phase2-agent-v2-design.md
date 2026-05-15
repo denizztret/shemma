@@ -1,13 +1,14 @@
 # di.draw Phase 2.1 — Agent v2: domain-first model + layout intelligence
 
-> **Status:** design (v2.1.2, 2026-05-15) — pending user review
+> **Status:** design (v2.1.3, 2026-05-16) — pending user review
 > **Predecessor:** `2026-05-14-di-draw-design.md` v3.7 (Phase 1 MVP, shipped)
 > **Revision history:**
 >   - v1 — palette-based actions;
 >   - v2 — pivot to domain-first («роли важнее цвета»);
 >   - v2.1 — full ELK + extensibility map;
 >   - v2.1.1 — 7 системных gap'ов: shared `@didraw/domain` пакет, унификация на `mode`, transactions/layout split, pin inference, canonical `Group.children`, edge routing v1 scope, UI overlay вынесен из layout;
->   - v2.1.2 — cleanup pass: stale parent-формулировки в action table и worked example, edge-routing wording в feature table и coverage map, SSOT clarification (`@didraw/domain/role-preset.ts`), context `pinned` flag вместо `position` координат.
+>   - v2.1.2 — cleanup pass: stale parent-формулировки в action table и worked example, edge-routing wording в feature table и coverage map, SSOT clarification (`@didraw/domain/role-preset.ts`), context `pinned` flag вместо `position` координат;
+>   - v2.1.3 — plan review pass: `connect.kind` → `connect.connectionKind` (избегаем коллизии с action discriminator `kind`); `define` отвергает container roles (network/boundary через `group`); validate работает на sequential working state (delete потом connect — fail); layout action режимы honored route'ом (а не игнорятся в пользу batch-hint'а); layout пишет `meta.position` + `meta.routing.{ports,bendPoints}`; context route уважает `?since=N`; preserve-order пост-процессинг перенесён в Phase 2.2 backlog.
 > **Roadmap context:** one of six Phase 2 sub-projects (см. §0)
 
 ## 0. Phase 2 roadmap (контекст)
@@ -206,7 +207,7 @@ type ActionError = {
 | Kind | Args | Notes |
 |---|---|---|
 | `define` | `{role: Role; name: string; label?: string; in?: ElementId; meta?: object}` | `name` — human-readable id (`auth`, `users-db`). Unique per room. `in` — добавляет элемент в `Group.children` указанного container'а (single source per §3.1, никакого `parent` поля у элемента). `label` default = `name`. **Upsert semantics**: повторный define c тем же `name` обновляет `label`/`meta` и переносит между containers через `Group.children`-ops; попытка сменить `role` → 422 `role-conflict`. |
-| `connect` | `{from: ElementId; to: ElementId; kind?: ConnectionKind; label?: string; meta?: object}` | Default `kind` = `sync`. `from`/`to` ссылаются на existing element by name. |
+| `connect` | `{from: ElementId; to: ElementId; connectionKind?: ConnectionKind; label?: string; meta?: object}` | Default `connectionKind` = `sync`. `from`/`to` ссылаются на existing element by name. Поле имя `connectionKind` (не `kind`) — `kind` уже используется как discriminator самого action. |
 | `group` | `{ids: ElementId[]; as: "network"\|"boundary"; name: string; label?: string}` | Создаёт container и добавляет указанные ids в его `Group.children`. Состав container'а живёт только в `Group.children`. |
 | `note` | `{about?: ElementId; text: string; name?: string}` | Annotation. Если `about` задан — нота визуально привязана (arrow binding). |
 | `layout` | `{mode?: LayoutMode; scope?: "all"\|ElementId; spacing?: "compact"\|"normal"\|"loose"}` | Explicit re-layout. Обычно не нужен — auto-layout по умолчанию. `direction` не существует — направление выводится из mode. |
@@ -406,7 +407,7 @@ AI отправляет один batch:
   "actions": [
     {"kind": "define", "role": "service",   "name": "auth"},
     {"kind": "define", "role": "datastore", "name": "users-db"},
-    {"kind": "connect", "from": "auth", "to": "users-db", "kind": "data"},
+    {"kind": "connect", "from": "auth", "to": "users-db", "connectionKind": "data"},
     {"kind": "group", "ids": ["auth", "users-db"], "as": "network", "name": "vpc-prod"}
   ],
   "clientOpId": "sess1-batch-1",

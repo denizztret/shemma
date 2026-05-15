@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "WebSearch",
-      "WebFetch(domain:tldraw.dev)"
+      "WebFetch(domain:tldraw.dev)",
+      "Skill(superpowers:brainstorming)"
     ]
   }
 }
