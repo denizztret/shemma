@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { type Editor, type TLShape, Tldraw } from "tldraw";
 import "tldraw/tldraw.css";
+import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { isOurOp, rememberOurOpId } from "./canvas/echo-guard";
 import { edgeToShape, nodeToShape } from "./canvas/from-canvas-state";
 import { fromShapeId, toEdgeShapeId, toShapeId } from "./canvas/id-prefix";
@@ -28,6 +29,7 @@ export function App({ room }: { room: string }) {
     let close: (() => void) | undefined;
     let unsubStore: (() => void) | undefined;
     let unsubSel: (() => void) | undefined;
+    let camSaveTimer: ReturnType<typeof setTimeout> | undefined;
     (async () => {
       const s = await getState();
       if (!active) return;
@@ -38,43 +40,58 @@ export function App({ room }: { room: string }) {
       const allBindings = edgeData.flatMap((d) => d.bindings);
       if (allShapes.length) editor.createShapes(allShapes);
       if (allBindings.length) editor.createBindings(allBindings);
-      // Fit camera to existing content so room with content opens centred, not blank.
-      if (allShapes.length) editor.zoomToFit({ animation: { duration: 0 } });
+      const cam = loadCamera(room);
+      if (cam) {
+        editor.setCamera(cam, { immediate: true });
+      } else if (allShapes.length) {
+        // First visit: fit to content so the room doesn't open blank.
+        editor.zoomToFit({ animation: { duration: 0 } });
+      }
       close = openWs({
         onPromptCreated: () => setPromptsTick((x) => x + 1),
         onPromptResolved: () => setPromptsTick((x) => x + 1),
         onPatch: (m) => {
           if (isOurOp(m.originClientId)) return;
-          for (const op of m.ops) {
-            if (op.op === "add" && op.target === "node") {
-              editor.createShapes([nodeToShape(op.value)]);
-            } else if (op.op === "add" && op.target === "edge") {
-              const { shape, bindings } = edgeToShape(op.value);
-              editor.createShapes([shape]);
-              if (bindings.length) editor.createBindings(bindings);
-            } else if (op.op === "delete" && op.target === "node") {
-              editor.deleteShapes([toShapeId(op.id)]);
-            } else if (op.op === "delete" && op.target === "edge") {
-              editor.deleteShapes([toEdgeShapeId(op.id)]);
-            } else if (op.op === "update" && op.target === "node") {
-              const sid = toShapeId(op.id);
-              const existing = editor.getShape(sid);
-              if (!existing) continue;
-              // Build update payload with the shape's actual type so non-geo shapes update too.
-              const updates: Record<string, unknown> = {};
-              if (op.set.x !== undefined) updates.x = op.set.x;
-              if (op.set.y !== undefined) updates.y = op.set.y;
-              if (op.set.label !== undefined) {
-                updates.props = { richText: labelToRichText(op.set.label) };
-              }
-              if (Object.keys(updates).length > 0) {
-                editor.updateShapes([
-                  // biome-ignore lint/suspicious/noExplicitAny: tldraw updateShapes expects shape-specific type literal
-                  { id: sid, type: existing.type, ...updates } as any,
-                ]);
+          // mergeRemoteChanges marks the inner mutations as `source: "remote"`
+          // so our `source: "user"` listener below doesn't echo them back to
+          // the server (per tldraw collaboration docs).
+          editor.store.mergeRemoteChanges(() => {
+            for (const op of m.ops) {
+              if (op.op === "add" && op.target === "node") {
+                editor.createShapes([nodeToShape(op.value)]);
+              } else if (op.op === "add" && op.target === "edge") {
+                const { shape, bindings } = edgeToShape(op.value);
+                editor.createShapes([shape]);
+                if (bindings.length) editor.createBindings(bindings);
+              } else if (op.op === "delete" && op.target === "node") {
+                editor.deleteShapes([toShapeId(op.id)]);
+              } else if (op.op === "delete" && op.target === "edge") {
+                editor.deleteShapes([toEdgeShapeId(op.id)]);
+              } else if (op.op === "update" && op.target === "node") {
+                const sid = toShapeId(op.id);
+                const existing = editor.getShape(sid);
+                if (!existing) continue;
+                const updates: Record<string, unknown> = {};
+                if (op.set.x !== undefined) updates.x = op.set.x;
+                if (op.set.y !== undefined) updates.y = op.set.y;
+                const propsPatch: Record<string, unknown> = {};
+                if (op.set.w !== undefined) propsPatch.w = op.set.w;
+                if (op.set.h !== undefined) propsPatch.h = op.set.h;
+                if (op.set.label !== undefined) {
+                  propsPatch.richText = labelToRichText(op.set.label);
+                }
+                if (Object.keys(propsPatch).length > 0) {
+                  updates.props = propsPatch;
+                }
+                if (Object.keys(updates).length > 0) {
+                  editor.updateShapes([
+                    // biome-ignore lint/suspicious/noExplicitAny: tldraw updateShapes expects shape-specific type literal
+                    { id: sid, type: existing.type, ...updates } as any,
+                  ]);
+                }
               }
             }
-          }
+          });
         },
       });
 
@@ -84,42 +101,76 @@ export function App({ room }: { room: string }) {
           .map((s) => [s.id as unknown as string, s]),
       );
       let inflight = false;
-      unsubStore = editor.store.listen(
-        () => {
-          const cur = new Map<string, TLShape>(
-            editor
-              .getCurrentPageShapes()
-              .map((s) => [s.id as unknown as string, s]),
-          );
-          const ops = diffToOps(snap, cur);
+      // Skip listener-driven send during programmatic mass-imports (mermaid).
+      // The importer issues its own explicit sendPatch with deduplicated ops.
+      let suppressLocalSend = false;
+      const trySend = () => {
+        if (inflight || suppressLocalSend) return;
+        const cur = new Map<string, TLShape>(
+          editor
+            .getCurrentPageShapes()
+            .map((s) => [s.id as unknown as string, s]),
+        );
+        const ops = diffToOps(snap, cur);
+        if (ops.length === 0) return;
+        inflight = true;
+        const cid = crypto.randomUUID();
+        rememberOurOpId(cid);
+        // biome-ignore lint/suspicious/noExplicitAny: SimpleOp is compatible with backend PatchOp schema
+        void sendPatch(ops as any, cid).finally(() => {
+          // Snap moves to what we just sent. Diffs after this are relative to
+          // that baseline, so changes made during the in-flight window are
+          // captured by the next trySend below.
           snap.clear();
           for (const [k, v] of cur) snap.set(k, v);
-          if (ops.length === 0 || inflight) return;
-          inflight = true;
-          const cid = crypto.randomUUID();
-          rememberOurOpId(cid);
-          // biome-ignore lint/suspicious/noExplicitAny: SimpleOp is compatible with backend PatchOp schema
-          void sendPatch(ops as any, cid).finally(() => {
-            inflight = false;
-          });
-        },
-        { source: "user", scope: "document" },
-      );
+          inflight = false;
+          trySend();
+        });
+      };
+      unsubStore = editor.store.listen(trySend, {
+        source: "user",
+        scope: "document",
+      });
 
-      // Selection + camera listener: fires on any user interaction (including pan/zoom).
-      // Both selection and cameraTick are updated so PromptInput always re-anchors correctly.
+      // Session-scope listener fires on every user interaction. Guard the
+      // PromptInput re-anchor against camera-only no-op ticks (pan emits one
+      // event per pointer move ≈ 60 Hz; without the guard React re-renders
+      // every frame).
+      let lastCamKey = "";
       unsubSel = editor.store.listen(
         () => {
           const ids = editor.getSelectedShapeIds().map((id) => fromShapeId(id));
           setSelection(ids);
-          setCameraTick((x) => x + 1);
+          const cam = editor.getCamera();
+          const camKey = `${cam.x}|${cam.y}|${cam.z}`;
+          if (camKey !== lastCamKey) {
+            lastCamKey = camKey;
+            setCameraTick((x) => x + 1);
+            if (camSaveTimer) clearTimeout(camSaveTimer);
+            camSaveTimer = setTimeout(() => saveCamera(room, cam), 150);
+          }
         },
         { source: "user", scope: "session" },
       );
 
       // biome-ignore lint/suspicious/noExplicitAny: attaching helper to window for AI/dev console use
       (window as any).didrawImportMermaid = async (source: string) => {
-        const ops = await mermaidToOps(editor, source);
+        // mermaidToOps mutates the editor store while extracting ops. Suppress
+        // the local-send path so the listener does not also send those shapes;
+        // we then explicitly sendPatch the deduplicated ops ourselves.
+        suppressLocalSend = true;
+        let ops: Awaited<ReturnType<typeof mermaidToOps>>;
+        try {
+          ops = await mermaidToOps(editor, source);
+        } finally {
+          // Re-baseline snap to the post-import state so the next user change
+          // diffs cleanly without re-emitting the imported shapes.
+          snap.clear();
+          for (const s of editor.getCurrentPageShapes()) {
+            snap.set(s.id as unknown as string, s);
+          }
+          suppressLocalSend = false;
+        }
         if (ops.length === 0) return { ok: false, error: "no ops produced" };
         const cid = crypto.randomUUID();
         rememberOurOpId(cid);
@@ -132,11 +183,16 @@ export function App({ room }: { room: string }) {
       close?.();
       unsubStore?.();
       unsubSel?.();
+      if (camSaveTimer) {
+        // Pending debounced save — flush now so reload keeps the latest camera.
+        clearTimeout(camSaveTimer);
+        if (editor) saveCamera(room, editor.getCamera());
+      }
       // biome-ignore lint/suspicious/noExplicitAny: cleaning up window helper
       // biome-ignore lint/performance/noDelete: intentional property removal from window
       delete (window as any).didrawImportMermaid;
     };
-  }, [editor]);
+  }, [editor, room]);
 
   return (
     <AppChrome

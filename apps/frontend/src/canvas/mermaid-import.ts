@@ -1,6 +1,5 @@
-import type { Editor, TLShape } from "tldraw";
+import { type Editor, type TLShape, renderPlaintextFromRichText } from "tldraw";
 import { fromShapeId } from "./id-prefix";
-import { richTextToString } from "./richtext";
 import type { NodeValue, SimpleOp } from "./to-patch";
 
 type EdgeOp = {
@@ -22,7 +21,15 @@ async function loadMermaid() {
   return await import("@tldraw/mermaid");
 }
 
-function shapeToNodeValue(s: TLShape): NodeValue | null {
+function readLabel(editor: Editor, s: TLShape): string | undefined {
+  // biome-ignore lint/suspicious/noExplicitAny: tldraw shape props are not typed via public API
+  const rt = (s as any).props?.richText;
+  if (!rt) return undefined;
+  const text = renderPlaintextFromRichText(editor, rt);
+  return text || undefined;
+}
+
+function shapeToNodeValue(editor: Editor, s: TLShape): NodeValue | null {
   if (s.type === "geo") {
     // biome-ignore lint/suspicious/noExplicitAny: tldraw shape props are not typed via public API
     const p = (s as any).props ?? {};
@@ -33,7 +40,7 @@ function shapeToNodeValue(s: TLShape): NodeValue | null {
       y: s.y,
       w: p.w,
       h: p.h,
-      label: richTextToString(p.richText) || undefined,
+      label: readLabel(editor, s),
     };
   }
   if (s.type === "note") {
@@ -42,8 +49,7 @@ function shapeToNodeValue(s: TLShape): NodeValue | null {
       kind: "sticky",
       x: s.x,
       y: s.y,
-      // biome-ignore lint/suspicious/noExplicitAny: tldraw shape props are not typed via public API
-      label: richTextToString((s as any).props?.richText),
+      label: readLabel(editor, s) ?? "",
     };
   }
   if (s.type === "text") {
@@ -52,8 +58,7 @@ function shapeToNodeValue(s: TLShape): NodeValue | null {
       kind: "text",
       x: s.x,
       y: s.y,
-      // biome-ignore lint/suspicious/noExplicitAny: tldraw shape props are not typed via public API
-      label: richTextToString((s as any).props?.richText),
+      label: readLabel(editor, s) ?? "",
     };
   }
   if (s.type === "line" || s.type === "draw") {
@@ -126,7 +131,7 @@ export async function mermaidToOps(
       });
       continue;
     }
-    const nodeVal = shapeToNodeValue(s);
+    const nodeVal = shapeToNodeValue(editor, s);
     if (nodeVal) {
       ops.push({ op: "add", target: "node", value: nodeVal });
     }

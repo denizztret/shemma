@@ -18,7 +18,13 @@ export type SimpleOp =
       op: "update";
       target: "node";
       id: string;
-      set: { x?: number; y?: number; label?: string };
+      set: {
+        x?: number;
+        y?: number;
+        w?: number;
+        h?: number;
+        label?: string;
+      };
     }
   | { op: "delete"; target: "node"; id: string };
 
@@ -90,9 +96,17 @@ export function diffToOps(
     const curNode = shapeToNode(s);
     const prevNode = shapeToNode(before);
     if (!curNode || !prevNode) continue;
-    const set: { x?: number; y?: number; label?: string } = {};
+    const set: {
+      x?: number;
+      y?: number;
+      w?: number;
+      h?: number;
+      label?: string;
+    } = {};
     if (s.x !== before.x) set.x = s.x;
     if (s.y !== before.y) set.y = s.y;
+    if (curNode.w !== prevNode.w && curNode.w !== undefined) set.w = curNode.w;
+    if (curNode.h !== prevNode.h && curNode.h !== undefined) set.h = curNode.h;
     if (curNode.label !== prevNode.label) set.label = curNode.label ?? "";
     if (Object.keys(set).length > 0) {
       ops.push({ op: "update", target: "node", id: fromShapeId(s.id), set });
