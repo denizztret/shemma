@@ -203,4 +203,66 @@ describe("applyPatch", () => {
       expect(r.state.nodes).toHaveLength(1); // node остался плавающим
     }
   });
+
+  test("update node ignores set.id (cannot rebrand identity)", () => {
+    const s: CanvasState = {
+      version: 1,
+      nodes: [{ id: "n1", kind: "rect", x: 0, y: 0 }],
+      edges: [],
+      groups: [],
+    };
+    const r = applyPatch(s, [
+      // biome-ignore lint/suspicious/noExplicitAny: testing runtime safeguard against unsupported set.id
+      { op: "update", target: "node", id: "n1", set: { id: "n2" } as any },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.state.nodes[0].id).toBe("n1");
+    }
+  });
+
+  test("update edge endpoint to missing node — fails", () => {
+    const s: CanvasState = {
+      version: 1,
+      nodes: [{ id: "n1", kind: "rect", x: 0, y: 0 }],
+      edges: [
+        {
+          id: "e1",
+          from: { kind: "node", id: "n1" },
+          to: { kind: "point", x: 10, y: 10 },
+        },
+      ],
+      groups: [],
+    };
+    const r = applyPatch(s, [
+      {
+        op: "update",
+        target: "edge",
+        id: "e1",
+        set: { to: { kind: "node", id: "missing" } },
+      },
+    ]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("missing");
+  });
+
+  test("cascade: delete group removes its id from other groups' children", () => {
+    const s: CanvasState = {
+      version: 1,
+      nodes: [],
+      edges: [],
+      groups: [
+        { id: "parent", kind: "group", children: ["child", "other"] },
+        { id: "child", kind: "group", children: [] },
+        { id: "other", kind: "group", children: [] },
+      ],
+    };
+    const r = applyPatch(s, [{ op: "delete", target: "group", id: "child" }]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.state.groups.find((g) => g.id === "parent")?.children).toEqual([
+        "other",
+      ]);
+    }
+  });
 });

@@ -79,6 +79,10 @@ function updateOp(
     if (idx === -1)
       return { ok: false, state: s, error: `edge ${op.id} not found` };
     const merged = mergeRecord(s.edges[idx], op.set, ["style", "meta"]) as Edge;
+    const err =
+      checkEndpoint(s, merged.from, "from") ??
+      checkEndpoint(s, merged.to, "to");
+    if (err) return { ok: false, state: s, error: err };
     const edges = [...s.edges];
     edges[idx] = merged;
     return { ok: true, state: { ...s, edges } };
@@ -127,10 +131,20 @@ function deleteOp(
     };
   }
   if (op.target === "group") {
-    // group удаляется; дети остаются "плавающими"
+    // group удаляется; её дети-ноды/edges остаются плавающими, но id самой группы
+    // надо вычистить из children любых других групп, чтобы не оставлять висячую ссылку.
     return {
       ok: true,
-      state: { ...s, groups: s.groups.filter((g) => g.id !== op.id) },
+      state: {
+        ...s,
+        groups: s.groups
+          .filter((g) => g.id !== op.id)
+          .map((g) =>
+            g.children.includes(op.id)
+              ? { ...g, children: g.children.filter((c) => c !== op.id) }
+              : g,
+          ),
+      },
     };
   }
   return { ok: false, state: s, error: "unknown delete target" };
@@ -143,6 +157,8 @@ function mergeRecord<T extends Record<string, unknown>>(
 ): T {
   const out: Record<string, unknown> = { ...base };
   for (const k of Object.keys(patch) as (keyof T)[]) {
+    // Identity is immutable: never let an update rebrand a record's id.
+    if (k === "id") continue;
     const v = patch[k];
     if (deepKeys.includes(k) && isObject(v) && isObject(base[k])) {
       const sub: Record<string, unknown> = {
