@@ -43,14 +43,12 @@ describe("runtime profile isolation", () => {
   });
 
   test("pid files are profile-specific", () => {
-    const env = { ...process.env };
-
     const script = `
       const { pidFile } = await import("${PROFILE_SRC}");
       console.log(JSON.stringify({ dev: pidFile("dev"), release: pidFile("release") }));
     `;
 
-    const { stdout, status } = spawnBunScript(script, env);
+    const { stdout, status } = spawnBunScript(script, process.env);
     expect(status).toBe(0);
     const j = JSON.parse(stdout);
     expect(j.dev).not.toBe(j.release);
