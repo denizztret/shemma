@@ -5,108 +5,79 @@ description: Use when user mentions canvas, drawing, schemas, architecture diagr
 
 # draw
 
-You have a live canvas board for this Claude Code session. State below is auto-injected; use the `didraw` CLI through Bash to read and modify it.
+You have a live canvas board for this Claude Code session. Domain-level commands below; do NOT use raw `didraw patch` — use `didraw define / connect / group / note / layout / delete / apply / context` instead.
 
-## Current canvas state (compact JSON)
+## Current canvas context
 
-!`didraw state --compact 2>/dev/null || echo '{"canvas":{"nodes":[],"edges":[],"groups":[]},"version":0}'`
-
-## Pending user prompts
-
-!`didraw prompts list --status pending 2>/dev/null || echo '{"prompts":[]}'`
+!`didraw context 2>/dev/null || echo '{"summary":{"total":0,"byRole":{}},"inView":[],"connections":[],"recentOps":[]}'`
 
 ## Rooms in this workspace
 
 !`didraw rooms list 2>/dev/null || echo '{"rooms":[]}'`
 
-If `rooms` lists non-empty schemas relevant to the current dialogue, ask the user whether to continue an existing schema or start a new one. Don't clutter the `default` room with unrelated ad-hoc diagrams. Use `--room <id>` on data commands to address a specific room.
+If `rooms` lists non-empty schemas relevant to the current dialogue, ask the user whether to continue an existing schema or start a new one.
 
-## Commands (use the Bash tool)
+## Pending user prompts
 
-Read:
-```
-didraw state --compact                          # full snapshot
-didraw state --since <last_version>             # diff only
-```
+!`didraw prompts list --status pending 2>/dev/null || echo '{"prompts":[]}'`
 
-Write:
-```
-echo '{"ops":[...],"source":"ai","clientOpId":"<uuid>"}' | didraw patch --stdin
-didraw clear --confirm                          # wipe canvas (destructive!)
-```
+## Roles
 
-Bulk-import a graph (Mermaid) — **browser-only per ADR-0001**:
-The `@tldraw/mermaid` package requires a live tldraw `Editor` (mounted in DOM with full SVG layout); it cannot run server-side. To import Mermaid, open the canvas in a browser tab (`didraw open <room>`) and run in the page's DevTools console:
-```js
-await window.didrawImportMermaid(`graph LR
-  app --> server --> db`)
-```
-Returns `{ok, version}` and broadcasts to all tabs. There is no `didraw import mermaid` CLI command.
+| Role | When | Example name |
+|---|---|---|
+| `actor` | user/customer/external person | `customer`, `admin` |
+| `service` | app, API, microservice, function | `auth`, `payment-api` |
+| `datastore` | DB, cache, S3, file store | `users-db`, `redis-sessions` |
+| `queue` | broker/event-bus/stream | `kafka-events` |
+| `network` | VPC, subnet, perimeter (container) | `vpc-prod` |
+| `boundary` | logical/security boundary (container) | `dmz` |
+| `external` | 3rd-party service | `stripe`, `sendgrid` |
+| `note` | annotation/ADR pointer | `note-1` (auto) |
 
-Auto-layout new nodes:
-```
-didraw layout --algorithm elk-layered
-didraw layout --node-ids n1,n2          # only specific
-```
+## Connection kinds
 
-Targeted prompts (user-attached questions on objects):
-```
-didraw prompts list --status pending
-didraw prompts resolve <id> --response "text"
-didraw prompts dismiss <id>
-```
+| Kind | Default label | Visual |
+|---|---|---|
+| `sync` (default) | "calls" | solid → |
+| `async` | "publishes" | dashed → |
+| `data` | "reads" | solid → |
+| `dep` | (none) | dotted → |
 
-### Rooms management
+## Commands
 
 ```
-didraw rooms list                                    # list with elementCount + version
-didraw rooms archive <id>                            # move to .archive/
-didraw rooms restore <id>                            # restore from .archive/
-didraw rooms export <id> --to /path/to/file.json     # save snapshot
-didraw rooms import /path/to/file.json [--as <id>] [--force]
-didraw rooms rm <id> --confirm                       # hard delete
+didraw define <role> <name> [--label "..."] [--in <container>]
+didraw connect <from> <to> [--kind sync|async|data|dep] [--label "..."]
+didraw group <id1,id2,...> --as network|boundary --name <name>
+didraw note --text "..." [--about <name>]
+didraw layout [--mode layered-lr|layered-tb|tree|pack|force]
+didraw delete <id1,id2,...> [--cascade]
+didraw apply --stdin              # JSON batch with {actions: [...]}
 ```
 
-AI-activity badge (so the user sees when YOU are busy):
+## Pattern: batch via apply
+
+For multi-step changes, prefer one `apply --stdin` over many `define`/`connect` calls — one auto-layout, one transaction:
+
+```bash
+echo '{
+  "actions": [
+    {"kind":"define","role":"service","name":"auth"},
+    {"kind":"define","role":"datastore","name":"users-db"},
+    {"kind":"connect","from":"auth","to":"users-db","connectionKind":"data"}
+  ],
+  "layoutHint": {"mode": "layered-lr"}
+}' | didraw apply --stdin
 ```
-didraw ai start --actor <name> --task "<short description>"
-# ... do the work ...
-didraw ai stop
-didraw ai status                                # check current
+
+## Pattern: preview before commit
+
+Use `dryRun:true` to see compiled ops without writing:
+
+```bash
+echo '{"actions":[…],"dryRun":true}' | didraw apply --stdin
 ```
 
-Always pair `start` with `stop` (use a shell trap or finally pattern).
-Stale records auto-clear after 5 minutes server-side, but explicit `stop`
-is the right shape. The `--task` text shows in the orange chip at the
-top of the canvas; update it between distinct phases of multi-step work.
+## User overrides — respect them
 
-**Note for subagents using the release binary:** the `ai` subcommand
-was added 2026-05-15 and may not be present in
-`/Users/tretyakov_dv/Projects/sandbox/di.draw/release/didraw-*` until
-the binary is rebuilt. If `ai` is missing from the help text, fall back
-to `bun /Users/tretyakov_dv/Projects/sandbox/di.draw/packages/didraw-cli/src/index.ts ai ...`
-to invoke the source CLI directly.
-
-## PatchOp format
-
-- `{op:"add", target:"node"|"edge"|"group", value:{...}}` — create
-- `{op:"update", target, id, set:{...}}` — partial; `style`/`meta` deep-merge
-- `{op:"delete", target, id}` — remove
-
-## Node fields
-
-- `id` (UUID), `kind` (`rect|ellipse|diamond|sticky|text|freeform`), `x`, `y`
-- Optional: `w`, `h` (default 120×60; sticky 200×120), `label`, `style{color,fill,stroke,fontSize}`, `meta`
-
-## Edge fields
-
-- `id`, `from`, `to` — endpoints are `{kind:"node",id}` (anchored) or `{kind:"point",x,y}` (free in space)
-- Optional: `label`, `style{color,dashed,arrow:"none"|"to"|"both"}`
-
-## Coordinates
-
-Pixels, centre of canvas ≈ (0,0). Spacing 150–250px between nodes feels natural.
-
-## If you reply to a pending user prompt
-
-Always call `didraw prompts resolve <id> --response "what you did"` after — so the marker on the canvas updates and the user sees your response.
+If the user moved or recoloured a node (you'll see `pinned:true` or `styleOwnedBy:"user"` in context), your next `define` upserts must NOT clobber those fields. Backend enforces this — but be aware semantically.
