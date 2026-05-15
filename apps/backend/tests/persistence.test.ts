@@ -25,6 +25,13 @@ describe("FilePersistence", () => {
     const loaded = await p.load("t");
     expect(loaded?.canvas.nodes[0].id).toBe("n1");
     expect(loaded?.version).toBe(3);
+
+    const { readFileSync } = await import("node:fs");
+    const raw = readFileSync(`${dir}/t.json`, "utf8");
+    const env = JSON.parse(raw);
+    expect(env.schemaVersion).toBe(1);
+    expect(env.roomId).toBe("t");
+    expect(env.elementCount).toBe(1);
   });
 
   test("opLog and dirty NOT persisted", async () => {
@@ -63,5 +70,30 @@ describe("FilePersistence", () => {
     await p.flushAll();
     const loaded = await p.load("urgent");
     expect(loaded?.canvas.nodes[0].id).toBe("n1");
+  });
+
+  test("flushIfDirty writes pending state synchronously, clears timer", async () => {
+    const p = new FilePersistence(dir);
+    const s = makeRoomState();
+    s.canvas.nodes.push({ id: "x", kind: "rect", x: 0, y: 0 });
+    s.version = 1;
+
+    p.scheduleSave("r", s);
+    // before flush — pending exists; file may not yet be on disk
+    await p.flushIfDirty("r");
+
+    const { readFileSync } = await import("node:fs");
+    const raw = readFileSync(`${dir}/r.json`, "utf8");
+    const env = JSON.parse(raw);
+    expect(env.version).toBe(1);
+    expect(env.canvas.nodes[0].id).toBe("x");
+  });
+
+  test("flushIfDirty is idempotent — safe to call without pending", async () => {
+    const p = new FilePersistence(dir);
+    await p.flushIfDirty("nonexistent");
+    // No exception, no file created
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(`${dir}/nonexistent.json`)).toBe(false);
   });
 });

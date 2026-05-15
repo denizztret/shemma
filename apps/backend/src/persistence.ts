@@ -1,7 +1,7 @@
 import { promises as fs, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { config } from "./config";
-import { emptyCanvasState } from "./rooms";
+import { parseFull, serialize } from "./envelope";
 import type { RoomStore } from "./rooms";
 import type { RoomId, RoomState } from "./types";
 
@@ -15,15 +15,23 @@ export class FilePersistence implements RoomStore {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   }
 
+  pathFor(id: RoomId): string {
+    // Defense-in-depth: Task 3 adds upstream regex validation in rooms.ts;
+    // this throws if id contains path-traversal sequences in case it slips through.
+    if (id.includes("/") || id.includes("\\") || id.includes("..") || id === "") {
+      throw new Error(`invalid room id: ${JSON.stringify(id)}`);
+    }
+    return join(this.dir, `${id}.json`);
+  }
+
   async load(id: RoomId): Promise<RoomState | null> {
-    const path = join(this.dir, `${sanitize(id)}.json`);
     try {
-      const raw = await fs.readFile(path, "utf8");
-      const j = JSON.parse(raw) as Partial<RoomState>;
+      const raw = await fs.readFile(this.pathFor(id), "utf8");
+      const env = parseFull(raw);
       return {
-        canvas: j.canvas ?? emptyCanvasState(),
-        prompts: j.prompts ?? [],
-        version: j.version ?? 0,
+        canvas: env.canvas,
+        prompts: env.prompts,
+        version: env.version,
         opLog: [],
         dirty: false,
         lastTouched: Date.now(),
@@ -35,13 +43,7 @@ export class FilePersistence implements RoomStore {
   }
 
   async save(id: RoomId, s: RoomState): Promise<void> {
-    const path = join(this.dir, `${sanitize(id)}.json`);
-    const dump = JSON.stringify(
-      { canvas: s.canvas, prompts: s.prompts, version: s.version },
-      null,
-      2,
-    );
-    await fs.writeFile(path, dump, "utf8");
+    await fs.writeFile(this.pathFor(id), serialize(id, s), "utf8");
   }
 
   /**
@@ -60,6 +62,14 @@ export class FilePersistence implements RoomStore {
     this.pending.set(id, { timer, state: s });
   }
 
+  async flushIfDirty(id: RoomId): Promise<void> {
+    const pending = this.pending.get(id);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pending.delete(id);
+    await this.save(id, pending.state);
+  }
+
   /**
    * Immediately write all pending saves and clear the queue.
    * Called on graceful shutdown (SIGTERM/SIGINT) so debounce-300ms losses don't happen.
@@ -76,8 +86,4 @@ export class FilePersistence implements RoomStore {
       ),
     );
   }
-}
-
-function sanitize(id: string): string {
-  return id.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
