@@ -41,16 +41,46 @@ export function makeApp(opts: AppOpts = {}) {
   return { app, rooms, bus, persistence };
 }
 
+// Resolve the frontend-dist directory.
+// In bun --compile mode, import.meta.dir is /$bunfs/root — not a real path.
+// We resolve relative to the binary itself (process.execPath) so that the
+// frontend-dist/ folder can live alongside the binary in a release package.
+// In dev mode (bun run src/index.ts), fall back to the source-relative path.
+function frontendDistDir(): string {
+  const bunfsPrefix = "/$bunfs";
+  if (import.meta.dir.startsWith(bunfsPrefix)) {
+    // Compiled executable: serve from <binary-dir>/frontend-dist/
+    const { dirname } = require("node:path") as typeof import("node:path");
+    return `${dirname(process.execPath)}/frontend-dist`;
+  }
+  // Dev mode: serve from apps/backend/src/frontend-dist/
+  return `${import.meta.dir}/frontend-dist`;
+}
+
+const FRONTEND_DIST = frontendDistDir();
+
 export async function startServer(opts: AppOpts = {}) {
   const { app, bus, persistence } = makeApp(opts);
   const server = Bun.serve({
     port: opts.port ?? config.port,
-    fetch: (req, srv) => {
+    fetch: async (req, srv) => {
       const url = new URL(req.url);
       if (url.pathname === "/ws") {
         const room = url.searchParams.get("room") ?? DEFAULT_ROOM;
         if (srv.upgrade(req, { data: { room } })) return;
         return new Response("upgrade failed", { status: 500 });
+      }
+      // release/debug mode: serve frontend from frontend-dist/ (disk or binary-adjacent)
+      if (
+        (config.profile === "release" || config.profile === "debug") &&
+        !url.pathname.startsWith("/api") &&
+        url.pathname !== "/ws"
+      ) {
+        const assetPath = url.pathname === "/" ? "/index.html" : url.pathname;
+        const file = Bun.file(`${FRONTEND_DIST}${assetPath}`);
+        if (await file.exists()) {
+          return new Response(file);
+        }
       }
       return app.fetch(req);
     },

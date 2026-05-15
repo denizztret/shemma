@@ -6,3 +6,6 @@ dist/
 # tsc emit artifacts (frontend may invoke `tsc` for type-check)
 apps/frontend/src/**/*.js
 *.tsbuildinfo
+
+release/
+apps/backend/src/frontend-dist/

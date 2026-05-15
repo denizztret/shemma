@@ -1,23 +1,20 @@
-import { createRequire } from "node:module";
 import type { Edge, Node } from "./types";
 
-const cjsRequire = createRequire(import.meta.url);
+// Import elk-worker as an embedded asset — works in both dev mode (file path)
+// and bun build --compile mode ($bunfs/... internal path).
+import elkWorkerPath from "../node_modules/elkjs/lib/elk-worker.min.js" with {
+  type: "file",
+};
 
-// elkjs requires CJS-style require and a workerUrl for Bun/Node compatibility.
-// web-worker package handles the actual worker thread creation.
+// Use require() so bun statically bundles elkjs into the compiled binary.
+// createRequire(import.meta.url) is NOT used because import.meta.url resolves
+// to /$bunfs/root/... inside a compiled executable, breaking module lookup.
 // biome-ignore lint/suspicious/noExplicitAny: third-party CJS module
-const ELK = cjsRequire("elkjs/lib/main.js") as any;
+const ELK = require("elkjs/lib/main.js") as any;
 
-// Path to the elkjs GWT worker bundle.
-// import.meta.url is apps/backend/src/layout-engine.ts → ../node_modules is apps/backend/node_modules
-const ELK_WORKER_URL = new URL(
-  "../node_modules/elkjs/lib/elk-worker.min.js",
-  import.meta.url,
-).pathname;
-
-// Singleton ELK instance — worker thread is reused across calls
+// Singleton ELK instance — worker path comes from embedded asset
 // biome-ignore lint/suspicious/noExplicitAny: third-party CJS module instance
-const elk = new ELK({ workerUrl: ELK_WORKER_URL }) as any;
+const elk = new ELK({ workerUrl: elkWorkerPath }) as any;
 
 type NodeEndpoint = { kind: "node"; id: string };
 
