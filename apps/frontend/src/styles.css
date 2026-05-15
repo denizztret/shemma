@@ -5,9 +5,6 @@ body,
   padding: 0;
   height: 100%;
 }
-.app-root {
-  height: 100%;
-}
 body {
   font-family: system-ui, sans-serif;
 }
