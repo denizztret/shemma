@@ -8,6 +8,7 @@ import { healthRoutes } from "./routes/health";
 import { layoutRoutes } from "./routes/layout";
 import { patchRoutes } from "./routes/patch";
 import { promptRoutes } from "./routes/prompts";
+import { roomsRoutes } from "./routes/rooms";
 import { stateRoutes } from "./routes/state";
 import { versionRoutes } from "./routes/version";
 import { DEFAULT_ROOM, type RoomState } from "./types";
@@ -42,6 +43,7 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", layoutRoutes(rooms, bus, { onDirty }));
   app.route("/", promptRoutes(rooms, bus, { onDirty }));
   app.route("/", aiRoutes(rooms, bus));
+  app.route("/", roomsRoutes(rooms, storageDir));
   return { app, rooms, bus, persistence };
 }
 
