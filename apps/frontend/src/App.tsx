@@ -47,6 +47,34 @@ export function App({ room }: { room: string }) {
     if (selection.length === 0) setPromptOpen(false);
   }, [selection.length]);
 
+  // Periodic re-fetch of AI activity. WS broadcasts the same updates, but a
+  // tab that was backgrounded long enough to drop its WebSocket can otherwise
+  // sit on stale "AI is busy" or miss a freshly-started run. Cheap (one
+  // request every 10s) and also re-fires immediately when the tab regains
+  // focus.
+  useEffect(() => {
+    let cancelled = false;
+    const refetch = async () => {
+      try {
+        const r = await fetch(
+          `/api/ai/activity?room=${encodeURIComponent(room)}`,
+        );
+        const j = await r.json();
+        if (!cancelled) setAiActivity(j.activity ?? null);
+      } catch {
+        // network blip; the next tick will retry.
+      }
+    };
+    const id = setInterval(refetch, 10_000);
+    const onFocus = () => refetch();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [room]);
+
   useEffect(() => {
     if (!editor) return;
     let active = true;
