@@ -6,7 +6,7 @@
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "dev": "concurrently 'DIDRAW_PROFILE=dev bun run --cwd apps/backend dev' 'bun run --cwd apps/frontend dev'",
-    "test": "bun --cwd apps/backend test && bun --cwd packages/didraw-client test && bun --cwd packages/didraw-cli test",
+    "test": "bun --cwd packages/didraw-domain test && bun --cwd apps/backend test && bun --cwd packages/didraw-client test && bun --cwd packages/didraw-cli test",
     "lint": "biome check ."
   },
   "devDependencies": {

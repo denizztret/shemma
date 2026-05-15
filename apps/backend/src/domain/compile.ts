@@ -47,6 +47,12 @@ function nextEdgeId(c: WorkingCanvas): string {
   return `shape:c_${n}`;
 }
 
+function nextNoteName(wc: WorkingCanvas): string {
+  let n = wc.nodes.size;
+  while (wc.nodes.has(nameToShapeId(`note-${n}`))) n++;
+  return `note-${n}`;
+}
+
 export function compile(
   actions: DomainAction[],
   canvas: CanvasState,
@@ -165,7 +171,7 @@ export function compile(
         break;
       }
       case "note": {
-        const name = a.name ?? `note-${wc.nodes.size}`;
+        const name = a.name ?? nextNoteName(wc);
         const sid = nameToShapeId(name);
         const preset = rolePreset("note");
         const node: Node = {

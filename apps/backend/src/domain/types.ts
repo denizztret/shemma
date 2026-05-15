@@ -1,9 +1,10 @@
-import type { ConnectionKind, LayoutMode, Role } from "@didraw/domain";
+import type { ConnectionKind, LayoutMode, Role, Spacing } from "@didraw/domain";
 import type { PatchOp } from "../types";
 
 export type ElementId = string;
-export type Spacing = "compact" | "normal" | "loose";
 
+// LayoutHint.scope ("all" | "affected" | ElementId) is wider than LayoutAction.scope ("all" | ElementId):
+// "affected" is the orchestrator default (layout only what changed in this batch), never emitted by AI.
 export type LayoutHint = {
   mode?: LayoutMode;
   scope?: "all" | "affected" | ElementId;

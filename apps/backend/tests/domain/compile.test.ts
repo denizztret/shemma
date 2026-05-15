@@ -120,4 +120,38 @@ describe("compile", () => {
     expect(fromG1.set.children).toEqual([]);
     expect(toG2.set.children).toEqual(["shape:e_x"]);
   });
+
+  test("note with `about` — creates sticky node + dep edge bound to target", () => {
+    const initial = emptyCanvasState();
+    initial.nodes.push({ id: "shape:e_auth", kind: "rect", x: 0, y: 0, label: "auth", meta: { name: "auth", role: "service" } });
+    const r = compile([{ kind: "note", about: "auth", text: "todo: rotate keys", name: "note-rotate" }], initial);
+    const nodeAdds = r.ops.filter((o) => "target" in o && o.target === "node" && o.op === "add");
+    expect(nodeAdds).toHaveLength(1);
+    const sticky = (nodeAdds[0] as { value: { kind: string; label: string; meta?: Record<string, unknown> } }).value;
+    expect(sticky.kind).toBe("sticky");
+    expect(sticky.label).toBe("todo: rotate keys");
+    expect(sticky.meta?.role).toBe("note");
+    const edgeAdds = r.ops.filter((o) => "target" in o && o.target === "edge" && o.op === "add");
+    expect(edgeAdds).toHaveLength(1);
+    const edge = (edgeAdds[0] as { value: { meta?: Record<string, unknown>; style?: { dashed?: boolean } } }).value;
+    expect(edge.style?.dashed).toBe(true);
+    expect((edge.meta as { kind?: string }).kind).toBe("dep");
+  });
+
+  test("note without explicit name — picks a non-colliding auto name", () => {
+    const initial = emptyCanvasState();
+    initial.nodes.push({ id: "shape:e_note-0", kind: "sticky", x: 0, y: 0, label: "preexisting", meta: { name: "note-0", role: "note" } });
+    const r = compile([{ kind: "note", text: "second note" }], initial);
+    const adds = r.ops.filter((o) => o.op === "add" && "target" in o && o.target === "node");
+    expect(adds).toHaveLength(1);
+    const v = (adds[0] as { value: { id: string; meta?: Record<string, unknown> } }).value;
+    expect(v.id).not.toBe("shape:e_note-0");
+    expect(v.id.startsWith("shape:e_note-")).toBe(true);
+  });
+
+  test("layout action — produces no ops, elementIds[i] === undefined", () => {
+    const r = compile([{ kind: "layout", mode: "layered-lr" }], emptyCanvasState());
+    expect(r.ops).toHaveLength(0);
+    expect(r.elementIds).toEqual([undefined]);
+  });
 });
