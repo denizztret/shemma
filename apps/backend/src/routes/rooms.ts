@@ -117,6 +117,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
     }
 
     await rename(srcPath, dstPath);
+    await rooms.evict(id);   // clear stale in-memory state from prior GETs
     return c.json({ ok: true });
   });
 

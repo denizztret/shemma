@@ -203,6 +203,46 @@ describe("POST /api/rooms/:id/restore", () => {
     );
     expect(res.status).toBe(409);
   });
+
+  test("restore evicts stale in-memory state from prior GETs", async () => {
+    seedRoom("loaded", (s) => {
+      s.canvas.nodes.push({ id: "preserved", kind: "rect", x: 0, y: 0 });
+      s.version = 9;
+    });
+    const { app } = makeApp({ storageDir: dir });
+
+    // Archive — file moves to .archive, memory cleared.
+    await app.fetch(new Request("http://localhost/api/rooms/loaded/archive", {
+      method: "POST",
+    }));
+
+    // GET while archived — loads empty state into memory map (file not found).
+    const statePreRestore = await app.fetch(
+      new Request("http://localhost/api/state?room=loaded"),
+    );
+    const body1 = (await statePreRestore.json()) as { canvas: { nodes: unknown[] } };
+    expect(body1.canvas.nodes).toEqual([]);
+
+    // Restore — file comes back to disk.
+    const restRes = await app.fetch(
+      new Request("http://localhost/api/rooms/loaded/restore", {
+        method: "POST",
+      }),
+    );
+    expect(restRes.status).toBe(200);
+
+    // GET after restore — must see the original "preserved" node, NOT the
+    // empty in-memory state loaded between archive and restore.
+    const statePostRestore = await app.fetch(
+      new Request("http://localhost/api/state?room=loaded"),
+    );
+    const body2 = (await statePostRestore.json()) as {
+      canvas: { nodes: Array<{ id: string }> };
+      version: number;
+    };
+    expect(body2.canvas.nodes[0]?.id).toBe("preserved");
+    expect(body2.version).toBe(9);
+  });
 });
 
 describe("POST /api/rooms/:id/export", () => {
