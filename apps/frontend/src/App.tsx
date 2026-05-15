@@ -331,7 +331,16 @@ export function App({ room }: { room: string }) {
         </>
       }
     >
-      <Tldraw onMount={setEditor} components={buildTldrawComponents(room)} />
+      <Tldraw
+        onMount={(ed) => {
+          setEditor(ed);
+          if (import.meta.env.DEV) {
+            // biome-ignore lint/suspicious/noExplicitAny: dev-only debug hook
+            (window as any).__editor = ed;
+          }
+        }}
+        components={buildTldrawComponents(room)}
+      />
     </AppChrome>
   );
 }
