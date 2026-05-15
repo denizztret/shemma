@@ -29,13 +29,14 @@ echo '{"ops":[...],"source":"ai","clientOpId":"<uuid>"}' | didraw patch --stdin
 didraw clear --confirm                          # wipe canvas (destructive!)
 ```
 
-Bulk-import a graph (Mermaid):
+Bulk-import a graph (Mermaid) — **browser-only per ADR-0001**:
+The `@tldraw/mermaid` package requires a live tldraw `Editor` (mounted in DOM with full SVG layout); it cannot run server-side. To import Mermaid, open the canvas in a browser tab (`didraw open <room>`) and run in the page's DevTools console:
+```js
+await window.didrawImportMermaid(`graph LR
+  app --> server --> db`)
 ```
-didraw import mermaid --stdin <<EOF
-graph LR
-  app --> server --> db
-EOF
-```
+Returns `{ok, version}` and broadcasts to all tabs. There is no `didraw import mermaid` CLI command.
+
 Auto-layout new nodes:
 ```
 didraw layout --algorithm elk-layered
