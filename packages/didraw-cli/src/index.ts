@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { ensure, start, status, stop } from "./daemon";
+import { exportRoom, list, open, rmRoom } from "./lifecycle";
 import { applyProfile, parseProfile } from "./profile";
 
 const argv = process.argv.slice(2);
@@ -28,6 +29,29 @@ async function main() {
     if (sub === "ensure" || sub === "--ensure") return ensure(profile);
     usage();
     process.exit(1);
+  }
+  if (cmd === "open") {
+    if (!argv[1]) {
+      usage();
+      process.exit(1);
+    }
+    return open(argv[1], profile);
+  }
+  if (cmd === "list") return list();
+  if (cmd === "export") {
+    const [, room, flag, to] = argv;
+    if (!room || flag !== "--to" || !to) {
+      usage();
+      process.exit(1);
+    }
+    return exportRoom(room, to);
+  }
+  if (cmd === "rm") {
+    if (!argv[1]) {
+      usage();
+      process.exit(1);
+    }
+    return rmRoom(argv[1]);
   }
   usage();
   process.exit(cmd ? 1 : 0);
