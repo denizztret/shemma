@@ -1,7 +1,8 @@
-# di.draw Phase 2.1 — Agent v2: typed actions + cheap context + semantic styling
+# di.draw Phase 2.1 — Agent v2: domain-first model + layout intelligence
 
-> **Status:** design (v1, 2026-05-15) — pending user review
+> **Status:** design (v2, 2026-05-15) — pending user review
 > **Predecessor:** `2026-05-14-di-draw-design.md` v3.7 (Phase 1 MVP, shipped)
+> **Revision history:** v1 (2026-05-15) — palette-based actions; v2 (2026-05-15) — pivot to domain-first после user feedback («это диаграммы архитектурных решений, не картинки; роли важнее цвета»).
 > **Roadmap context:** this spec is one of six Phase 2 sub-projects (см. §0)
 
 ## 0. Phase 2 roadmap (контекст)
@@ -10,10 +11,11 @@ MVP закрыт (52 коммита на main, single-binary verified). Двиг
 
 | ID | Sub-project | Зависимости | Spec status |
 |----|---|---|---|
-| **2.1** | Agent v2 — typed actions, cheap context, semantic palette | — | **этот документ** |
+| **2.0** | Persistence hardening — session-isolation fix, rooms discovery, skill startup awareness | — | [`2026-05-15-di-draw-phase2-0-persistence-design.md`](./2026-05-15-di-draw-phase2-0-persistence-design.md) (small, ~5-7 tasks) |
+| **2.1** | Agent v2 — domain-first model (roles, not geometry), layout intelligence, single API surface | requires 2.0 | **этот документ** |
 | **2.2** | Roundtrip & sync hardening (user-arrows, ack/replay, no-silent-fail) | parallel/after 2.1 | TBD |
-| **2.3** | MCP adapter v1 (read + actions, не сырой patch) | requires 2.1 | TBD (replaces `docs/handoff/mcp-launch-brief.md`) |
-| **2.4** | Import — SVG / Miro / image → shapes + auto-layout | requires 2.1 | TBD |
+| **2.3** | MCP adapter v1 (read + domain actions, не сырой patch) | requires 2.1 | TBD (replaces `docs/handoff/mcp-launch-brief.md`) |
+| **2.4** | Import — SVG / Miro / image → roles + auto-layout | requires 2.1 | TBD |
 | **2.5** | Export — Mermaid / SVG / PNG / Miro / Figma | requires 2.4 | TBD |
 | **2.6** | Multi-LLM hardening (Claude / Codex / corporate) | docs-only, after 2.1-2.3 | TBD |
 | 3.x | Drawing-as-first-class, multi-user shared rooms | deferred | — |
@@ -24,188 +26,197 @@ MVP закрыт (52 коммита на main, single-binary verified). Двиг
 
 ## 1. Цели и неуспех
 
-### 1.1. Что должно стать правдой после Phase 2.1
+### 1.1. Главная идея
 
-1. **Агент пишет в canvas через typed actions** (`didraw act create-node …`, `didraw act --stdin <batch>`, `mcp.canvas_apply_action(...)`), а не через сырой PatchOp.
-2. **Семантика стилей**: команда «зелёный блок» детерминированно даёт идиоматичный tldraw-вид (зелёная обводка + полупрозрачная зелёная заливка) — без догадок и LLM-творчества.
-3. **Token-cheap context**: AI читает компактное view-aware представление вместо full snapshot. Для 100-нодового canvas — целевой объём ≤ 8KB JSON (≤ ~2K tokens) против 20-40KB сегодня.
-4. **PatchOp остаётся** как low-level транспорт для фронтенда (user-edits → backend) и backwards compatibility — нет breaking changes для существующих сессий и CLI consumers.
-5. **Деterministic ids + idempotency** — agent может безопасно повторить действие после network glitch без дубликатов.
+di.draw — инструмент для **визуализации архитектурных решений из диалога**. Пользователь объясняет архитектуру (или AI её предлагает), а canvas строит **красивую и понятную** диаграмму — такую, что не хочется перерисовывать вручную.
 
-### 1.2. Что НЕ цель этой фазы
+Это значит: агент работает в терминах **домена** (есть сервис auth, есть база users-db, между ними поток данных), а не геометрии (rect at 200,300 with width 120). Визуальное оформление — детерминированная функция от роли и связи, не свободное творчество LLM.
 
-- Custom geo-shape с раздельными stroke/fill colors. Workaround через `accent: soft-fill` принимается как достаточный для v1 (см. §6 L1).
-- Push-канал user-prompts → AI (B2 из known-issues). Уходит в 2.3 (MCP subscribe).
-- User-нарисованные arrows → backend (B1). Уходит в 2.2.
-- Inline regex-DSL «покрась/удали» без LLM (L3). Решение остаётся на уровне skill/CLI: либо AI знает action API, либо watcher переводит NL → action. Backend regex-парсер — отдельный backlog.
-- Import / Export — отдельные фазы.
-- Drawing (freeform), multi-user, push-MCP — Phase 3.
+### 1.2. Что должно стать правдой после Phase 2.1
+
+1. **Domain model — primary API.** Агент пишет в canvas через `define-element`/`connect`/`group`/`note`/`layout`/`delete` с обязательными `role` и `name`, а не через сырой PatchOp. Single API surface — нет двойного пути «action + patch для агента».
+2. **Visual is a function of role.** Каждой роли (`actor`, `service`, `datastore`, `queue`, `network`, `boundary`, `external`, `note`) соответствует tldraw-preset (shape kind + base style). Frontend `role-render.ts` — single source of truth. AI не выбирает цвет/форму, не сочиняет.
+3. **Layout intelligence — first-class.** При каждом mutation auto-recompute layout: новые элементы становятся в место, существующие не дёргаются без нужды. Group-aware (`network`/`boundary` держат детей внутри), direction-aware (`LR`/`TB` per-group или globally). После любого batch агенту не нужно отдельной командой «layout».
+4. **Token-cheap context.** AI читает компактное view-aware представление вместо full snapshot. Целевой объём для 100-элементного canvas ≤ 8KB JSON (≤ ~2K tokens) против 20-40KB сегодня. Context включает domain summary (counts by role, top-level groups, recent ops в человекочитаемом виде), не raw nodes/edges.
+5. **PatchOp остаётся** как **транспорт между frontend и backend** для пользовательских правок (user перетащил, перекрасил вручную). Агент через patch не ходит — этот путь невидим для AI. Это снимает риск двух конкурирующих агентских API.
+6. **Idempotency & deterministic ids.** Безопасный retry. Имена элементов читабельны (`auth`, `users-db`), не uuid.
+
+### 1.3. Что НЕ цель этой фазы
+
+- **Цветовая палитра / `tone`/`accent` vocabulary.** Точечная покраска — native tldraw. Если пользователь хочет другой цвет — он перекрасит сам, и frontend zachoваnет override (см. §6).
+- **Custom tldraw shapes под каждую роль.** В v1 — geo + style preset. Custom shape utils — backlog (если по результатам daily-use какая-то роль реально требует уникального визуала, например цилиндр для datastore).
+- **Push-канал user-prompts → AI (B2).** Phase 2.3 (MCP subscribe).
+- **User-нарисованные arrows → backend (B1).** Phase 2.2.
+- **Inline NL→action парсер на backend (L3).** Парсинг диалога — задача LLM-агента, не backend. Backend принимает только typed actions.
+- **Import / Export.** Phase 2.4 / 2.5.
+- **Drawing (freeform), multi-user.** Phase 3.
 
 ---
 
 ## 2. Архитектура
 
-Новые модули в монорепо:
+Новые модули. Минимум слоёв: один domain API (`/api/domain`), один renderer (`role-render.ts`), один layout engine.
 
 ```
 apps/backend/src/
-  actions/
-    types.ts          # AgentAction discriminated union + type guards
-    validate.ts       # synchronous validators
-    compile.ts        # AgentAction[] → PatchOp[]   (pure, deterministic)
-    ids.ts            # allocateId(state, kind): collision-free
-  agent/
-    context.ts        # buildAgentContext(state, viewport, selection, since)
-    palette.ts        # semantic styling: Tone+Accent+Emphasis → tldraw {color, fill, dash, size}
-    viewport.ts       # last-known viewport per room (set by frontend on idle)
+  domain/
+    types.ts          # Element, Connection, GroupRef + roles + 6 action kinds
+    validate.ts       # synchronous validators (refs exist, role known, name unique)
+    compile.ts        # DomainAction[] → PatchOp[]   (pure, deterministic)
+    layout.ts         # layout(state, hints): group-aware ELK call + jitter-min
+    context.ts        # buildAgentContext — domain-summary view, не raw shapes
+    viewport.ts       # last-known viewport per room (ephemeral)
   routes/
-    action.ts         # POST /api/action          (batch, dry-run)
-    agent-context.ts  # GET  /api/agent/context   (cheap read)
-    viewport.ts       # POST /api/viewport        (frontend reports current view)
+    domain.ts         # POST /api/domain   (batch actions, dry-run, auto-layout)
+    context.ts        # GET  /api/agent/context
+    viewport.ts       # POST /api/viewport
 
 packages/didraw-client/src/
-  actions.ts          # CanvasClient.act* methods + applyActions(batch, {dryRun})
-                      # also: getAgentContext(opts)
+  domain.ts           # CanvasClient.define / connect / group / note / layout / delete
 
 packages/didraw-cli/src/
-  actions.ts          # `didraw act <kind> [args]`, `didraw act --stdin`
-                      # `didraw context [--viewport …] [--since N]`
+  domain.ts           # `didraw define <role> <name> [--label] [--in group] [--meta k=v]`
+                      # `didraw connect <from> <to> [--label] [--kind data|sync|async]`
+                      # `didraw group <ids> --as boundary|network --name X`
+                      # `didraw note --about <id> --text "..."`
+                      # `didraw layout [--direction LR|TB] [--scope <groupId>]`
+                      # `didraw delete <id|ids>`
+                      # `didraw context [--since N]`
+                      # `didraw apply --stdin`  (batch JSON)
 
 apps/frontend/src/
-  canvas/palette.ts   # mirror of backend palette (no RTT for client-side use)
-  transport/viewport.ts  # ~1Hz debounced POST when camera moves
+  canvas/
+    role-render.ts    # SINGLE source of truth: role → tldraw shape preset
+    role-render.test.ts
+  transport/
+    viewport.ts       # debounced camera→backend report
 ```
 
-§3.8 контракт из spec v3.7 сохраняется — никаких `position:fixed` overlay'ев, никаких новых UI элементов в этой фазе (proposal preview — sticky-note + meta, не custom shape).
+Sigh-of-relief property: **PatchOp полностью пропадает из агентского API**. CLI/MCP/skill cheat-sheet не упоминают patch. `/api/patch` остаётся как **transport** между frontend и backend (когда пользователь руками что-то правит) — он невидим для AI, никаких двух API surface'ов.
 
-### 2.1. Почему action layer поверх patch, а не вместо
+### 2.1. Почему domain layer заменяет patch для агента, а не «поверх»
 
-PatchOp — это «assembly» canvas state: маленькие, totally-ordered, easily-mergeable операции. Frontend генерирует их естественно через `to-patch.ts`, и существующие 52 теста, opLog, WS-pipeline, echo-guard — на них держатся.
+PatchOp — естественный output frontend'а: tldraw editor выдаёт diff, мы шлём `/api/patch`. Этот путь не трогаем — backwards-compatible.
 
-AgentAction — это «source code»: высокоуровневые намерения с семантикой. Они **компилируются** в PatchOp на backend перед applyPatch. Два API surface'а оправданы потому что:
+DomainAction — это **единственный** канал для агента. На backend он компилируется в PatchOp (через `domain/compile.ts`) и проходит через тот же `applyPatch`/opLog/bus pipeline. Никакого второго storage, никакого parallel state — компилятор и есть «склейка» между уровнями.
 
-- Frontend user-edits → patch (естественный output из tldraw diff)
-- Agent writes → action (намерения, валидируются, проверяются на семантику)
+Когда через 6 месяцев захочется поменять визуальное оформление роли (например, `datastore` начнёт рендериться cylinder shape) — меняется **только** `role-render.ts`. Когда захочется добавить роль (`cache`, `lambda`, `cdn`) — добавляется одна строка в типах + одна в renderer. Никакого rolling-refactor по слоям, потому что слой один.
 
-Альтернатива «всё через actions, patch недоступен» (Подход B в брейне) — слишком инвазивна для 0.0.1 → 0.1.0 итерации. Альтернатива «actions только на CLI» (Подход C) — лишает MCP сервер общей логики и плодит дублирование.
+### 2.2. UX контракт для пользовательских правок
+
+Если пользователь руками меняет визуал (перекрасил блок, передвинул) — frontend пишет PatchOp в backend как раньше. Backend хранит этот override в `style`/`meta` элемента. При следующем agent action на тот же элемент `compile.ts` уважает override: если у элемента уже есть user-set цвет — base preset из роли не перезаписывается. Это **single rule** — «user override beats role default» — и она живёт в одном месте (compile.ts merge logic).
 
 ---
 
-## 3. AgentAction v1 schema
+## 3. Domain model + actions v1
 
-Discriminated union, 8 видов. Все поля строго типизированы; неизвестные поля — validation error, не silent-drop.
-
-### 3.1. Common envelope
+### 3.1. Roles (extensible enum)
 
 ```ts
-type ActionRequest = {
-  actions: AgentAction[];
-  clientOpId?: string;     // idempotency key, like /api/patch
-  source?: "ai" | "user";  // default "ai"
-  dryRun?: boolean;        // если true: validate+compile, не пишем canvas/opLog/bus
+type Role =
+  | "actor"      // user, customer, external person
+  | "service"    // app, API, microservice, function, daemon
+  | "datastore"  // DB, S3, cache, file storage
+  | "queue"      // message broker, event bus, stream
+  | "network"    // VPC, subnet, perimeter — *container* role (groups children)
+  | "boundary"   // logical/team/security boundary — also container role
+  | "external"   // 3rd-party service, external API
+  | "note";      // annotation, ADR pointer, decision record
+```
+
+Roles делятся на **leaf** (`actor`/`service`/`datastore`/`queue`/`external`/`note`) и **container** (`network`/`boundary`). Container элементы имеют `children: ElementId[]` — это и есть «положи auth внутрь vpc-prod».
+
+Расширение: добавить роль = одна строка в `Role` union + одна в `role-render.ts`. Никаких rolling-changes по другим файлам.
+
+### 3.2. Connection kinds
+
+```ts
+type ConnectionKind = "sync" | "async" | "data" | "dep";
+// sync : solid arrow, default label "calls"          (HTTP, RPC)
+// async: dashed arrow, default label "publishes"     (queue, event)
+// data : solid arrow, double-headed allowed          (DB read/write)
+// dep  : dotted arrow, no label                       ("depends on")
+```
+
+Визуальное оформление коннектов — детерминированно по `kind`. Агент выбирает **kind** (передаёт замысел), а не dashed/solid (геометрию).
+
+### 3.3. Common envelope
+
+```ts
+type DomainRequest = {
+  actions: DomainAction[];
+  clientOpId?: string;        // idempotency key
+  dryRun?: boolean;
+  layoutHint?: LayoutHint | null;    // null = skip auto-layout; default = {direction:"LR", scope:"affected"}
 };
 
-type ActionResponse =
+type LayoutHint = {
+  direction?: "LR" | "TB";
+  scope?: "all" | "affected" | ElementId;   // group-id для re-layout одного контейнера
+};
+
+type DomainResponse =
   | { ok: true; version: number; idempotent?: true;
-      results: ActionResult[]; }
+      results: ActionResult[];
+      layout?: { applied: boolean; affected: ElementId[] }; }
   | { ok: false; errors: ActionError[]; };
 
 type ActionResult = {
   actionIndex: number;
-  generatedIds?: string[];      // newly allocated ids (для create-node/edge)
-  generatedOps?: PatchOp[];     // присутствует только при dryRun=true
+  elementId?: ElementId;     // для define/group — итоговый id
+  generatedOps?: PatchOp[];  // только при dryRun
 };
 
 type ActionError = {
   actionIndex: number;
   field?: string;
-  code: "unknown-ref" | "invalid-shape" | "unknown-action" | "compile-error" | "id-conflict";
+  code: "unknown-role" | "unknown-ref" | "name-conflict" | "role-conflict"
+      | "cascade-confirm-required" | "invalid-shape" | "compile-error";
   message: string;
+  affected?: ElementId[];   // для cascade-confirm-required
 };
 ```
 
-Транзакционность: либо все action в batch применяются, либо ни один. При validation/compile error — 422, ничего не пишем.
+Транзакционность: либо все actions + auto-layout — либо ни одной правки.
 
-### 3.2. The 8 actions
+### 3.4. The 6 actions
 
-| Kind | Args | Compiles to | Notes |
-|---|---|---|---|
-| `create-node` | `{kind: NodeKind; label?: string; at?: {x,y}; size?: {w,h}; style?: Semantic; meta?: object}` | `add node` | `id` allocated by backend. Если `at` не задан — `{x:0, y:0}` (пользователь/agent позже сделает `layout`). |
-| `create-edge` | `{from: Endpoint; to: Endpoint; label?: string; style?: EdgeSemantic; meta?: object}` где `Endpoint = string \| {x,y}` (id или free-point) | `add edge` | id allocated. |
-| `restyle` | `{id: string; style: Semantic\|EdgeSemantic}` | `update node\|edge` | Deep-merge как сейчас. |
-| `move` | `{id: string; to?: {x,y}; by?: {dx,dy}}` | `update node` | Ровно одно из `to`/`by`. |
-| `relabel` | `{id: string; label: string}` | `update node\|edge` | `label: ""` — снимает label. |
-| `delete` | `{id: string} \| {ids: string[]}` | `delete` per id | Cascade — как сейчас (edges → groups). |
-| `layout` | `{algorithm?: "elk-layered"\|"dagre"; nodeIds?: string[]}` | wrap `/api/layout` | Не идёт через compile — отдельная ветка с тем же error-shape. |
-| `propose` | `{title: string; rationale?: string; actions: AgentAction[]}` | one `add node` (proposal sticky) | Body actions embedded in `meta.proposal`. См. §3.5. |
+| Kind | Args | Notes |
+|---|---|---|
+| `define` | `{role: Role; name: string; label?: string; in?: ElementId; meta?: object}` | `name` — human-readable id (`auth`, `users-db`). Unique per room. `in` — container parent. `label` default = `name`. **Upsert semantics**: повторный define c тем же `name` обновляет `label`/`meta`/`in`; попытка сменить `role` → 422 `role-conflict`. |
+| `connect` | `{from: ElementId; to: ElementId; kind?: ConnectionKind; label?: string; meta?: object}` | Default `kind` = `sync`. `from`/`to` ссылаются на existing element by name. |
+| `group` | `{ids: ElementId[]; as: "network"\|"boundary"; name: string; label?: string}` | Объединить existing элементы в container. Children получают `parent`. |
+| `note` | `{about?: ElementId; text: string; name?: string}` | Annotation. Если `about` задан — нота визуально привязана (arrow binding). |
+| `layout` | `{direction?: "LR"\|"TB"; scope?: "all"\|ElementId}` | Explicit re-layout. Обычно не нужен — auto-layout по умолчанию. |
+| `delete` | `{id: ElementId} \| {ids: ElementId[]} \| {ids:[...], cascade: true}` | Cascade-aware: удаление container с детьми требует `cascade:true`, иначе 422 `cascade-confirm-required` с `affected` (для UX «вы уверены?»). |
 
-### 3.3. Semantic style vocabulary
+**Что исчезло из v1:**
+- `restyle` — точечная покраска native в tldraw, агент не нужен.
+- `move` — auto-layout делает позиционирование. Для редкого pin-position — через `meta.position`.
+- `relabel` — слилось с `define` (upsert).
+- `propose` — preview ушёл в `dryRun:true` (то же намерение, без отдельного state).
 
-```ts
-type Tone =
-  | "black" | "grey"
-  | "red" | "orange" | "yellow"
-  | "green" | "blue" | "violet" | "light-violet";
+6 actions, каждая — domain-level intent.
 
-type Accent = "outline" | "soft-fill" | "solid-fill";
-//                ↓             ↓              ↓
-// tldraw fill: "none"        "semi"         "solid"
+### 3.5. Element identity
 
-type Emphasis = "normal" | "strong" | "dashed";
-//                 ↓          ↓            ↓
-// tldraw size:   "m"        "l"          "m"
-// tldraw dash:  "solid"   "solid"      "dashed"
+Имена — readable, выбираются агентом или пользователем (`auth`, `users-db`, `vpc-prod`). Backend хранит mapping `name → internal shape id`. `name` per room unique; underscores/hyphens разрешены, spaces — нет.
 
-type Size = "s" | "m" | "l";   // node w/h preset; ignored if size {w,h} provided
+Tldraw shape id формируется как `shape:e_${slug(name)}` (детерминированно — переоткрытие сессии воссоздаст те же ids, не сломаются stored references).
 
-type Semantic = {
-  tone?: Tone;
-  accent?: Accent;       // default "outline" для geo, "solid-fill" для note
-  emphasis?: Emphasis;   // default "normal"
-  size?: Size;           // node only
-};
+### 3.6. Auto-layout policy
 
-type EdgeSemantic = {
-  tone?: Tone;
-  arrow?: "none" | "to" | "both";   // default "to"
-  emphasis?: Emphasis;              // dashed → tldraw dashed
-};
-```
+После каждого batch с `define`/`connect`/`group` actions backend запускает layout (если `layoutHint !== null`):
 
-Mapping table (full, `palette.ts`):
+- **Default algorithm:** ELK layered.
+- **Default direction:** `LR` (или `layoutHint.direction`).
+- **Scope `"affected"`** (default): новые элементы и их прямые соседи (по edges) перепозиционируются; не затронутые — keep position (jitter-min).
+- **Scope `"all"`:** full recompute (по запросу).
+- **Container-aware:** ELK работает рекурсивно — сначала layout внутри каждого `network`/`boundary` container, потом top-level.
+- **Pin support:** если у элемента есть `meta.position: {x,y}` — ELK получает его как fixed constraint, не двигает.
+- **Performance:** server-side через `apps/backend/src/layout-engine.ts` с новым `affectedIds` параметром. Цель для 100 элементов — <100ms.
 
-| Semantic input | → tldraw output |
-|---|---|
-| `{tone:"green", accent:"soft-fill"}` | `{color:"green", fill:"semi"}` |
-| `{tone:"green", accent:"solid-fill"}` | `{color:"green", fill:"solid"}` |
-| `{tone:"red", accent:"outline", emphasis:"strong"}` | `{color:"red", fill:"none", size:"l"}` |
-| `{tone:"black", emphasis:"dashed"}` (edge) | `{color:"black", dash:"dashed"}` |
-
-«Зелёная обводка + светло-зелёная заливка» из user prompt 2026-05-15 — это `{tone:"green", accent:"soft-fill"}`. Один цвет, два визуальных слоя — это всё, что позволяет tldraw geo без custom shape (см. L1).
-
-### 3.4. ID allocation
-
-`allocateId(state, kind)`:
-- node: `n_${nextN}` где `nextN` = `max(N | exists id matching /^n_(\d+)$/) + 1`, иначе `1`.
-- edge: `e_${nextN}` (по тому же правилу для `/^e_(\d+)$/`).
-- group: `g_${nextN}`.
-- proposal: `p_${nextN}`.
-
-Если в state есть id, не matching pattern (например импортированный UUID) — он не влияет на счётчик; новые ids не коллизируют с ним, потому что pattern строго `prefix_digits`. Deterministic, читабельно, no UUIDs.
-
-При concurrent action batches — backend serializes по room mutex (room state однопоточный сейчас, см. `apps/backend/src/rooms.ts`).
-
-### 3.5. Proposal flow (v1: schema-only)
-
-`propose` action создаёт sticky-note (kind:"sticky") с:
-- `label`: `"📋 " + title` (видно на canvas)
-- `meta.proposal`: `{title, rationale?, actions: [...]}` — embedded payload
-- `style: {tone: "yellow", accent: "soft-fill"}`
-- `at`: рядом с upper-left актуального viewport, или (0,0) если viewport unknown
-
-UI кнопок Apply/Reject — НЕ в этой фазе. Backend exposes proposal через `/api/agent/context.proposals[]` (отдельный массив, не смешиваем с recent ops). Пользователь видит карточку, может вручную сказать AI «apply proposal p_3» — AI читает `meta.proposal.actions` и шлёт через `/api/action`.
-
-UI integration с PromptDrawer — backlog Phase 2.5.
+Опционально: `layoutHint: null` — отключает auto-layout (агент батчует много define'ов и хочет один финальный explicit `layout` action в конце).
 
 ---
 
@@ -219,37 +230,60 @@ GET /api/agent/context?room=…&since=N&viewport=x,y,w,h&select=id1,id2
 
 `viewport` опционален. Если отсутствует — backend использует last-known viewport из `/api/viewport` (см. §4.4); если и того нет — возвращает summary без `inView`.
 
-### 4.2. Response shape
+### 4.2. Response shape — domain-summary view
+
+Контекст возвращает **доменное** представление, не сырые tldraw shapes:
 
 ```ts
 {
   version: number,
   viewport: {x, y, w, h} | null,
-  inView: NodeCompact[],         // intersect with viewport, ≤30 items
-  selection: NodeCompact[],      // always full, no truncation
-  edges: EdgeCompact[],          // edges where any endpoint in (inView ∪ selection)
-  recentOps: OpSummary[],        // since opLog, max 20 entries
-  offscreenSummary: {
+  summary: {
     total: number,
-    byKind: Record<NodeKind, number>,
-    boundingBox: {minX, minY, maxX, maxY}
-  } | null,
-  proposals: ProposalSummary[],  // open proposals (kind:"sticky" with meta.proposal)
-  truncated?: true               // если opLog window истёк для since
+    byRole: Record<Role, number>,        // {"service": 5, "datastore": 2, ...}
+    topLevelGroups: GroupRef[]           // network/boundary containers
+  },
+  inView: ElementCompact[],              // visible in viewport, ≤30 items
+  selection: ElementCompact[],           // always full
+  connections: ConnectionCompact[],      // connections where any endpoint in inView∪selection
+  recentOps: OpSummary[],                // last 20 domain-level ops (human-readable)
+  offscreenSummary: { byRole: Record<Role, number> } | null,
+  truncated?: true
 }
+
+type ElementCompact = {
+  id: string;            // name, e.g. "auth"
+  role: Role;
+  label?: string;
+  parent?: string;       // container name
+  position?: {x,y};      // только если pinned via meta.position
+};
+
+type ConnectionCompact = {
+  from: string; to: string;
+  kind: ConnectionKind;
+  label?: string;
+};
+
+type OpSummary = {
+  version: number;
+  source: "ai" | "user";
+  summary: string;       // "defined service 'auth' in vpc-prod"  /  "connected auth → users-db (data)"
+};
 ```
 
-`NodeCompact`: `{id, kind, x, y, w?, h?, label?, style?}` — то же, что текущий compact, но без meta (для AI редко нужно). `EdgeCompact`: аналогично.
+Геометрия (x/y/w/h tldraw shapes) — **не передаётся агенту** по умолчанию. Если ему нужно — есть низкоуровневый fallback `didraw state --compact` (остаётся для отладки, не рекомендуется).
 
-`OpSummary`: `{version, source, kindSummary}` где `kindSummary` — sparse строка типа `"add 2 nodes, delete e_3"` (не raw ops — это уже компиляция диффа в человекочитаемое; экономит токены и достаточно для context).
+Это даёт **3× экономию токенов** относительно v1-черновика этой спеки и **6-10×** относительно текущего MVP — потому что нет coords, нет width/height, нет tldraw-style props.
 
 ### 4.3. Token-budget regression test
 
 Тест в `apps/backend/tests/agent-context.test.ts`:
-- Seed: 100 nodes (10×10 grid, 200px gap), 50 edges, 5 of them in 800×600 viewport.
-- Assert: `JSON.stringify(response).length < 8000`.
+- Seed: 100 elements (mix: 60 services, 20 datastores, 10 queues, 5 actors, 3 networks, 2 boundaries), 80 connections, ~30 видны в viewport 800×600.
+- Assert: `JSON.stringify(response).length < 8000` для default response.
+- Assert: response не содержит keys `x`/`y`/`w`/`h`/`fill`/`color` (защита от регрессии — геометрия не должна утекать в context).
 
-Цель: для 100-нодового canvas context умещается в ~2K токенов.
+Цель: для 100-элементного canvas context умещается в ~2K токенов.
 
 ### 4.4. Viewport reporting
 
@@ -259,63 +293,97 @@ Frontend на `editor.store.listen` слушает camera change, debounce 500ms
 
 ## 5. Data flow (end-to-end)
 
-### 5.1. AI пишет action
+### 5.1. Пример: «диалог → диаграмма»
 
+Пользователь в чате: «У нас в архитектуре есть сервис auth, который ходит в users-db. Оба внутри vpc-prod».
+
+AI отправляет один batch:
+```json
+{
+  "actions": [
+    {"kind": "define", "role": "service",   "name": "auth"},
+    {"kind": "define", "role": "datastore", "name": "users-db"},
+    {"kind": "connect", "from": "auth", "to": "users-db", "kind": "data"},
+    {"kind": "group", "ids": ["auth", "users-db"], "as": "network", "name": "vpc-prod"}
+  ],
+  "clientOpId": "sess1-batch-1",
+  "layoutHint": {"direction": "LR"}
+}
 ```
-AI (Claude/Codex)                  CLI                backend                 WS subscribers
-  │ "create green rect"             │                    │                          │
-  │  didraw act create-node \       │                    │                          │
-  │     --kind rect --label "API" \ │                    │                          │
-  │     --style "tone=green,        │                    │                          │
-  │              accent=soft-fill"  │                    │                          │
-  ├────────────────────────────────►│                    │                          │
-  │                                 │ POST /api/action   │                          │
-  │                                 ├───────────────────►│                          │
-  │                                 │                    │ validate                 │
-  │                                 │                    │ allocateId → "n_5"       │
-  │                                 │                    │ palette: tone+accent     │
-  │                                 │                    │   → {color:green,        │
-  │                                 │                    │      fill:semi}          │
-  │                                 │                    │ compile → [PatchOp]      │
-  │                                 │                    │ applyPatch (existing)    │
-  │                                 │                    │ opLog/version/bus.pub ──►│
-  │                                 │                    │                          │
-  │                                 │◄──── {ok, version, │                          │
-  │◄────────────────────────────────│      generatedIds:["n_5"]}                    │
+
+Backend:
+1. Validate: все роли известны, ссылки `auth`/`users-db` есть после define-шагов в этом же batch (compile.ts знает intra-batch refs).
+2. Compile → PatchOp[]: 2 add-node, 1 add-edge, 1 add-group + установка `parent` у двух нод.
+3. ELK layered layout (direction LR, scope `affected`) → расставляет auth слева, users-db справа, обе внутри vpc-prod boundary rect. Backend пишет `update node {x,y}` ops для каждой ноды.
+4. applyPatch как одна транзакция; opLog получает один entry с source `ai`.
+5. WS bus.publish → frontend рендерит через `role-render.ts`: auth = rounded rect grey, users-db = rounded rect blue-ish, arrow с label «reads/writes», vpc-prod = dashed boundary rect охватывающий обе.
+
+AI получает:
+```json
+{"ok": true, "version": 4, "results": [
+  {"actionIndex": 0, "elementId": "auth"},
+  {"actionIndex": 1, "elementId": "users-db"},
+  {"actionIndex": 2, "elementId": "c_1"},
+  {"actionIndex": 3, "elementId": "vpc-prod"}
+], "layout": {"applied": true, "affected": ["auth", "users-db", "vpc-prod"]}}
 ```
+
+Никаких координат, никаких цветов в API. Всё detrministic из ролей.
 
 ### 5.2. AI читает context
 
 ```
 AI                                 CLI                  backend
- │  didraw context --since 42      │                      │
+ │  didraw context --since 4       │                      │
  ├────────────────────────────────►│                      │
  │                                 │ GET /api/agent/      │
- │                                 │   context?since=42   │
+ │                                 │   context?since=4    │
  │                                 ├─────────────────────►│
- │                                 │                      │ derive inView from
- │                                 │                      │   last-known viewport
- │                                 │                      │ filter opLog since=42
- │                                 │                      │ build response
- │                                 │◄──── {version,       │
- │◄────────────────────────────────│      inView:[…],     │
+ │                                 │                      │ build domain summary
+ │                                 │                      │ opLog since=4 → human ops
+ │                                 │◄──── {version:5,     │
+ │◄────────────────────────────────│      summary:{       │
+ │                                 │        total:3,      │
+ │                                 │        byRole:{      │
+ │                                 │          service:1,  │
+ │                                 │          datastore:1,│
+ │                                 │          network:1}},│
  │                                 │      recentOps:[…]}  │
 ```
 
-### 5.3. Frontend user-edits (без изменений)
+### 5.3. User-edit (без изменений)
 
-User двигает shape → `to-patch.ts` строит PatchOp → POST `/api/patch` → existing pipeline. Action API не задействован.
+User перетаскивает auth: `to-patch.ts` → POST `/api/patch` → existing pipeline. Backend записывает новую позицию в `meta.position` (pinned). При следующем agent batch с layoutHint=`affected` — auth не двигается, остальные перестраиваются вокруг.
 
 ---
 
-## 6. Backwards compatibility
+## 6. Backwards compatibility & user-override discipline
 
-- `/api/patch` — без изменений. Сохраняется в client/CLI.
-- `/api/state` — без изменений (но deprecated в skill cheat-sheet в пользу `/api/agent/context`).
-- `/api/layout` — без изменений. `act layout` — алиас.
-- CLI `didraw patch --stdin`, `didraw state`, `didraw layout`, `didraw clear` — без изменений (помечается «low-level»).
-- 52 существующих теста должны остаться зелёными после реализации.
-- MCP brief (`docs/handoff/mcp-launch-brief.md`) — устаревает. После 2.1 пишется новая v2 спека MCP, которая использует `/api/action` + `/api/agent/context` вместо `applyPatch`/`getState`.
+### 6.1. Что остаётся как было
+
+- `/api/patch` — без изменений (frontend user-edits transport).
+- `/api/state` — без изменений (debug fallback; **removed from skill cheat-sheet**).
+- `/api/layout` — без изменений (internal; `layout` action wraps it).
+- CLI `didraw patch --stdin`, `didraw state`, `didraw layout`, `didraw clear` — остаются как low-level (debug/manual). В skill — не упоминаются.
+- 52 существующих теста должны остаться зелёными.
+
+### 6.2. User overrides discipline
+
+Когда пользователь руками меняет цвет/размер shape, frontend пишет `update node` с новым стилем → backend сохраняет в `style`/`meta`. При следующем agent action к этому элементу:
+
+- **Renderer side:** `role-render.ts` берёт base preset из роли, потом merge'ит сверху `style` override из state. Override wins.
+- **Compile side:** `domain/compile.ts` не перезаписывает `style`/`meta.position` при upsert define — только label/role-default.
+- **Reset path:** агент может явно очистить override через action с `meta: {reset: true}` (low-priority feature; backlog если кейс возникнет).
+
+Это **один rule «user beats role»** в одном месте. Не plumbing через слои.
+
+### 6.3. MCP brief deprecation
+
+`docs/handoff/mcp-launch-brief.md` (Phase 2.1 / Task 41) — устаревает. После этой фазы пишется v2 спека MCP в Phase 2.3 со следующими tools:
+- `canvas_get_context` (replaces `canvas_get_state`)
+- `canvas_apply_domain` (replaces `canvas_apply_patch`)
+- `canvas_get_version`
+- `canvas_subscribe` (push, requires HTTP/SSE transport — отдельная задача)
 
 ---
 
@@ -323,54 +391,59 @@ User двигает shape → `to-patch.ts` строит PatchOp → POST `/api/
 
 | Case | Поведение |
 |---|---|
-| Action references unknown id (`move {id:"n_99"}`, n_99 not exists) | 422, `{code:"unknown-ref", actionIndex, field:"id"}` |
-| `create-edge` endpoint id not exists | 422, `{code:"unknown-ref"}` |
-| `move` with both `to` и `by` | 422, `{code:"invalid-shape"}` |
+| `define {role: "frobnicator"}` (unknown role) | 422, `{code:"unknown-role", actionIndex, field:"role"}` |
+| `connect {from: "doesnt-exist"}` | 422, `{code:"unknown-ref", field:"from"}` |
+| `define {name: "auth", role: "service"}` где уже есть `auth: datastore` | 422, `{code:"role-conflict"}` |
+| `define {name: "auth"}` upsert (same role) | 200, label/meta updated, no new id |
 | Unknown action kind | 422, `{code:"unknown-action"}` |
 | Compile crash (bug) | 500, `{code:"compile-error"}`, лог с request-id |
-| ID collision (concurrent batches) | retry once internally; если повтор — 500 `{code:"id-conflict"}` |
-| `clientOpId` повтор | 200 `{ok:true, idempotent:true, version, results: cached}` |
-| `dryRun:true` | 200 `{ok:true, version: r.version, results: [{actionIndex, generatedOps, generatedIds}]}`, без mutations |
-| Validation OK но `palette` не знает `tone` (нерасширенный список) | 422 `{code:"invalid-shape", field:"style.tone"}` — лучше отказ, чем silent-drop |
+| `delete` non-empty container without `cascade:true` | 422, `{code:"cascade-confirm-required", affected:[child-ids…]}` |
+| `clientOpId` повтор | 200, `{ok:true, idempotent:true, version, results: cached}` |
+| `dryRun:true` | 200, `results[i].generatedOps` populated, опускает opLog/canvas/bus |
+| Layout engine failure (ELK timeout) | warning в response (`layout.applied:false`), но actions всё равно применяются — диаграмма выживает |
 
 ---
 
 ## 8. CLI surface
 
+Domain-уровневые команды, по одной на action kind:
+
 ```
-didraw act create-node --kind rect --label "API" [--at x,y] [--size WxH] [--style "tone=green,accent=soft-fill"]
-didraw act create-edge --from n_1 --to n_2 [--label "uses"] [--style "tone=grey,arrow=to,emphasis=dashed"]
-didraw act restyle --id n_3 --style "tone=red,accent=outline,emphasis=strong"
-didraw act move --id n_3 --to 100,200          # или --by 50,0
-didraw act relabel --id n_3 --label "new label"
-didraw act delete --ids n_3,n_4
-didraw act layout [--algorithm elk-layered] [--node-ids n_1,n_2]
-didraw act propose --title "Add gateway" --stdin   # actions read from stdin JSON
+didraw define <role> <name> [--label "..."] [--in <container-name>] [--meta key=val,...]
+didraw connect <from> <to> [--kind sync|async|data|dep] [--label "..."]
+didraw group <id1>,<id2>,... --as network|boundary --name <name> [--label "..."]
+didraw note --text "..." [--about <element-name>]
+didraw layout [--direction LR|TB] [--scope all|<group-name>]
+didraw delete <id1>,<id2>,... [--cascade]
 
 # Batch:
-didraw act --stdin                # JSON: {actions:[…], clientOpId?, dryRun?}
+didraw apply --stdin              # JSON: {actions:[...], clientOpId?, dryRun?, layoutHint?}
 
 # Read:
-didraw context [--since N] [--viewport x,y,w,h]
+didraw context [--since N]        # domain-summary view, не raw shapes
 ```
 
-Output (как и сейчас) — single-line JSON. Exit code 0 если `ok:true`, 1 иначе.
+Все commands — single-line JSON output. Exit 0 если `ok:true`, 1 иначе. На stderr — human-readable error (для grep'а в логах).
 
-CLI integration tests в `packages/didraw-cli/tests/actions.test.ts`.
+Convenience: батч-патч можно построить пошагово (`didraw define …; didraw connect …`) — каждый вызов = отдельный POST. Для атомарности и одной auto-layout — `didraw apply --stdin` с batch JSON.
+
+CLI integration tests — `packages/didraw-cli/tests/domain.test.ts`.
 
 ---
 
 ## 9. Skill cheat-sheet rewrite
 
-`.claude/skills/draw/SKILL.md` переписывается:
+`.claude/skills/draw/SKILL.md` существенно меняется:
 
-- Injected state меняется с `didraw state --compact` на `didraw context --since 0` (для первого запуска — full; AI отслеживает `version` сам).
-- Примеры: все «как создать ноду» — через `didraw act create-node`, не через `echo '{ops:…}' | didraw patch --stdin`.
-- Раздел «PatchOp format» помечается «low-level — only if action API doesn't fit».
-- Добавляется «Semantic style palette» с таблицей tone+accent.
-- Добавляется «Proposal pattern» — когда AI хочет сделать большое изменение, шлёт `propose` и ждёт пока пользователь подтвердит.
+- **Injected state** — заменяется с `didraw state --compact` на `didraw context` (domain summary).
+- **Injected rooms list** — `didraw rooms list` (см. Phase 2.0) показывает существующие схемы из текущей папки, AI может предложить продолжить старую.
+- **Примеры** — все идут через `didraw define / connect / group / note`. Раздел «PatchOp format» **удаляется** из skill (агент его не видит).
+- **Roles table** — список ролей с примерами, что чем называется (`auth, payment, kafka-events, postgres-users, vpc-prod, dmz`).
+- **Connection kinds table** — sync/async/data/dep с пояснениями («kind: data для DB read/write»).
+- **Pattern: «эскиз → разработка»** — рекомендуется идти `dryRun:true` для крупных предложений, показать пользователю текстом, потом без dryRun.
+- **Style note** — «цвета и геометрию пользователь правит сам в canvas; если он перекрасил — твои next actions это уважают».
 
-Версия skill бампается, изменение коммитится в одном PR с backend/CLI.
+Версия skill бампается. Изменения коммитятся в одном PR с backend/CLI.
 
 ---
 
@@ -378,89 +451,97 @@ CLI integration tests в `packages/didraw-cli/tests/actions.test.ts`.
 
 ### 10.1. Unit tests
 
-- `actions/validate.ts` — каждый action kind: happy path + каждая категория errors.
-- `actions/compile.ts` — каждый action → expected PatchOp[]. Deterministic.
-- `actions/ids.ts` — collision на empty/sparse/full state.
-- `agent/palette.ts` — full table coverage tone × accent × emphasis. Геометрические проверки size→{w,h}.
-- `agent/context.ts` — pure function, snapshot tests for representative canvas shapes (empty, single-node, 10 nodes inViewport, 100 nodes with viewport).
+- `domain/validate.ts` — каждый action kind: happy path + каждая категория errors (§7 table).
+- `domain/compile.ts` — каждое action kind → expected PatchOp[]. Intra-batch refs (define + connect ссылающийся на just-defined name). Deterministic.
+- `domain/layout.ts` — pin support (`meta.position` honored), `affected` vs `all` scope, container-recursive layout.
+- `domain/context.ts` — pure function, snapshot tests на репрезентативных canvas: empty / 1 service / mini-architecture (auth+db+vpc) / 100 elements.
 
 ### 10.2. Backend integration tests
 
-- POST `/api/action` happy paths: каждый action kind.
-- Transactional rollback: invalid action in batch → ничего не записано.
-- Idempotency replay.
-- dryRun не пишет в opLog.
-- `/api/agent/context` token-budget regression (см. §4.3).
+- POST `/api/domain` happy paths: каждый action kind.
+- Domain example end-to-end (§5.1): «диалог → 4 actions → готовая диаграмма» — assert на финальный state.
+- Transactional rollback: invalid action в batch → ничего не записано.
+- Idempotency replay (clientOpId).
+- dryRun не пишет в opLog/canvas/bus.
+- `/api/agent/context` token-budget regression (§4.3) + assert «никакой геометрии не утекает».
+- Cascade-confirm flow.
 
-### 10.3. CLI integration
+### 10.3. Frontend tests
 
-- `didraw act create-node` → side-effect через `didraw state --compact`.
-- `didraw act --stdin batch` — applies all-or-nothing.
-- `didraw act create-node --style "tone=foo"` → exit 1 с readable error.
+- `role-render.ts` — table-driven: каждая роль → ожидаемый tldraw shape preset (snapshot test).
+- User-override discipline (§6.2): seed состояния с user-painted-red service, эмит agent action update label на тот же элемент → проверить что color остаётся red.
 
-### 10.4. Frontend smoke (Playwright)
+### 10.4. CLI integration
 
-- Открыть `:8787`, через CLI создать node с `tone=green,accent=soft-fill`, проверить что в DOM рендерится geo shape с правильными атрибутами (color="green", fill="semi").
+- `didraw define service auth` → check via `didraw context`.
+- `didraw apply --stdin batch` — applies all-or-nothing.
+- `didraw define foo bar` (unknown role) → exit 1 с readable error.
 
-### 10.5. Performance
+### 10.5. Playwright smoke
 
-- Backend perf-тест: один POST `/api/action` с batch из 1000 `create-node` — server-side handling должно укладываться < 500ms (включая validate+compile+applyPatch, без сетевого latency).
-- Context perf: 1000-node canvas, `/api/agent/context` (viewport 800×600 захватывает ~30 нод) — server-side < 50ms, JSON < 12KB.
+- Открыть `:8787`. Через CLI создать mini-architecture (4 actions из §5.1). Проверить в DOM: 2 ноды внутри dashed boundary, arrow между ними с label, ELK расставил по горизонтали (auth.x < users-db.x).
+
+### 10.6. Performance
+
+- Backend perf: один `/api/domain` с batch из 100 `define` + 80 `connect` + auto-layout — < 500ms server-side.
+- Context perf: 1000-element canvas, `/api/agent/context` — < 50ms, JSON < 12KB.
 
 ---
 
 ## 11. Implementation plan outline
 
-(Детальный plan генерируется через `writing-plans` skill в отдельном документе после approval этой spec'и.)
+(Детальный план — через `writing-plans` skill после approval спеки.)
 
-Высокоуровнево:
+Высокоуровнево (10-12 tasks):
 
-1. Types + Validator + Compiler skeleton (TDD).
-2. Palette module (TDD, table-driven tests).
-3. ID allocator (TDD).
-4. `/api/action` route + integration tests (transactionality, idempotency, dryRun).
-5. `agent/context.ts` + viewport store + `/api/agent/context` route.
-6. `/api/viewport` route + frontend debounced reporter.
-7. CanvasClient extensions (`actions.ts`).
-8. CLI commands (`didraw act`, `didraw context`).
-9. Skill cheat-sheet rewrite + verification.
-10. Token-budget + perf regression tests.
-11. CHANGELOG + bump version (0.0.1 → 0.1.0 предлагается).
-12. Single-binary rebuild + smoke verify.
-
-Каждый шаг — отдельная Task в плане. Estimated total: ~10-14 tasks vs Phase 1's 47, потому что backend foundation готов.
+1. `domain/types.ts` + Role/ConnectionKind enums + name-validation (TDD).
+2. `domain/validate.ts` — all error categories (TDD per §7).
+3. `domain/compile.ts` — пер-action compile + intra-batch refs (TDD per §5.1 + edge cases).
+4. `domain/layout.ts` — group-aware ELK call + pin support + `affected` scope (TDD).
+5. `domain/context.ts` — domain summary builder + no-geometry guard (TDD).
+6. `routes/domain.ts` + `/api/viewport` + `/api/agent/context` — integration tests (transactionality, idempotency, dryRun).
+7. Frontend `role-render.ts` — table per role, user-override discipline (TDD).
+8. Frontend viewport reporter (`transport/viewport.ts`).
+9. `@didraw/client` extensions (`domain.ts`) — typed methods.
+10. CLI: `didraw define / connect / group / note / layout / delete / apply / context`.
+11. Skill cheat-sheet rewrite + Playwright smoke (§5.1 e2e).
+12. CHANGELOG + bump (0.0.1 → 0.2.0; 0.1.0 зарезервируем за Phase 2.0 persistence). Rebuild binary, smoke.
 
 ---
 
-## 12. Open questions / decisions left to writing-plans
+## 12. Open questions / decisions deferred
 
-1. **Tone palette size** — 9 цветов покрывают tldraw enum, оставляем все. Если urgent — можно ужать в Phase 2.5 на основе usage telemetry.
-2. **Action `propose` UI integration** — оставлено как sticky+meta в 2.1; PromptDrawer integration с кнопками Apply/Reject — отдельная задача (потенциально Phase 2.5).
-3. **Custom geo shape для раздельного stroke/fill** (закрытие L1 полностью) — пока workaround. Тригер для full fix — пользовательский запрос «нужны разные цвета обводки и заливки» (помечаем в backlog).
-4. **`didraw context` vs `didraw state --compact` в skill injected block** — оба остаются, но дефолт меняется на `context`. CLI fallback (`state --compact`) — для случаев когда нужен полный снимок.
-5. **MCP v2** — после Phase 2.1 нужно обновить `mcp-launch-brief.md` (или создать v2). Tools: `canvas_get_context` (replaces `canvas_get_state`), `canvas_apply_action` (replaces `canvas_apply_patch`), `canvas_get_version`. Это уже Phase 2.3 scope, здесь только helper-note.
+1. **Role set расширение.** v1: 8 ролей. Если daily-use покажет нужду в `cache`, `cdn`, `lambda`, `gateway` — добавим (one line in enum + one row in renderer). Не блокер.
+2. **Custom tldraw shapes per role.** v1 — geo presets. Custom shape utils (например cylinder для datastore) — отдельная задача в backlog, тригер: visual feedback что geo недостаточно.
+3. **MCP v2 spec** — Phase 2.3. Замещает `docs/handoff/mcp-launch-brief.md`.
+4. **User-override reset** — нет в v1. Добавим если кейс реально возникнет (`meta.reset:true`-action).
+5. **Layout algorithm selection** — v1 hard-coded ELK layered. Dagre/force-directed alternatives — backlog.
+6. **Phase 2.0 persistence** — отдельная спека (см. §0 roadmap), включает: P3 fix (CLAUDE_SESSION_ID → storage path), `didraw rooms list/use/archive`, skill startup awareness про прошлые схемы в текущей папке. Делается **перед** этой фазой.
 
 ---
 
 ## 13. Self-check — spec coverage map
 
-| Goal (§1.1) | Где покрыто |
+| Goal (§1.2) | Где покрыто |
 |---|---|
-| typed actions | §3, §8 |
-| semantic styling | §3.3, §6 L1 mitigation |
-| token-cheap context | §4, §10.5 |
-| PatchOp coexists | §2.1, §6 |
-| deterministic ids + idempotency | §3.1, §3.4, §7 |
+| Domain model — primary API | §2, §3 |
+| Visual is function of role | §2 (`role-render.ts`), §3.1, §10.3 |
+| Layout intelligence first-class | §3.6, §10.1 #4 |
+| Token-cheap context | §4 (domain summary, no geometry), §10.6 |
+| PatchOp transport-only | §2.1, §6.1 |
+| Idempotency, readable ids | §3.4 (upsert), §3.5 (name = id) |
 
-| User wish (msg 2026-05-15) | Где покрыто / в каком sub-project |
+| User wish (msg 2026-05-15, повторное) | Где покрыто |
 |---|---|
-| canvas ↔ LLM через chat | §3, §4 (this spec) |
-| fast & cheap on tokens | §4, §10.5 (this spec) |
-| local-first, no SaaS | preserved — backend changes are additive |
-| agent uses all tools (green outline + green soft fill) | §3.3 mapping table (this spec) |
-| import Miro / SVG / image with layout | Phase 2.4 (separate spec) |
-| export to Miro / Figma | Phase 2.5 (separate spec) |
-| multi-LLM | Phase 2.6 (separate spec) |
-| drawing not just schemas | Phase 3.x (deferred) |
-| multi-user | Phase 3.x (deferred) |
-| roundtrip correctness | Phase 2.2 (separate spec) |
+| диалог → красивая архитектурная диаграмма | §3, §5.1 (worked example) |
+| правильные роли (сеть, сервис, БД, юзер) | §3.1 Role enum |
+| красивая компоновка, не хочется перерисовывать | §3.6 ELK + container-aware |
+| user правит цвет точечно сам (не агент) | §6.2 user-override discipline |
+| persistence предыдущих схем в папке | Phase 2.0 (отдельная спека, см. §0) |
+| меньше технического долга, не плодить слои | §2.1 (single domain API), §6.1 (patch остаётся как transport, не parallel agent path) |
+| dialog-driven (диалог транслируется на доску) | §5.1 пример batch'а из реплики |
+| import (Miro/SVG/image) | Phase 2.4 |
+| export (Miro/Figma) | Phase 2.5 |
+| multi-LLM | Phase 2.6 |
+| drawing-not-only-schemas | Phase 3.x |
+| multi-user | Phase 3.x |
