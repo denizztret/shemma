@@ -1,3 +1,4 @@
+import type { FilePersistence } from "./persistence";
 import type { CanvasState, RoomId, RoomState } from "./types";
 import { DEFAULT_ROOM } from "./types";
 
@@ -46,7 +47,23 @@ export function makeRoomState(): RoomState {
 export class Rooms {
   private map = new Map<RoomId, RoomState>();
   private loading = new Map<RoomId, Promise<RoomState>>();
+  private persistence?: FilePersistence;
+
   constructor(private store: RoomStore) {}
+
+  setPersistence(p: FilePersistence) {
+    this.persistence = p;
+  }
+
+  async flushIfDirty(id: RoomId): Promise<void> {
+    if (!this.persistence) return;
+    await this.persistence.flushIfDirty(id);
+  }
+
+  async evict(id: RoomId): Promise<void> {
+    await this.flushIfDirty(id);
+    this.map.delete(id);
+  }
 
   async get(id: RoomId): Promise<RoomState> {
     const existing = this.map.get(id);

@@ -29,6 +29,7 @@ export function makeApp(opts: AppOpts = {}) {
       }
     : { load: async () => null, save: async () => {} };
   const rooms = new Rooms(store);
+  if (persistence) rooms.setPersistence(persistence);
   const bus = new WsHub();
   const app = new Hono();
   const onDirty = persistence
