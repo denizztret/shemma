@@ -1,7 +1,9 @@
 import type { TLShapeId, TLShapePartial } from "tldraw";
+import type { Role } from "@didraw/domain";
 import { toEdgeShapeId, toShapeId } from "./id-prefix";
 import { kindToTldraw } from "./kinds";
 import { labelToRichText } from "./richtext";
+import { PORT_SIDE_TO_ANCHOR, rolePropsForNode } from "./role-render";
 
 // TLBindingCreate is not re-exported from tldraw root; mirror the minimal shape we use.
 export type ArrowBindingCreate = {
@@ -41,9 +43,20 @@ export function nodeToShape(n: {
   h?: number;
   label?: string;
   style?: NodeStyle;
+  meta?: Record<string, unknown>;
 }): TLShapePartial {
   const tld = kindToTldraw(n.kind);
   const styleProps = styleToProps(n.style);
+  const role = n.meta?.role as Role | undefined;
+  if (role) {
+    const presetProps = rolePropsForNode({
+      role,
+      styleOwnedBy: n.meta?.styleOwnedBy as string | undefined,
+      userStyle: { color: styleProps.color, fill: styleProps.fill },
+    });
+    if (presetProps.color !== undefined) styleProps.color = presetProps.color;
+    if (presetProps.fill !== undefined) styleProps.fill = presetProps.fill;
+  }
 
   if (tld === "note") {
     return {
@@ -97,12 +110,27 @@ type Endpoint =
   | { kind: "node"; id: string }
   | { kind: "point"; x: number; y: number };
 
+type EdgeRouting = {
+  ports?: {
+    from?: { side: "N" | "S" | "E" | "W" };
+    to?: { side: "N" | "S" | "E" | "W" };
+  };
+  bendPoints?: Array<{ x: number; y: number }>;
+};
+
+function anchorFor(
+  side: "N" | "S" | "E" | "W" | undefined,
+): { x: number; y: number } {
+  return side ? PORT_SIDE_TO_ANCHOR[side] : { x: 0.5, y: 0.5 };
+}
+
 type EdgeValue = {
   id: string;
   from: Endpoint;
   to: Endpoint;
   label?: string;
   style?: { color?: string; dashed?: boolean; arrow?: "none" | "to" | "both" };
+  meta?: Record<string, unknown>;
 };
 
 // Maps Edge → tldraw arrow shape + bindings for any node-anchored endpoints.
@@ -137,6 +165,10 @@ export function edgeToShape(e: EdgeValue): {
     meta: { canvasId: e.id, kind: "edge" },
   };
 
+  const routing = e.meta?.routing as EdgeRouting | undefined;
+  const fromAnchor = anchorFor(routing?.ports?.from?.side);
+  const toAnchor = anchorFor(routing?.ports?.to?.side);
+
   const bindings: ArrowBindingCreate[] = [];
   if (e.from.kind === "node") {
     bindings.push({
@@ -145,8 +177,8 @@ export function edgeToShape(e: EdgeValue): {
       toId: toShapeId(e.from.id),
       props: {
         terminal: "start",
-        normalizedAnchor: { x: 0.5, y: 0.5 },
-        isPrecise: false,
+        normalizedAnchor: fromAnchor,
+        isPrecise: routing?.ports?.from?.side !== undefined,
         isExact: false,
       },
     });
@@ -158,8 +190,8 @@ export function edgeToShape(e: EdgeValue): {
       toId: toShapeId(e.to.id),
       props: {
         terminal: "end",
-        normalizedAnchor: { x: 0.5, y: 0.5 },
-        isPrecise: false,
+        normalizedAnchor: toAnchor,
+        isPrecise: routing?.ports?.to?.side !== undefined,
         isExact: false,
       },
     });

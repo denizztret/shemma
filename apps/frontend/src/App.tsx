@@ -20,6 +20,7 @@ import { UpdateBanner } from "./chrome/UpdateBanner";
 import { PromptDrawer } from "./prompts/PromptDrawer";
 import { PromptInput } from "./prompts/PromptInput";
 import { getState, sendPatch } from "./transport/api";
+import { viewportReporter } from "./transport/viewport";
 import { type AiActivity, openWs } from "./transport/ws";
 
 export function App({ room }: { room: string }) {
@@ -79,6 +80,14 @@ export function App({ room }: { room: string }) {
       window.removeEventListener("focus", onFocus);
     };
   }, [room]);
+
+  // Viewport reporter: sends camera position/zoom to the backend on each
+  // debounced camera change. Best-effort — network errors are silently swallowed.
+  useEffect(() => {
+    if (!editor) return;
+    const stop = viewportReporter(editor, { roomId: room });
+    return () => stop();
+  }, [editor, room]);
 
   useEffect(() => {
     if (!editor) return;
