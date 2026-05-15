@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "elkjs": "^0.9.3",
-    "hono": "^4.6.0"
+    "hono": "^4.6.0",
+    "web-worker": "^1.5.0"
   },
   "devDependencies": {
     "bun-types": "latest"

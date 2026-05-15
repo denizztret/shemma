@@ -39,7 +39,16 @@ export function makeApp(opts: AppOpts = {}) {
         : undefined,
     }),
   );
-  app.route("/", layoutRoutes);
+  app.route(
+    "/",
+    layoutRoutes(rooms, bus, {
+      onDirty: persistence
+        ? (id, room) => {
+            persistence.scheduleSave(id, room);
+          }
+        : undefined,
+    }),
+  );
   return { app, rooms, bus, persistence };
 }
 
