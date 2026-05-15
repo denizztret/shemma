@@ -6,10 +6,20 @@ CHANNEL="${2:-stable}"
 GIT_SHA="$(git rev-parse --short HEAD)"
 BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+ASSETS_FILE="apps/backend/src/embedded-assets.ts"
+ASSETS_PLACEHOLDER=$(cat "$ASSETS_FILE")
+restore_placeholder() {
+  echo "$ASSETS_PLACEHOLDER" > "$ASSETS_FILE"
+}
+trap restore_placeholder EXIT
+
 echo "Building frontend..."
 bun run --cwd apps/frontend build
 rm -rf apps/backend/src/frontend-dist
 cp -r apps/frontend/dist apps/backend/src/frontend-dist
+
+echo "Generating embedded-assets manifest..."
+bun scripts/generate-embedded-assets.ts
 
 mkdir -p release
 
@@ -30,11 +40,6 @@ build_target() {
 build_target "bun-darwin-arm64" "didraw-darwin-arm64"
 build_target "bun-darwin-x64" "didraw-darwin-x64"
 build_target "bun-linux-x64" "didraw-linux-x64"
-
-# Copy frontend-dist alongside the binaries so they can serve the UI
-echo "Copying frontend-dist to release/..."
-rm -rf release/frontend-dist
-cp -r apps/backend/src/frontend-dist release/frontend-dist
 
 echo "Release builds ready in release/"
 ls -lh release/

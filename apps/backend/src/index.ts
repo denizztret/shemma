@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { config } from "./config";
+import { EMBEDDED_ASSETS } from "./embedded-assets";
 import { FilePersistence } from "./persistence";
 import { type RoomStore, Rooms } from "./rooms";
 import { healthRoutes } from "./routes/health";
@@ -41,23 +42,19 @@ export function makeApp(opts: AppOpts = {}) {
   return { app, rooms, bus, persistence };
 }
 
-// Resolve the frontend-dist directory.
-// In bun --compile mode, import.meta.dir is /$bunfs/root — not a real path.
-// We resolve relative to the binary itself (process.execPath) so that the
-// frontend-dist/ folder can live alongside the binary in a release package.
-// In dev mode (bun run src/index.ts), fall back to the source-relative path.
-function frontendDistDir(): string {
-  const bunfsPrefix = "/$bunfs";
-  if (import.meta.dir.startsWith(bunfsPrefix)) {
-    // Compiled executable: serve from <binary-dir>/frontend-dist/
-    const { dirname } = require("node:path") as typeof import("node:path");
-    return `${dirname(process.execPath)}/frontend-dist`;
-  }
-  // Dev mode: serve from apps/backend/src/frontend-dist/
-  return `${import.meta.dir}/frontend-dist`;
-}
+// In compiled binary EMBEDDED_ASSETS maps URL paths → /$bunfs/... virtual paths
+// (populated by scripts/build-release.sh before --compile). In dev/uncompiled
+// mode the map is empty and we fall back to reading from a disk frontend-dist.
+const DEV_FRONTEND_DIST = `${import.meta.dir}/frontend-dist`;
 
-const FRONTEND_DIST = frontendDistDir();
+async function tryServeFrontend(pathname: string): Promise<Response | null> {
+  const assetPath = pathname === "/" ? "/index.html" : pathname;
+  const embedded = EMBEDDED_ASSETS[assetPath];
+  if (embedded) return new Response(Bun.file(embedded));
+  const onDisk = Bun.file(`${DEV_FRONTEND_DIST}${assetPath}`);
+  if (await onDisk.exists()) return new Response(onDisk);
+  return null;
+}
 
 export async function startServer(opts: AppOpts = {}) {
   const { app, bus, persistence } = makeApp(opts);
@@ -70,17 +67,13 @@ export async function startServer(opts: AppOpts = {}) {
         if (srv.upgrade(req, { data: { room } })) return;
         return new Response("upgrade failed", { status: 500 });
       }
-      // release/debug mode: serve frontend from frontend-dist/ (disk or binary-adjacent)
+      // release/debug: serve frontend from embedded assets (compiled) or disk (dev)
       if (
         (config.profile === "release" || config.profile === "debug") &&
-        !url.pathname.startsWith("/api") &&
-        url.pathname !== "/ws"
+        !url.pathname.startsWith("/api")
       ) {
-        const assetPath = url.pathname === "/" ? "/index.html" : url.pathname;
-        const file = Bun.file(`${FRONTEND_DIST}${assetPath}`);
-        if (await file.exists()) {
-          return new Response(file);
-        }
+        const served = await tryServeFrontend(url.pathname);
+        if (served) return served;
       }
       return app.fetch(req);
     },
