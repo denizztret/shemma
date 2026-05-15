@@ -1,3 +1,45 @@
+## 0.2.0 — 2026-05-16
+
+### Phase 2.1 — Agent v2 (domain-first)
+
+**Shared:**
+- New workspace package `@didraw/domain` — SSOT for `Role`, `ConnectionKind`, `LayoutMode`, `rolePreset`, `connectionPreset`, name validation, `modeToElkOptions`.
+
+**Backend:**
+- New domain layer: `apps/backend/src/domain/{types,validate,compile,layout,layout-postprocess,context}.ts`.
+- New routes:
+  - `POST /api/domain` — typed actions (define/connect/group/note/layout/delete + apply batch + dryRun + idempotency); transactions atomic for domain mutations, best-effort for layout.
+  - `GET /api/agent/context` — token-cheap domain summary (no geometry, ≤8KB for 100 elements); supports `?since=N` delta filter.
+  - `POST /api/viewport` / `GET /api/viewport` — ephemeral per-room viewport storage (30-min idle wipe).
+- ELK развёрнут на полную: compound containers (network/boundary → compound nodes), ports (computed sides → frontend anchors), pin (`meta.pinned` → app-level post-process; ELK layered ignores `elk.position`), affected vs all scope, orthogonal edge routing (bendpoints stored for forward-compat; render in v3.x).
+- Post-process pipeline: snap-to-grid 10px + min-spacing 20px.
+- `POST /api/patch` теперь делает inference на `source:"user"`:
+  - update `x`/`y` → `meta.pinned=true`, `meta.position={x,y}` (full object, preserves unchanged axis).
+  - update `style` → `meta.styleOwnedBy="user"`.
+
+**CLI (BREAKING):**
+- New domain commands: `define`, `connect`, `group`, `note`, `delete`, `apply --stdin`, `context`.
+- `layout` command parameter renamed: `--algorithm dagre|elk-layered` → `--mode layered-lr|layered-tb|tree|pack|force` (the old "dagre" was misleadingly ELK force; new naming honest).
+
+**Frontend:**
+- `role-render.ts` применяет `rolePreset(role)` поверх state; уважает `meta.styleOwnedBy === "user"`.
+- Port-side из ELK → `normalizedAnchor` для arrow bindings; `isPrecise: true` when port side explicit.
+- Viewport reporter — debounced (500ms) `POST /api/viewport` на camera change.
+
+**Skill:**
+- `/draw` cheat-sheet полностью переписан: инжектит `didraw context` вместо `state --compact`; добавлены Roles/Connection-kinds tables; раздел PatchOp удалён (агент его больше не видит).
+
+**Deprecated:**
+- `docs/handoff/mcp-launch-brief.md` — будет переписан в Phase 2.3 (MCP adapter поверх domain API).
+
+**Deferred to Phase 2.2:**
+- Preserve-order in `layout-postprocess` (currently snap-to-grid + min-spacing only).
+- Bendpoint rendering (stored in `meta.routing.bendPoints`, currently ignored by tldraw renderer).
+- `scope=ElementId` (subgraph layout around a specific element; currently treated as `"all"`).
+- Playwright E2E smoke for §5.1 worked example.
+
+---
+
 ## 0.1.0 — 2026-05-15
 
 ### Phase 2.0 — Persistence hardening
