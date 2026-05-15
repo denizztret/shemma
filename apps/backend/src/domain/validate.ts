@@ -1,0 +1,141 @@
+import {
+  isContainerRole,
+  isValidConnectionKind,
+  isValidName,
+  isValidRole,
+  type Role,
+} from "@didraw/domain";
+import type { CanvasState } from "../types";
+import type { ActionError, DomainAction } from "./types";
+
+type KnownElement = { role: Role; isContainer: boolean };
+
+function seedKnown(canvas: CanvasState): Map<string, KnownElement> {
+  const m = new Map<string, KnownElement>();
+  for (const n of canvas.nodes) {
+    const nm = n.meta?.name as string | undefined;
+    const role = n.meta?.role as Role | undefined;
+    if (nm && role) m.set(nm, { role, isContainer: false });
+  }
+  for (const g of canvas.groups) {
+    const meta = (g as { meta?: { name?: string; role?: Role } }).meta;
+    const nm = meta?.name ?? g.label;
+    const role = meta?.role ?? "network";
+    if (nm) m.set(nm, { role, isContainer: true });
+  }
+  return m;
+}
+
+export function validateBatch(
+  actions: DomainAction[],
+  canvas: CanvasState,
+): { ok: true } | { ok: false; errors: ActionError[] } {
+  const errors: ActionError[] = [];
+  // Sequential working state — mutates as actions are processed so a later
+  // action sees the result of an earlier add/remove. This makes `delete a`
+  // followed by `connect a b` correctly fail at validation time.
+  const known = seedKnown(canvas);
+
+  for (let i = 0; i < actions.length; i++) {
+    const a = actions[i];
+    switch (a.kind) {
+      case "define": {
+        if (!isValidRole(a.role)) {
+          errors.push({ actionIndex: i, field: "role", code: "unknown-role", message: `unknown role "${a.role}"` });
+          break;
+        }
+        // Container roles (network/boundary) must come through `group`,
+        // not `define` — spec §3.1 makes Group.children the canonical container model.
+        if (isContainerRole(a.role)) {
+          errors.push({
+            actionIndex: i,
+            field: "role",
+            code: "invalid-shape",
+            message: `container role "${a.role}" must be created via group action, not define`,
+          });
+          break;
+        }
+        if (!isValidName(a.name)) {
+          errors.push({ actionIndex: i, field: "name", code: "invalid-shape", message: `invalid name "${a.name}"` });
+          break;
+        }
+        const existing = known.get(a.name);
+        if (existing && existing.role !== a.role) {
+          errors.push({ actionIndex: i, field: "role", code: "role-conflict", message: `"${a.name}" already exists as ${existing.role}` });
+          break;
+        }
+        if (a.in !== undefined) {
+          const container = known.get(a.in);
+          if (!container) {
+            errors.push({ actionIndex: i, field: "in", code: "unknown-ref", message: `container "${a.in}" not found` });
+            break;
+          }
+          if (!container.isContainer) {
+            errors.push({ actionIndex: i, field: "in", code: "invalid-shape", message: `"${a.in}" is ${container.role}, not a container` });
+            break;
+          }
+        }
+        known.set(a.name, { role: a.role, isContainer: false });
+        break;
+      }
+      case "connect": {
+        if (a.connectionKind !== undefined && !isValidConnectionKind(a.connectionKind)) {
+          errors.push({ actionIndex: i, field: "connectionKind", code: "invalid-shape", message: `unknown connection kind "${a.connectionKind}"` });
+          break;
+        }
+        if (!known.has(a.from)) {
+          errors.push({ actionIndex: i, field: "from", code: "unknown-ref", message: `from "${a.from}" not found` });
+        }
+        if (!known.has(a.to)) {
+          errors.push({ actionIndex: i, field: "to", code: "unknown-ref", message: `to "${a.to}" not found` });
+        }
+        break;
+      }
+      case "group": {
+        if (a.as !== "network" && a.as !== "boundary") {
+          errors.push({ actionIndex: i, field: "as", code: "invalid-shape", message: `group.as must be network|boundary` });
+          break;
+        }
+        if (!isValidName(a.name)) {
+          errors.push({ actionIndex: i, field: "name", code: "invalid-shape", message: `invalid name "${a.name}"` });
+          break;
+        }
+        for (const id of a.ids) {
+          if (!known.has(id)) {
+            errors.push({ actionIndex: i, field: "ids", code: "unknown-ref", message: `child "${id}" not found` });
+          }
+        }
+        known.set(a.name, { role: a.as, isContainer: true });
+        break;
+      }
+      case "note": {
+        if (a.name && !isValidName(a.name)) {
+          errors.push({ actionIndex: i, field: "name", code: "invalid-shape", message: `invalid name "${a.name}"` });
+          break;
+        }
+        if (a.about && !known.has(a.about)) {
+          errors.push({ actionIndex: i, field: "about", code: "unknown-ref", message: `about "${a.about}" not found` });
+        }
+        if (a.name) known.set(a.name, { role: "note", isContainer: false });
+        break;
+      }
+      case "layout":
+        // Always valid; mode/scope/spacing checked downstream (modeToElkOptions handles invalid mode).
+        break;
+      case "delete": {
+        const ids = "ids" in a ? a.ids : [a.id];
+        for (const id of ids) {
+          if (!known.has(id)) {
+            errors.push({ actionIndex: i, field: "id", code: "unknown-ref", message: `delete target "${id}" not found` });
+          }
+          known.delete(id);
+        }
+        break;
+      }
+      default:
+        errors.push({ actionIndex: i, code: "unknown-action", message: `unknown action kind "${(a as { kind: string }).kind}"` });
+    }
+  }
+
+  return errors.length === 0 ? { ok: true } : { ok: false, errors };
+}

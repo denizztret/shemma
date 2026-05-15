@@ -13,6 +13,7 @@
     "apps/backend": {
       "name": "@didraw/backend",
       "dependencies": {
+        "@didraw/domain": "workspace:*",
         "elkjs": "^0.9.3",
         "hono": "^4.6.0",
         "web-worker": "^1.5.0",
@@ -51,6 +52,9 @@
     },
     "packages/didraw-client": {
       "name": "@didraw/client",
+    },
+    "packages/didraw-domain": {
+      "name": "@didraw/domain",
     },
   },
   "packages": {
@@ -127,6 +131,8 @@
     "@didraw/backend": ["@didraw/backend@workspace:apps/backend"],
 
     "@didraw/client": ["@didraw/client@workspace:packages/didraw-client"],
+
+    "@didraw/domain": ["@didraw/domain@workspace:packages/didraw-domain"],
 
     "@didraw/frontend": ["@didraw/frontend@workspace:apps/frontend"],
 
