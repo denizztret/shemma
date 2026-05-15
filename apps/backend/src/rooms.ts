@@ -1,4 +1,27 @@
 import type { CanvasState, RoomId, RoomState } from "./types";
+import { DEFAULT_ROOM } from "./types";
+
+const ROOM_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
+export function validateRoomId(id: string): boolean {
+  return ROOM_ID_RE.test(id);
+}
+
+export function resolveRoomId(
+  raw: string | undefined,
+):
+  | { ok: true; id: string }
+  | { ok: false; reason: string } {
+  // Resolution chain per spec §2.1: explicit > URL > CLAUDE_SESSION_ID > default.
+  const id = raw ?? process.env.CLAUDE_SESSION_ID ?? DEFAULT_ROOM;
+  if (!validateRoomId(id)) {
+    return {
+      ok: false,
+      reason: `invalid room id "${id}": expected /^[a-zA-Z0-9_-]{1,64}$/`,
+    };
+  }
+  return { ok: true, id };
+}
 
 export type RoomStore = {
   load: (id: RoomId) => Promise<RoomState | null>;

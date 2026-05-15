@@ -1,7 +1,7 @@
 import { Hono } from "hono";
+import { resolveRoomId } from "../rooms";
 import type { Rooms } from "../rooms";
 import type { Prompt, RoomState } from "../types";
-import { DEFAULT_ROOM } from "../types";
 import type { WsHub } from "../ws";
 
 export function promptRoutes(
@@ -16,7 +16,9 @@ export function promptRoutes(
   };
 
   r.post("/api/prompt", async (c) => {
-    const id = c.req.query("room") ?? DEFAULT_ROOM;
+    const rv = resolveRoomId(c.req.query("room"));
+    if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
+    const id = rv.id;
     const body = await c.req.json().catch(() => ({}));
     const p: Prompt = {
       id: crypto.randomUUID(),
@@ -33,7 +35,9 @@ export function promptRoutes(
   });
 
   r.get("/api/prompts", async (c) => {
-    const id = c.req.query("room") ?? DEFAULT_ROOM;
+    const rv = resolveRoomId(c.req.query("room"));
+    if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
+    const id = rv.id;
     const status = c.req.query("status") ?? "pending";
     const room = await rooms.get(id);
     const prompts =
@@ -44,7 +48,9 @@ export function promptRoutes(
   });
 
   r.post("/api/prompt/:id/resolve", async (c) => {
-    const id = c.req.query("room") ?? DEFAULT_ROOM;
+    const rv = resolveRoomId(c.req.query("room"));
+    if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
+    const id = rv.id;
     const pid = c.req.param("id");
     const body = await c.req.json().catch(() => ({}));
     const room = await rooms.get(id);
@@ -59,7 +65,9 @@ export function promptRoutes(
   });
 
   r.post("/api/prompt/:id/dismiss", async (c) => {
-    const id = c.req.query("room") ?? DEFAULT_ROOM;
+    const rv = resolveRoomId(c.req.query("room"));
+    if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
+    const id = rv.id;
     const pid = c.req.param("id");
     const room = await rooms.get(id);
     const p = room.prompts.find((x) => x.id === pid);
@@ -72,7 +80,9 @@ export function promptRoutes(
   });
 
   r.delete("/api/prompt/:id", async (c) => {
-    const id = c.req.query("room") ?? DEFAULT_ROOM;
+    const rv = resolveRoomId(c.req.query("room"));
+    if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
+    const id = rv.id;
     const pid = c.req.param("id");
     const room = await rooms.get(id);
     const idx = room.prompts.findIndex((x) => x.id === pid);
@@ -84,7 +94,9 @@ export function promptRoutes(
   });
 
   r.delete("/api/prompts", async (c) => {
-    const id = c.req.query("room") ?? DEFAULT_ROOM;
+    const rv = resolveRoomId(c.req.query("room"));
+    if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
+    const id = rv.id;
     const room = await rooms.get(id);
     const removedIds: string[] = [];
     room.prompts = room.prompts.filter((p) => {

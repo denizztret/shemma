@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { config } from "../config";
 import { applyPatch } from "../patch";
+import { resolveRoomId } from "../rooms";
 import type { Rooms } from "../rooms";
-import { DEFAULT_ROOM } from "../types";
 import type { PatchBus, PatchOp, RoomState } from "../types";
 
 export function patchRoutes(
@@ -11,7 +11,9 @@ export function patchRoutes(
   opts: { onDirty?: (room: string, state: RoomState) => void } = {},
 ) {
   return new Hono().post("/api/patch", async (c) => {
-    const id = c.req.query("room") ?? DEFAULT_ROOM;
+    const rv = resolveRoomId(c.req.query("room"));
+    if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
+    const id = rv.id;
     const body = await c.req.json().catch(() => null);
     if (!body || !Array.isArray(body.ops))
       return c.json({ ok: false, error: "expected {ops,source}" }, 400);

@@ -16,11 +16,6 @@ export class FilePersistence implements RoomStore {
   }
 
   pathFor(id: RoomId): string {
-    // Defense-in-depth: Task 3 adds upstream regex validation in rooms.ts;
-    // this throws if id contains path-traversal sequences in case it slips through.
-    if (id.includes("/") || id.includes("\\") || id.includes("..") || id === "") {
-      throw new Error(`invalid room id: ${JSON.stringify(id)}`);
-    }
     return join(this.dir, `${id}.json`);
   }
 

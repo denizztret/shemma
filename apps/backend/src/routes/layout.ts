@@ -2,8 +2,8 @@ import { Hono } from "hono";
 import { config } from "../config";
 import { layoutNodes } from "../layout-engine";
 import { applyPatch } from "../patch";
+import { resolveRoomId } from "../rooms";
 import type { Rooms } from "../rooms";
-import { DEFAULT_ROOM } from "../types";
 import type { PatchBus, PatchOp, RoomState } from "../types";
 
 export function layoutRoutes(
@@ -12,7 +12,9 @@ export function layoutRoutes(
   opts: { onDirty?: (room: string, state: RoomState) => void } = {},
 ) {
   return new Hono().post("/api/layout", async (c) => {
-    const id = c.req.query("room") ?? DEFAULT_ROOM;
+    const rv = resolveRoomId(c.req.query("room"));
+    if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
+    const id = rv.id;
     const body = await c.req.json().catch(() => ({}));
     const algorithm: "elk-layered" | "dagre" = body.algorithm ?? "elk-layered";
     const nodeIds: string[] | undefined = body.nodeIds;

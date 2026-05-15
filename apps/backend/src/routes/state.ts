@@ -1,11 +1,13 @@
 import { Hono } from "hono";
+import { resolveRoomId } from "../rooms";
 import type { Rooms } from "../rooms";
-import { DEFAULT_ROOM } from "../types";
 import type { CanvasState, Edge, Node } from "../types";
 
 export function stateRoutes(rooms: Rooms) {
   return new Hono().get("/api/state", async (c) => {
-    const id = c.req.query("room") ?? DEFAULT_ROOM;
+    const rv = resolveRoomId(c.req.query("room"));
+    if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
+    const id = rv.id;
     const sinceRaw = c.req.query("since");
     const fmt = c.req.query("fmt") ?? "full";
     const r = await rooms.get(id);

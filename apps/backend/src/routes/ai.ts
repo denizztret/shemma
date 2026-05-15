@@ -1,6 +1,6 @@
 import { Hono } from "hono";
+import { resolveRoomId } from "../rooms";
 import type { Rooms } from "../rooms";
-import { DEFAULT_ROOM } from "../types";
 import type { WsHub } from "../ws";
 
 // Stale activity records auto-clear after this window so a crashed/zombie
@@ -10,7 +10,9 @@ const STALE_MS = 5 * 60 * 1000;
 export function aiRoutes(rooms: Rooms, bus: WsHub) {
   return new Hono()
     .post("/api/ai/start", async (c) => {
-      const room = c.req.query("room") ?? DEFAULT_ROOM;
+      const rv = resolveRoomId(c.req.query("room"));
+      if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
+      const room = rv.id;
       const body = (await c.req.json().catch(() => null)) as {
         actor?: string;
         task?: string;
@@ -32,14 +34,18 @@ export function aiRoutes(rooms: Rooms, bus: WsHub) {
       return c.json({ ok: true });
     })
     .post("/api/ai/stop", async (c) => {
-      const room = c.req.query("room") ?? DEFAULT_ROOM;
+      const rv = resolveRoomId(c.req.query("room"));
+      if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
+      const room = rv.id;
       const r = await rooms.get(room);
       r.aiActivity = undefined;
       bus.publishAiActivity(room, null);
       return c.json({ ok: true });
     })
     .get("/api/ai/activity", async (c) => {
-      const room = c.req.query("room") ?? DEFAULT_ROOM;
+      const rv = resolveRoomId(c.req.query("room"));
+      if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
+      const room = rv.id;
       const r = await rooms.get(room);
       // Auto-expire stale records on read so clients querying after a zombie
       // don't see indefinite "AI is busy" state.
