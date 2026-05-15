@@ -1,0 +1,17 @@
+{
+  "name": "@didraw/backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "hono": "^4.6.0",
+    "elkjs": "^0.9.3"
+  },
+  "devDependencies": {
+    "bun-types": "latest"
+  }
+}
