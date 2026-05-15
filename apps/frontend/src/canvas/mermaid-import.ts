@@ -116,8 +116,10 @@ export async function mermaidToOps(
         ? fromShapeId(endBinding.toId)
         : `${fromShapeId(s.id)}-to`;
 
-      // biome-ignore lint/suspicious/noExplicitAny: tldraw arrow props are not typed via public API
-      const label = (s as any).props?.text || undefined;
+      // tldraw 5.x stores arrow labels in props.richText (ProseMirror doc),
+      // not props.text. Use the official extractor so multi-paragraph / marks
+      // round-trip cleanly.
+      const label = readLabel(editor, s);
 
       ops.push({
         op: "add",

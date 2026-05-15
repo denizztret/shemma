@@ -75,7 +75,10 @@ export function PromptInput({
         }}
         onKeyDown={(e) => {
           if (e.key === "Enter") void send();
-          // Stop propagation so tldraw editor doesn't steal hotkeys (e.g. delete) while typing.
+          else if (e.key === "Escape") onClose();
+          // Stop propagation so tldraw editor doesn't steal hotkeys (e.g.
+          // delete on the canvas) while typing. Escape is handled above first
+          // so the global window listener doesn't matter while focus is here.
           e.stopPropagation();
         }}
       />

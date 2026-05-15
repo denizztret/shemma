@@ -4,7 +4,12 @@ import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { isOurOp, rememberOurOpId } from "./canvas/echo-guard";
 import { edgeToShape, nodeToShape } from "./canvas/from-canvas-state";
-import { fromShapeId, toEdgeShapeId, toShapeId } from "./canvas/id-prefix";
+import {
+  fromEdgeShapeId,
+  fromShapeId,
+  toEdgeShapeId,
+  toShapeId,
+} from "./canvas/id-prefix";
 import { mermaidToOps } from "./canvas/mermaid-import";
 import { labelToRichText } from "./canvas/richtext";
 import { diffToOps } from "./canvas/to-patch";
@@ -208,12 +213,22 @@ export function App({ room }: { room: string }) {
         const cid = crypto.randomUUID();
         rememberOurOpId(cid);
         // biome-ignore lint/suspicious/noExplicitAny: SimpleOp is compatible with backend PatchOp schema
-        void sendPatch(ops as any, cid).finally(() => {
-          // Snap moves to what we just sent. Diffs after this are relative to
-          // that baseline, so changes made during the in-flight window are
-          // captured by the next trySend below.
-          snap.clear();
-          for (const [k, v] of cur) snap.set(k, v);
+        void sendPatch(ops as any, cid).then((result) => {
+          if (result.ok) {
+            // Snap moves to what we just sent. Diffs after this are relative
+            // to that baseline; changes made during the in-flight window are
+            // captured by the next trySend below.
+            snap.clear();
+            for (const [k, v] of cur) snap.set(k, v);
+          } else {
+            // Patch was rejected (422) or the network failed. Leave snap on
+            // the last successfully-sent baseline so the rejected ops will
+            // be re-diffed and re-sent on the next trySend tick.
+            console.warn(
+              "[didraw] sendPatch failed, will retry:",
+              result.error,
+            );
+          }
           inflight = false;
           trySend();
         });
@@ -230,7 +245,11 @@ export function App({ room }: { room: string }) {
       let lastCamKey = "";
       unsubSel = editor.store.listen(
         () => {
-          const ids = editor.getSelectedShapeIds().map((id) => fromShapeId(id));
+          // Edge shapes use a different prefix ("shape:edge-<id>"); strip the
+          // right one so prompt selection sends backend ids the AI can match.
+          const ids = editor
+            .getSelectedShapeIds()
+            .map((id) => fromEdgeShapeId(id) ?? fromShapeId(id));
           setSelection(ids);
           const cam = editor.getCamera();
           const camKey = `${cam.x}|${cam.y}|${cam.z}`;
@@ -253,20 +272,28 @@ export function App({ room }: { room: string }) {
         let ops: Awaited<ReturnType<typeof mermaidToOps>>;
         try {
           ops = await mermaidToOps(editor, source);
-        } finally {
-          // Re-baseline snap to the post-import state so the next user change
-          // diffs cleanly without re-emitting the imported shapes.
+        } catch (e) {
+          suppressLocalSend = false;
+          return { ok: false, error: String(e) };
+        }
+        if (ops.length === 0) {
+          suppressLocalSend = false;
+          return { ok: false, error: "no ops produced" };
+        }
+        const cid = crypto.randomUUID();
+        rememberOurOpId(cid);
+        // biome-ignore lint/suspicious/noExplicitAny: MermaidOp is compatible with backend PatchOp schema
+        const result = await sendPatch(ops as any, cid);
+        // Only re-baseline snap when the patch actually landed. Otherwise the
+        // listener will pick up the unsynced shapes on the next tick and retry.
+        if (result.ok) {
           snap.clear();
           for (const s of editor.getCurrentPageShapes()) {
             snap.set(s.id as unknown as string, s);
           }
-          suppressLocalSend = false;
         }
-        if (ops.length === 0) return { ok: false, error: "no ops produced" };
-        const cid = crypto.randomUUID();
-        rememberOurOpId(cid);
-        // biome-ignore lint/suspicious/noExplicitAny: MermaidOp is compatible with backend PatchOp schema
-        return await sendPatch(ops as any, cid);
+        suppressLocalSend = false;
+        return result;
       };
     })();
     return () => {
