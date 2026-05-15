@@ -196,4 +196,36 @@ export class CanvasClient {
     );
     return r.json();
   }
+
+  async applyDomain(body: {
+    actions: unknown[];
+    clientOpId?: string;
+    dryRun?: boolean;
+    layoutHint?: unknown;
+  }) {
+    const r = await fetch(`${this.base}/api/domain?${this.q()}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return r.json();
+  }
+
+  async getContext(opts: { since?: number; viewport?: string; select?: string[] } = {}) {
+    const params = new URLSearchParams({ room: this.room });
+    if (opts.since !== undefined) params.set("since", String(opts.since));
+    if (opts.viewport) params.set("viewport", opts.viewport);
+    if (opts.select?.length) params.set("select", opts.select.join(","));
+    const r = await fetch(`${this.base}/api/agent/context?${params.toString()}`);
+    return r.json();
+  }
+
+  async postViewport(vp: { x: number; y: number; w: number; h: number; zoom?: number }) {
+    const r = await fetch(`${this.base}/api/viewport?${this.q()}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(vp),
+    });
+    return r.json();
+  }
 }

@@ -2,7 +2,7 @@
 import { cmdAiStart, cmdAiStatus, cmdAiStop } from "./ai";
 import { ensure, start, status, stop } from "./daemon";
 import { cmdClear, cmdPatch, cmdState } from "./data";
-import { cmdLayout } from "./layout";
+import { applyStdin, connectCmd, context, define, deleteCmd, group, layoutCmd, note } from "./domain";
 import {
   archiveRoom,
   exportRoom,
@@ -55,7 +55,17 @@ async function main() {
   if (cmd === "state") return cmdState(argv.slice(1));
   if (cmd === "patch") return cmdPatch(argv.slice(1));
   if (cmd === "clear") return cmdClear(argv.slice(1));
-  if (cmd === "layout") return cmdLayout(argv.slice(1));
+  if (cmd === "layout") {
+    let mode: string | undefined;
+    let scope: string | undefined;
+    let spacing: string | undefined;
+    for (let i = 1; i < argv.length; i++) {
+      if (argv[i] === "--mode") mode = argv[++i];
+      else if (argv[i] === "--scope") scope = argv[++i];
+      else if (argv[i] === "--spacing") spacing = argv[++i];
+    }
+    return layoutCmd({ mode, scope, spacing, profile });
+  }
   if (cmd === "prompts") return cmdPrompts(argv.slice(1));
   if (cmd === "ai") {
     if (sub === "start") return cmdAiStart(argv.slice(2));
@@ -151,6 +161,80 @@ async function main() {
     );
     process.exit(1);
   }
+
+  if (cmd === "define") {
+    const role = argv[1];
+    const name = argv[2];
+    if (!role || !name) { console.error(JSON.stringify({ ok: false, error: "expected <role> <name>" })); process.exit(1); }
+    let label: string | undefined;
+    let inContainer: string | undefined;
+    for (let i = 3; i < argv.length; i++) {
+      if (argv[i] === "--label") label = argv[++i];
+      else if (argv[i] === "--in") inContainer = argv[++i];
+    }
+    return define({ role, name, label, in: inContainer, profile });
+  }
+
+  if (cmd === "connect") {
+    const from = argv[1];
+    const to = argv[2];
+    if (!from || !to) { console.error(JSON.stringify({ ok: false, error: "expected <from> <to>" })); process.exit(1); }
+    let kind: string | undefined;
+    let label: string | undefined;
+    for (let i = 3; i < argv.length; i++) {
+      if (argv[i] === "--kind") kind = argv[++i];
+      else if (argv[i] === "--label") label = argv[++i];
+    }
+    return connectCmd({ from, to, kind, label, profile });
+  }
+
+  if (cmd === "group") {
+    const ids = argv[1]?.split(",") ?? [];
+    let asKind: string | undefined;
+    let name: string | undefined;
+    let label: string | undefined;
+    for (let i = 2; i < argv.length; i++) {
+      if (argv[i] === "--as") asKind = argv[++i];
+      else if (argv[i] === "--name") name = argv[++i];
+      else if (argv[i] === "--label") label = argv[++i];
+    }
+    if (!asKind || !name) { console.error(JSON.stringify({ ok: false, error: "expected --as <kind> --name <name>" })); process.exit(1); }
+    return group({ ids, as: asKind, name, label, profile });
+  }
+
+  if (cmd === "note") {
+    let text: string | undefined;
+    let about: string | undefined;
+    for (let i = 1; i < argv.length; i++) {
+      if (argv[i] === "--text") text = argv[++i];
+      else if (argv[i] === "--about") about = argv[++i];
+    }
+    if (!text) { console.error(JSON.stringify({ ok: false, error: "expected --text \"...\"" })); process.exit(1); }
+    return note({ text, about, profile });
+  }
+
+  if (cmd === "delete") {
+    const ids = argv[1]?.split(",") ?? [];
+    const cascade = argv.includes("--cascade");
+    if (ids.length === 0) { console.error(JSON.stringify({ ok: false, error: "expected <id1,id2,...>" })); process.exit(1); }
+    return deleteCmd({ ids, cascade, profile });
+  }
+
+  if (cmd === "apply") {
+    if (!argv.includes("--stdin")) { console.error(JSON.stringify({ ok: false, error: "expected --stdin" })); process.exit(1); }
+    return applyStdin({ profile });
+  }
+
+  if (cmd === "context") {
+    let since: number | undefined;
+    let viewport: string | undefined;
+    for (let i = 1; i < argv.length; i++) {
+      if (argv[i] === "--since") since = Number(argv[++i]);
+      else if (argv[i] === "--viewport") viewport = argv[++i];
+    }
+    return context({ since, viewport, profile });
+  }
+
   usage();
   process.exit(cmd ? 1 : 0);
 }
@@ -168,11 +252,20 @@ Lifecycle:
   rooms import   <path> [--as <id>] [--force]
   rooms rm       <id> --confirm
 
+Domain (preferred AI interface):
+  define <role> <name> [--label "..."] [--in <container>]
+  connect <from> <to> [--kind sync|async|data|dep] [--label "..."]
+  group <id1,id2,...> --as network|boundary --name <name> [--label "..."]
+  note --text "..." [--about <name>]
+  layout [--mode layered-lr|layered-tb|tree|pack|force] [--scope all|<group>] [--spacing compact|normal|loose]
+  delete <id1,id2,...> [--cascade]
+  apply --stdin       # JSON batch on stdin
+  context [--since N] [--viewport x,y,w,h]
+
 Data:
   state    --room <id> [--compact] [--since <v>]
   patch    --room <id> --stdin
   import   mermaid --room <id> --stdin | --file <path>
-  layout   --room <id> --algorithm elk-layered [--node-ids <id,...>]
   prompts  list --room <id> [--status pending|resolved|dismissed|all]
   prompts  resolve <id> --room <id> [--response <text>]
   prompts  dismiss <id> --room <id>
