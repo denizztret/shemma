@@ -21,13 +21,22 @@ describe("buildContext", () => {
     expect(ctx.summary.byRole.network).toBe(1);
   });
 
-  test("no geometry leaks (no x/y/w/h in ElementCompact)", () => {
-    const ctx = buildContext(seedState(), { viewport: null });
-    const json = JSON.stringify(ctx);
-    expect(json).not.toMatch(/"x":/);
-    expect(json).not.toMatch(/"w":/);
-    expect(json).not.toMatch(/"h":/);
-    expect(json).not.toMatch(/"fill":/);
+  test("no geometry leaks — inView/selection/connections never carry x/y/w/h/fill", () => {
+    // Use a non-null viewport so that the bug (geometry leaking into an element)
+    // would actually be distinguishable from the legitimate ctx.viewport block.
+    const ctx = buildContext(seedState(), { viewport: { x: 0, y: 0, w: 1000, h: 1000 } });
+    // Serialize ONLY the element-bearing sections, NOT ctx.viewport (which legitimately carries x/y/w/h).
+    const elementsJson = JSON.stringify({
+      inView: ctx.inView,
+      selection: ctx.selection,
+      connections: ctx.connections,
+    });
+    expect(elementsJson).not.toMatch(/"x":/);
+    expect(elementsJson).not.toMatch(/"y":/);
+    expect(elementsJson).not.toMatch(/"w":/);
+    expect(elementsJson).not.toMatch(/"h":/);
+    expect(elementsJson).not.toMatch(/"fill":/);
+    expect(elementsJson).not.toMatch(/"stroke":/);
   });
 
   test("inView excludes nodes outside viewport when set", () => {

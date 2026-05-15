@@ -98,6 +98,9 @@ export async function runLayout(
   };
 
   const pinnedSet = new Set<string>();
+  // TODO: scope = ElementId (subgraph layout around a specific element) is not yet
+  // implemented; non-"affected" / non-"all" strings silently fall through to "all".
+  // Tracked for Phase 2.2 sync hardening.
   // In "affected" scope: all nodes NOT in the affected set are treated as pinned
   if (fullHint.scope === "affected" && affectedSet) {
     const affectedIds = new Set(affectedSet.affected);

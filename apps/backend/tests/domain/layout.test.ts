@@ -56,13 +56,13 @@ describe("runLayout", () => {
     }
   });
 
-  test("returns ok:false on ELK error path (synthetic)", async () => {
-    // Force a malformed canvas (negative width which some ELK builds reject)
+  test("returns ok:false when ELK fails (edge references missing node)", async () => {
     const c = emptyCanvasState();
-    c.nodes.push({ id: "shape:e_x", kind: "rect", x: 0, y: 0, w: -1, h: -1, label: "x" });
+    c.nodes.push({ id: "shape:e_a", kind: "rect", x: 0, y: 0, w: 100, h: 50, label: "a" });
+    c.edges.push({ id: "shape:c_0", from: { kind: "node", id: "shape:e_a" }, to: { kind: "node", id: "shape:e_missing" } });
     const r = await runLayout(c, { mode: "layered-lr", scope: "all", spacing: "normal" });
-    // ELK may either coerce or throw — both are acceptable. We only assert the shape:
-    expect(typeof r.ok).toBe("boolean");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(typeof r.reason).toBe("string");
   });
 
   test("group containers become ELK compound nodes — children laid out inside parent", async () => {
