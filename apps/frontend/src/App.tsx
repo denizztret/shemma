@@ -9,6 +9,8 @@ import { labelToRichText } from "./canvas/richtext";
 import { diffToOps } from "./canvas/to-patch";
 import { AppChrome } from "./chrome/AppChrome";
 import { buildTldrawComponents } from "./chrome/TldrawComponents";
+import { UpdateBanner } from "./chrome/UpdateBanner";
+import { VersionFooter } from "./chrome/VersionFooter";
 import { PromptDrawer } from "./prompts/PromptDrawer";
 import { PromptInput } from "./prompts/PromptInput";
 import { getState, sendPatch } from "./transport/api";
@@ -125,8 +127,8 @@ export function App({ room }: { room: string }) {
 
   return (
     <AppChrome
-      banner={null}
-      footer={null}
+      banner={<UpdateBanner />}
+      footer={<VersionFooter />}
       floatingOverlays={
         <>
           {editor && (
