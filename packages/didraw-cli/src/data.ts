@@ -1,4 +1,5 @@
 import { CanvasClient } from "@didraw/client";
+import { fail } from "./util";
 
 type Args = {
   room?: string;
@@ -81,11 +82,4 @@ async function readStdin(): Promise<string> {
   let data = "";
   for await (const chunk of process.stdin) data += String(chunk);
   return data;
-}
-
-function fail(e: unknown) {
-  const msg = e instanceof Error ? e.message : String(e);
-  const status = msg.includes("ECONNREFUSED") ? 3 : 1;
-  console.error(JSON.stringify({ ok: false, error: msg }));
-  process.exit(status);
 }

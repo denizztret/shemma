@@ -7,7 +7,7 @@ import { layoutRoutes } from "./routes/layout";
 import { patchRoutes } from "./routes/patch";
 import { promptRoutes } from "./routes/prompts";
 import { stateRoutes } from "./routes/state";
-import { DEFAULT_ROOM } from "./types";
+import { DEFAULT_ROOM, type RoomState } from "./types";
 import { type Sock, WsHub } from "./ws";
 
 export type AppOpts = {
@@ -28,38 +28,14 @@ export function makeApp(opts: AppOpts = {}) {
   const rooms = new Rooms(store);
   const bus = new WsHub();
   const app = new Hono();
+  const onDirty = persistence
+    ? (id: string, room: RoomState) => persistence.scheduleSave(id, room)
+    : undefined;
   app.route("/", healthRoutes);
   app.route("/", stateRoutes(rooms));
-  app.route(
-    "/",
-    patchRoutes(rooms, bus, {
-      onDirty: persistence
-        ? (id, room) => {
-            persistence.scheduleSave(id, room);
-          }
-        : undefined,
-    }),
-  );
-  app.route(
-    "/",
-    layoutRoutes(rooms, bus, {
-      onDirty: persistence
-        ? (id, room) => {
-            persistence.scheduleSave(id, room);
-          }
-        : undefined,
-    }),
-  );
-  app.route(
-    "/",
-    promptRoutes(rooms, bus, {
-      onDirty: persistence
-        ? (id, room) => {
-            persistence.scheduleSave(id, room);
-          }
-        : undefined,
-    }),
-  );
+  app.route("/", patchRoutes(rooms, bus, { onDirty }));
+  app.route("/", layoutRoutes(rooms, bus, { onDirty }));
+  app.route("/", promptRoutes(rooms, bus, { onDirty }));
   return { app, rooms, bus, persistence };
 }
 

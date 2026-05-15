@@ -8,13 +8,13 @@ export function PromptInput({
   selection,
   cameraTick: _cameraTick,
 }: {
-  editor: Editor | null;
+  editor: Editor;
   selection: string[];
   /** Bumped on every viewport change so anchor re-computes on pan/zoom. */
   cameraTick: number;
 }) {
   const [text, setText] = useState("");
-  if (!editor || selection.length === 0) return null;
+  if (selection.length === 0) return null;
 
   const bounds = editor.getSelectionPageBounds();
   if (!bounds) return null;

@@ -1,6 +1,14 @@
 import { CanvasClient } from "@didraw/client";
+import { fail } from "./util";
 
-type Status = "pending" | "resolved" | "dismissed" | "all";
+const VALID_STATUSES = ["pending", "resolved", "dismissed", "all"] as const;
+type Status = (typeof VALID_STATUSES)[number];
+
+function isStatus(v: unknown): v is Status {
+  return (
+    typeof v === "string" && (VALID_STATUSES as readonly string[]).includes(v)
+  );
+}
 
 export async function cmdPrompts(argv: string[]) {
   const sub = argv[0];
@@ -11,8 +19,19 @@ export async function cmdPrompts(argv: string[]) {
   let id: string | undefined;
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--room") room = rest[++i];
-    else if (rest[i] === "--status") status = rest[++i] as Status;
-    else if (rest[i] === "--response") response = rest[++i];
+    else if (rest[i] === "--status") {
+      const v = rest[++i];
+      if (!isStatus(v)) {
+        console.error(
+          JSON.stringify({
+            ok: false,
+            error: `invalid --status: ${v}. Expected one of: ${VALID_STATUSES.join("|")}`,
+          }),
+        );
+        process.exit(1);
+      }
+      status = v;
+    } else if (rest[i] === "--response") response = rest[++i];
     else if (!id && !rest[i].startsWith("--")) id = rest[i];
   }
   const c = new CanvasClient({ room });
@@ -35,7 +54,6 @@ export async function cmdPrompts(argv: string[]) {
       process.exit(1);
     }
   } catch (e) {
-    console.error(JSON.stringify({ ok: false, error: String(e) }));
-    process.exit(1);
+    fail(e);
   }
 }

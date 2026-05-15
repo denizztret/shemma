@@ -15,9 +15,9 @@ STATE_FILE="${HOME}/.claude/.draw-state-${ROOM}"
 LAST=0
 [[ -f "$STATE_FILE" ]] && LAST=$(cat "$STATE_FILE")
 
-# Use the workspace bin via bun directly — didraw may not be on PATH
-DIDRAW="bun --cwd ${CLAUDE_PROJECT_DIR:-.}/packages/didraw-cli src/index.ts"
-DIFF=$($DIDRAW state --since "$LAST" 2>/dev/null || echo '{"diff":[],"version":0}')
+PORT="${DIDRAW_PORT:-8787}"
+DIFF=$(curl -sf "http://localhost:${PORT}/api/state?room=${ROOM}&since=${LAST}" 2>/dev/null \
+  || echo '{"diff":[],"version":0}')
 NEW=$(echo "$DIFF" | jq -r '.version // 0')
 echo "$NEW" > "$STATE_FILE"
 

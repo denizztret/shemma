@@ -1,4 +1,5 @@
 import { CanvasClient } from "@didraw/client";
+import { fail } from "./util";
 
 export async function cmdLayout(argv: string[]) {
   let room: string | undefined;
@@ -16,7 +17,6 @@ export async function cmdLayout(argv: string[]) {
     console.log(JSON.stringify(r));
     if (r.ok === false) process.exit(1);
   } catch (e) {
-    console.error(JSON.stringify({ ok: false, error: String(e) }));
-    process.exit(1);
+    fail(e);
   }
 }

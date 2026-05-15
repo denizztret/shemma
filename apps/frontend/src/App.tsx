@@ -129,11 +129,13 @@ export function App({ room }: { room: string }) {
       footer={null}
       floatingOverlays={
         <>
-          <PromptInput
-            editor={editor}
-            selection={selection}
-            cameraTick={cameraTick}
-          />
+          {editor && (
+            <PromptInput
+              editor={editor}
+              selection={selection}
+              cameraTick={cameraTick}
+            />
+          )}
           <PromptDrawer tick={promptsTick} />
         </>
       }
