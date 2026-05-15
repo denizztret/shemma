@@ -8,13 +8,14 @@ import { fromShapeId, toEdgeShapeId, toShapeId } from "./canvas/id-prefix";
 import { mermaidToOps } from "./canvas/mermaid-import";
 import { labelToRichText } from "./canvas/richtext";
 import { diffToOps } from "./canvas/to-patch";
+import { AiActivityBadge } from "./chrome/AiActivityBadge";
 import { AppChrome } from "./chrome/AppChrome";
 import { buildTldrawComponents } from "./chrome/TldrawComponents";
 import { UpdateBanner } from "./chrome/UpdateBanner";
 import { PromptDrawer } from "./prompts/PromptDrawer";
 import { PromptInput } from "./prompts/PromptInput";
 import { getState, sendPatch } from "./transport/api";
-import { openWs } from "./transport/ws";
+import { type AiActivity, openWs } from "./transport/ws";
 
 export function App({ room }: { room: string }) {
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -25,6 +26,7 @@ export function App({ room }: { room: string }) {
   // selection and stays open until Send/Esc/selection cleared. Holding a
   // modifier was the previous design but conflicted with tldraw drag tools.
   const [promptOpen, setPromptOpen] = useState(false);
+  const [aiActivity, setAiActivity] = useState<AiActivity | null>(null);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -55,6 +57,12 @@ export function App({ room }: { room: string }) {
     (async () => {
       const s = await getState();
       if (!active) return;
+      // Initial AI-activity snapshot so a tab opened mid-task already shows
+      // the badge before the next WS event arrives.
+      fetch(`/api/ai/activity?room=${encodeURIComponent(room)}`)
+        .then((r) => r.json())
+        .then((j) => active && setAiActivity(j.activity ?? null))
+        .catch(() => {});
       const nodeShapes = s.canvas.nodes.map(nodeToShape);
       const edgeData: ReturnType<typeof edgeToShape>[] =
         s.canvas.edges.map(edgeToShape);
@@ -72,6 +80,7 @@ export function App({ room }: { room: string }) {
       close = openWs({
         onPromptCreated: () => setPromptsTick((x) => x + 1),
         onPromptResolved: () => setPromptsTick((x) => x + 1),
+        onAiActivity: (a) => setAiActivity(a),
         onPatch: (m) => {
           if (isOurOp(m.originClientId)) return;
           const newNodeIds: TLShapeId[] = [];
@@ -263,6 +272,7 @@ export function App({ room }: { room: string }) {
             />
           )}
           <PromptDrawer tick={promptsTick} />
+          <AiActivityBadge activity={aiActivity} />
         </>
       }
     >

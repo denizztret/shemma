@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { cmdAiStart, cmdAiStatus, cmdAiStop } from "./ai";
 import { ensure, start, status, stop } from "./daemon";
 import { cmdClear, cmdPatch, cmdState } from "./data";
 import { cmdLayout } from "./layout";
@@ -48,6 +49,13 @@ async function main() {
   if (cmd === "clear") return cmdClear(argv.slice(1));
   if (cmd === "layout") return cmdLayout(argv.slice(1));
   if (cmd === "prompts") return cmdPrompts(argv.slice(1));
+  if (cmd === "ai") {
+    if (sub === "start") return cmdAiStart(argv.slice(2));
+    if (sub === "stop") return cmdAiStop(argv.slice(2));
+    if (sub === "status") return cmdAiStatus(argv.slice(2));
+    usage();
+    process.exit(1);
+  }
   if (cmd === "version") return cmdVersion();
   if (cmd === "update") {
     if (sub === "--check") return cmdUpdateCheck();
@@ -110,6 +118,9 @@ Data:
   prompts  resolve <id> --room <id> [--response <text>]
   prompts  dismiss <id> --room <id>
   clear    --room <id> --confirm
+  ai       start --actor <name> --task <text> [--room <id>]
+  ai       stop [--room <id>]
+  ai       status [--room <id>]
 
 Versioning:
   version

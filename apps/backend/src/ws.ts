@@ -1,4 +1,4 @@
-import type { PatchBus, PatchOp, Prompt, WsMessage } from "./types";
+import type { AiActivity, PatchBus, PatchOp, Prompt, WsMessage } from "./types";
 
 export type Sock = { send: (data: string) => void; readyState: number };
 const OPEN = 1;
@@ -34,6 +34,9 @@ export class WsHub implements PatchBus {
   }
   publishPromptResolved(room: string, id: string, response?: string) {
     this.broadcast(room, { kind: "prompt-resolved", id, response });
+  }
+  publishAiActivity(room: string, activity: AiActivity | null) {
+    this.broadcast(room, { kind: "ai-activity", activity });
   }
 
   private broadcast(room: string, msg: WsMessage) {

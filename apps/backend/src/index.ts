@@ -3,6 +3,7 @@ import { config } from "./config";
 import { EMBEDDED_ASSETS } from "./embedded-assets";
 import { FilePersistence } from "./persistence";
 import { type RoomStore, Rooms } from "./rooms";
+import { aiRoutes } from "./routes/ai";
 import { healthRoutes } from "./routes/health";
 import { layoutRoutes } from "./routes/layout";
 import { patchRoutes } from "./routes/patch";
@@ -39,6 +40,7 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", patchRoutes(rooms, bus, { onDirty }));
   app.route("/", layoutRoutes(rooms, bus, { onDirty }));
   app.route("/", promptRoutes(rooms, bus, { onDirty }));
+  app.route("/", aiRoutes(rooms, bus));
   return { app, rooms, bus, persistence };
 }
 

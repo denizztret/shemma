@@ -97,6 +97,12 @@ export type OpLogEntry = {
   clientOpId?: string;
 };
 
+export type AiActivity = {
+  actor: string;
+  task: string;
+  startedAt: number;
+};
+
 export type RoomState = {
   canvas: CanvasState;
   opLog: OpLogEntry[];
@@ -104,6 +110,7 @@ export type RoomState = {
   version: number;
   dirty: boolean;
   lastTouched: number;
+  aiActivity?: AiActivity;
 };
 
 export type WsMessage =
@@ -116,7 +123,8 @@ export type WsMessage =
       originClientId?: string;
     }
   | { kind: "prompt-created"; prompt: Prompt }
-  | { kind: "prompt-resolved"; id: string; response?: string };
+  | { kind: "prompt-resolved"; id: string; response?: string }
+  | { kind: "ai-activity"; activity: AiActivity | null };
 
 export type PatchBus = {
   publish: (

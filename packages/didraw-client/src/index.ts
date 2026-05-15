@@ -109,4 +109,23 @@ export class CanvasClient {
     const r = await fetch(`${this.base}/api/version`);
     return r.json();
   }
+
+  async aiStart(actor: string, task: string) {
+    const r = await fetch(`${this.base}/api/ai/start?${this.q()}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actor, task }),
+    });
+    return r.json();
+  }
+  async aiStop() {
+    const r = await fetch(`${this.base}/api/ai/stop?${this.q()}`, {
+      method: "POST",
+    });
+    return r.json();
+  }
+  async aiActivity() {
+    const r = await fetch(`${this.base}/api/ai/activity?${this.q()}`);
+    return r.json();
+  }
 }

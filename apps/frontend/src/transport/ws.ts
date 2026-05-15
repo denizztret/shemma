@@ -1,5 +1,11 @@
 import { room } from "./api";
 
+export type AiActivity = {
+  actor: string;
+  task: string;
+  startedAt: number;
+};
+
 export type WsMessage =
   | { kind: "hello"; version: number }
   | {
@@ -12,7 +18,8 @@ export type WsMessage =
     }
   // biome-ignore lint/suspicious/noExplicitAny: prompt schema is opaque backend type
   | { kind: "prompt-created"; prompt: any }
-  | { kind: "prompt-resolved"; id: string; response?: string };
+  | { kind: "prompt-resolved"; id: string; response?: string }
+  | { kind: "ai-activity"; activity: AiActivity | null };
 
 export function openWs(handlers: {
   // biome-ignore lint/suspicious/noExplicitAny: patch message passed through opaquely
@@ -21,6 +28,7 @@ export function openWs(handlers: {
   onPromptCreated?: (m: any) => void;
   // biome-ignore lint/suspicious/noExplicitAny: prompt-resolved message passed through opaquely
   onPromptResolved?: (m: any) => void;
+  onAiActivity?: (activity: AiActivity | null) => void;
 }) {
   let ws: WebSocket | null = null;
   let attempt = 0;
@@ -38,6 +46,7 @@ export function openWs(handlers: {
       if (m.kind === "patch") handlers.onPatch?.(m);
       if (m.kind === "prompt-created") handlers.onPromptCreated?.(m);
       if (m.kind === "prompt-resolved") handlers.onPromptResolved?.(m);
+      if (m.kind === "ai-activity") handlers.onAiActivity?.(m.activity);
     };
     ws.onclose = () => {
       if (stopped) return;
