@@ -3,6 +3,8 @@ import { config } from "./config";
 import { FilePersistence } from "./persistence";
 import { type RoomStore, Rooms } from "./rooms";
 import { healthRoutes } from "./routes/health";
+import { importMermaidRoutes } from "./routes/import-mermaid";
+import { layoutRoutes } from "./routes/layout";
 import { patchRoutes } from "./routes/patch";
 import { stateRoutes } from "./routes/state";
 import { DEFAULT_ROOM } from "./types";
@@ -38,6 +40,8 @@ export function makeApp(opts: AppOpts = {}) {
         : undefined,
     }),
   );
+  app.route("/", importMermaidRoutes);
+  app.route("/", layoutRoutes);
   return { app, rooms, bus, persistence };
 }
 
