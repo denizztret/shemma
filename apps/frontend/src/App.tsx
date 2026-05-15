@@ -1,9 +1,14 @@
 import { useEffect, useState } from "react";
-import { type Editor, type TLShape, Tldraw } from "tldraw";
+import {
+  type Editor,
+  type TLShape,
+  Tldraw,
+  TldrawUiOrientationProvider,
+} from "tldraw";
 import "tldraw/tldraw.css";
 import { isOurOp, rememberOurOpId } from "./canvas/echo-guard";
-import { nodeToShape } from "./canvas/from-canvas-state";
-import { fromShapeId, toShapeId } from "./canvas/id-prefix";
+import { edgeToShape, nodeToShape } from "./canvas/from-canvas-state";
+import { fromShapeId, toEdgeShapeId, toShapeId } from "./canvas/id-prefix";
 import { mermaidToOps } from "./canvas/mermaid-import";
 import { labelToRichText } from "./canvas/richtext";
 import { diffToOps } from "./canvas/to-patch";
@@ -31,8 +36,15 @@ export function App({ room }: { room: string }) {
     (async () => {
       const s = await getState();
       if (!active) return;
-      const shapes = s.canvas.nodes.map(nodeToShape);
-      if (shapes.length) editor.createShapes(shapes);
+      const nodeShapes = s.canvas.nodes.map(nodeToShape);
+      const edgeData: ReturnType<typeof edgeToShape>[] =
+        s.canvas.edges.map(edgeToShape);
+      const allShapes = [...nodeShapes, ...edgeData.map((d) => d.shape)];
+      const allBindings = edgeData.flatMap((d) => d.bindings);
+      if (allShapes.length) editor.createShapes(allShapes);
+      if (allBindings.length) editor.createBindings(allBindings);
+      // Fit camera to existing content so room with content opens centred, not blank.
+      if (allShapes.length) editor.zoomToFit({ animation: { duration: 0 } });
       close = openWs({
         onPromptCreated: () => setPromptsTick((x) => x + 1),
         onPromptResolved: () => setPromptsTick((x) => x + 1),
@@ -41,8 +53,14 @@ export function App({ room }: { room: string }) {
           for (const op of m.ops) {
             if (op.op === "add" && op.target === "node") {
               editor.createShapes([nodeToShape(op.value)]);
+            } else if (op.op === "add" && op.target === "edge") {
+              const { shape, bindings } = edgeToShape(op.value);
+              editor.createShapes([shape]);
+              if (bindings.length) editor.createBindings(bindings);
             } else if (op.op === "delete" && op.target === "node") {
               editor.deleteShapes([toShapeId(op.id)]);
+            } else if (op.op === "delete" && op.target === "edge") {
+              editor.deleteShapes([toEdgeShapeId(op.id)]);
             } else if (op.op === "update" && op.target === "node") {
               const sid = toShapeId(op.id);
               const existing = editor.getShape(sid);
@@ -142,7 +160,9 @@ export function App({ room }: { room: string }) {
         </>
       }
     >
-      <Tldraw onMount={setEditor} components={buildTldrawComponents(room)} />
+      <TldrawUiOrientationProvider orientation="vertical" tooltipSide="right">
+        <Tldraw onMount={setEditor} components={buildTldrawComponents(room)} />
+      </TldrawUiOrientationProvider>
     </AppChrome>
   );
 }

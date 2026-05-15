@@ -78,6 +78,9 @@ export function diffToOps(
 ): SimpleOp[] {
   const ops: SimpleOp[] = [];
   for (const [id, s] of next) {
+    // User-created/moved arrows aren't yet round-tripped to backend (edge reverse-flow
+    // is backlog). Skip arrows entirely so cascades from node moves don't leak ops.
+    if (s.type === "arrow") continue;
     const before = prev.get(id);
     if (!before) {
       const v = shapeToNode(s);
@@ -96,6 +99,7 @@ export function diffToOps(
     }
   }
   for (const [id, s] of prev) {
+    if (s.type === "arrow") continue;
     if (!next.has(id))
       ops.push({ op: "delete", target: "node", id: fromShapeId(s.id) });
   }

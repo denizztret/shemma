@@ -31,12 +31,13 @@ export function AppChrome({
         {floatingOverlays}
       </div>
       {footer ? (
-        // right: 56 keeps clear of tldraw's bottom-right help button (~48px wide + 8 gap).
+        // bottom-left, above tldraw's zoom-control row (~36px tall) — keeps clear of
+        // bottom-right watermark area where tldraw's "Made with tldraw"/license badge sits.
         <div
           style={{
             position: "absolute",
-            right: 56,
-            bottom: 8,
+            left: 8,
+            bottom: 50,
             zIndex: tokens.z.overlay,
             pointerEvents: "auto",
           }}
