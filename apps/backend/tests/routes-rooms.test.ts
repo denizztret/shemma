@@ -82,3 +82,125 @@ describe("GET /api/rooms", () => {
     expect(body.rooms.map((r) => r.id)).toEqual(["good"]);
   });
 });
+
+describe("POST /api/rooms/:id/archive", () => {
+  test("moves file to .archive/ and evicts from memory", async () => {
+    seedRoom("to-archive", (s) => {
+      s.canvas.nodes.push({ id: "n1", kind: "rect", x: 0, y: 0 });
+      s.version = 3;
+    });
+    const { app } = makeApp({ storageDir: dir });
+
+    await app.fetch(new Request("http://localhost/api/state?room=to-archive"));
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/to-archive/archive", {
+        method: "POST",
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dir, "to-archive.json"))).toBe(false);
+    expect(existsSync(join(dir, ".archive", "to-archive.json"))).toBe(true);
+  });
+
+  test("404 if room file does not exist", async () => {
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/no-such/archive", {
+        method: "POST",
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  test("422 on path-param injection attempts", async () => {
+    const { app } = makeApp({ storageDir: dir });
+    for (const badId of ["..%2Fetc", "name%20with%20space", "name!"]) {
+      const res = await app.fetch(
+        new Request(`http://localhost/api/rooms/${badId}/archive`, {
+          method: "POST",
+        }),
+      );
+      expect(res.status).toBe(422);
+    }
+  });
+
+  test("flushes dirty state before archiving", async () => {
+    const { app, rooms, persistence } = makeApp({ storageDir: dir });
+    const r = await rooms.get("dirty-room");
+    r.canvas.nodes.push({ id: "n1", kind: "rect", x: 0, y: 0 });
+    r.version = 5;
+    r.dirty = true;
+    persistence!.scheduleSave("dirty-room", r);
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/dirty-room/archive", {
+        method: "POST",
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const { readFileSync } = await import("node:fs");
+    const env = JSON.parse(
+      readFileSync(join(dir, ".archive", "dirty-room.json"), "utf8"),
+    );
+    expect(env.version).toBe(5);
+    expect(env.elementCount).toBe(1);
+  });
+});
+
+describe("POST /api/rooms/:id/restore", () => {
+  test("moves file back from .archive/", async () => {
+    seedRoom("to-archive", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    await app.fetch(
+      new Request("http://localhost/api/rooms/to-archive/archive", {
+        method: "POST",
+      }),
+    );
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/to-archive/restore", {
+        method: "POST",
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dir, "to-archive.json"))).toBe(true);
+    expect(existsSync(join(dir, ".archive", "to-archive.json"))).toBe(false);
+  });
+
+  test("404 if not archived", async () => {
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/none/restore", {
+        method: "POST",
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  test("409 if active id already exists", async () => {
+    seedRoom("conflict", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    await app.fetch(
+      new Request("http://localhost/api/rooms/conflict/archive", {
+        method: "POST",
+      }),
+    );
+    seedRoom("conflict", () => {});
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/conflict/restore", {
+        method: "POST",
+      }),
+    );
+    expect(res.status).toBe(409);
+  });
+});

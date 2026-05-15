@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, rename, mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { Context } from "hono";
 import { Hono } from "hono";
@@ -63,6 +63,61 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
       }
       throw e;
     }
+  });
+
+  app.post("/api/rooms/:id/archive", async (c) => {
+    const idParam = roomParam(c);
+    if (!idParam.ok) return idParam.response;
+    const id = idParam.id;
+    const srcPath = join(storageDir, `${id}.json`);
+
+    // CRITICAL ORDER: flush BEFORE stat. A freshly-created dirty room may have
+    // no file on disk yet (autosave debounce not fired). flushIfDirty is
+    // idempotent — no-op if nothing pending.
+    await rooms.flushIfDirty(id);
+
+    try {
+      await stat(srcPath);
+    } catch {
+      return c.json({ ok: false, error: "room not found" }, 404);
+    }
+
+    await rooms.evict(id);
+
+    const archiveDir = join(storageDir, ".archive");
+    await mkdir(archiveDir, { recursive: true });
+    const dstPath = join(archiveDir, `${id}.json`);
+    await rename(srcPath, dstPath);
+
+    return c.json({ ok: true, archivedTo: dstPath });
+  });
+
+  app.post("/api/rooms/:id/restore", async (c) => {
+    const idParam = roomParam(c);
+    if (!idParam.ok) return idParam.response;
+    const id = idParam.id;
+    const archiveDir = join(storageDir, ".archive");
+    const srcPath = join(archiveDir, `${id}.json`);
+    const dstPath = join(storageDir, `${id}.json`);
+
+    try {
+      await stat(srcPath);
+    } catch {
+      return c.json({ ok: false, error: "archived room not found" }, 404);
+    }
+    await rooms.flushIfDirty(id);
+    try {
+      await stat(dstPath);
+      return c.json(
+        { ok: false, error: "active room with this id already exists" },
+        409,
+      );
+    } catch {
+      // dstPath does not exist — good
+    }
+
+    await rename(srcPath, dstPath);
+    return c.json({ ok: true });
   });
 
   return app;
