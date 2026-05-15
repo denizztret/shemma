@@ -3,7 +3,15 @@ import { cmdAiStart, cmdAiStatus, cmdAiStop } from "./ai";
 import { ensure, start, status, stop } from "./daemon";
 import { cmdClear, cmdPatch, cmdState } from "./data";
 import { cmdLayout } from "./layout";
-import { exportRoom, list, open, rmRoom } from "./lifecycle";
+import {
+  archiveRoom,
+  exportRoom,
+  importRoom,
+  list,
+  open,
+  restoreRoom,
+  rmRoom,
+} from "./lifecycle";
 import { applyProfile, parseProfile, portFor } from "./profile";
 import { cmdPrompts } from "./prompts";
 import { cmdUpdate, cmdUpdateCheck, cmdUpdateSetChannel } from "./update";
@@ -79,21 +87,69 @@ async function main() {
     }
     return open(argv[1], profile);
   }
-  if (cmd === "list") return list();
-  if (cmd === "export") {
-    const [, room, flag, to] = argv;
-    if (!room || flag !== "--to" || !to) {
-      usage();
-      process.exit(1);
+  if (cmd === "rooms") {
+    const sub = argv[1];
+    if (sub === "list") return list(profile);
+    if (sub === "archive") {
+      const id = argv[2];
+      if (!id) {
+        console.error(JSON.stringify({ ok: false, error: "expected <id>" }));
+        process.exit(1);
+      }
+      return archiveRoom(id, profile);
     }
-    return exportRoom(room, to);
-  }
-  if (cmd === "rm") {
-    if (!argv[1]) {
-      usage();
-      process.exit(1);
+    if (sub === "restore") {
+      const id = argv[2];
+      if (!id) {
+        console.error(JSON.stringify({ ok: false, error: "expected <id>" }));
+        process.exit(1);
+      }
+      return restoreRoom(id, profile);
     }
-    return rmRoom(argv[1], { confirm: argv.includes("--confirm") });
+    if (sub === "export") {
+      const id = argv[2];
+      let to: string | undefined;
+      for (let i = 3; i < argv.length; i++) {
+        if (argv[i] === "--to") to = argv[++i];
+      }
+      if (!id || !to) {
+        console.error(
+          JSON.stringify({ ok: false, error: "expected <id> --to <path>" }),
+        );
+        process.exit(1);
+      }
+      return exportRoom(id, to, profile);
+    }
+    if (sub === "import") {
+      const from = argv[2];
+      let asVal: string | undefined;
+      let force = false;
+      for (let i = 3; i < argv.length; i++) {
+        if (argv[i] === "--as") asVal = argv[++i];
+        else if (argv[i] === "--force") force = true;
+      }
+      if (!from) {
+        console.error(JSON.stringify({ ok: false, error: "expected <path>" }));
+        process.exit(1);
+      }
+      return importRoom(from, { as: asVal, force }, profile);
+    }
+    if (sub === "rm") {
+      const id = argv[2];
+      const confirm = argv.includes("--confirm");
+      if (!id) {
+        console.error(JSON.stringify({ ok: false, error: "expected <id>" }));
+        process.exit(1);
+      }
+      return rmRoom(id, { confirm }, profile);
+    }
+    console.error(
+      JSON.stringify({
+        ok: false,
+        error: `unknown rooms subcommand: ${sub ?? "(none)"}`,
+      }),
+    );
+    process.exit(1);
   }
   usage();
   process.exit(cmd ? 1 : 0);
@@ -105,9 +161,12 @@ function usage() {
 Lifecycle:
   daemon start|stop|status|ensure
   open <room>
-  list
-  export <room> --to <path>
-  rm <room> --confirm
+  rooms list
+  rooms archive  <id>
+  rooms restore  <id>
+  rooms export   <id> --to <path>
+  rooms import   <path> [--as <id>] [--force]
+  rooms rm       <id> --confirm
 
 Data:
   state    --room <id> [--compact] [--since <v>]

@@ -64,10 +64,48 @@ export async function start(profile: Profile) {
   console.log(JSON.stringify({ ok: true, pid: child.pid, profile, port }));
 }
 
+/**
+ * Ensure the daemon is running. Prints status to stdout on success.
+ * Used by the `daemon ensure` CLI command where the caller wants confirmation.
+ */
 export async function ensure(profile: Profile) {
+  await ensureDaemon(profile, /* verbose */ true);
+}
+
+/**
+ * Ensure the daemon is running without printing to stdout on success.
+ * Used internally by lifecycle commands whose own output occupies stdout.
+ */
+export async function ensureSilent(profile: Profile) {
+  await ensureDaemon(profile, /* verbose */ false);
+}
+
+async function ensureDaemon(profile: Profile, verbose: boolean) {
+  // Fast path: if DIDRAW_PORT is explicitly set (e.g. in tests or when the
+  // caller already knows the port), skip PID-file checks and just verify
+  // the server is healthy. This avoids spurious daemon spawns when an
+  // in-process test server is already listening on the target port.
+  if (process.env.DIDRAW_PORT !== undefined) {
+    const port = portFor(profile);
+    if (await isHealthy(port)) {
+      if (verbose) {
+        console.log(JSON.stringify({ ok: true, already: true, profile, port }));
+      }
+      return;
+    }
+    console.error(
+      JSON.stringify({
+        ok: false,
+        error: `didraw: DIDRAW_PORT is set but server not healthy on :${port}`,
+      }),
+    );
+    process.exit(3);
+  }
   const s = await status(profile);
   if (s.running) {
-    console.log(JSON.stringify({ ok: true, already: true, ...s }));
+    if (verbose) {
+      console.log(JSON.stringify({ ok: true, already: true, ...s }));
+    }
     return;
   }
   await start(profile);

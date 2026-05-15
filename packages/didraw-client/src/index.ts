@@ -142,4 +142,58 @@ export class CanvasClient {
     const r = await fetch(`${this.base}/api/ai/activity?${this.q()}`);
     return r.json();
   }
+
+  async listRooms() {
+    const r = await fetch(`${this.base}/api/rooms`);
+    return r.json();
+  }
+
+  async archiveRoom(id: string) {
+    const r = await fetch(
+      `${this.base}/api/rooms/${encodeURIComponent(id)}/archive`,
+      { method: "POST" },
+    );
+    return r.json();
+  }
+
+  async restoreRoom(id: string) {
+    const r = await fetch(
+      `${this.base}/api/rooms/${encodeURIComponent(id)}/restore`,
+      { method: "POST" },
+    );
+    return r.json();
+  }
+
+  async exportRoom(id: string, to: string) {
+    const r = await fetch(
+      `${this.base}/api/rooms/${encodeURIComponent(id)}/export`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to }),
+      },
+    );
+    return r.json();
+  }
+
+  async importRoom(from: string, opts: { as?: string; force?: boolean } = {}) {
+    const r = await fetch(`${this.base}/api/rooms/import`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ from, as: opts.as, force: opts.force }),
+    });
+    return r.json();
+  }
+
+  async deleteRoom(id: string, confirm = false) {
+    const r = await fetch(
+      `${this.base}/api/rooms/${encodeURIComponent(id)}`,
+      {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm }),
+      },
+    );
+    return r.json();
+  }
 }
