@@ -47,7 +47,8 @@ function semverCmp(a: string, b: string): number {
 
 function resolveChannel(): Channel {
   const fromConfig = readConfig().channel;
-  if (fromConfig) return fromConfig;
+  if (fromConfig && (VALID_CHANNELS as readonly string[]).includes(fromConfig))
+    return fromConfig;
   const fromEnv = process.env.DIDRAW_CHANNEL;
   if (fromEnv && (VALID_CHANNELS as readonly string[]).includes(fromEnv))
     return fromEnv as Channel;
@@ -116,10 +117,17 @@ type ManifestChannel = {
 type Manifest = { channels?: Record<string, ManifestChannel> };
 
 export async function cmdUpdate(argv: string[]) {
+  // Refuse to overwrite the bun interpreter when run as `bun src/index.ts` in dev.
+  // Compiled binaries have execPath ending with the artifact name (didraw / didraw-*).
+  if (!/didraw(-[^/]+)?$/.test(process.execPath))
+    fail(
+      "update is only available for compiled release binaries; use bun in dev",
+    );
+
   const channel = resolveChannel();
   const current = process.env.DIDRAW_VERSION ?? "0.0.0";
 
-  let manifest: Manifest;
+  let manifest!: Manifest;
   try {
     const r = await fetch(manifestUrl());
     if (!r.ok) throw new Error(`manifest HTTP ${r.status}`);
@@ -150,7 +158,7 @@ export async function cmdUpdate(argv: string[]) {
   const target = process.execPath;
   const dir = dirname(target);
 
-  let tmpfile: string;
+  let tmpfile!: string;
   try {
     tmpfile = await downloadAndVerify(asset.url, asset.sha256);
   } catch (e) {
