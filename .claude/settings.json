@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run --cwd ${CLAUDE_PROJECT_DIR:-.}/packages/didraw-cli src/index.ts daemon ensure"
+          }
+        ]
+      }
+    ]
+  }
+}
