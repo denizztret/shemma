@@ -3,12 +3,10 @@ import { tokens } from "../design-tokens";
 
 export function AppChrome({
   banner,
-  footer,
   floatingOverlays,
   children,
 }: {
   banner?: ReactNode;
-  footer?: ReactNode;
   floatingOverlays?: ReactNode;
   children: ReactNode;
 }) {
@@ -30,21 +28,6 @@ export function AppChrome({
         {children}
         {floatingOverlays}
       </div>
-      {footer ? (
-        // bottom-left, above tldraw's zoom-control row (~36px tall) — keeps clear of
-        // bottom-right watermark area where tldraw's "Made with tldraw"/license badge sits.
-        <div
-          style={{
-            position: "absolute",
-            left: 8,
-            bottom: 50,
-            zIndex: tokens.z.overlay,
-            pointerEvents: "auto",
-          }}
-        >
-          {footer}
-        </div>
-      ) : null}
     </div>
   );
 }

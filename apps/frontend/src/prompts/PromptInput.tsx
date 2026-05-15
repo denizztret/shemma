@@ -7,14 +7,17 @@ export function PromptInput({
   editor,
   selection,
   cameraTick: _cameraTick,
+  visible,
 }: {
   editor: Editor;
   selection: string[];
   /** Bumped on every viewport change so anchor re-computes on pan/zoom. */
   cameraTick: number;
+  /** Gated by App: `selection.length > 0 && modifierHeld`. */
+  visible: boolean;
 }) {
   const [text, setText] = useState("");
-  if (selection.length === 0) return null;
+  if (!visible || selection.length === 0) return null;
 
   const bounds = editor.getSelectionPageBounds();
   if (!bounds) return null;

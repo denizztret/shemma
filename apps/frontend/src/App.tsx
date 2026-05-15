@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { type Editor, type TLShape, Tldraw } from "tldraw";
+import { type Editor, type TLShape, type TLShapeId, Tldraw } from "tldraw";
 import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { isOurOp, rememberOurOpId } from "./canvas/echo-guard";
@@ -11,7 +11,6 @@ import { diffToOps } from "./canvas/to-patch";
 import { AppChrome } from "./chrome/AppChrome";
 import { buildTldrawComponents } from "./chrome/TldrawComponents";
 import { UpdateBanner } from "./chrome/UpdateBanner";
-import { VersionFooter } from "./chrome/VersionFooter";
 import { PromptDrawer } from "./prompts/PromptDrawer";
 import { PromptInput } from "./prompts/PromptInput";
 import { getState, sendPatch } from "./transport/api";
@@ -22,6 +21,29 @@ export function App({ room }: { room: string }) {
   const [selection, setSelection] = useState<string[]>([]);
   const [promptsTick, setPromptsTick] = useState(0);
   const [cameraTick, setCameraTick] = useState(0);
+  // PromptInput shows only while user holds ⌘ (or Alt) — avoids the input
+  // appearing on every selection during routine editing/moving.
+  const [askModifierHeld, setAskModifierHeld] = useState(false);
+
+  useEffect(() => {
+    const isMod = (e: KeyboardEvent) => e.key === "Meta" || e.key === "Alt";
+    const down = (e: KeyboardEvent) => {
+      if (isMod(e)) setAskModifierHeld(true);
+    };
+    const up = (e: KeyboardEvent) => {
+      if (isMod(e)) setAskModifierHeld(false);
+    };
+    // Window may lose focus while the modifier is held (e.g. ⌘Tab) — reset on blur.
+    const blur = () => setAskModifierHeld(false);
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", blur);
+    };
+  }, []);
 
   useEffect(() => {
     if (!editor) return;
@@ -52,6 +74,7 @@ export function App({ room }: { room: string }) {
         onPromptResolved: () => setPromptsTick((x) => x + 1),
         onPatch: (m) => {
           if (isOurOp(m.originClientId)) return;
+          const newNodeIds: TLShapeId[] = [];
           // mergeRemoteChanges marks the inner mutations as `source: "remote"`
           // so our `source: "user"` listener below doesn't echo them back to
           // the server (per tldraw collaboration docs).
@@ -59,6 +82,7 @@ export function App({ room }: { room: string }) {
             for (const op of m.ops) {
               if (op.op === "add" && op.target === "node") {
                 editor.createShapes([nodeToShape(op.value)]);
+                newNodeIds.push(toShapeId(op.value.id));
               } else if (op.op === "add" && op.target === "edge") {
                 const { shape, bindings } = edgeToShape(op.value);
                 editor.createShapes([shape]);
@@ -92,6 +116,20 @@ export function App({ room }: { room: string }) {
               }
             }
           });
+          // If a remote batch added new nodes that landed outside the user's
+          // current viewport, gently zoom-to-fit those new shapes so they
+          // become visible. Skip when at least one new shape is already in
+          // view (don't disturb the user's camera unnecessarily).
+          if (newNodeIds.length > 0) {
+            const vp = editor.getViewportPageBounds();
+            const anyVisible = newNodeIds.some((id) => {
+              const b = editor.getShapePageBounds(id);
+              return b ? vp.includes(b) : false;
+            });
+            if (!anyVisible) {
+              editor.zoomToFit({ animation: { duration: 300 } });
+            }
+          }
         },
       });
 
@@ -197,7 +235,6 @@ export function App({ room }: { room: string }) {
   return (
     <AppChrome
       banner={<UpdateBanner />}
-      footer={<VersionFooter />}
       floatingOverlays={
         <>
           {editor && (
@@ -205,6 +242,7 @@ export function App({ room }: { room: string }) {
               editor={editor}
               selection={selection}
               cameraTick={cameraTick}
+              visible={askModifierHeld}
             />
           )}
           <PromptDrawer tick={promptsTick} />
