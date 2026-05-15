@@ -4,6 +4,7 @@ import { EMBEDDED_ASSETS } from "./embedded-assets";
 import { FilePersistence } from "./persistence";
 import { type RoomStore, Rooms } from "./rooms";
 import { aiRoutes } from "./routes/ai";
+import { domainRoutes } from "./routes/domain";
 import { healthRoutes } from "./routes/health";
 import { layoutRoutes } from "./routes/layout";
 import { patchRoutes } from "./routes/patch";
@@ -46,6 +47,7 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", aiRoutes(rooms, bus));
   app.route("/", roomsRoutes(rooms, storageDir));
   app.route("/", viewportRoutes(rooms));
+  app.route("/", domainRoutes(rooms, bus, { onDirty }));
   return { app, rooms, bus, persistence };
 }
 
