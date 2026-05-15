@@ -11,14 +11,14 @@ MVP закрыт (52 коммита на main, single-binary verified). Двиг
 
 | ID | Sub-project | Зависимости | Spec status |
 |----|---|---|---|
-| **2.0** | Persistence hardening — session-isolation fix, rooms discovery, skill startup awareness | — | [`2026-05-15-di-draw-phase2-0-persistence-design.md`](./2026-05-15-di-draw-phase2-0-persistence-design.md) (small, ~5-7 tasks) |
-| **2.1** | Agent v2 — domain-first model (roles, not geometry), layout intelligence, single API surface | requires 2.0 | **этот документ** |
-| **2.2** | Roundtrip & sync hardening (user-arrows, ack/replay, no-silent-fail) | parallel/after 2.1 | TBD |
+| **2.0** | Persistence hardening — session-isolation fix, rooms discovery, **room export/import to JSON file** (backup + cross-folder transfer), skill startup awareness | — | [`2026-05-15-di-draw-phase2-0-persistence-design.md`](./2026-05-15-di-draw-phase2-0-persistence-design.md) (~5-7 tasks) |
+| **2.1** | Agent v2 — domain-first model (roles, not geometry), full ELK layout intelligence (compound, ports, orthogonal, bendpoints, pin), single API surface, extensibility map | requires 2.0 | **этот документ** |
+| **2.2** | Roundtrip & sync hardening (user-arrows → backend, ack/replay, no-silent-fail) | parallel/after 2.1 | TBD |
 | **2.3** | MCP adapter v1 (read + domain actions, не сырой patch) | requires 2.1 | TBD (replaces `docs/handoff/mcp-launch-brief.md`) |
-| **2.4** | Import — SVG / Miro / image → roles + auto-layout | requires 2.1 | TBD |
-| **2.5** | Export — Mermaid / SVG / PNG / Miro / Figma | requires 2.4 | TBD |
-| **2.6** | Multi-LLM hardening (Claude / Codex / corporate) | docs-only, after 2.1-2.3 | TBD |
-| 3.x | Drawing-as-first-class, multi-user shared rooms | deferred | — |
+| **2.4** | Import — Mermaid (already partial) + SVG + D2 + Miro JSON + (опционально) PNG/SVG-image → roles via heuristics. Layout пере-применяется на доменной модели после импорта. | requires 2.1 | TBD |
+| **2.5** | Export — Mermaid + native tldraw SVG/PNG + Miro REST API + Figma REST API + PlantUML (если уйдёт по simplicity). Все форматы через registry, добавление формата = один файл. | requires 2.4 | TBD |
+| **2.6** | Multi-LLM hardening (Claude / Codex / corporate) — docs + verification | docs-only, after 2.1-2.3 | TBD |
+| 3.x | Custom tldraw shapes per role, drawing-as-first-class, Cola/fCoSE «untangle graph» команда, multi-user shared rooms | deferred | — |
 
 Этот документ покрывает только **2.1**. Каждый следующий sub-project получит свою спеку и план.
 
@@ -206,17 +206,85 @@ Tldraw shape id формируется как `shape:e_${slug(name)}` (дете�
 
 ### 3.6. Auto-layout policy
 
-После каждого batch с `define`/`connect`/`group` actions backend запускает layout (если `layoutHint !== null`):
+ELK — primary engine (он уже подключен в `apps/backend/src/layout-engine.ts`, но сейчас используется в ~5% возможностей: только плоский graph + node coords, никаких compound, ports, edge routing, bendpoints, direction, pin). Phase 2.1 разворачивает его на полную.
 
-- **Default algorithm:** ELK layered.
-- **Default direction:** `LR` (или `layoutHint.direction`).
-- **Scope `"affected"`** (default): новые элементы и их прямые соседи (по edges) перепозиционируются; не затронутые — keep position (jitter-min).
-- **Scope `"all"`:** full recompute (по запросу).
-- **Container-aware:** ELK работает рекурсивно — сначала layout внутри каждого `network`/`boundary` container, потом top-level.
-- **Pin support:** если у элемента есть `meta.position: {x,y}` — ELK получает его как fixed constraint, не двигает.
-- **Performance:** server-side через `apps/backend/src/layout-engine.ts` с новым `affectedIds` параметром. Цель для 100 элементов — <100ms.
+#### 3.6.1. Layout modes (вместо плоского `algorithm`)
 
-Опционально: `layoutHint: null` — отключает auto-layout (агент батчует много define'ов и хочет один финальный explicit `layout` action в конце).
+`LayoutMode` — enum, явно семантичный. `LayoutHint.mode` заменяет старый `direction`:
+
+```ts
+type LayoutMode =
+  | "layered-lr"   // ELK layered, direction RIGHT — для архитектуры/system diagrams (default)
+  | "layered-tb"   // ELK layered, direction DOWN — для pipeline/flow
+  | "tree"         // ELK mrtree — для иерархий с одним корнем
+  | "pack"         // ELK rectpacking — disconnected components packed neatly
+  | "force";       // ELK force — fallback для messy graphs
+
+type LayoutHint = {
+  mode?: LayoutMode;        // default "layered-lr"
+  scope?: "all" | "affected" | ElementId;
+  spacing?: "compact" | "normal" | "loose";  // → ELK spacing.nodeNode/.edgeNode/.componentComponent
+};
+```
+
+Старый `algorithm: "dagre"` (misleading — реально elk-force) **переименовывается**: API меняется на `mode`, value `force` остаётся как honest fallback. Backwards-compat: один tick — старый `algorithm` параметр принимается и маппится в `mode` с deprecation warning в response.
+
+Расширение: добавить mode — одна строка в enum + один case в `mode-to-elk-options.ts`. Cola/fCoSE/Dagre-настоящий — будущая фаза (см. §14 Extensibility), regisry-pattern engine.
+
+#### 3.6.2. ELK feature usage — full
+
+| ELK feature | Где используется в di.draw | Status today | После Phase 2.1 |
+|---|---|---|---|
+| `elk.algorithm` | layout-engine | flat string | mode-driven через `mode-to-elk-options` |
+| `elk.direction` | layered modes | not used | `RIGHT`/`DOWN` per mode |
+| `elk.edgeRouting` | архитектурные схемы | not used | `ORTHOGONAL` для layered modes (rectangular bendpoints — естественно для архитектурных диаграмм) |
+| `elk.spacing.*` | spacing levels | default | компактный/нормальный/loose preset |
+| `compound nodes` | network/boundary containers | not used | **критично**: containers становятся ELK compound nodes с children, ELK сам располагает внутренности |
+| `ports` | edge anchors | not used | для service↔service connections — северный/южный/восточный/западный port (tldraw `normalizedAnchor` пересчитывается из ELK port-side) |
+| `bendpoints` | tldraw arrow waypoints | not used | ELK возвращает sections с bend points → tldraw arrow получает waypoints (через property update; см. §3.6.5) |
+| `elk.fixed = true` | pin support | not used | элементы с `meta.position` и `meta.pinned=true` получают fixed constraint |
+| partial layout | affected scope | not used | only `affected` subgraph отправляется в ELK; неаффектнутые ноды передаются как fixed (pinned) |
+
+#### 3.6.3. Scope policy
+
+- `scope: "affected"` (default) — backend строит affected set = `defined + connected_to_defined + groups_containing_defined`. Всё остальное в `state` передаётся в ELK как pinned (fixed). Это даёт jitter-min: пользовательская часть диаграммы не двигается.
+- `scope: "all"` — full recompute. По явному запросу. Применяется, когда пользователь сам сказал «переставь всё».
+- `scope: "<groupId>"` — re-layout только внутри указанного container'а; всё снаружи — pinned.
+
+#### 3.6.4. Pin / user overrides
+
+Элементы имеют:
+- `meta.position: {x,y}` — последняя позиция (всегда).
+- `meta.pinned: boolean` — установлено `true` когда **пользователь явно** перетащил/закрепил.
+
+ELK получает pinned элементы с `elk.fixed = true`. Auto-layout их не двигает.
+
+Не-pinned элементы могут получить новую позицию при relayout. После того как ELK вернул координаты — backend пишет их обратно в `meta.position` (но не флипает `pinned` в `true`). Это даёт: «пока пользователь не вмешался — layout рулит; как только вмешался — pin остаётся навсегда».
+
+Reset pin: action `define {name:"auth", meta:{pinned: false}}` (опциональная low-priority feature, backlog если случай возникнет).
+
+#### 3.6.5. Edge routing → tldraw
+
+ELK с `edgeRouting: ORTHOGONAL` возвращает `sections[].bendPoints[]` для каждого edge. Frontend `role-render.ts` (тoт же модуль, что мэппит role→shape) принимает waypoints и применяет к tldraw arrow через `props.bend` или новый `props.waypoints` если такой откроется. **Caveat**: tldraw 5.x arrow API не имеет first-class multi-bendpoint поддержки — для v1 будет approximation:
+- 0 bendpoints (ELK решил прямой) → tldraw arrow прямой.
+- 1+ bendpoints → tldraw arrow с computed `bend` (single curve approximation).
+- Когда tldraw добавит native waypoints — frontend mapper переключится без изменений в backend (свобода, заложенная архитектурой §14).
+
+#### 3.6.6. Post-processing pipeline
+
+После ELK, перед записью в state:
+
+1. **Snap-to-grid** — округление координат до 10px multiple (визуальная аккуратность).
+2. **Min-spacing guard** — пост-проверка `node-to-node distance >= 20px`; если ELK по какой-то причине поставил слишком близко (редко, но бывает с pinned constraints) — раздвигает.
+3. **No-overlap-with-system-UI** — резерв 80px сверху-справа под room badge / version footer / AI activity chip (§3.8 контракт).
+4. **Preserve relative order** — для not-pinned existing nodes: после ELK сравниваем их новые vs прежние позиции; если ELK перевернул порядок без сильного выигрыша в edge length — оставляем старый порядок (heuristic: разница total edge length < 5%).
+5. **Center camera on changed bbox** — frontend получает в WS-сообщении новый action response поле `bbox` (the box affecting bounds) и **опционально** центрирует камеру через `editor.zoomToBounds` если этот bbox не виден в текущем viewport. Дефолт — выключено, включается через user setting (backlog).
+
+#### 3.6.7. Performance budget
+
+- 100 elements, batch с 5 mutations + auto-layout `affected` (5-15 элементов в ELK): < 100ms server-side.
+- 1000 elements, batch с 5 mutations + `affected`: < 200ms (partial ELK call).
+- 1000 elements, full `scope: "all"`: < 800ms (acceptable; редкий случай).
 
 ---
 
@@ -492,20 +560,22 @@ CLI integration tests — `packages/didraw-cli/tests/domain.test.ts`.
 
 (Детальный план — через `writing-plans` skill после approval спеки.)
 
-Высокоуровнево (10-12 tasks):
+Высокоуровнево (12-14 tasks):
 
-1. `domain/types.ts` + Role/ConnectionKind enums + name-validation (TDD).
+1. `domain/types.ts` + Role/ConnectionKind enums + LayoutMode enum + name-validation (TDD).
 2. `domain/validate.ts` — all error categories (TDD per §7).
 3. `domain/compile.ts` — пер-action compile + intra-batch refs (TDD per §5.1 + edge cases).
-4. `domain/layout.ts` — group-aware ELK call + pin support + `affected` scope (TDD).
-5. `domain/context.ts` — domain summary builder + no-geometry guard (TDD).
-6. `routes/domain.ts` + `/api/viewport` + `/api/agent/context` — integration tests (transactionality, idempotency, dryRun).
-7. Frontend `role-render.ts` — table per role, user-override discipline (TDD).
-8. Frontend viewport reporter (`transport/viewport.ts`).
-9. `@didraw/client` extensions (`domain.ts`) — typed methods.
-10. CLI: `didraw define / connect / group / note / layout / delete / apply / context`.
-11. Skill cheat-sheet rewrite + Playwright smoke (§5.1 e2e).
-12. CHANGELOG + bump (0.0.1 → 0.2.0; 0.1.0 зарезервируем за Phase 2.0 persistence). Rebuild binary, smoke.
+4. `domain/layout-modes.ts` — registry `mode → elkOptions`; rename misleading `dagre` (factual `force`) → `mode: "force"` with deprecation alias (TDD).
+5. `domain/layout.ts` — full ELK: compound nodes для containers, ports, orthogonal routing, bendpoints, pin support, `affected` scope (TDD per §3.6).
+6. `domain/layout-postprocess.ts` — snap-to-grid + min-spacing + preserve-order + UI-reserve (§3.6.6) (TDD).
+7. `domain/context.ts` — domain summary builder + no-geometry guard (TDD).
+8. `routes/domain.ts` + `/api/viewport` + `/api/agent/context` — integration tests (transactionality, idempotency, dryRun, layout response shape).
+9. Frontend `role-render.ts` — table per role + bendpoint→tldraw arrow mapping + user-override discipline (TDD per §6.2).
+10. Frontend viewport reporter (`transport/viewport.ts`).
+11. `@didraw/client` extensions (`domain.ts`) — typed methods.
+12. CLI: `didraw define / connect / group / note / layout / delete / apply / context` + `--mode` flag for layout.
+13. Skill cheat-sheet rewrite (с layout mode hints + role examples) + Playwright smoke (§5.1 e2e).
+14. CHANGELOG + bump (0.1.0 → 0.2.0; 0.1.0 за Phase 2.0). Rebuild binary, smoke.
 
 ---
 
@@ -520,7 +590,31 @@ CLI integration tests — `packages/didraw-cli/tests/domain.test.ts`.
 
 ---
 
-## 13. Self-check — spec coverage map
+## 13. Extensibility — карта точек расширения
+
+Архитектура Phase 2.1 закладывает явные extension points так, чтобы будущие фичи **добавлялись**, а не **переписывали**. Один файл = один axis of extension.
+
+| Что хочется добавить | Где меняется | Сколько строк | Кросс-файловые правки |
+|---|---|---|---|
+| Новая роль (`cache`, `cdn`, `lambda`, `gateway`) | `domain/types.ts` Role enum + `frontend/canvas/role-render.ts` table row | 2 | нет |
+| Новый ConnectionKind (`stream`, `notify`) | `domain/types.ts` + `role-render.ts` (visual mapping) | 2 | нет |
+| Новый LayoutMode (`circular`, `swimlane`) | `domain/layout-modes.ts` registry entry | 1 file (mode-to-elk options) | нет, если в рамках ELK |
+| Альтернативный layout engine (Cola, fCoSE, real Dagre) | `domain/layout-engines/<name>.ts` + registry entry в `layout.ts` | 1 file | нет |
+| Новый action kind (`split`, `merge`, `clone`) | `domain/types.ts` discriminated union + один case в `validate.ts` и `compile.ts` | 3 файла, locally | tests in plan |
+| Новый import format (D2, Draw.io, Lucidchart JSON) | `import/<format>/parse.ts` + `import/registry.ts` entry → выдаёт `DomainAction[]` | 1-2 files | нет (Import переиспользует Domain API) |
+| Новый export format (Mermaid, PlantUML, Miro, Figma) | `export/<format>/serialize.ts` + `export/registry.ts` entry → принимает `CanvasState` | 1-2 files | нет |
+| Custom tldraw shape для роли (вместо geo preset) | `frontend/canvas/shapes/<role>-shape.tsx` + `role-render.ts` switch case | 1-2 files | runs alongside geo |
+| Новый context view (например «timeline view») | `domain/context-views/<name>.ts` + `/api/agent/context?view=...` param | 1 file | нет |
+| Альтернативная LLM backend (Codex/local) | docs only — CLI/skill уже LLM-agnostic | 0 code | doc update |
+
+**Anti-extension policy** (что не делаем как extension):
+- Параллельный agent API (action + patch для агента). PatchOp **только** frontend transport — не превращается в публичный API через add-only feature toggle.
+- Mode-flag style customization внутри одного шейпера. Если визуал роли требует много conditionals — лучше custom shape (extension point есть).
+- "Magic strings" в action args (типа `style: "tone=green"`). Все enum'ы — типизированные unions. Если расширяем — расширяем union.
+
+Это и есть «не переписывать в будущем»: расширение всегда сводится к **добавлению файла** в registry или **строки** в enum + соответствующая запись в один renderer/compiler. Pull-request на новую роль = два diff hunks, не refactor.
+
+## 14. Self-check — spec coverage map
 
 | Goal (§1.2) | Где покрыто |
 |---|---|
@@ -531,17 +625,23 @@ CLI integration tests — `packages/didraw-cli/tests/domain.test.ts`.
 | PatchOp transport-only | §2.1, §6.1 |
 | Idempotency, readable ids | §3.4 (upsert), §3.5 (name = id) |
 
-| User wish (msg 2026-05-15, повторное) | Где покрыто |
+| User wish | Где покрыто |
 |---|---|
 | диалог → красивая архитектурная диаграмма | §3, §5.1 (worked example) |
 | правильные роли (сеть, сервис, БД, юзер) | §3.1 Role enum |
-| красивая компоновка, не хочется перерисовывать | §3.6 ELK + container-aware |
+| красивая компоновка, не хочется перерисовывать | §3.6 (full ELK: compound, ports, orthogonal, bendpoints, post-processing snap-to-grid + min-spacing + preserve-order) |
 | user правит цвет точечно сам (не агент) | §6.2 user-override discipline |
-| persistence предыдущих схем в папке | Phase 2.0 (отдельная спека, см. §0) |
-| меньше технического долга, не плодить слои | §2.1 (single domain API), §6.1 (patch остаётся как transport, не parallel agent path) |
-| dialog-driven (диалог транслируется на доску) | §5.1 пример batch'а из реплики |
-| import (Miro/SVG/image) | Phase 2.4 |
-| export (Miro/Figma) | Phase 2.5 |
+| persistence предыдущих схем в папке | Phase 2.0 (отдельная спека) |
+| backup/share схем между папками | Phase 2.0 §2.4 (`didraw rooms export/import` to JSON) |
+| меньше технического долга, не плодить слои | §2.1 (single domain API), §6.1 (patch — transport, не agent API) |
+| dialog-driven (диалог → доска) | §5.1 worked example |
+| **расширяемость без переписывания** | §13 Extensibility map — каждый axis расширения = 1-2 файла, никаких rolling refactors |
+| layout-алгоритмы вместо LLM-творчества | §3.6 — ELK primary, post-processing, agent даёт intent, не coords |
+| ELK на полную (compound/ports/edge routing) | §3.6.2 feature table |
+| fix misleading `algorithm:"dagre"` → `elk.force` | §3.6.1 — переименование в `mode: "force"` с deprecation period |
+| Cola/fCoSE «untangle» | Phase 3.x (через extension point §13 — engine registry) |
+| import (Mermaid/SVG/D2/Miro) | Phase 2.4 (registry-based) |
+| export (Mermaid/Miro/Figma/SVG/PNG) | Phase 2.5 (registry-based) |
 | multi-LLM | Phase 2.6 |
 | drawing-not-only-schemas | Phase 3.x |
 | multi-user | Phase 3.x |

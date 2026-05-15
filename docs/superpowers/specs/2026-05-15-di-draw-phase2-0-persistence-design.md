@@ -55,7 +55,25 @@ didraw rooms restore <id>         # из .archive/ обратно
 
 Сохраняем backward compatibility: `--room <id>` arg на всех data commands продолжает работать как override.
 
-### 2.4. Skill startup awareness
+### 2.4. Room export/import to JSON file
+
+Простая операция, не зависит от формата (это просто внутренний canvas snapshot, не Mermaid/Miro/etc — те идут в Phase 2.5).
+
+```
+didraw rooms export <id> --to path/file.json    # пишет {schemaVersion, canvas, prompts} в файл
+didraw rooms import path/file.json [--as <id>]  # читает файл, создаёт room (или перезаписывает)
+```
+
+Под капотом — то же, что storage layer пишет на диск. Schema version в header — для будущей миграции (если изменим shape).
+
+Зачем сейчас, а не в Phase 2.5:
+- **Backup.** Пользователь хочет сохранить рабочую схему до экспериментов.
+- **Cross-folder transfer.** Перенести готовую диаграмму из одного проекта в другой.
+- **Sharing minimal.** Коллега запустит свой di.draw и `didraw rooms import received.json` — увидит ту же схему. Это **не** полноценный multi-user, это «отправь файл по любому каналу». Достаточно как baseline до Phase 3 multi-user.
+
+Phase 2.5 добавит export в **другие форматы** (Mermaid/Miro/Figma/SVG/PNG) — это уже трансформация, не транспорт.
+
+### 2.5. Skill startup awareness
 
 В `.claude/skills/draw/SKILL.md` добавляем injected section:
 
@@ -79,26 +97,28 @@ AI на старте `/draw` видит:
 
 ## 3. Scope-out
 
-- **Cross-project rooms.** Rooms scoped по `<storageDir>` (folder). Перенос между folders — manual.
+- **Cross-project rooms.** Rooms scoped по `<storageDir>` (folder). Cross-folder transfer — через `rooms export/import` (§2.4), а не shared-mount.
 - **Cloud sync, shared rooms.** Phase 3.
 - **Room renaming.** v1 — archive + restore-as-other-name. Direct rename — backlog.
-- **Room export/import** (single-file save/load). Phase 2.5 (export фича).
+- **Export в другие форматы** (Mermaid/Miro/Figma/SVG/PNG). Phase 2.5. Здесь — только native JSON snapshot для backup/sharing.
 
 ## 4. Tests
 
-- `apps/backend/tests/storage-path.test.ts` — слугификация всех вариантов env.
-- `apps/backend/tests/rooms-api.test.ts` — list, use, archive flow; mtime cache invalidation.
-- CLI integration: `didraw rooms list` пустой workspace → `{rooms:[]}`; после `didraw define service auth` → 1 room, 1 element.
-- Manual smoke: запустить из двух разных folder'ов одновременно, убедиться что storage dirs разные.
+- `apps/backend/tests/storage-path.test.ts` — слугификация всех вариантов env (`CLAUDE_SESSION_ID` / `CLAUDE_PROJECT_DIR` / fallback).
+- `apps/backend/tests/rooms-api.test.ts` — list, use, archive, restore flow; mtime cache invalidation.
+- `apps/backend/tests/room-export-import.test.ts` — export → import roundtrip: assert state byte-equality (canvas + prompts), schemaVersion header присутствует, импорт в новый id не перезаписывает существующий без `--force`.
+- CLI integration: `didraw rooms list` пустой workspace → `{rooms:[]}`; после `didraw define service auth` → 1 room, 1 element; `rooms export … --to /tmp/x.json && rooms import /tmp/x.json --as restored` → 2 rooms.
+- Manual smoke: запустить из двух разных folder'ов одновременно, убедиться что storage dirs разные (не пересекаются).
 
 ## 5. Implementation outline (writing-plans будет шире)
 
-1. `config.ts`: env-based slug; tests for fallback chain.
-2. `rooms.ts`: cache + scan API.
-3. `routes/rooms.ts`: list/use/archive endpoints + tests.
-4. CLI: `didraw rooms` subcommand.
-5. Skill: inject `didraw rooms list` + guidance text.
-6. Smoke: dual-folder run + archive/restore roundtrip.
-7. CHANGELOG, bump 0.0.1 → 0.1.0.
+1. `config.ts`: env-based slug + fallback chain; tests.
+2. `rooms.ts`: cache + scan API (mtime invalidation).
+3. `routes/rooms.ts`: list/use/archive/restore endpoints + tests.
+4. `routes/rooms-export-import.ts` или extension к §3: file roundtrip + schemaVersion header.
+5. CLI: `didraw rooms` subcommand (list/use/archive/restore/export/import).
+6. Skill: inject `didraw rooms list` + guidance text.
+7. Smoke: dual-folder run + archive/restore roundtrip + export/import roundtrip.
+8. CHANGELOG, bump 0.0.1 → 0.1.0.
 
-Estimated: 5-7 tasks.
+Estimated: 6-8 tasks.
