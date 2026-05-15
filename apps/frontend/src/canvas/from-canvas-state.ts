@@ -16,6 +16,22 @@ export type ArrowBindingCreate = {
   };
 };
 
+export type NodeStyle = {
+  color?: string;
+  fill?: string;
+};
+
+// Backend `style.color`/`style.fill` are plain strings; tldraw expects values
+// from its own enums (color: black|grey|red|...; fill: none|semi|solid|pattern).
+// We pass them through verbatim — unknown values produce a tldraw console
+// warning, which is acceptable and beats silently dropping the style.
+function styleToProps(style?: NodeStyle): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (style?.color) out.color = style.color;
+  if (style?.fill) out.fill = style.fill;
+  return out;
+}
+
 export function nodeToShape(n: {
   id: string;
   kind: string;
@@ -24,8 +40,10 @@ export function nodeToShape(n: {
   w?: number;
   h?: number;
   label?: string;
+  style?: NodeStyle;
 }): TLShapePartial {
   const tld = kindToTldraw(n.kind);
+  const styleProps = styleToProps(n.style);
 
   if (tld === "note") {
     return {
@@ -33,7 +51,7 @@ export function nodeToShape(n: {
       type: "note",
       x: n.x,
       y: n.y,
-      props: { richText: labelToRichText(n.label) },
+      props: { ...styleProps, richText: labelToRichText(n.label) },
       meta: { canvasId: n.id, kind: n.kind },
     };
   }
@@ -44,7 +62,7 @@ export function nodeToShape(n: {
       type: "text",
       x: n.x,
       y: n.y,
-      props: { richText: labelToRichText(n.label) },
+      props: { ...styleProps, richText: labelToRichText(n.label) },
       meta: { canvasId: n.id, kind: n.kind },
     };
   }
@@ -65,6 +83,7 @@ export function nodeToShape(n: {
     x: n.x,
     y: n.y,
     props: {
+      ...styleProps,
       geo: tld,
       w: n.w ?? 120,
       h: n.h ?? 60,

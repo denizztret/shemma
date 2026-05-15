@@ -147,6 +147,8 @@ export function App({ room }: { room: string }) {
                 if (op.set.label !== undefined) {
                   propsPatch.richText = labelToRichText(op.set.label);
                 }
+                if (op.set.style?.color) propsPatch.color = op.set.style.color;
+                if (op.set.style?.fill) propsPatch.fill = op.set.style.fill;
                 if (Object.keys(propsPatch).length > 0) {
                   updates.props = propsPatch;
                 }
