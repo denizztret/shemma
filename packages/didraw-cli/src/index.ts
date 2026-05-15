@@ -56,7 +56,7 @@ async function main() {
       usage();
       process.exit(1);
     }
-    return rmRoom(argv[1]);
+    return rmRoom(argv[1], { confirm: argv.includes("--confirm") });
   }
   usage();
   process.exit(cmd ? 1 : 0);
@@ -70,7 +70,7 @@ Lifecycle:
   open <room>
   list
   export <room> --to <path>
-  rm <room>
+  rm <room> --confirm
 
 Data:
   state    --room <id> [--compact] [--since <v>]
@@ -87,6 +87,8 @@ Versioning:
   update [--check] [--channel stable|nightly|dev]
 
 (internal-server: private subcommand used by daemon self-spawn)
+
+Exit codes: 0 ok, 1 usage/error, 2 not-found, 3 daemon-not-healthy
 `);
 }
 

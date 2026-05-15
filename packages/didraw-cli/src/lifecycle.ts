@@ -6,8 +6,7 @@ import {
   readdirSync,
   unlinkSync,
 } from "node:fs";
-import { stdin, stdout } from "node:process";
-import { createInterface } from "node:readline/promises";
+import { join } from "node:path";
 import { getConfig } from "@didraw/backend/src/config";
 import { ensure } from "./daemon";
 import type { Profile } from "./profile";
@@ -46,7 +45,7 @@ export function list() {
 }
 
 export function exportRoom(room: string, to: string) {
-  const src = `${canvasDir()}/${room}.json`;
+  const src = join(canvasDir(), `${room}.json`);
   if (!existsSync(src)) {
     console.error(JSON.stringify({ ok: false, error: "not found" }));
     process.exit(2);
@@ -55,19 +54,18 @@ export function exportRoom(room: string, to: string) {
   console.log(JSON.stringify({ ok: true, from: src, to }));
 }
 
-export async function rmRoom(room: string) {
-  const p = `${canvasDir()}/${room}.json`;
+export function rmRoom(room: string, opts: { confirm?: boolean } = {}) {
+  const p = join(canvasDir(), `${room}.json`);
   if (!existsSync(p)) {
     console.error(JSON.stringify({ ok: false, error: "not found" }));
     process.exit(2);
   }
-  const rl = createInterface({ input: stdin, output: stdout });
-  const ans = await rl.question(
-    `Delete ${room} (profile=${getConfig().profile})? [y/N] `,
-  );
-  rl.close();
-  if (ans.toLowerCase() === "y") {
-    unlinkSync(p);
-    console.log(JSON.stringify({ ok: true, deleted: room }));
-  } else console.log(JSON.stringify({ ok: false, error: "cancelled" }));
+  if (!opts.confirm) {
+    console.error(
+      JSON.stringify({ ok: false, error: "expected --confirm flag" }),
+    );
+    process.exit(1);
+  }
+  unlinkSync(p);
+  console.log(JSON.stringify({ ok: true, deleted: room }));
 }

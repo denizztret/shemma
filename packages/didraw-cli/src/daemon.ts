@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { getConfig } from "@didraw/backend/src/config";
 import { CanvasClient } from "@didraw/client";
+
+const GRACEFUL_SHUTDOWN_MS = 2000; // matches backend default; override via DIDRAW_GRACEFUL_SHUTDOWN_MS
 import { type Profile, pidFile, portFor } from "./profile";
 
-async function isAlive(pid: number): Promise<boolean> {
+function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -28,7 +29,7 @@ export async function status(profile: Profile) {
   const file = pidFile(profile);
   if (!existsSync(file)) return { running: false, profile, port };
   const pid = Number(readFileSync(file, "utf8"));
-  if (!(await isAlive(pid))) return { running: false, profile, port };
+  if (!isAlive(pid)) return { running: false, profile, port };
   return { running: await isHealthy(port), pid, profile, port };
 }
 
@@ -53,6 +54,12 @@ export async function start(profile: Profile) {
     },
   );
   child.unref();
+  if (!child.pid) {
+    console.error(
+      JSON.stringify({ ok: false, error: "failed to spawn daemon: no PID" }),
+    );
+    process.exit(1);
+  }
   writeFileSync(pidFile(profile), String(child.pid));
   console.log(JSON.stringify({ ok: true, pid: child.pid, profile, port }));
 }
@@ -88,16 +95,25 @@ export async function stop(profile: Profile) {
   try {
     process.kill(pid, "SIGTERM");
   } catch (_) {}
-  const deadline = Date.now() + getConfig().gracefulShutdownMs;
+  const overrideMs = Number(process.env.DIDRAW_GRACEFUL_SHUTDOWN_MS);
+  const gracefulMs =
+    Number.isFinite(overrideMs) && overrideMs > 0
+      ? overrideMs
+      : GRACEFUL_SHUTDOWN_MS;
+  const deadline = Date.now() + gracefulMs;
   while (Date.now() < deadline) {
-    if (!(await isAlive(pid))) break;
+    if (!isAlive(pid)) break;
     await new Promise((r) => setTimeout(r, 50));
   }
-  if (await isAlive(pid)) {
+  if (isAlive(pid)) {
     try {
       process.kill(pid, "SIGKILL");
     } catch (_) {}
   }
-  unlinkSync(file);
+  try {
+    unlinkSync(file);
+  } catch (_) {
+    /* ignore — file may already be gone */
+  }
   console.log(JSON.stringify({ ok: true, stopped: pid, profile }));
 }
