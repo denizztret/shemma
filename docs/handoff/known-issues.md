@@ -1,70 +1,58 @@
 # Known issues — post-MVP
 
-Найдены через live e2e smoke (release binary в /tmp, chrome-devtools MCP, CLI patches) после закрытия Phase 1.
+## ✅ Fixed in Phase 1.12 (commits `1bc6533`, `3a26e0e`)
 
-## P1 — Edges не рендерятся
-
-**Симптом:** `didraw patch` создаёт `{op:"add",target:"edge",...}` — backend сохраняет ✅, `didraw state` возвращает edges ✅, но **на canvas стрелка не появляется**.
-
-**Корневая причина (две точки):**
-
-1. `apps/frontend/src/App.tsx:34` — initial load берёт только `s.canvas.nodes.map(nodeToShape)`. Edges игнорируются.
-2. `apps/frontend/src/App.tsx:39-62` — WS-handler имеет branches только для `op.target === "node"`. Patches `op.target === "edge"` падают сквозь, не создают tldraw arrows.
-
-**Что нужно:**
-
-- `apps/frontend/src/canvas/from-canvas-state.ts` — добавить `edgeToShape(e)` который маппит `Edge → TLArrowShape`. Endpoint-types:
-  - `{kind:"node",id}` → `start.type: "binding"` + bound shape ID
-  - `{kind:"point",x,y}` → `start.type: "point"` + coords
-  - `style.arrow:"none"|"to"|"both"` → tldraw arrow heads
-  - `style.dashed:true` → `props.dash: "dashed"`
-- `App.tsx:30-33` — initial load: `editor.createShapes([...nodes.map(nodeToShape), ...edges.map(edgeToShape)])`.
-- `App.tsx:39-62` WS-handler — добавить branches `op.target === "edge"` для add/update/delete (analogous nodes).
-- `canvas/to-patch.ts` — обратный поток (user-drag создаёт/двигает arrow → POST patch). Нужно научить `diffToOps` распознавать TLArrowShape и эмитить `{target:"edge"}` ops.
-- Spec ref: §3.1 `Edge` type, §3.2 frontend rendering, §3.4 echo-guard (тот же flow что для nodes).
-
-**Тест:** Playwright (`apps/frontend/tests/golden.spec.ts`) — расширить: AI добавляет 2 ноды + 1 edge, проверить что DOM имеет `.tl-shape[data-shape-type="arrow"]`.
-
-## P2 — Sticky note label не разделяет `\n`
-
-**Симптом:** `didraw patch` с `label:"PostgreSQL\\n(primary)"` → бэкенд хранит строку с literal `\n`, sticky note показывает `PostgreSQL\n(primary)` (literal `\n`, не line break).
-
-**Корневая причина:** `apps/frontend/src/canvas/richtext.ts:9-15` `labelToRichText(label)` кладёт весь label в один `{type:"text",text:label}` внутри одного `{type:"paragraph"}`. ProseMirror doc model требует **отдельный `{type:"paragraph"}` на каждую строку** для line breaks.
-
-**Что нужно:**
-
-```ts
-export function labelToRichText(label?: string): RichTextDoc {
-  if (!label) return { type: "doc", content: [{ type: "paragraph" }] };
-  const lines = label.split("\n");
-  return {
-    type: "doc",
-    content: lines.map((line) => ({
-      type: "paragraph",
-      content: line ? [{ type: "text", text: line }] : undefined,
-    })),
-  };
-}
-```
-
-И зеркальное в `richTextToString` — `doc.content.map(p => p.content?.[0]?.text ?? "").join("\n")`.
-
-**Тест:** unit-test для `labelToRichText("a\nb")` → проверить что `content.length === 2` и параграфы содержат `"a"` и `"b"` отдельно.
-
-## P3 — `room` env-fallback в release не учитывает `CLAUDE_SESSION_ID`
-
-**Симптом:** При запуске release binary вне Claude Code-сессии без `CLAUDE_SESSION_ID` env, storageDir резолвится в `~/.claude/projects/default-project/canvas/`. Все room'ы клиента (например, `?room=demo`) попадают в этот общий dir — теряется per-session isolation, которую обещает spec §3.5.
-
-**Корневая причина:** `apps/backend/src/config.ts:50-57` — `storageDir` по умолчанию `~/.claude/projects/default-project/<storageSubdir>`. Hard-coded "default-project". `CLAUDE_SESSION_ID` env не читается.
-
-**Что нужно:** добавить чтение `CLAUDE_SESSION_ID` → `<slug>`-сегмент. Если env пуст — fallback на `default-project`. Документировать в README и spec.
-
-**Не блокер** — для single-user MVP working out of one common dir это OK. Но при multi-tab / multi-session Claude Code появится конфликт.
+- **P1 — Edges не рендерятся:** ✅ Закрыт. `edgeToShape` helper эмитит `TLArrow` shape + bindings для node-anchored endpoints. Initial load + WS forward branches покрывают AI-инициированные edges. **User-initiated arrow drag → backend** ещё не round-trip'ится (см. backlog ниже).
+- **P2 — Sticky `\n` literal escape:** ✅ Закрыт. `labelToRichText` теперь split'ит label по `\n` на отдельные ProseMirror paragraphs, `richTextToString` joins back. Multiline labels работают для note/text/geo.
+- **U2 — Auto zoomToFit:** ✅ После initial `createShapes` → `editor.zoomToFit()` если есть контент.
+- **U4 — VersionFooter overlap:** ✅ Перемещён в bottom-left над zoom controls; tldraw watermark остаётся в bottom-right отдельно.
+- **U5 — Vertical toolbar:** ✅ `Toolbar` slot override в `buildTldrawComponents` рендерит `DefaultToolbar orientation="vertical"`.
 
 ---
 
-## Что НЕ баг
+## 🔓 Открытые
 
-- **PromptDrawer показывает `1` без явного создания** — это persistent prompt из прошлой сессии (`~/.claude/projects/default-project/canvas/demo.json`). Работает as designed (per spec §3.6 prompts persist).
-- **`Get a license for production` watermark внизу-справа** — это tldraw SDK license requirement (free tier). Перекрывает часть VersionFooter (`v0.0.1 · stab[le]` обрезано). Решается покупкой tldraw license или показом footer выше.
-- **Стрелка в нижнюю-mystery rect** на скриншоте — это tldraw placeholder для arrow без bound endpoint, потому что edge с references `{kind:"node",id:"db"}` ссылается на shape которой нет в editor.store (см. P1). После P1-fix mystery rect исчезнет.
+### P3 — `CLAUDE_SESSION_ID` env не учитывается в storage path
+
+**Симптом:** Release binary без явного `CLAUDE_SESSION_ID` env складывает все room'ы в общий `~/.claude/projects/default-project/canvas/`. Теряется per-session isolation, обещанная spec §3.5.
+
+**Severity:** Low. Для single-user MVP не блокер. При multi-tab Claude Code появится конфликт.
+
+**Где:** `apps/backend/src/config.ts:50-57` — hard-coded `"default-project"` в `storageDir` fallback.
+
+**Fix:** добавить чтение `process.env.CLAUDE_SESSION_ID` → `<slug>`-сегмент. Если env пуст — текущий fallback `default-project`. Документировать в README.
+
+---
+
+### B1 — User-initiated arrows не отправляются в backend
+
+**Симптом:** Если пользователь рисует стрелку нативно через tldraw toolbar (не через AI), shape создаётся локально но не попадает в `/api/patch`. При reload пропадёт.
+
+**Severity:** Medium для usability. Critical если пользователь хочет дополнять AI-сгенерированную диаграмму своими стрелками.
+
+**Где:** `apps/frontend/src/canvas/to-patch.ts:79-105` — guard `if (s.type === "arrow") continue;` намеренно skip'ает arrows из diff'а.
+
+**Fix:** добавить `shapeToEdge(s, editor)` который:
+1. Читает `editor.getBindingsToShape(arrowId, "arrow")` для start/end terminals
+2. Маппит binding `toId` → original `Edge.from/to: {kind:"node", id}`
+3. Если binding отсутствует — берёт `props.start/end` как `{kind:"point", x, y}`
+4. Эмитит `{op:"add"|"update", target:"edge", value:{...}}`
+
+Backend уже принимает edges (Tasks 6+9), поэтому изменения только во frontend `to-patch.ts` + handle update в `update` op (сейчас skipped в WS handler — добавить).
+
+---
+
+### B2 — Push-канал prompts → AI realtime отсутствует
+
+**Симптом:** User в UI создаёт prompt → backend сохраняет → frontend `PromptDrawer` обновляется. Но **AI узнаёт о новом prompt только при следующем `/draw` invocation** или явном `didraw prompts list`.
+
+**Severity:** Medium для UX. Без push-канала AI не может реагировать на user prompts быстро.
+
+**Fix:** Phase 2.2 — `canvas-channel-mcp` MCP-server по [Claude Code Channels](https://code.claude.com/docs/en/channels). См. план task 42, lines 4918-4972.
+
+---
+
+## ℹ️ Не баг (поведение by-design)
+
+- **PromptDrawer `1` без явного создания** — persistent prompt из прошлой сессии (`<storageDir>/<room>.json`). Per spec §3.6 prompts persist между sessions.
+- **`Get a license for production` watermark** — tldraw SDK free-tier. Решается покупкой commercial license, вне scope MVP.
