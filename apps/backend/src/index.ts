@@ -67,11 +67,8 @@ export async function startServer(opts: AppOpts = {}) {
         if (srv.upgrade(req, { data: { room } })) return;
         return new Response("upgrade failed", { status: 500 });
       }
-      // release/debug: serve frontend from embedded assets (compiled) or disk (dev)
-      if (
-        (config.profile === "release" || config.profile === "debug") &&
-        !url.pathname.startsWith("/api")
-      ) {
+      // serve frontend for release/debug profiles; dev relies on Vite's own server
+      if (config.profile !== "dev" && !url.pathname.startsWith("/api")) {
         const served = await tryServeFrontend(url.pathname);
         if (served) return served;
       }

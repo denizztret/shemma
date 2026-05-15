@@ -7,9 +7,11 @@ GIT_SHA="$(git rev-parse --short HEAD)"
 BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 ASSETS_FILE="apps/backend/src/embedded-assets.ts"
-ASSETS_PLACEHOLDER=$(cat "$ASSETS_FILE")
+ASSETS_BACKUP="$(mktemp)"
+cp "$ASSETS_FILE" "$ASSETS_BACKUP"
 restore_placeholder() {
-  echo "$ASSETS_PLACEHOLDER" > "$ASSETS_FILE"
+  cp "$ASSETS_BACKUP" "$ASSETS_FILE"
+  rm -f "$ASSETS_BACKUP"
 }
 trap restore_placeholder EXIT
 

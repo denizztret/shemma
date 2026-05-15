@@ -10,6 +10,12 @@ import { fail } from "./util";
 export const VALID_CHANNELS = ["stable", "nightly", "dev"] as const;
 type Channel = (typeof VALID_CHANNELS)[number];
 
+function isChannel(s: string): s is Channel {
+  return (VALID_CHANNELS as readonly string[]).includes(s);
+}
+
+const CURRENT_VERSION = process.env.DIDRAW_VERSION ?? "0.0.0";
+
 const CONFIG_FILE = join(homedir(), ".claude", ".didraw-config.json");
 
 function manifestUrl(): string {
@@ -35,8 +41,12 @@ function writeConfig(cfg: Config) {
 }
 
 function semverCmp(a: string, b: string): number {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
+  // Strip pre-release/build suffix (e.g. "0.0.0-dev") so split(".").map(Number)
+  // doesn't produce NaN — release-channel never compares pre-release ordering.
+  const [ax] = a.split("-");
+  const [bx] = b.split("-");
+  const pa = ax.split(".").map(Number);
+  const pb = bx.split(".").map(Number);
   for (let i = 0; i < 3; i++) {
     const av = pa[i] ?? 0;
     const bv = pb[i] ?? 0;
@@ -47,17 +57,14 @@ function semverCmp(a: string, b: string): number {
 
 function resolveChannel(): Channel {
   const fromConfig = readConfig().channel;
-  if (fromConfig && (VALID_CHANNELS as readonly string[]).includes(fromConfig))
-    return fromConfig;
+  if (fromConfig && isChannel(fromConfig)) return fromConfig;
   const fromEnv = process.env.DIDRAW_CHANNEL;
-  if (fromEnv && (VALID_CHANNELS as readonly string[]).includes(fromEnv))
-    return fromEnv as Channel;
+  if (fromEnv && isChannel(fromEnv)) return fromEnv;
   return "stable";
 }
 
 export async function cmdUpdateCheck() {
   const channel = resolveChannel();
-  const current = process.env.DIDRAW_VERSION ?? "0.0.0";
   try {
     const r = await fetch(manifestUrl());
     if (!r.ok) throw new Error(`manifest ${r.status}`);
@@ -65,20 +72,22 @@ export async function cmdUpdateCheck() {
       channels?: Record<string, { version?: string }>;
     };
     const latest = m.channels?.[channel]?.version ?? null;
-    const available = !!latest && semverCmp(latest, current) > 0;
-    console.log(JSON.stringify({ current, latest, available, channel }));
+    const available = !!latest && semverCmp(latest, CURRENT_VERSION) > 0;
+    console.log(
+      JSON.stringify({ current: CURRENT_VERSION, latest, available, channel }),
+    );
   } catch (e) {
     fail(e);
   }
 }
 
 export async function cmdUpdateSetChannel(channel: string) {
-  if (!(VALID_CHANNELS as readonly string[]).includes(channel))
+  if (!isChannel(channel))
     fail(
       `unknown channel "${channel}". Expected one of: ${VALID_CHANNELS.join("|")}`,
     );
   const cfg = readConfig();
-  cfg.channel = channel as Channel;
+  cfg.channel = channel;
   writeConfig(cfg);
   console.log(JSON.stringify({ ok: true, channel }));
 }
@@ -116,6 +125,12 @@ type ManifestChannel = {
 };
 type Manifest = { channels?: Record<string, ManifestChannel> };
 
+async function fetchManifest(): Promise<Manifest> {
+  const r = await fetch(manifestUrl());
+  if (!r.ok) throw new Error(`manifest HTTP ${r.status}`);
+  return r.json() as Promise<Manifest>;
+}
+
 export async function cmdUpdate(argv: string[]) {
   // Refuse to overwrite the bun interpreter when run as `bun src/index.ts` in dev.
   // Compiled binaries have execPath ending with the artifact name (didraw / didraw-*).
@@ -125,13 +140,10 @@ export async function cmdUpdate(argv: string[]) {
     );
 
   const channel = resolveChannel();
-  const current = process.env.DIDRAW_VERSION ?? "0.0.0";
 
-  let manifest!: Manifest;
+  let manifest: Manifest;
   try {
-    const r = await fetch(manifestUrl());
-    if (!r.ok) throw new Error(`manifest HTTP ${r.status}`);
-    manifest = (await r.json()) as Manifest;
+    manifest = await fetchManifest();
   } catch (e) {
     fail(e);
   }
@@ -139,12 +151,12 @@ export async function cmdUpdate(argv: string[]) {
   const ch = manifest.channels?.[channel];
   if (!ch) fail(`channel "${channel}" not in manifest`);
 
-  if (semverCmp(ch.version, current) <= 0) {
+  if (semverCmp(ch.version, CURRENT_VERSION) <= 0) {
     console.log(
       JSON.stringify({
         ok: true,
         alreadyLatest: true,
-        version: current,
+        version: CURRENT_VERSION,
         channel,
       }),
     );
@@ -158,7 +170,7 @@ export async function cmdUpdate(argv: string[]) {
   const target = process.execPath;
   const dir = dirname(target);
 
-  let tmpfile!: string;
+  let tmpfile: string;
   try {
     tmpfile = await downloadAndVerify(asset.url, asset.sha256);
   } catch (e) {
@@ -195,15 +207,18 @@ export async function cmdUpdate(argv: string[]) {
   console.log(
     JSON.stringify({
       ok: true,
-      from: current,
+      from: CURRENT_VERSION,
       to: ch.version,
       channel,
       profile,
-      rollback: `mv ${oldPath} ${target}`,
+      rollback: `mv '${oldPath}' '${target}'`,
     }),
   );
 
   // ensure() self-spawns from process.execPath, which now points at the new binary.
   await stop(profile).catch(() => {});
   await ensure(profile);
+  // Successful restart — drop the rollback backup to avoid accumulating ~70MB
+  // per update. If ensure() throws (process.exit(3)), .old stays for manual rollback.
+  await fs.unlink(oldPath).catch(() => {});
 }
