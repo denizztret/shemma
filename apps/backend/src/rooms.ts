@@ -48,8 +48,25 @@ export class Rooms {
   private map = new Map<RoomId, RoomState>();
   private loading = new Map<RoomId, Promise<RoomState>>();
   private persistence?: FilePersistence;
+  private viewports = new Map<string, { x: number; y: number; w: number; h: number; zoom?: number; at: number }>();
 
   constructor(private store: RoomStore) {}
+
+  setViewport(id: string, vp: { x: number; y: number; w: number; h: number; zoom?: number }): void {
+    this.viewports.set(id, { ...vp, at: Date.now() });
+  }
+
+  getViewport(id: string): { x: number; y: number; w: number; h: number; zoom?: number } | null {
+    const v = this.viewports.get(id);
+    if (!v) return null;
+    // Wipe after 30 min inactivity.
+    if (Date.now() - v.at > 30 * 60 * 1000) {
+      this.viewports.delete(id);
+      return null;
+    }
+    const { at, ...rest } = v;
+    return rest;
+  }
 
   setPersistence(p: FilePersistence) {
     this.persistence = p;

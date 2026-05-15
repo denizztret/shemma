@@ -11,6 +11,7 @@ import { promptRoutes } from "./routes/prompts";
 import { roomsRoutes } from "./routes/rooms";
 import { stateRoutes } from "./routes/state";
 import { versionRoutes } from "./routes/version";
+import { viewportRoutes } from "./routes/viewport";
 import { DEFAULT_ROOM, type RoomState } from "./types";
 import { type Sock, WsHub } from "./ws";
 
@@ -44,6 +45,7 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", promptRoutes(rooms, bus, { onDirty }));
   app.route("/", aiRoutes(rooms, bus));
   app.route("/", roomsRoutes(rooms, storageDir));
+  app.route("/", viewportRoutes(rooms));
   return { app, rooms, bus, persistence };
 }
 
