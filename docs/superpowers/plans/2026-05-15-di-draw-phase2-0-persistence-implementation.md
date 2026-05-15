@@ -1,6 +1,10 @@
 # di.draw Phase 2.0 — Persistence Hardening Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> **Revision history:**
+>   - v1 (2026-05-15) — initial draft;
+>   - v1.1 (2026-05-15) — после review закрыты 8 findings: bad assertion в Task 1, CLAUDE_SESSION_ID fallback в `resolveRoomId`, flush-before-stat order в archive/export/delete, shared `roomParam` helper + path-traversal tests, honest `parseHeader` doc, removed `setOnDirty` contradictions в Task 4, CLI subprocess test pattern (Bun.spawn) в Task 9, conditional `release/VERSION` git add.
 
 **Goal:** Закрыть P3 (workspace isolation), сформализовать persisted envelope, добавить daemon-safe rooms API (list/archive/restore/export/import) и переключить CLI с прямых filesystem ops на HTTP-via-daemon. После этого Phase 2.1 (Agent v2) сможет полагаться на стабильный rooms discovery.
 
@@ -63,8 +67,10 @@ describe("slugifyProject", () => {
     const a = slugifyProject("/home/u1/proj");
     const b = slugifyProject("/home/u2/proj");
     expect(a).not.toBe(b);
-    expect(a.endsWith("-" + a.slice(-8))).toBe(false); // sanity
-    expect(a.split("-").pop()?.length).toBe(8);        // hash suffix length
+    expect(a).toMatch(/-[0-9a-f]{8}$/);                // 8-char hex hash suffix
+    expect(b).toMatch(/-[0-9a-f]{8}$/);
+    expect(a.startsWith("proj-")).toBe(true);          // body preserved
+    expect(b.startsWith("proj-")).toBe(true);
   });
 
   test("lowercase + slashes to dashes + no leading/trailing dash", () => {
@@ -305,7 +311,7 @@ describe("envelope", () => {
     expect(env.elementCount).toBe(4);
   });
 
-  test("parseHeader reads metadata without parsing canvas", () => {
+  test("parseHeader projects out only metadata fields", () => {
     const s = makeRoomState();
     s.canvas.nodes.push({ id: "n1", kind: "rect", x: 1, y: 2 });
     s.version = 7;
@@ -317,8 +323,9 @@ describe("envelope", () => {
     expect(hdr!.version).toBe(7);
     expect(hdr!.elementCount).toBe(1);
     expect(hdr!.schemaVersion).toBe(1);
-    // header does NOT carry canvas/prompts:
+    // returned object does NOT include canvas/prompts (projection contract):
     expect((hdr as Record<string, unknown>).canvas).toBeUndefined();
+    expect((hdr as Record<string, unknown>).prompts).toBeUndefined();
   });
 
   test("parseHeader returns null on malformed JSON", () => {
@@ -403,6 +410,17 @@ export function serialize(roomId: string, s: RoomState): string {
   return JSON.stringify(env, null, 2);
 }
 
+/**
+ * Reads envelope metadata fields from a full file content string.
+ *
+ * v1 implementation: performs a full JSON.parse and projects out the header
+ * fields. Spec §2.2 allowed for a streaming-parser optimization but explicitly
+ * permitted full-parse as the v1 path. The performance budget (~50ms for 100
+ * rooms) is met even with full parse for typical room sizes.
+ *
+ * Returns null on malformed JSON or missing required fields — callers should
+ * skip such entries when listing.
+ */
 export function parseHeader(raw: string): EnvelopeHeader | null {
   try {
     const j = JSON.parse(raw) as Partial<PersistedEnvelope>;
@@ -667,7 +685,9 @@ export function resolveRoomId(raw: string | undefined): {
   ok: true;
   id: string;
 } | { ok: false; reason: string } {
-  const id = raw ?? DEFAULT_ROOM;
+  // Resolution chain per spec §2.1: explicit > URL > CLAUDE_SESSION_ID > default.
+  // Backend/CLI side has env access (frontend uses its own narrower chain).
+  const id = raw ?? process.env.CLAUDE_SESSION_ID ?? DEFAULT_ROOM;
   if (!validateRoomId(id)) {
     return {
       ok: false,
@@ -694,12 +714,52 @@ Apply this to: `routes/state.ts`, `routes/patch.ts`, `routes/layout.ts`, `routes
 Run: `cd apps/backend && bun test tests/routes.*.test.ts`
 Expected: All existing pass (they use valid ids like "test-room", "abc").
 
-- [ ] **Step 7: Add regression test in `tests/rooms-id-validation.test.ts`**
+- [ ] **Step 7: Add regression tests in `tests/rooms-id-validation.test.ts`**
 
 Append:
 
 ```ts
+import { afterEach, beforeEach } from "bun:test";
 import { makeApp } from "../src/index";
+import { resolveRoomId } from "../src/rooms";
+
+describe("resolveRoomId chain", () => {
+  const ORIG_SESSION = process.env.CLAUDE_SESSION_ID;
+  beforeEach(() => {
+    delete process.env.CLAUDE_SESSION_ID;
+  });
+  afterEach(() => {
+    if (ORIG_SESSION !== undefined) {
+      process.env.CLAUDE_SESSION_ID = ORIG_SESSION;
+    }
+  });
+
+  test("explicit raw wins over CLAUDE_SESSION_ID env", () => {
+    process.env.CLAUDE_SESSION_ID = "sess-id";
+    const r = resolveRoomId("explicit");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.id).toBe("explicit");
+  });
+
+  test("CLAUDE_SESSION_ID env fallback when raw missing", () => {
+    process.env.CLAUDE_SESSION_ID = "sess-abc";
+    const r = resolveRoomId(undefined);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.id).toBe("sess-abc");
+  });
+
+  test("default when raw and env both missing", () => {
+    const r = resolveRoomId(undefined);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.id).toBe("default");
+  });
+
+  test("invalid env var → 422 reason returned", () => {
+    process.env.CLAUDE_SESSION_ID = "invalid id with space";
+    const r = resolveRoomId(undefined);
+    expect(r.ok).toBe(false);
+  });
+});
 
 describe("route-level validation", () => {
   test("state endpoint rejects invalid room id with 422", async () => {
@@ -757,9 +817,9 @@ beforeEach(() => {
     load: (id) => persistence.load(id),
     save: (id, s) => persistence.save(id, s),
   });
-  // wire scheduleSave path: room writes go through scheduleSave
-  rooms.setOnDirty((id, s) => persistence.scheduleSave(id, s));
-  // wire flushIfDirty + evict through to persistence
+  // Wire flushIfDirty + evict through to persistence.
+  // (scheduleSave wiring lives in makeApp via existing onDirty callback;
+  // tests here call persistence.scheduleSave directly to simulate that.)
   rooms.setPersistence(persistence);
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -817,23 +877,22 @@ describe("Rooms.evict", () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cd apps/backend && bun test tests/rooms-flush-evict.test.ts`
-Expected: FAIL — `setOnDirty`, `setPersistence`, `flushIfDirty`, `evict` not on `Rooms`.
+Expected: FAIL — `setPersistence`, `flushIfDirty`, `evict` not on `Rooms`.
 
 - [ ] **Step 3: Extend `apps/backend/src/rooms.ts`**
 
-Add to the `Rooms` class (around line 25, after constructor):
+Add type-only import at top of file (to avoid import cycle — `persistence.ts` already imports `Rooms`):
 
 ```ts
 import type { FilePersistence } from "./persistence";
+```
 
+Add to the `Rooms` class (after constructor):
+
+```ts
 // ... inside class Rooms ...
 
-private onDirty?: (id: RoomId, s: RoomState) => void;
 private persistence?: FilePersistence;
-
-setOnDirty(cb: (id: RoomId, s: RoomState) => void) {
-  this.onDirty = cb;
-}
 
 setPersistence(p: FilePersistence) {
   this.persistence = p;
@@ -850,57 +909,14 @@ async evict(id: RoomId): Promise<void> {
 }
 ```
 
-**Note on import cycle:** `persistence.ts` imports `Rooms` (via `RoomStore` type). To avoid cycle, use `import type { FilePersistence }` in `rooms.ts` (type-only import erased at compile time).
+The existing routes (patch/layout/prompts) already use their own `onDirty` callback wiring through `makeApp` opts — we don't touch that path. `Rooms.setPersistence` is additional wiring for new code (Tasks 5-8) that need `flushIfDirty`/`evict`.
 
 - [ ] **Step 4: Run flush/evict test**
 
 Run: `cd apps/backend && bun test tests/rooms-flush-evict.test.ts`
 Expected: PASS (4 tests).
 
-- [ ] **Step 5: Wire `Rooms` to persistence in `makeApp`**
-
-Modify `apps/backend/src/index.ts` `makeApp()`. Replace the wiring block (after `const rooms = new Rooms(store);`):
-
-```ts
-const rooms = new Rooms(store);
-if (persistence) {
-  rooms.setPersistence(persistence);
-  rooms.setOnDirty((id, s) => persistence.scheduleSave(id, s));
-}
-const bus = new WsHub();
-```
-
-And remove the `onDirty` parameter being passed to existing routes (they should now access `rooms.flushIfDirty` directly when needed, but for now existing routes use the `onDirty` opts pattern — keep that intact, just route the callback through `Rooms`).
-
-Actually: re-read existing routes. `patchRoutes(rooms, bus, { onDirty })` — `onDirty` is the callback. Keep this for backwards compat; the existing routes pass it through. The new `setOnDirty` on `Rooms` is **additional** wiring used by new `rooms.ts` routes.
-
-Cleanest path: keep existing `opts.onDirty` flow as-is (it works for backwards-compat), and `setOnDirty` is **only** used by new code paths in Task 5+ (which will mutate rooms in routes/rooms.ts).
-
-Simplify: remove `setOnDirty` from the class — it's not needed because existing routes already have their own `onDirty` callback wiring. The class only needs `setPersistence` for `flushIfDirty/evict`.
-
-Revise `apps/backend/src/rooms.ts` — drop `onDirty` handling:
-
-```ts
-private persistence?: FilePersistence;
-
-setPersistence(p: FilePersistence) {
-  this.persistence = p;
-}
-
-async flushIfDirty(id: RoomId): Promise<void> {
-  if (!this.persistence) return;
-  await this.persistence.flushIfDirty(id);
-}
-
-async evict(id: RoomId): Promise<void> {
-  await this.flushIfDirty(id);
-  this.map.delete(id);
-}
-```
-
-Update test (remove `setOnDirty` line) — keep only `setPersistence`. Run again, expect PASS.
-
-- [ ] **Step 6: Verify `index.ts` wiring**
+- [ ] **Step 5: Verify `index.ts` wiring**
 
 `apps/backend/src/index.ts` `makeApp()` final form:
 
@@ -932,12 +948,12 @@ export function makeApp(opts: AppOpts = {}) {
 }
 ```
 
-- [ ] **Step 7: Run full backend test suite**
+- [ ] **Step 6: Run full backend test suite**
 
 Run: `cd apps/backend && bun test`
 Expected: All pass (existing 50+ tests still green; new 4 flush/evict tests added).
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add apps/backend/src/rooms.ts apps/backend/src/index.ts \
@@ -1055,9 +1071,30 @@ Expected: FAIL — `/api/rooms` returns 404.
 ```ts
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { Context } from "hono";
 import { Hono } from "hono";
 import { parseHeader } from "../envelope";
 import type { Rooms } from "../rooms";
+import { validateRoomId } from "../rooms";
+
+// Shared path-param validator. All `:id` routes MUST go through this — raw
+// c.req.param("id") joined with storageDir is a path-traversal vector
+// (e.g. id="../etc/passwd" → escape from storageDir).
+function roomParam(c: Context):
+  | { ok: true; id: string }
+  | { ok: false; response: Response } {
+  const id = c.req.param("id");
+  if (!validateRoomId(id)) {
+    return {
+      ok: false,
+      response: c.json(
+        { ok: false, error: `invalid room id "${id}"` },
+        422,
+      ),
+    };
+  }
+  return { ok: true, id };
+}
 
 export function roomsRoutes(rooms: Rooms, storageDir: string) {
   const app = new Hono();
@@ -1178,6 +1215,18 @@ describe("POST /api/rooms/:id/archive", () => {
     expect(res.status).toBe(404);
   });
 
+  test("422 on path-param injection attempts", async () => {
+    const { app } = makeApp({ storageDir: dir });
+    for (const badId of ["..%2Fetc", "name%20with%20space", "name!"]) {
+      const res = await app.fetch(
+        new Request(`http://localhost/api/rooms/${badId}/archive`, {
+          method: "POST",
+        }),
+      );
+      expect(res.status).toBe(422);
+    }
+  });
+
   test("flushes dirty state before archiving", async () => {
     const { app, rooms, persistence } = makeApp({ storageDir: dir });
     // mutate without going through autosave commit timing
@@ -1273,15 +1322,23 @@ import { rename, mkdir, stat } from "node:fs/promises";
 // ... inside roomsRoutes ...
 
 app.post("/api/rooms/:id/archive", async (c) => {
-  const id = c.req.param("id");
+  const idParam = roomParam(c);
+  if (!idParam.ok) return idParam.response;
+  const id = idParam.id;
   const srcPath = join(storageDir, `${id}.json`);
+
+  // CRITICAL ORDER: flush BEFORE stat. A freshly-created dirty room may have
+  // no file on disk yet (autosave debounce not fired). flushIfDirty is
+  // idempotent — no-op if nothing pending.
+  await rooms.flushIfDirty(id);
+
   try {
     await stat(srcPath);
   } catch {
     return c.json({ ok: false, error: "room not found" }, 404);
   }
 
-  await rooms.evict(id);  // flushes + removes from memory
+  await rooms.evict(id);  // remove from memory
 
   const archiveDir = join(storageDir, ".archive");
   await mkdir(archiveDir, { recursive: true });
@@ -1292,7 +1349,9 @@ app.post("/api/rooms/:id/archive", async (c) => {
 });
 
 app.post("/api/rooms/:id/restore", async (c) => {
-  const id = c.req.param("id");
+  const idParam = roomParam(c);
+  if (!idParam.ok) return idParam.response;
+  const id = idParam.id;
   const archiveDir = join(storageDir, ".archive");
   const srcPath = join(archiveDir, `${id}.json`);
   const dstPath = join(storageDir, `${id}.json`);
@@ -1302,6 +1361,9 @@ app.post("/api/rooms/:id/restore", async (c) => {
   } catch {
     return c.json({ ok: false, error: "archived room not found" }, 404);
   }
+  // For conflict check we must consider in-memory + on-disk. Flush ensures
+  // pending writes for the target id have landed before we check.
+  await rooms.flushIfDirty(id);
   try {
     await stat(dstPath);
     return c.json(
@@ -1458,11 +1520,16 @@ Add endpoint inside `roomsRoutes`:
 
 ```ts
 app.post("/api/rooms/:id/export", async (c) => {
-  const id = c.req.param("id");
+  const idParam = roomParam(c);
+  if (!idParam.ok) return idParam.response;
+  const id = idParam.id;
   const body = (await c.req.json().catch(() => null)) as { to?: string } | null;
   if (!body?.to) {
     return c.json({ ok: false, error: "expected {to: <path>}" }, 400);
   }
+
+  // Flush BEFORE stat. Newly-created dirty rooms may not have a file yet.
+  await rooms.flushIfDirty(id);
 
   const srcPath = join(storageDir, `${id}.json`);
   try {
@@ -1470,9 +1537,6 @@ app.post("/api/rooms/:id/export", async (c) => {
   } catch {
     return c.json({ ok: false, error: "room not found" }, 404);
   }
-
-  // Flush any pending writes for this room before reading state.
-  await rooms.flushIfDirty(id);
 
   // Get current state from in-memory rooms (if loaded) or disk.
   const room = await rooms.get(id);
@@ -1737,7 +1801,9 @@ Append to `routes/rooms.ts`:
 import { unlink } from "node:fs/promises";
 
 app.delete("/api/rooms/:id", async (c) => {
-  const id = c.req.param("id");
+  const idParam = roomParam(c);
+  if (!idParam.ok) return idParam.response;
+  const id = idParam.id;
   const body = (await c.req.json().catch(() => ({}))) as { confirm?: boolean };
   if (!body.confirm) {
     return c.json(
@@ -1745,6 +1811,10 @@ app.delete("/api/rooms/:id", async (c) => {
       400,
     );
   }
+
+  // Flush before stat: pending writes for this room must materialize so we
+  // either find the file (and delete it) or honestly 404.
+  await rooms.flushIfDirty(id);
 
   const path = join(storageDir, `${id}.json`);
   try {
@@ -2033,84 +2103,133 @@ if (cmd === "rooms") {
 
 Read `packages/didraw-cli/src/index.ts` first and match the existing flow precisely; the snippet above is a guide, not a drop-in.
 
-- [ ] **Step 4: Write CLI integration test**
+- [ ] **Step 4: Write CLI subprocess integration test**
+
+This test follows the **existing pattern** in `packages/didraw-cli/tests/data.test.ts` — spawn the CLI binary as a subprocess and assert on its stdout/exit code. This exercises the actual command-line parsing in `index.ts`, not just `CanvasClient`.
 
 Create `packages/didraw-cli/tests/lifecycle.http.test.ts`:
 
 ```ts
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { makeApp } from "@didraw/backend/src/index";
-import { startServer } from "@didraw/backend/src/index";
-import { CanvasClient } from "@didraw/client";
+import { startServer } from "../../../apps/backend/src/index";
 
+let srv: { port: number; close: () => Promise<void> };
 let dir: string;
-let server: Awaited<ReturnType<typeof startServer>>;
-let port: number;
-let client: CanvasClient;
+const CLI = join(import.meta.dir, "..", "src", "index.ts");
 
-beforeEach(async () => {
+beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "didraw-cli-"));
-  // pick an ephemeral port
-  port = 30000 + Math.floor(Math.random() * 1000);
-  process.env.DIDRAW_STORAGE_DIR = dir;
-  process.env.DIDRAW_PORT = String(port);
-  server = await startServer({ storageDir: dir, port });
-  client = new CanvasClient({ baseUrl: `http://localhost:${port}` });
+  srv = await startServer({ storageDir: dir, port: 0 });
 });
-
-afterEach(async () => {
-  await server.close();
+afterAll(async () => {
+  await srv.close();
   rmSync(dir, { recursive: true, force: true });
-  delete process.env.DIDRAW_STORAGE_DIR;
-  delete process.env.DIDRAW_PORT;
 });
 
-describe("CLI lifecycle via HTTP", () => {
-  test("list empty workspace", async () => {
-    const r = (await client.listRooms()) as { rooms: unknown[] };
-    expect(r.rooms).toEqual([]);
+const envBase = (): Record<string, string> => ({
+  ...(process.env as Record<string, string>),
+  DIDRAW_PORT: String(srv.port),
+});
+
+async function cli(
+  args: string[],
+  opts: { env?: Record<string, string>; input?: string } = {},
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  const proc = Bun.spawn(["bun", CLI, ...args], {
+    env: opts.env ?? envBase(),
+    stdin: opts.input !== undefined ? Buffer.from(opts.input) : "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  return { status: exitCode, stdout, stderr };
+}
+
+describe("didraw rooms via subprocess CLI", () => {
+  test("rooms list — empty workspace", async () => {
+    const r = await cli(["rooms", "list"]);
+    expect(r.status).toBe(0);
+    const j = JSON.parse(r.stdout);
+    expect(j.ok).toBe(true);
+    expect(j.rooms).toEqual([]);
   });
 
-  test("export → import roundtrip", async () => {
-    // create a room with state
-    await client.applyPatch(
-      [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }],
-      { source: "user" },
-    );
-    const target = join(dir, "..", "exp.json");
-    const exp = (await client.exportRoom("default", target)) as { ok: boolean };
-    expect(exp.ok).toBe(true);
+  test("rooms export → import roundtrip via CLI", async () => {
+    // create a room with state through CLI patch
+    const body = JSON.stringify({
+      ops: [
+        {
+          op: "add",
+          target: "node",
+          value: { id: "n1", kind: "rect", x: 0, y: 0 },
+        },
+      ],
+      source: "user",
+    });
+    const patch = await cli(["patch", "--stdin"], {
+      env: { ...envBase(), CLAUDE_SESSION_ID: "src-room" },
+      input: body,
+    });
+    expect(patch.status).toBe(0);
 
-    const imp = (await client.importRoom(target, { as: "restored" })) as {
-      ok: boolean;
-      roomId: string;
-    };
-    expect(imp.ok).toBe(true);
-    expect(imp.roomId).toBe("restored");
+    const target = join(dir, "..", "exp-via-cli.json");
+    const exp = await cli(["rooms", "export", "src-room", "--to", target]);
+    expect(exp.status).toBe(0);
+    expect(JSON.parse(exp.stdout).ok).toBe(true);
 
-    const list = (await client.listRooms()) as {
-      rooms: Array<{ id: string }>;
-    };
-    expect(list.rooms.map((r) => r.id).sort()).toEqual(["default", "restored"]);
+    const imp = await cli(["rooms", "import", target, "--as", "imported-room"]);
+    expect(imp.status).toBe(0);
+    const impBody = JSON.parse(imp.stdout);
+    expect(impBody.ok).toBe(true);
+    expect(impBody.roomId).toBe("imported-room");
+
+    const list = await cli(["rooms", "list"]);
+    const ids = JSON.parse(list.stdout).rooms.map((r: { id: string }) => r.id).sort();
+    expect(ids).toContain("src-room");
+    expect(ids).toContain("imported-room");
 
     rmSync(target, { force: true });
   });
 
-  test("archive then restore", async () => {
-    await client.applyPatch(
-      [{ op: "add", target: "node", value: { id: "n1", kind: "rect", x: 0, y: 0 } }],
-      { source: "user" },
-    );
-    expect((await client.archiveRoom("default") as { ok: boolean }).ok).toBe(true);
-    expect((await client.listRooms() as { rooms: unknown[] }).rooms).toEqual([]);
+  test("rooms archive then restore via CLI", async () => {
+    const body = JSON.stringify({
+      ops: [
+        {
+          op: "add",
+          target: "node",
+          value: { id: "n1", kind: "rect", x: 0, y: 0 },
+        },
+      ],
+      source: "user",
+    });
+    await cli(["patch", "--stdin"], {
+      env: { ...envBase(), CLAUDE_SESSION_ID: "to-archive" },
+      input: body,
+    });
 
-    expect((await client.restoreRoom("default") as { ok: boolean }).ok).toBe(true);
-    expect(
-      ((await client.listRooms()) as { rooms: Array<{ id: string }> }).rooms.length,
-    ).toBe(1);
+    const arch = await cli(["rooms", "archive", "to-archive"]);
+    expect(arch.status).toBe(0);
+
+    const rest = await cli(["rooms", "restore", "to-archive"]);
+    expect(rest.status).toBe(0);
+
+    const list = await cli(["rooms", "list"]);
+    const ids = JSON.parse(list.stdout).rooms.map((r: { id: string }) => r.id);
+    expect(ids).toContain("to-archive");
+  });
+
+  test("rooms rm without --confirm exits 1", async () => {
+    const r = await cli(["rooms", "rm", "anything"]);
+    expect(r.status).toBe(1);
+    const err = JSON.parse(r.stderr);
+    expect(err.error).toMatch(/confirm/);
   });
 });
 ```
@@ -2292,7 +2411,10 @@ release/didraw-* rooms list
 - [ ] **Step 8: Commit and tag**
 
 ```bash
-git add CHANGELOG.md package.json release/VERSION .claude/skills/draw/SKILL.md
+git add CHANGELOG.md package.json .claude/skills/draw/SKILL.md
+# Conditionally add release/VERSION if it exists (it's generated by build-release.sh
+# and not always committed):
+[ -f release/VERSION ] && git add release/VERSION
 git commit -m "release: 0.1.0 — Phase 2.0 persistence hardening"
 git tag v0.1.0
 ```
