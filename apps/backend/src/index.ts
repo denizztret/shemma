@@ -13,6 +13,7 @@ import { roomsRoutes } from "./routes/rooms";
 import { stateRoutes } from "./routes/state";
 import { versionRoutes } from "./routes/version";
 import { viewportRoutes } from "./routes/viewport";
+import { contextRoutes } from "./routes/context";
 import { DEFAULT_ROOM, type RoomState } from "./types";
 import { type Sock, WsHub } from "./ws";
 
@@ -48,6 +49,7 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", roomsRoutes(rooms, storageDir));
   app.route("/", viewportRoutes(rooms));
   app.route("/", domainRoutes(rooms, bus, { onDirty }));
+  app.route("/", contextRoutes(rooms));
   return { app, rooms, bus, persistence };
 }
 
