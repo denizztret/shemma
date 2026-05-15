@@ -5,6 +5,7 @@ import { cmdLayout } from "./layout";
 import { exportRoom, list, open, rmRoom } from "./lifecycle";
 import { applyProfile, parseProfile } from "./profile";
 import { cmdPrompts } from "./prompts";
+import { cmdVersion } from "./version-cmd";
 
 const argv = process.argv.slice(2);
 const profile = parseProfile(argv);
@@ -29,6 +30,7 @@ async function main() {
   if (cmd === "clear") return cmdClear(argv.slice(1));
   if (cmd === "layout") return cmdLayout(argv.slice(1));
   if (cmd === "prompts") return cmdPrompts(argv.slice(1));
+  if (cmd === "version") return cmdVersion();
 
   if (cmd === "daemon") {
     if (sub === "start") return start(profile);

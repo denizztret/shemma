@@ -104,4 +104,9 @@ export class CanvasClient {
       return false;
     }
   }
+
+  async getVersion() {
+    const r = await fetch(`${this.base}/api/version`);
+    return r.json();
+  }
 }
