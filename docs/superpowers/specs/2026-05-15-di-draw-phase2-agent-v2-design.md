@@ -1,9 +1,13 @@
 # di.draw Phase 2.1 — Agent v2: domain-first model + layout intelligence
 
-> **Status:** design (v2, 2026-05-15) — pending user review
+> **Status:** design (v2.1.1, 2026-05-15) — pending user review
 > **Predecessor:** `2026-05-14-di-draw-design.md` v3.7 (Phase 1 MVP, shipped)
-> **Revision history:** v1 (2026-05-15) — palette-based actions; v2 (2026-05-15) — pivot to domain-first после user feedback («это диаграммы архитектурных решений, не картинки; роли важнее цвета»).
-> **Roadmap context:** this spec is one of six Phase 2 sub-projects (см. §0)
+> **Revision history:**
+>   - v1 — palette-based actions;
+>   - v2 — pivot to domain-first («роли важнее цвета»);
+>   - v2.1 — full ELK + extensibility map;
+>   - v2.1.1 — после review закрыты 7 системных gap'ов: shared `@didraw/domain` пакет для role→preset, унификация на `mode` (drop `direction`), transactions only для actions + layout best-effort, pin inference в `/api/patch source:user`, container model canonical через `Group.children`, v1 edge routing — ports/anchors only, UI overlay reserve вынесен из layout в frontend camera.
+> **Roadmap context:** one of six Phase 2 sub-projects (см. §0)
 
 ## 0. Phase 2 roadmap (контекст)
 
@@ -36,7 +40,7 @@ di.draw — инструмент для **визуализации архите�
 
 1. **Domain model — primary API.** Агент пишет в canvas через `define-element`/`connect`/`group`/`note`/`layout`/`delete` с обязательными `role` и `name`, а не через сырой PatchOp. Single API surface — нет двойного пути «action + patch для агента».
 2. **Visual is a function of role.** Каждой роли (`actor`, `service`, `datastore`, `queue`, `network`, `boundary`, `external`, `note`) соответствует tldraw-preset (shape kind + base style). Frontend `role-render.ts` — single source of truth. AI не выбирает цвет/форму, не сочиняет.
-3. **Layout intelligence — first-class.** При каждом mutation auto-recompute layout: новые элементы становятся в место, существующие не дёргаются без нужды. Group-aware (`network`/`boundary` держат детей внутри), direction-aware (`LR`/`TB` per-group или globally). После любого batch агенту не нужно отдельной командой «layout».
+3. **Layout intelligence — first-class.** При каждом mutation auto-recompute layout: новые элементы встают в место, существующие не дёргаются без нужды. Group-aware (`network`/`boundary` держат детей внутри), mode-driven (`layered-lr` / `layered-tb` / `tree` / `pack` / `force` — выбор per-batch или per-group). После любого batch агенту не нужно отдельной командой «layout».
 4. **Token-cheap context.** AI читает компактное view-aware представление вместо full snapshot. Целевой объём для 100-элементного canvas ≤ 8KB JSON (≤ ~2K tokens) против 20-40KB сегодня. Context включает domain summary (counts by role, top-level groups, recent ops в человекочитаемом виде), не raw nodes/edges.
 5. **PatchOp остаётся** как **транспорт между frontend и backend** для пользовательских правок (user перетащил, перекрасил вручную). Агент через patch не ходит — этот путь невидим для AI. Это снимает риск двух конкурирующих агентских API.
 6. **Idempotency & deterministic ids.** Безопасный retry. Имена элементов читабельны (`auth`, `users-db`), не uuid.
@@ -55,15 +59,24 @@ di.draw — инструмент для **визуализации архите�
 
 ## 2. Архитектура
 
-Новые модули. Минимум слоёв: один domain API (`/api/domain`), один renderer (`role-render.ts`), один layout engine.
+Минимум слоёв: один domain API (`/api/domain`), один **shared role→preset module** (используется backend и frontend через workspace package), один layout engine.
 
 ```
+packages/didraw-domain/src/         # NEW: shared between backend и frontend
+  roles.ts            # Role enum + leaf vs container classification
+  connection-kinds.ts # ConnectionKind enum
+  role-preset.ts      # SINGLE source of truth: role → {tldraw shape preset, defaults}
+  layout-modes.ts     # LayoutMode enum + mode→elkOptions
+  validation.ts       # name regex, role transition rules (shared)
+  index.ts            # public re-exports
+
 apps/backend/src/
   domain/
-    types.ts          # Element, Connection, GroupRef + roles + 6 action kinds
+    types.ts          # Element, Connection, GroupRef (внутренние shape для backend state)
     validate.ts       # synchronous validators (refs exist, role known, name unique)
-    compile.ts        # DomainAction[] → PatchOp[]   (pure, deterministic)
-    layout.ts         # layout(state, hints): group-aware ELK call + jitter-min
+    compile.ts        # DomainAction[] → PatchOp[]   (pure, deterministic; импортирует из @didraw/domain)
+    layout.ts         # group-aware ELK call + jitter-min + pin support
+    layout-postprocess.ts  # snap-to-grid + min-spacing + preserve-order
     context.ts        # buildAgentContext — domain-summary view, не raw shapes
     viewport.ts       # last-known viewport per room (ephemeral)
   routes/
@@ -75,24 +88,19 @@ packages/didraw-client/src/
   domain.ts           # CanvasClient.define / connect / group / note / layout / delete
 
 packages/didraw-cli/src/
-  domain.ts           # `didraw define <role> <name> [--label] [--in group] [--meta k=v]`
-                      # `didraw connect <from> <to> [--label] [--kind data|sync|async]`
-                      # `didraw group <ids> --as boundary|network --name X`
-                      # `didraw note --about <id> --text "..."`
-                      # `didraw layout [--direction LR|TB] [--scope <groupId>]`
-                      # `didraw delete <id|ids>`
-                      # `didraw context [--since N]`
-                      # `didraw apply --stdin`  (batch JSON)
+  domain.ts           # `didraw define / connect / group / note / layout / delete / apply / context`
 
 apps/frontend/src/
   canvas/
-    role-render.ts    # SINGLE source of truth: role → tldraw shape preset
+    role-render.ts    # tldraw rendering — импортирует preset table из @didraw/domain
     role-render.test.ts
   transport/
     viewport.ts       # debounced camera→backend report
 ```
 
-Sigh-of-relief property: **PatchOp полностью пропадает из агентского API**. CLI/MCP/skill cheat-sheet не упоминают patch. `/api/patch` остаётся как **transport** между frontend и backend (когда пользователь руками что-то правит) — он невидим для AI, никаких двух API surface'ов.
+**Sigh-of-relief property:** PatchOp полностью невидим в агентском API. CLI/MCP/skill не упоминают `patch`. `/api/patch` остаётся как frontend↔backend transport — единый канал для user-edits и для compiled-output domain layer'а.
+
+**Single source of truth разрешение:** `packages/didraw-domain` импортируется и backend (для compile.ts ↦ применять preset как defaults в `add node` ops), и frontend (для render.ts ↦ применять preset поверх state при рендере). Это снимает конфликт v2: «backend хранит kind/style» теперь честно — он хранит preset-defaults через тот же модуль, что использует frontend, не дубликат таблицы.
 
 ### 2.1. Почему domain layer заменяет patch для агента, а не «поверх»
 
@@ -124,9 +132,16 @@ type Role =
   | "note";      // annotation, ADR pointer, decision record
 ```
 
-Roles делятся на **leaf** (`actor`/`service`/`datastore`/`queue`/`external`/`note`) и **container** (`network`/`boundary`). Container элементы имеют `children: ElementId[]` — это и есть «положи auth внутрь vpc-prod».
+Roles делятся на **leaf** (`actor`/`service`/`datastore`/`queue`/`external`/`note`) и **container** (`network`/`boundary`).
 
-Расширение: добавить роль = одна строка в `Role` union + одна в `role-render.ts`. Никаких rolling-changes по другим файлам.
+**Canonical container model**: parent-child связь хранится **только** в `Group.children: ElementId[]` — это и есть «положи auth внутрь vpc-prod». В типах элементов **нет** `parent` поля. Никаких дублирующих указателей и проблемы синхронизации.
+
+- В backend `apps/backend/src/types.ts` уже есть `Group { id, children, ... }` (см. §3 текущей model spec v3.7). Phase 2.1 переиспользует.
+- При компиляции `group` action — `compile.ts` создаёт/обновляет соответствующую `Group` запись через PatchOp `add/update group`, никаких параллельных правок child-нод.
+- Frontend и context-API могут производить **derived** «parent» в response для UX (например `ElementCompact.parent` в context view §4.2) — но это компьютация на чтение, не stored field.
+- Перемещение элемента между containers = batch из двух `update group {id, set: {children}}` ops (одно убрать, одно добавить). Можно обернуть в helper-action в backlog, в v1 — explicit.
+
+Расширение: добавить роль = одна строка в `Role` union + одна в `role-preset.ts` table. Никаких rolling-changes.
 
 ### 3.2. Connection kinds
 
@@ -147,13 +162,15 @@ type DomainRequest = {
   actions: DomainAction[];
   clientOpId?: string;        // idempotency key
   dryRun?: boolean;
-  layoutHint?: LayoutHint | null;    // null = skip auto-layout; default = {direction:"LR", scope:"affected"}
+  layoutHint?: LayoutHint | null;    // null = skip auto-layout; default = {mode:"layered-lr", scope:"affected"}
 };
 
 type LayoutHint = {
-  direction?: "LR" | "TB";
-  scope?: "all" | "affected" | ElementId;   // group-id для re-layout одного контейнера
+  mode?: LayoutMode;          // see §3.6.1; default "layered-lr"
+  scope?: "all" | "affected" | ElementId;
+  spacing?: "compact" | "normal" | "loose";  // default "normal"
 };
+// LayoutMode comes from @didraw/domain shared package; no `direction` field — направление выводится из mode.
 
 type DomainResponse =
   | { ok: true; version: number; idempotent?: true;
@@ -177,7 +194,11 @@ type ActionError = {
 };
 ```
 
-Транзакционность: либо все actions + auto-layout — либо ни одной правки.
+**Transaction model**:
+- **Domain mutations** (define/connect/group/note/delete) — атомарны. Либо все actions из batch применяются, либо ни одной (на validation/compile error — 422, state untouched).
+- **Layout** — **best-effort**, не часть транзакции. Если ELK упал/timeout — domain mutations всё равно применяются, response содержит `layout: {applied: false, reason: "elk-timeout"}` или подобное. Диаграмма выживает даже когда layout engine сбоит; элементы получают `meta.position` со старыми/неинициализированными координатами, пользователь может сдвинуть руками.
+
+Это честнее, чем «всё или ничего»: domain integrity сохраняется, а layout — улучшение поверх.
 
 ### 3.4. The 6 actions
 
@@ -187,7 +208,7 @@ type ActionError = {
 | `connect` | `{from: ElementId; to: ElementId; kind?: ConnectionKind; label?: string; meta?: object}` | Default `kind` = `sync`. `from`/`to` ссылаются на existing element by name. |
 | `group` | `{ids: ElementId[]; as: "network"\|"boundary"; name: string; label?: string}` | Объединить existing элементы в container. Children получают `parent`. |
 | `note` | `{about?: ElementId; text: string; name?: string}` | Annotation. Если `about` задан — нота визуально привязана (arrow binding). |
-| `layout` | `{direction?: "LR"\|"TB"; scope?: "all"\|ElementId}` | Explicit re-layout. Обычно не нужен — auto-layout по умолчанию. |
+| `layout` | `{mode?: LayoutMode; scope?: "all"\|ElementId; spacing?: "compact"\|"normal"\|"loose"}` | Explicit re-layout. Обычно не нужен — auto-layout по умолчанию. `direction` не существует — направление выводится из mode. |
 | `delete` | `{id: ElementId} \| {ids: ElementId[]} \| {ids:[...], cascade: true}` | Cascade-aware: удаление container с детьми требует `cascade:true`, иначе 422 `cascade-confirm-required` с `affected` (для UX «вы уверены?»). |
 
 **Что исчезло из v1:**
@@ -263,22 +284,31 @@ ELK получает pinned элементы с `elk.fixed = true`. Auto-layout 
 
 Reset pin: action `define {name:"auth", meta:{pinned: false}}` (опциональная low-priority feature, backlog если случай возникнет).
 
-#### 3.6.5. Edge routing → tldraw
+#### 3.6.5. Edge routing → tldraw (v1 scope: ports + anchors only)
 
-ELK с `edgeRouting: ORTHOGONAL` возвращает `sections[].bendPoints[]` для каждого edge. Frontend `role-render.ts` (тoт же модуль, что мэппит role→shape) принимает waypoints и применяет к tldraw arrow через `props.bend` или новый `props.waypoints` если такой откроется. **Caveat**: tldraw 5.x arrow API не имеет first-class multi-bendpoint поддержки — для v1 будет approximation:
-- 0 bendpoints (ELK решил прямой) → tldraw arrow прямой.
-- 1+ bendpoints → tldraw arrow с computed `bend` (single curve approximation).
-- Когда tldraw добавит native waypoints — frontend mapper переключится без изменений в backend (свобода, заложенная архитектурой §14).
+tldraw 5.x arrow shape не имеет first-class multi-bendpoint API. Поэтому **v1 не делает ORTHOGONAL multi-bendpoint routing** — это backlog.
+
+Что **попадает в v1**:
+- **Ports**: ELK для каждой ноды вычисляет `port-side` (N/S/E/W) для каждого incident edge. Frontend пересчитывает `normalizedAnchor` из port-side ({0.5, 0}, {0.5, 1}, {1, 0.5}, {0, 0.5}). Это уже улучшает визуал: arrows выходят из «правильной» грани, не из центра.
+- **Better anchors**: `isPrecise: true` плюс точный port-side. Tldraw нативно сглаживает arrow для не-overlapping shapes.
+
+Что **в backlog** (явный extension point §13 «Custom tldraw shape per role»):
+- True multi-bendpoint orthogonal routing — когда tldraw expose'нет multi-segment arrows ИЛИ через custom arrow shape util в Phase 3.
+- Edge labels с background для читаемости на пересечениях.
+
+ELK всё равно вызывается с `edgeRouting: ORTHOGONAL` — bendpoints вычисляются, но **не применяются** к tldraw arrow в v1. Они сохраняются в `meta.routing.bendPoints` для будущего рендеринга (no-op forward compatibility).
 
 #### 3.6.6. Post-processing pipeline
 
-После ELK, перед записью в state:
+После ELK, перед записью в state, **только canvas-space операции** (layout не должен знать про screen-space UI):
 
 1. **Snap-to-grid** — округление координат до 10px multiple (визуальная аккуратность).
 2. **Min-spacing guard** — пост-проверка `node-to-node distance >= 20px`; если ELK по какой-то причине поставил слишком близко (редко, но бывает с pinned constraints) — раздвигает.
-3. **No-overlap-with-system-UI** — резерв 80px сверху-справа под room badge / version footer / AI activity chip (§3.8 контракт).
-4. **Preserve relative order** — для not-pinned existing nodes: после ELK сравниваем их новые vs прежние позиции; если ELK перевернул порядок без сильного выигрыша в edge length — оставляем старый порядок (heuristic: разница total edge length < 5%).
-5. **Center camera on changed bbox** — frontend получает в WS-сообщении новый action response поле `bbox` (the box affecting bounds) и **опционально** центрирует камеру через `editor.zoomToBounds` если этот bbox не виден в текущем viewport. Дефолт — выключено, включается через user setting (backlog).
+3. **Preserve relative order** — для not-pinned existing nodes: после ELK сравниваем их новые vs прежние позиции; если ELK перевернул порядок без сильного выигрыша в edge length — оставляем старый порядок (heuristic: разница total edge length < 5%).
+
+**Не делается на этом слое** (вынесено явно):
+- **System UI overlap** (room badge, AI chip, version footer) — это screen-space, живёт в frontend camera/padding. Backend layout его не видит и не должен. Frontend `editor.setCameraOptions({padding})` или `zoomToBounds(..., {inset})` решает на стороне рендера. Если нужно — отдельная маленькая фронтенд-задача в backlog, не часть Phase 2.1 layout.
+- **Center camera on bbox** — то же: frontend camera logic, не часть `domain/layout.ts`. backend может приложить `affectedBbox: {x,y,w,h}` в response чисто как information для frontend; что с ним делать — решает frontend.
 
 #### 3.6.7. Performance budget
 
@@ -375,7 +405,7 @@ AI отправляет один batch:
     {"kind": "group", "ids": ["auth", "users-db"], "as": "network", "name": "vpc-prod"}
   ],
   "clientOpId": "sess1-batch-1",
-  "layoutHint": {"direction": "LR"}
+  "layoutHint": {"mode": "layered-lr"}
 }
 ```
 
@@ -437,13 +467,33 @@ User перетаскивает auth: `to-patch.ts` → POST `/api/patch` → ex
 
 ### 6.2. User overrides discipline
 
-Когда пользователь руками меняет цвет/размер shape, frontend пишет `update node` с новым стилем → backend сохраняет в `style`/`meta`. При следующем agent action к этому элементу:
+Frontend `to-patch.ts` (см. `apps/frontend/src/canvas/to-patch.ts`) сегодня отправляет `{op:"update", target:"node", id, set:{x,y,w,h,label,style}}` через `/api/patch` с `source:"user"`. Backend применяет patch — но **не** знает, что это означает «pin».
 
-- **Renderer side:** `role-render.ts` берёт base preset из роли, потом merge'ит сверху `style` override из state. Override wins.
-- **Compile side:** `domain/compile.ts` не перезаписывает `style`/`meta.position` при upsert define — только label/role-default.
-- **Reset path:** агент может явно очистить override через action с `meta: {reset: true}` (low-priority feature; backlog если кейс возникнет).
+Phase 2.1 добавляет одно правило в `apps/backend/src/routes/patch.ts`:
 
-Это **один rule «user beats role»** в одном месте. Не plumbing через слои.
+```
+on POST /api/patch with source === "user":
+  for each op in ops:
+    if op.op === "update" && op.target === "node" && (op.set.x ?? op.set.y) !== undefined:
+      // user moved this node — pin its position
+      op.set.meta ??= {};
+      op.set.meta.pinned = true;
+      op.set.meta.position = { x: <resulting x>, y: <resulting y> };
+    if op.op === "update" && op.target === "node" && (op.set.style ?? op.set.color) !== undefined:
+      // user restyled — mark style as user-owned, so role preset re-render won't clobber
+      op.set.meta ??= {};
+      op.set.meta.styleOwnedBy = "user";
+```
+
+Никакого нового endpoint'а, никакого изменения frontend кода — backend сам делает inference из `source:"user"` тега. Это single rule в одной функции (`patch.ts`).
+
+**Renderer side** (frontend): `role-render.ts` берёт preset из `@didraw/domain.rolePreset(role)`, потом merge'ит сверху state's `style` если `meta.styleOwnedBy === "user"`. Иначе — preset wins (агент может обновлять preset через `define` upsert и не сломать визуал).
+
+**Compile side** (backend): `domain/compile.ts` при upsert define **не** перезаписывает `meta.pinned`, `meta.position`, и не touch'ает `style` если `meta.styleOwnedBy === "user"`. Только label/role-default updates.
+
+**Reset path**: явно через future action (low-priority feature; backlog).
+
+Это один rule в одной функции — никакого plumbing через слои.
 
 ### 6.3. MCP brief deprecation
 
@@ -468,7 +518,7 @@ User перетаскивает auth: `to-patch.ts` → POST `/api/patch` → ex
 | `delete` non-empty container without `cascade:true` | 422, `{code:"cascade-confirm-required", affected:[child-ids…]}` |
 | `clientOpId` повтор | 200, `{ok:true, idempotent:true, version, results: cached}` |
 | `dryRun:true` | 200, `results[i].generatedOps` populated, опускает opLog/canvas/bus |
-| Layout engine failure (ELK timeout) | warning в response (`layout.applied:false`), но actions всё равно применяются — диаграмма выживает |
+| Layout engine failure (ELK timeout/crash) | actions применяются (transaction committed), response `{ok:true, layout:{applied:false, reason}}` — best-effort layout per §3.3 |
 
 ---
 
@@ -481,7 +531,7 @@ didraw define <role> <name> [--label "..."] [--in <container-name>] [--meta key=
 didraw connect <from> <to> [--kind sync|async|data|dep] [--label "..."]
 didraw group <id1>,<id2>,... --as network|boundary --name <name> [--label "..."]
 didraw note --text "..." [--about <element-name>]
-didraw layout [--direction LR|TB] [--scope all|<group-name>]
+didraw layout [--mode layered-lr|layered-tb|tree|pack|force] [--scope all|<group-name>] [--spacing compact|normal|loose]
 didraw delete <id1>,<id2>,... [--cascade]
 
 # Batch:
@@ -534,10 +584,12 @@ CLI integration tests — `packages/didraw-cli/tests/domain.test.ts`.
 - `/api/agent/context` token-budget regression (§4.3) + assert «никакой геометрии не утекает».
 - Cascade-confirm flow.
 
-### 10.3. Frontend tests
+### 10.3. Frontend + cross-stack tests
 
-- `role-render.ts` — table-driven: каждая роль → ожидаемый tldraw shape preset (snapshot test).
-- User-override discipline (§6.2): seed состояния с user-painted-red service, эмит agent action update label на тот же элемент → проверить что color остаётся red.
+- `role-render.ts` — table-driven: каждая роль → ожидаемый tldraw shape preset (snapshot test). Импорт `rolePreset` идёт из `@didraw/domain` — assert что shared package действительно используется.
+- **Pin inference end-to-end (§6.2):** POST `/api/patch` `source:"user"` с `update node {x:200, y:300}` → state.nodes[id].meta.pinned === true и `meta.position == {x:200, y:300}`. Затем agent action `define {name: same id, role: same}` upsert → координаты НЕ затронуты.
+- **Style ownership end-to-end:** POST `/api/patch` `source:"user"` с `update node {style:{color:"red"}}` → `meta.styleOwnedBy === "user"`. Затем render через role-render.ts с base preset `color:"blue"` → DOM рендерит "red". Agent define upsert не меняет.
+- **No false positive pin:** POST `/api/patch` `source:"ai"` с update x/y → pin **не** ставится (только user-source триггерит).
 
 ### 10.4. CLI integration
 
@@ -560,22 +612,23 @@ CLI integration tests — `packages/didraw-cli/tests/domain.test.ts`.
 
 (Детальный план — через `writing-plans` skill после approval спеки.)
 
-Высокоуровнево (12-14 tasks):
+Высокоуровнево (13-15 tasks):
 
-1. `domain/types.ts` + Role/ConnectionKind enums + LayoutMode enum + name-validation (TDD).
-2. `domain/validate.ts` — all error categories (TDD per §7).
-3. `domain/compile.ts` — пер-action compile + intra-batch refs (TDD per §5.1 + edge cases).
-4. `domain/layout-modes.ts` — registry `mode → elkOptions`; rename misleading `dagre` (factual `force`) → `mode: "force"` with deprecation alias (TDD).
-5. `domain/layout.ts` — full ELK: compound nodes для containers, ports, orthogonal routing, bendpoints, pin support, `affected` scope (TDD per §3.6).
-6. `domain/layout-postprocess.ts` — snap-to-grid + min-spacing + preserve-order + UI-reserve (§3.6.6) (TDD).
-7. `domain/context.ts` — domain summary builder + no-geometry guard (TDD).
-8. `routes/domain.ts` + `/api/viewport` + `/api/agent/context` — integration tests (transactionality, idempotency, dryRun, layout response shape).
-9. Frontend `role-render.ts` — table per role + bendpoint→tldraw arrow mapping + user-override discipline (TDD per §6.2).
-10. Frontend viewport reporter (`transport/viewport.ts`).
-11. `@didraw/client` extensions (`domain.ts`) — typed methods.
-12. CLI: `didraw define / connect / group / note / layout / delete / apply / context` + `--mode` flag for layout.
-13. Skill cheat-sheet rewrite (с layout mode hints + role examples) + Playwright smoke (§5.1 e2e).
-14. CHANGELOG + bump (0.1.0 → 0.2.0; 0.1.0 за Phase 2.0). Rebuild binary, smoke.
+1. **`packages/didraw-domain` shared package** (new): Role/ConnectionKind/LayoutMode enums + `role-preset.ts` table + `validation.ts` (name regex, role transition rules) + `layout-modes.ts` (mode → elkOptions). TDD на чистые функции.
+2. `apps/backend/src/domain/types.ts` — внутренние backend types (Element shape для state), импортирует enums из @didraw/domain.
+3. `domain/validate.ts` — all error categories per §7 (TDD).
+4. `domain/compile.ts` — пер-action compile + intra-batch refs + upsert semantics + `meta.styleOwnedBy` respect (TDD per §5.1).
+5. `domain/layout.ts` — full ELK с compound containers, ports, pin support, partial-layout scope, **best-effort error handling** per §3.3 (TDD).
+6. `domain/layout-postprocess.ts` — snap-to-grid + min-spacing + preserve-order (§3.6.6; **no** UI-overlap concerns) (TDD).
+7. `domain/context.ts` — domain-summary view + no-geometry guard + derived `parent` (TDD).
+8. `routes/patch.ts` — **pin inference**: source==="user" + update x/y → set meta.pinned + meta.position; source==="user" + style change → set meta.styleOwnedBy=="user" (TDD per §6.2).
+9. `routes/domain.ts` + `routes/viewport.ts` + `routes/context.ts` — integration tests (transactions for actions, layout best-effort, idempotency, dryRun).
+10. Frontend `role-render.ts` — импорт из `@didraw/domain.rolePreset` + port-anchor mapping (§3.6.5 v1 scope) + user-override discipline (TDD per §6.2).
+11. Frontend viewport reporter (`transport/viewport.ts`, debounced ~1Hz).
+12. `@didraw/client` extensions — typed domain methods.
+13. CLI: `didraw define / connect / group / note / layout / delete / apply / context` (с `--mode`, без `--direction`).
+14. Skill cheat-sheet rewrite (mode hints, role examples, **no PatchOp section**) + Playwright smoke (§5.1 e2e).
+15. CHANGELOG + bump (0.1.0 → 0.2.0). Rebuild binary, smoke.
 
 ---
 
@@ -586,7 +639,7 @@ CLI integration tests — `packages/didraw-cli/tests/domain.test.ts`.
 3. **MCP v2 spec** — Phase 2.3. Замещает `docs/handoff/mcp-launch-brief.md`.
 4. **User-override reset** — нет в v1. Добавим если кейс реально возникнет (`meta.reset:true`-action).
 5. **Layout algorithm selection** — v1 hard-coded ELK layered. Dagre/force-directed alternatives — backlog.
-6. **Phase 2.0 persistence** — отдельная спека (см. §0 roadmap), включает: P3 fix (CLAUDE_SESSION_ID → storage path), `didraw rooms list/use/archive`, skill startup awareness про прошлые схемы в текущей папке. Делается **перед** этой фазой.
+6. **Phase 2.0 persistence** — отдельная спека (см. §0 roadmap), включает: workspace-scoped storage + session-scoped rooms + daemon-safe ops + `didraw rooms list/archive/restore/export/import` + skill startup awareness. Делается **перед** этой фазой.
 
 ---
 
@@ -596,9 +649,9 @@ CLI integration tests — `packages/didraw-cli/tests/domain.test.ts`.
 
 | Что хочется добавить | Где меняется | Сколько строк | Кросс-файловые правки |
 |---|---|---|---|
-| Новая роль (`cache`, `cdn`, `lambda`, `gateway`) | `domain/types.ts` Role enum + `frontend/canvas/role-render.ts` table row | 2 | нет |
-| Новый ConnectionKind (`stream`, `notify`) | `domain/types.ts` + `role-render.ts` (visual mapping) | 2 | нет |
-| Новый LayoutMode (`circular`, `swimlane`) | `domain/layout-modes.ts` registry entry | 1 file (mode-to-elk options) | нет, если в рамках ELK |
+| Новая роль (`cache`, `cdn`, `lambda`, `gateway`) | `@didraw/domain` Role enum + `role-preset.ts` table row | 2 | нет (shared package — backend и frontend подхватывают automatically) |
+| Новый ConnectionKind (`stream`, `notify`) | `@didraw/domain` ConnectionKind enum + preset mapping | 2 | нет |
+| Новый LayoutMode (`circular`, `swimlane`) | `@didraw/domain/layout-modes.ts` registry entry | 1 | нет, если в рамках ELK |
 | Альтернативный layout engine (Cola, fCoSE, real Dagre) | `domain/layout-engines/<name>.ts` + registry entry в `layout.ts` | 1 file | нет |
 | Новый action kind (`split`, `merge`, `clone`) | `domain/types.ts` discriminated union + один case в `validate.ts` и `compile.ts` | 3 файла, locally | tests in plan |
 | Новый import format (D2, Draw.io, Lucidchart JSON) | `import/<format>/parse.ts` + `import/registry.ts` entry → выдаёт `DomainAction[]` | 1-2 files | нет (Import переиспользует Domain API) |

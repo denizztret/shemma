@@ -1,6 +1,7 @@
 # di.draw Phase 2.0 — Persistence hardening
 
-> **Status:** design (v1, 2026-05-15) — pending user review
+> **Status:** design (v1.1, 2026-05-15) — pending user review
+> **Revision history:** v1 (2026-05-15) — session-scoped storage; v1.1 (2026-05-15) — после review: workspace-scoped storage / session-scoped room, daemon-safe ops, drop `rooms use`, explicit `--force` semantics, collision-resistant slugify.
 > **Scope:** minimal pre-2.1 prerequisite. Закрывает P3 + добавляет rooms discovery, чтобы Phase 2.1 (Agent v2) при старте сессии видел уже существующие схемы из текущей папки.
 
 ## 1. Зачем сейчас, отдельно от 2.1
@@ -16,62 +17,128 @@ Phase 2.1 (domain agent) принимает решения «продолжае�
 
 ## 2. Что делаем
 
-### 2.1. Закрыть P3 — `CLAUDE_SESSION_ID` → storage path
+### 2.1. Workspace-scoped storage / session-scoped room
 
-`apps/backend/src/config.ts:50-57` сейчас hard-codes `"default-project"`. Меняем на:
+**Главная инверсия относительно v1**: storage директория определяется **проектом**, а не сессией. `CLAUDE_SESSION_ID` влияет только на default room name внутри этой директории. Это позволяет новой сессии в той же папке увидеть схемы старых сессий — что и есть цель `rooms discovery`.
+
+```
+storageDir = ~/.claude/projects/<projectSlug>/<canvas | canvas-dev>/
+roomFile   = <storageDir>/<roomId>.json
+```
+
+#### Project slug resolution chain (новый, в `config.ts`)
 
 ```ts
-const slug = process.env.CLAUDE_SESSION_ID
-  ? slugify(process.env.CLAUDE_SESSION_ID)
-  : process.env.CLAUDE_PROJECT_DIR
-    ? slugify(process.env.CLAUDE_PROJECT_DIR)
-    : "default-project";
+projectSlug =
+  process.env.DIDRAW_PROJECT_DIR ??   // explicit override (testing, multi-project)
+  process.env.CLAUDE_PROJECT_DIR ??   // Claude Code пробрасывает абсолютный путь workspace
+  process.cwd() ??                    // fallback на текущую рабочую директорию
+  "default-project";
+
+projectSlug → slugify → safe path segment
 ```
 
-Где `slugify` — детерминированный path-safe slug (нижний регистр, заменить `/` на `-`, обрезать leading dashes).
+#### Slugify rules
 
-`CLAUDE_PROJECT_DIR` — env, который Claude Code пробрасывает с абсолютным path workspace. Если `CLAUDE_SESSION_ID` нет (например пользователь дёрнул `didraw` напрямую из shell), fallback на dir-based slug — тоже стабильно per-folder.
+- Lowercase.
+- `/`, `\` → `-`.
+- Remove leading/trailing `-`.
+- Collapse runs of `-`.
+- **Collision-resistant suffix**: финальный slug = `slugBody + "-" + sha1(originalInput).slice(0,8)`. Это гарантирует, что разные пути с одинаковой sluggified-частью (`/home/u1/proj` и `/home/u2/proj`) не сольются в одну директорию.
 
-### 2.2. Rooms API
-
-Добавить:
-
-```
-GET  /api/rooms          # list { rooms: [{id, lastTouched, elementCount, version}] }
-POST /api/rooms/:id/use  # switch active room для default-room fallback (writes lastUsed marker)
-DELETE /api/rooms/:id    # archive — moves файл в <storageDir>/.archive/, keeps for grep
-```
-
-Backend сканирует `<storageDir>/*.json`, читает метаданные без полной загрузки (только version + elementCount + mtime). Cache invalidation — на mtime check, реcканируется при изменении.
-
-### 2.3. CLI
+#### Room id resolution chain (новый, в backend route handler + frontend transport)
 
 ```
-didraw rooms list                 # JSON: [{id, lastTouched, elementCount, version}]
-didraw rooms use <id>             # установить activeRoom для текущей папки
-didraw rooms archive <id>         # переместить в .archive/
-didraw rooms restore <id>         # из .archive/ обратно
+roomId =
+  explicit CLI arg --room <id>    OR
+  URL ?room=<id>                  OR
+  process.env.CLAUDE_SESSION_ID   OR
+  "default"
 ```
 
-Сохраняем backward compatibility: `--room <id>` arg на всех data commands продолжает работать как override.
+Validation: roomId должен матчить `/^[a-zA-Z0-9_-]{1,64}$/`. Не-matching id → **422 error**, не silent mangle (UX явный — пользователь увидит, что не так с именем).
 
-### 2.4. Room export/import to JSON file
+#### Что **не** делаем (v1)
 
-Простая операция, не зависит от формата (это просто внутренний canvas snapshot, не Mermaid/Miro/etc — те идут в Phase 2.5).
+- **`rooms use`** — отвергнут (option 1 из user review). Skрытое active-state создаёт расхождение между CLI и browser tab. Если пользователь хочет продолжить старую схему — `didraw open <roomId>` или `--room <id>`. Никаких persistent active-marker'ов.
+
+### 2.2. Rooms API — daemon-safe
+
+**Все операции с rooms идут через backend HTTP API** (не прямой filesystem из CLI). Сейчас `packages/didraw-cli/src/lifecycle.ts` делает `copyFileSync`/`unlinkSync` напрямую от диска — это **stale**: daemon держит state в памяти с `autosaveDebounceMs: 300` (см. `apps/backend/src/config.ts:62`). Между mutation и debounce flush файл устаревший. v1.1 закрывает это.
 
 ```
-didraw rooms export <id> --to path/file.json    # пишет {schemaVersion, canvas, prompts} в файл
-didraw rooms import path/file.json [--as <id>]  # читает файл, создаёт room (или перезаписывает)
+GET    /api/rooms                      # list { rooms: [{id, lastTouched, elementCount, version}] }
+POST   /api/rooms/:id/export           # body: {to: <absolute-path>}; flushes dirty state, returns {ok, path, schemaVersion}
+POST   /api/rooms/import               # body: {from: <path>, as?: <id>, force?: boolean}
+POST   /api/rooms/:id/archive          # flushes, evicts from memory, moves to <storageDir>/.archive/
+POST   /api/rooms/:id/restore          # moves back from .archive/
+DELETE /api/rooms/:id                  # hard delete; requires {confirm:true} body
 ```
 
-Под капотом — то же, что storage layer пишет на диск. Schema version в header — для будущей миграции (если изменим shape).
+#### Daemon-safe invariants
 
-Зачем сейчас, а не в Phase 2.5:
-- **Backup.** Пользователь хочет сохранить рабочую схему до экспериментов.
-- **Cross-folder transfer.** Перенести готовую диаграмму из одного проекта в другой.
-- **Sharing minimal.** Коллега запустит свой di.draw и `didraw rooms import received.json` — увидит ту же схему. Это **не** полноценный multi-user, это «отправь файл по любому каналу». Достаточно как baseline до Phase 3 multi-user.
+Каждая операция в backend следует одному шаблону:
 
-Phase 2.5 добавит export в **другие форматы** (Mermaid/Miro/Figma/SVG/PNG) — это уже трансформация, не транспорт.
+1. `await rooms.flushIfDirty(id)` — сбрасывает in-memory state в файл, синхронно.
+2. `await rooms.evict(id)` — удаляет room из памяти, если был загружен. Следующий запрос к нему перечитает с диска.
+3. Выполняется файловая операция (copy/move/unlink).
+4. Если impl ошиблась — структура persistence не повреждена, потому что (1) и (2) идемпотентны.
+
+`flushIfDirty` уже частично существует в backend (autosave debounce таймер), но публичного API для синхронного flush сейчас нет. Phase 2.0 его добавляет в `apps/backend/src/rooms.ts`.
+
+#### Metadata listing
+
+`GET /api/rooms` сканирует `<storageDir>/*.json`. Для каждого файла читает **только header**: первые ~2KB или явный `{schemaVersion, version, elementCount, lastTouched}` блок в начале payload. Без full-parse — это для 100 rooms не должно быть медленнее ~50ms. Cache: in-memory dict с mtime check; реcканируется при изменении любого файла в директории.
+
+### 2.3. CLI surface
+
+```
+didraw rooms list                                # via GET /api/rooms
+didraw rooms export <id> --to <path>             # via POST /api/rooms/:id/export
+didraw rooms import <path> [--as <id>] [--force] # via POST /api/rooms/import
+didraw rooms archive <id>                        # via POST /api/rooms/:id/archive
+didraw rooms restore <id>                        # via POST /api/rooms/:id/restore
+didraw rooms rm <id> --confirm                   # via DELETE /api/rooms/:id
+```
+
+`--room <id>` arg на data commands (state/patch/define/...) продолжает работать как room override. Default — `CLAUDE_SESSION_ID` env или `"default"`.
+
+Существующий `lifecycle.ts` (методы `exportRoom`, `rmRoom`, `list`) переделывается: вместо `copyFileSync`/`unlinkSync` — HTTP вызовы. Backwards-compat: command signatures сохраняются.
+
+### 2.4. Room export/import — semantics
+
+Простой transport, не трансформация. Mermaid/Miro/Figma — это Phase 2.5.
+
+#### Export schema
+
+```json
+{
+  "schemaVersion": 1,
+  "exportedAt": "2026-05-15T12:00:00Z",
+  "roomId": "<original id>",
+  "version": 42,
+  "canvas": { "version": 1, "nodes": [...], "edges": [...], "groups": [...] },
+  "prompts": [...]
+}
+```
+
+`version` (op-counter, не schema) обязателен — чтобы import восстанавливал byte-equivalent state, иначе incremental sync поломается.
+
+#### Overwrite semantics
+
+`POST /api/rooms/import`:
+- `force: false` (default): если target id уже существует → 409 `{ok:false, error:"room exists", existingId}`.
+- `force: true`: target room **flushed + evicted** (чтобы daemon не перезаписал импорт следующим autosave), затем файл заменяется.
+
+CLI: `--force` flag явный, без него — exit 1 с понятной ошибкой.
+
+#### Зачем сейчас, а не в Phase 2.5
+
+- **Backup.** До экспериментов сохранить рабочую схему.
+- **Cross-folder transfer.** Перенести готовую схему между проектами.
+- **Sharing minimal.** «Отправь файл по любому каналу», коллега `didraw rooms import received.json`. Не multi-user, но baseline до Phase 3.
+
+Phase 2.5 — это **трансформации** (Mermaid/Miro/Figma/SVG/PNG), которые потеряют domain fidelity. Native JSON остаётся как round-trip-safe transport.
 
 ### 2.5. Skill startup awareness
 
@@ -104,21 +171,48 @@ AI на старте `/draw` видит:
 
 ## 4. Tests
 
-- `apps/backend/tests/storage-path.test.ts` — слугификация всех вариантов env (`CLAUDE_SESSION_ID` / `CLAUDE_PROJECT_DIR` / fallback).
-- `apps/backend/tests/rooms-api.test.ts` — list, use, archive, restore flow; mtime cache invalidation.
-- `apps/backend/tests/room-export-import.test.ts` — export → import roundtrip: assert state byte-equality (canvas + prompts), schemaVersion header присутствует, импорт в новый id не перезаписывает существующий без `--force`.
-- CLI integration: `didraw rooms list` пустой workspace → `{rooms:[]}`; после `didraw define service auth` → 1 room, 1 element; `rooms export … --to /tmp/x.json && rooms import /tmp/x.json --as restored` → 2 rooms.
-- Manual smoke: запустить из двух разных folder'ов одновременно, убедиться что storage dirs разные (не пересекаются).
+### 4.1. Project-slug and room-id resolution
 
-## 5. Implementation outline (writing-plans будет шире)
+- **slugify**:
+  - `/home/u1/proj` и `/home/u2/proj` (одинаковый basename, разные пути) → различные slugs (collision hash суффикс).
+  - Spaces, unicode, deep paths — все продуцируют valid path segments.
+  - Empty input → fallback `"default-project"`.
+- **project slug chain**: only DIDRAW_PROJECT_DIR → only CLAUDE_PROJECT_DIR → only cwd → fallback. Каждый шаг с приоритетом.
+- **room id validation**: `auth-v2` accepted, `auth v2` (space) rejected with 422, `../etc/passwd` rejected with 422, empty rejected.
 
-1. `config.ts`: env-based slug + fallback chain; tests.
-2. `rooms.ts`: cache + scan API (mtime invalidation).
-3. `routes/rooms.ts`: list/use/archive/restore endpoints + tests.
-4. `routes/rooms-export-import.ts` или extension к §3: file roundtrip + schemaVersion header.
-5. CLI: `didraw rooms` subcommand (list/use/archive/restore/export/import).
-6. Skill: inject `didraw rooms list` + guidance text.
-7. Smoke: dual-folder run + archive/restore roundtrip + export/import roundtrip.
-8. CHANGELOG, bump 0.0.1 → 0.1.0.
+### 4.2. Workspace isolation
 
-Estimated: 6-8 tasks.
+- **Two sessions same workspace see same room list.** Spawn daemon из folder `/A` с session1; create room `design`. Спавн второй daemon (или re-init) из той же `/A` с session2; `rooms list` показывает `design`. Default room по session id различается, но обе сессии видят `design`.
+- **Different workspaces, isolated storage.** `/A` и `/B` ни в каком случае не делят rooms.
+
+### 4.3. Daemon-safe ops
+
+- **Dirty flush on export.** Apply mutation (room status dirty, ещё не autosaved); `rooms export` → exported file содержит mutation. Wait `autosaveDebounceMs+50`, повторный export — byte-equal с предыдущим.
+- **No autosave overwrite after delete.** Apply mutation, `rooms rm --confirm`, wait > `autosaveDebounceMs` — файл не воссоздан daemon'ом.
+- **Import overwrite without --force.** Import to existing id → 409, original room untouched.
+- **Import overwrite with --force.** Import to existing id с force=true → target room flushed, evicted, заменён; new room reflects imported data.
+
+### 4.4. Export/import roundtrip
+
+- Export → import roundtrip: assert canvas+prompts byte-equality, version field присутствует в файле, после import roomState.version совпадает с exported.
+- Schema version mismatch: import file with `schemaVersion: 999` → 422 c `"unsupported schemaVersion"`.
+
+### 4.5. CLI integration
+
+- `didraw rooms list` пустой workspace → `{rooms:[]}`.
+- После `didraw define service auth` → `rooms list` показывает 1 room.
+- `didraw rooms export … --to /tmp/x.json && didraw rooms import /tmp/x.json --as restored --force` → 2 rooms.
+
+## 5. Implementation outline
+
+1. `config.ts`: project slug resolution (DIDRAW_PROJECT_DIR → CLAUDE_PROJECT_DIR → cwd → "default-project") + collision-resistant slugify. Tests §4.1.
+2. `rooms.ts`: room id validation, `flushIfDirty(id)`, `evict(id)` public API. Tests §4.2-§4.3 invariants.
+3. `routes/rooms.ts`: list endpoint (header-only scan + mtime cache) + tests.
+4. `routes/rooms.ts`: archive/restore endpoints (daemon-safe pattern) + tests.
+5. `routes/rooms.ts`: export endpoint (flush → emit schema-versioned JSON) + tests.
+6. `routes/rooms.ts`: import endpoint (force semantics) + tests §4.4.
+7. CLI `lifecycle.ts` rewrite: replace direct filesystem with HTTP-via-daemon. Tests §4.5.
+8. Skill SKILL.md: inject `didraw rooms list` + guidance.
+9. CHANGELOG, bump 0.0.1 → 0.1.0.
+
+Estimated: 7-9 tasks (немного больше из-за daemon-safe rewrite существующего `lifecycle.ts`).
