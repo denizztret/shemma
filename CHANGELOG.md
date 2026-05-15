@@ -1,3 +1,30 @@
+## 0.1.0 — 2026-05-15
+
+### Phase 2.0 — Persistence hardening
+
+**Storage:**
+- Workspace-scoped storage path (was hard-coded `default-project`). Resolution: `DIDRAW_PROJECT_DIR > CLAUDE_PROJECT_DIR > cwd`. Collision-resistant slug (`name-<sha1[0:8]>`) prevents same-basename folders colliding.
+- Persisted envelope format: `{schemaVersion, roomId, version, lastTouched, elementCount, canvas, prompts}`. Single contract between storage and export.
+- Room id validation: `/^[a-zA-Z0-9_-]{1,64}$/`. Invalid ids rejected with 422 (no silent mangle).
+
+**Daemon-safe rooms API:**
+- `GET /api/rooms` — listing with envelope metadata (version, elementCount, lastTouched).
+- `POST /api/rooms/:id/archive` / `/restore` — move to `.archive/` and back.
+- `POST /api/rooms/:id/export` — write envelope + `exportedAt` to disk.
+- `POST /api/rooms/import` — restore from file with `as`/`force` options.
+- `DELETE /api/rooms/:id` — hard delete with `{confirm:true}` body.
+
+All ops use `flushIfDirty + evict + filesystem op` pattern, so daemon's autosave never overwrites a fresh archive/delete/import.
+
+**CLI (BREAKING):**
+- Removed top-level `didraw list`, `didraw export`, `didraw rm`.
+- New `didraw rooms` subcommand group: `list`, `archive`, `restore`, `export`, `import`, `rm`. All commands go through HTTP via daemon (not direct filesystem ops) — autosave and pending writes flush before the operation.
+
+**Skill:**
+- `/draw` cheat-sheet injects `didraw rooms list` at startup so AI sees existing schemas before deciding default-vs-resume.
+
+---
+
 ## 0.0.1 — 2026-05-15
 
 > Первый relesable cut: MVP-canvas + AI-workflow через Bash CLI + persistent watcher.

@@ -15,6 +15,12 @@ You have a live canvas board for this Claude Code session. State below is auto-i
 
 !`didraw prompts list --status pending 2>/dev/null || echo '{"prompts":[]}'`
 
+## Rooms in this workspace
+
+!`didraw rooms list 2>/dev/null || echo '{"rooms":[]}'`
+
+If `rooms` lists non-empty schemas relevant to the current dialogue, ask the user whether to continue an existing schema or start a new one. Don't clutter the `default` room with unrelated ad-hoc diagrams. Use `--room <id>` on data commands to address a specific room.
+
 ## Commands (use the Bash tool)
 
 Read:
@@ -48,6 +54,17 @@ Targeted prompts (user-attached questions on objects):
 didraw prompts list --status pending
 didraw prompts resolve <id> --response "text"
 didraw prompts dismiss <id>
+```
+
+### Rooms management
+
+```
+didraw rooms list                                    # list with elementCount + version
+didraw rooms archive <id>                            # move to .archive/
+didraw rooms restore <id>                            # restore from .archive/
+didraw rooms export <id> --to /path/to/file.json     # save snapshot
+didraw rooms import /path/to/file.json [--as <id>] [--force]
+didraw rooms rm <id> --confirm                       # hard delete
 ```
 
 AI-activity badge (so the user sees when YOU are busy):
