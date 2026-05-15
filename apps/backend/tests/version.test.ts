@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { startServer } from "../src/index";
 import { __resetCache } from "../src/update-check";
 
@@ -6,6 +6,11 @@ import { __resetCache } from "../src/update-check";
 // tests are fast, offline-safe, and checkLatest() returns {updateAvailable:false}.
 beforeAll(() => {
   process.env.DIDRAW_MANIFEST_URL = "http://127.0.0.1:1/nope";
+});
+
+afterAll(() => {
+  process.env.DIDRAW_MANIFEST_URL = undefined;
+  __resetCache();
 });
 
 describe("GET /api/version", () => {
