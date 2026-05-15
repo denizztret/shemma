@@ -50,6 +50,26 @@ didraw prompts resolve <id> --response "text"
 didraw prompts dismiss <id>
 ```
 
+AI-activity badge (so the user sees when YOU are busy):
+```
+didraw ai start --actor <name> --task "<short description>"
+# ... do the work ...
+didraw ai stop
+didraw ai status                                # check current
+```
+
+Always pair `start` with `stop` (use a shell trap or finally pattern).
+Stale records auto-clear after 5 minutes server-side, but explicit `stop`
+is the right shape. The `--task` text shows in the orange chip at the
+top of the canvas; update it between distinct phases of multi-step work.
+
+**Note for subagents using the release binary:** the `ai` subcommand
+was added 2026-05-15 and may not be present in
+`/Users/tretyakov_dv/Projects/sandbox/di.draw/release/didraw-*` until
+the binary is rebuilt. If `ai` is missing from the help text, fall back
+to `bun /Users/tretyakov_dv/Projects/sandbox/di.draw/packages/didraw-cli/src/index.ts ai ...`
+to invoke the source CLI directly.
+
 ## PatchOp format
 
 - `{op:"add", target:"node"|"edge"|"group", value:{...}}` — create
