@@ -3,14 +3,31 @@ import { ensure, start, status, stop } from "./daemon";
 import { cmdClear, cmdPatch, cmdState } from "./data";
 import { cmdLayout } from "./layout";
 import { exportRoom, list, open, rmRoom } from "./lifecycle";
-import { applyProfile, parseProfile } from "./profile";
+import { applyProfile, parseProfile, portFor } from "./profile";
 import { cmdPrompts } from "./prompts";
 import { cmdUpdate, cmdUpdateCheck, cmdUpdateSetChannel } from "./update";
 import { cmdVersion } from "./version-cmd";
 
-const argv = process.argv.slice(2);
-const profile = parseProfile(argv);
+const rawArgv = process.argv.slice(2);
+const profile = parseProfile(rawArgv);
 applyProfile(profile);
+// Resolve --profile → DIDRAW_PORT so any CanvasClient (data/prompts/layout/version) hits the right daemon.
+// Explicit DIDRAW_PORT is honoured if already set (portFor checks env first).
+process.env.DIDRAW_PORT ??= String(portFor(profile));
+// Strip --profile <value> here so per-command parsers don't need to know about it.
+const argv = stripProfileFlag(rawArgv);
+
+function stripProfileFlag(a: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === "--profile") {
+      i++; // skip value
+      continue;
+    }
+    out.push(a[i]);
+  }
+  return out;
+}
 
 const cmd = argv[0];
 const sub = argv[1];
