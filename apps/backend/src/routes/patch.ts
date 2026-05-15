@@ -5,6 +5,41 @@ import { resolveRoomId } from "../rooms";
 import type { Rooms } from "../rooms";
 import type { PatchBus, PatchOp, RoomState } from "../types";
 
+// Apply inference AFTER we have current room state, so partial updates
+// (only x or only y, or only one style field) preserve the unchanged axis
+// using the current node values rather than producing `undefined`.
+function inferUserMetadata(
+  ops: PatchOp[],
+  canvas: { nodes: Array<{ id: string; x: number; y: number; meta?: Record<string, unknown> }> },
+): PatchOp[] {
+  return ops.map((op) => {
+    if (op.op !== "update" || op.target !== "node") return op;
+    const set = op.set as { x?: number; y?: number; style?: unknown; meta?: Record<string, unknown> };
+    const movedX = set.x !== undefined;
+    const movedY = set.y !== undefined;
+    const styled = set.style !== undefined;
+    if (!movedX && !movedY && !styled) return op;
+
+    const current = canvas.nodes.find((n) => n.id === op.id);
+    const currentMeta = (current?.meta ?? {}) as Record<string, unknown>;
+    const currentPos = currentMeta.position as { x?: number; y?: number } | undefined;
+    // Deep-merge for meta — applyPatch shallow-merges nested objects, so we
+    // build the FULL new meta.position here rather than relying on merge.
+    const meta = { ...currentMeta, ...(set.meta ?? {}) } as Record<string, unknown>;
+    if (movedX || movedY) {
+      meta.pinned = true;
+      meta.position = {
+        x: movedX ? (set.x as number) : (currentPos?.x ?? current?.x ?? 0),
+        y: movedY ? (set.y as number) : (currentPos?.y ?? current?.y ?? 0),
+      };
+    }
+    if (styled) {
+      meta.styleOwnedBy = "user";
+    }
+    return { ...op, set: { ...set, meta } };
+  });
+}
+
 export function patchRoutes(
   rooms: Rooms,
   bus: PatchBus,
@@ -18,10 +53,14 @@ export function patchRoutes(
     if (!body || !Array.isArray(body.ops))
       return c.json({ ok: false, error: "expected {ops,source}" }, 400);
 
-    const ops = body.ops as PatchOp[];
     const source: "ai" | "user" = body.source === "ai" ? "ai" : "user";
     const clientOpId: string | undefined = body.clientOpId;
     const r = await rooms.get(id);
+
+    // Phase 2.1 §6.2: user-source updates infer pin + style ownership.
+    // MUST run AFTER rooms.get() — we need current x/y for partial moves.
+    let ops = body.ops as PatchOp[];
+    if (source === "user") ops = inferUserMetadata(ops, r.canvas);
 
     if (clientOpId && r.opLog.some((e) => e.clientOpId === clientOpId)) {
       return c.json({ ok: true, version: r.version, idempotent: true });
@@ -32,23 +71,12 @@ export function patchRoutes(
 
     r.canvas = result.state;
     r.version += 1;
-    r.opLog.push({
-      ops,
-      source,
-      version: r.version,
-      at: Date.now(),
-      clientOpId,
-    });
+    r.opLog.push({ ops, source, version: r.version, at: Date.now(), clientOpId });
     if (r.opLog.length > config.opLogMaxSize)
       r.opLog.splice(0, r.opLog.length - config.opLogMaxSize);
     r.dirty = true;
     opts.onDirty?.(id, r);
-    bus.publish(id, {
-      ops,
-      source,
-      version: r.version,
-      originClientId: clientOpId,
-    });
+    bus.publish(id, { ops, source, version: r.version, originClientId: clientOpId });
 
     return c.json({ ok: true, version: r.version });
   });
