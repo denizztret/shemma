@@ -5,6 +5,7 @@ import { type RoomStore, Rooms } from "./rooms";
 import { healthRoutes } from "./routes/health";
 import { layoutRoutes } from "./routes/layout";
 import { patchRoutes } from "./routes/patch";
+import { promptRoutes } from "./routes/prompts";
 import { stateRoutes } from "./routes/state";
 import { DEFAULT_ROOM } from "./types";
 import { type Sock, WsHub } from "./ws";
@@ -42,6 +43,16 @@ export function makeApp(opts: AppOpts = {}) {
   app.route(
     "/",
     layoutRoutes(rooms, bus, {
+      onDirty: persistence
+        ? (id, room) => {
+            persistence.scheduleSave(id, room);
+          }
+        : undefined,
+    }),
+  );
+  app.route(
+    "/",
+    promptRoutes(rooms, bus, {
       onDirty: persistence
         ? (id, room) => {
             persistence.scheduleSave(id, room);
