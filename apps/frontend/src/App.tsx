@@ -1,10 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  type Editor,
-  type TLShape,
-  Tldraw,
-  TldrawUiOrientationProvider,
-} from "tldraw";
+import { type Editor, type TLShape, Tldraw } from "tldraw";
 import "tldraw/tldraw.css";
 import { isOurOp, rememberOurOpId } from "./canvas/echo-guard";
 import { edgeToShape, nodeToShape } from "./canvas/from-canvas-state";
@@ -160,9 +155,7 @@ export function App({ room }: { room: string }) {
         </>
       }
     >
-      <TldrawUiOrientationProvider orientation="vertical" tooltipSide="right">
-        <Tldraw onMount={setEditor} components={buildTldrawComponents(room)} />
-      </TldrawUiOrientationProvider>
+      <Tldraw onMount={setEditor} components={buildTldrawComponents(room)} />
     </AppChrome>
   );
 }
