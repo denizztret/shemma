@@ -285,3 +285,185 @@ describe("POST /api/rooms/:id/export", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("POST /api/rooms/import", () => {
+  async function exportRoom(srcId: string, target: string) {
+    const { app } = makeApp({ storageDir: dir });
+    await app.fetch(
+      new Request(`http://localhost/api/rooms/${srcId}/export`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to: target }),
+      }),
+    );
+  }
+
+  test("imports to specified id with byte-equivalent canvas", async () => {
+    seedRoom("source", (s) => {
+      s.canvas.nodes.push({ id: "n1", kind: "rect", x: 1, y: 2 });
+      s.version = 7;
+    });
+    const exported = join(dir, "..", "imp-source.json");
+    await exportRoom("source", exported);
+
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ from: exported, as: "imported" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; roomId: string };
+    expect(body.roomId).toBe("imported");
+
+    const stateRes = await app.fetch(
+      new Request("http://localhost/api/state?room=imported"),
+    );
+    const stateBody = (await stateRes.json()) as {
+      canvas: { nodes: Array<{ id: string }> };
+      version: number;
+    };
+    expect(stateBody.canvas.nodes[0].id).toBe("n1");
+    expect(stateBody.version).toBe(7);
+
+    rmSync(exported, { force: true });
+  });
+
+  test("409 on existing target without force", async () => {
+    seedRoom("target", () => {});
+    seedRoom("source", () => {});
+    const exported = join(dir, "..", "imp-noforce.json");
+    await exportRoom("source", exported);
+
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ from: exported, as: "target" }),
+      }),
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(body.error).toMatch(/exists/);
+
+    rmSync(exported, { force: true });
+  });
+
+  test("overwrites with force=true (flushes evicts target)", async () => {
+    seedRoom("target", (s) => {
+      s.canvas.nodes.push({ id: "old", kind: "rect", x: 0, y: 0 });
+    });
+    seedRoom("source", (s) => {
+      s.canvas.nodes.push({ id: "new", kind: "rect", x: 0, y: 0 });
+      s.version = 42;
+    });
+    const exported = join(dir, "..", "imp-force.json");
+    await exportRoom("source", exported);
+
+    const { app } = makeApp({ storageDir: dir });
+    await app.fetch(new Request("http://localhost/api/state?room=target"));
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ from: exported, as: "target", force: true }),
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const stateRes = await app.fetch(
+      new Request("http://localhost/api/state?room=target"),
+    );
+    const stateBody = (await stateRes.json()) as {
+      canvas: { nodes: Array<{ id: string }> };
+    };
+    expect(stateBody.canvas.nodes[0].id).toBe("new");
+
+    rmSync(exported, { force: true });
+  });
+
+  test("422 on schemaVersion mismatch", async () => {
+    const badPath = join(dir, "..", "bad-schema.json");
+    writeFileSync(
+      badPath,
+      JSON.stringify({
+        schemaVersion: 999,
+        roomId: "x",
+        version: 0,
+        lastTouched: "2026-01-01T00:00:00Z",
+        elementCount: 0,
+        canvas: { version: 1, nodes: [], edges: [], groups: [] },
+        prompts: [],
+      }),
+      "utf8",
+    );
+
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ from: badPath, as: "x" }),
+      }),
+    );
+    expect(res.status).toBe(422);
+
+    rmSync(badPath, { force: true });
+  });
+});
+
+describe("DELETE /api/rooms/:id", () => {
+  test("requires confirm:true", async () => {
+    seedRoom("doomed", () => {});
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/doomed", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  test("removes file with confirm:true", async () => {
+    seedRoom("doomed", () => {});
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/doomed", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dir, "doomed.json"))).toBe(false);
+  });
+
+  test("no autosave overwrite after delete", async () => {
+    const { app, rooms, persistence } = makeApp({ storageDir: dir });
+    const r = await rooms.get("ghost");
+    r.canvas.nodes.push({ id: "n1", kind: "rect", x: 0, y: 0 });
+    r.dirty = true;
+    r.version = 1;
+    persistence!.scheduleSave("ghost", r);
+
+    await app.fetch(
+      new Request("http://localhost/api/rooms/ghost", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      }),
+    );
+
+    await new Promise((res) => setTimeout(res, 400));
+
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dir, "ghost.json"))).toBe(false);
+  });
+});

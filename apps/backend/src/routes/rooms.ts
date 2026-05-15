@@ -1,8 +1,8 @@
-import { readdir, readFile, rename, mkdir, stat, writeFile } from "node:fs/promises";
+import { readdir, readFile, rename, mkdir, stat, writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { Context } from "hono";
 import { Hono } from "hono";
-import { parseHeader, serializeExport } from "../envelope";
+import { parseHeader, parseFull, serializeExport } from "../envelope";
 import type { Rooms } from "../rooms";
 import { validateRoomId } from "../rooms";
 
@@ -144,6 +144,97 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
     await writeFile(body.to, raw, "utf8");
 
     return c.json({ ok: true, path: body.to, schemaVersion: 1 });
+  });
+
+  app.post("/api/rooms/import", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as
+      | { from?: string; as?: string; force?: boolean }
+      | null;
+
+    if (!body?.from) {
+      return c.json({ ok: false, error: "expected {from, as?, force?}" }, 400);
+    }
+
+    let raw: string;
+    try {
+      raw = await readFile(body.from, "utf8");
+    } catch {
+      return c.json({ ok: false, error: "source file not found" }, 404);
+    }
+
+    let env;
+    try {
+      env = parseFull(raw);
+    } catch (e) {
+      return c.json({ ok: false, error: (e as Error).message }, 422);
+    }
+
+    const targetId = body.as ?? env.roomId;
+    if (!validateRoomId(targetId)) {
+      return c.json(
+        { ok: false, error: `invalid target room id "${targetId}"` },
+        422,
+      );
+    }
+
+    const dstPath = join(storageDir, `${targetId}.json`);
+    let exists = false;
+    try {
+      await stat(dstPath);
+      exists = true;
+    } catch {}
+
+    if (exists && !body.force) {
+      return c.json(
+        { ok: false, error: `room "${targetId}" exists; pass force:true to overwrite` },
+        409,
+      );
+    }
+
+    if (exists) {
+      await rooms.evict(targetId);
+    }
+
+    const newEnv = {
+      schemaVersion: env.schemaVersion,
+      roomId: targetId,
+      version: env.version,
+      lastTouched: env.lastTouched,
+      elementCount: env.elementCount,
+      canvas: env.canvas,
+      prompts: env.prompts,
+    };
+    await writeFile(dstPath, JSON.stringify(newEnv, null, 2), "utf8");
+
+    return c.json({ ok: true, roomId: targetId, version: env.version });
+  });
+
+  app.delete("/api/rooms/:id", async (c) => {
+    const idParam = roomParam(c);
+    if (!idParam.ok) return idParam.response;
+    const id = idParam.id;
+    const body = (await c.req.json().catch(() => ({}))) as { confirm?: boolean };
+    if (!body.confirm) {
+      return c.json(
+        { ok: false, error: "expected {confirm:true} in body" },
+        400,
+      );
+    }
+
+    // Flush before stat: pending writes for this room must materialize so we
+    // either find the file (and delete it) or honestly 404.
+    await rooms.flushIfDirty(id);
+
+    const path = join(storageDir, `${id}.json`);
+    try {
+      await stat(path);
+    } catch {
+      return c.json({ ok: false, error: "room not found" }, 404);
+    }
+
+    await rooms.evict(id);
+    await unlink(path);
+    return c.json({ ok: true });
   });
 
   return app;
