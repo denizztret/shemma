@@ -1,0 +1,7 @@
+{
+  "name": "@didraw/domain",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": { "test": "bun test" }
+}
