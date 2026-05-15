@@ -124,6 +124,7 @@ export type WsMessage =
     }
   | { kind: "prompt-created"; prompt: Prompt }
   | { kind: "prompt-resolved"; id: string; response?: string }
+  | { kind: "prompt-removed"; ids: string[] }
   | { kind: "ai-activity"; activity: AiActivity | null };
 
 export type PatchBus = {

@@ -117,6 +117,8 @@ Data:
   prompts  list --room <id> [--status pending|resolved|dismissed|all]
   prompts  resolve <id> --room <id> [--response <text>]
   prompts  dismiss <id> --room <id>
+  prompts  delete <id> --room <id>
+  prompts  purge --room <id>                  # remove all non-pending
   clear    --room <id> --confirm
   ai       start --actor <name> --task <text> [--room <id>]
   ai       stop [--room <id>]

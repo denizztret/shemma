@@ -113,6 +113,7 @@ export function App({ room }: { room: string }) {
       close = openWs({
         onPromptCreated: () => setPromptsTick((x) => x + 1),
         onPromptResolved: () => setPromptsTick((x) => x + 1),
+        onPromptRemoved: () => setPromptsTick((x) => x + 1),
         onAiActivity: (a) => setAiActivity(a),
         onPatch: (m) => {
           if (isOurOp(m.originClientId)) return;

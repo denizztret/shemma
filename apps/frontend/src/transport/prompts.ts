@@ -15,3 +15,18 @@ export async function fetchPrompts(status = "all") {
   );
   return r.json();
 }
+
+export async function deletePrompt(id: string) {
+  const r = await fetch(
+    `/api/prompt/${encodeURIComponent(id)}?room=${encodeURIComponent(room)}`,
+    { method: "DELETE" },
+  );
+  return r.json();
+}
+
+export async function purgePrompts() {
+  const r = await fetch(`/api/prompts?room=${encodeURIComponent(room)}`, {
+    method: "DELETE",
+  });
+  return r.json();
+}

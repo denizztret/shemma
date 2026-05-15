@@ -71,5 +71,33 @@ export function promptRoutes(
     return c.json({ ok: true });
   });
 
+  r.delete("/api/prompt/:id", async (c) => {
+    const id = c.req.query("room") ?? DEFAULT_ROOM;
+    const pid = c.req.param("id");
+    const room = await rooms.get(id);
+    const idx = room.prompts.findIndex((x) => x.id === pid);
+    if (idx === -1) return c.json({ ok: false, error: "not found" }, 404);
+    room.prompts.splice(idx, 1);
+    markDirty(id, room);
+    hub.publishPromptRemoved(id, [pid]);
+    return c.json({ ok: true });
+  });
+
+  r.delete("/api/prompts", async (c) => {
+    const id = c.req.query("room") ?? DEFAULT_ROOM;
+    const room = await rooms.get(id);
+    const removedIds: string[] = [];
+    room.prompts = room.prompts.filter((p) => {
+      if (p.status === "pending") return true;
+      removedIds.push(p.id);
+      return false;
+    });
+    if (removedIds.length > 0) {
+      markDirty(id, room);
+      hub.publishPromptRemoved(id, removedIds);
+    }
+    return c.json({ ok: true, removed: removedIds.length });
+  });
+
   return r;
 }

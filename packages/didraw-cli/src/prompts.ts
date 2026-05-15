@@ -44,6 +44,11 @@ export async function cmdPrompts(argv: string[]) {
     } else if (sub === "dismiss") {
       if (!id) throw new Error("missing id");
       console.log(JSON.stringify(await c.dismissPrompt(id)));
+    } else if (sub === "delete") {
+      if (!id) throw new Error("missing id");
+      console.log(JSON.stringify(await c.deletePrompt(id)));
+    } else if (sub === "purge") {
+      console.log(JSON.stringify(await c.purgePrompts()));
     } else {
       console.error(
         JSON.stringify({

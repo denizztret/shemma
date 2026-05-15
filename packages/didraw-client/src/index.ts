@@ -72,6 +72,20 @@ export class CanvasClient {
     return r.json();
   }
 
+  async deletePrompt(id: string) {
+    const r = await fetch(`${this.base}/api/prompt/${id}?${this.q()}`, {
+      method: "DELETE",
+    });
+    return r.json();
+  }
+
+  async purgePrompts() {
+    const r = await fetch(`${this.base}/api/prompts?${this.q()}`, {
+      method: "DELETE",
+    });
+    return r.json();
+  }
+
   async clear() {
     const s = await this.getState({ fmt: "full" });
     const ops = [

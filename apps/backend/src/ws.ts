@@ -35,6 +35,9 @@ export class WsHub implements PatchBus {
   publishPromptResolved(room: string, id: string, response?: string) {
     this.broadcast(room, { kind: "prompt-resolved", id, response });
   }
+  publishPromptRemoved(room: string, ids: string[]) {
+    this.broadcast(room, { kind: "prompt-removed", ids });
+  }
   publishAiActivity(room: string, activity: AiActivity | null) {
     this.broadcast(room, { kind: "ai-activity", activity });
   }

@@ -19,6 +19,7 @@ export type WsMessage =
   // biome-ignore lint/suspicious/noExplicitAny: prompt schema is opaque backend type
   | { kind: "prompt-created"; prompt: any }
   | { kind: "prompt-resolved"; id: string; response?: string }
+  | { kind: "prompt-removed"; ids: string[] }
   | { kind: "ai-activity"; activity: AiActivity | null };
 
 export function openWs(handlers: {
@@ -28,6 +29,7 @@ export function openWs(handlers: {
   onPromptCreated?: (m: any) => void;
   // biome-ignore lint/suspicious/noExplicitAny: prompt-resolved message passed through opaquely
   onPromptResolved?: (m: any) => void;
+  onPromptRemoved?: (ids: string[]) => void;
   onAiActivity?: (activity: AiActivity | null) => void;
 }) {
   let ws: WebSocket | null = null;
@@ -46,6 +48,7 @@ export function openWs(handlers: {
       if (m.kind === "patch") handlers.onPatch?.(m);
       if (m.kind === "prompt-created") handlers.onPromptCreated?.(m);
       if (m.kind === "prompt-resolved") handlers.onPromptResolved?.(m);
+      if (m.kind === "prompt-removed") handlers.onPromptRemoved?.(m.ids);
       if (m.kind === "ai-activity") handlers.onAiActivity?.(m.activity);
     };
     ws.onclose = () => {
