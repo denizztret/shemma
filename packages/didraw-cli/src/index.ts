@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { ensure, start, status, stop } from "./daemon";
+import { cmdClear, cmdPatch, cmdState } from "./data";
 import { exportRoom, list, open, rmRoom } from "./lifecycle";
 import { applyProfile, parseProfile } from "./profile";
 
@@ -20,6 +21,10 @@ async function main() {
     await new Promise(() => {});
     return;
   }
+
+  if (cmd === "state") return cmdState(argv.slice(1));
+  if (cmd === "patch") return cmdPatch(argv.slice(1));
+  if (cmd === "clear") return cmdClear(argv.slice(1));
 
   if (cmd === "daemon") {
     if (sub === "start") return start(profile);
