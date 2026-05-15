@@ -15,6 +15,7 @@ import { applyPatch } from "../patch";
 import { resolveRoomId } from "../rooms";
 import type { Rooms } from "../rooms";
 import type { PatchBus, PatchOp, RoomState } from "../types";
+import type { LayoutMode, Spacing } from "@didraw/domain";
 
 function computeAffected(_actions: DomainAction[], ops: PatchOp[]): ElementId[] {
   const out = new Set<string>();
@@ -48,9 +49,6 @@ function expandCascadeDeletes(
   return {};
 }
 
-// In-memory idempotency cache: clientOpId → response. Per process; ephemeral.
-const idempotencyCache = new Map<string, DomainResponse>();
-
 type LayoutInfo = { applied: boolean; affected?: ElementId[]; reason?: string };
 
 export function domainRoutes(
@@ -58,6 +56,9 @@ export function domainRoutes(
   bus: PatchBus,
   opts: { onDirty?: (room: string, state: RoomState) => void } = {},
 ) {
+  // Per-instance idempotency cache: clientOpId → response. Ephemeral (no eviction).
+  const idempotencyCache = new Map<string, DomainResponse>();
+
   return new Hono().post("/api/domain", async (c) => {
     const rv = resolveRoomId(c.req.query("room"));
     if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
@@ -171,9 +172,9 @@ export function domainRoutes(
     //   3. body.layoutHint defaults
     //   4. fallback {mode:"layered-lr", scope:"affected", spacing:"normal"}
     type EffectiveHint = {
-      mode: "layered-lr" | "layered-tb" | "tree" | "pack" | "force";
+      mode: LayoutMode;
       scope: "all" | "affected" | string;
-      spacing: "compact" | "normal" | "loose";
+      spacing: Spacing;
     };
     let effectiveHint: EffectiveHint | null;
     if (body.layoutHint === null) {
