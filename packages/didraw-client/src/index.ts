@@ -40,15 +40,6 @@ export class CanvasClient {
     return r.json();
   }
 
-  async importMermaid(source: string, layout: "elk" | "keep" = "elk") {
-    const r = await fetch(`${this.base}/api/import/mermaid?${this.q()}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ source, layout }),
-    });
-    return r.json();
-  }
-
   async layout(algorithm: "elk-layered" | "dagre", nodeIds?: string[]) {
     const r = await fetch(`${this.base}/api/layout?${this.q()}`, {
       method: "POST",

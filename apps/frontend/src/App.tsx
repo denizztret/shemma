@@ -4,6 +4,7 @@ import "tldraw/tldraw.css";
 import { isOurOp, rememberOurOpId } from "./canvas/echo-guard";
 import { nodeToShape } from "./canvas/from-canvas-state";
 import { toShapeId } from "./canvas/id-prefix";
+import { mermaidToOps } from "./canvas/mermaid-import";
 import { labelToRichText } from "./canvas/richtext";
 import { diffToOps } from "./canvas/to-patch";
 import { AppChrome } from "./chrome/AppChrome";
@@ -81,11 +82,24 @@ export function App({ room }: { room: string }) {
         },
         { source: "user", scope: "document" },
       );
+
+      // biome-ignore lint/suspicious/noExplicitAny: attaching helper to window for AI/dev console use
+      (window as any).didrawImportMermaid = async (source: string) => {
+        const ops = await mermaidToOps(editor, source);
+        if (ops.length === 0) return { ok: false, error: "no ops produced" };
+        const cid = crypto.randomUUID();
+        rememberOurOpId(cid);
+        // biome-ignore lint/suspicious/noExplicitAny: MermaidOp is compatible with backend PatchOp schema
+        return await sendPatch(ops as any, cid);
+      };
     })();
     return () => {
       active = false;
       close?.();
       unsubStore?.();
+      // biome-ignore lint/suspicious/noExplicitAny: cleaning up window helper
+      // biome-ignore lint/performance/noDelete: intentional property removal from window
+      delete (window as any).didrawImportMermaid;
     };
   }, [editor]);
 
