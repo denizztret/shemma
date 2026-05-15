@@ -1,8 +1,8 @@
-import { readdir, readFile, rename, mkdir, stat } from "node:fs/promises";
+import { readdir, readFile, rename, mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Context } from "hono";
 import { Hono } from "hono";
-import { parseHeader } from "../envelope";
+import { parseHeader, serializeExport } from "../envelope";
 import type { Rooms } from "../rooms";
 import { validateRoomId } from "../rooms";
 
@@ -118,6 +118,32 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
 
     await rename(srcPath, dstPath);
     return c.json({ ok: true });
+  });
+
+  app.post("/api/rooms/:id/export", async (c) => {
+    const idParam = roomParam(c);
+    if (!idParam.ok) return idParam.response;
+    const id = idParam.id;
+    const body = (await c.req.json().catch(() => null)) as { to?: string } | null;
+    if (!body?.to) {
+      return c.json({ ok: false, error: "expected {to: <path>}" }, 400);
+    }
+
+    // Flush BEFORE stat. Newly-created dirty rooms may not have a file yet.
+    await rooms.flushIfDirty(id);
+
+    const srcPath = join(storageDir, `${id}.json`);
+    try {
+      await stat(srcPath);
+    } catch {
+      return c.json({ ok: false, error: "room not found" }, 404);
+    }
+
+    const room = await rooms.get(id);
+    const raw = serializeExport(id, room);
+    await writeFile(body.to, raw, "utf8");
+
+    return c.json({ ok: true, path: body.to, schemaVersion: 1 });
   });
 
   return app;

@@ -204,3 +204,84 @@ describe("POST /api/rooms/:id/restore", () => {
     expect(res.status).toBe(409);
   });
 });
+
+describe("POST /api/rooms/:id/export", () => {
+  test("writes envelope with exportedAt to target path", async () => {
+    seedRoom("design", (s) => {
+      s.canvas.nodes.push({ id: "n1", kind: "rect", x: 1, y: 2 });
+      s.version = 4;
+    });
+    const { app } = makeApp({ storageDir: dir });
+    const target = join(dir, "..", "design-export.json");
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/design/export", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to: target }),
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const { readFileSync } = await import("node:fs");
+    const env = JSON.parse(readFileSync(target, "utf8"));
+    expect(env.schemaVersion).toBe(1);
+    expect(env.roomId).toBe("design");
+    expect(env.version).toBe(4);
+    expect(env.elementCount).toBe(1);
+    expect(typeof env.exportedAt).toBe("string");
+    expect(env.canvas.nodes[0].id).toBe("n1");
+
+    rmSync(target, { force: true });
+  });
+
+  test("flushes dirty room before export", async () => {
+    const { app, rooms, persistence } = makeApp({ storageDir: dir });
+    const r = await rooms.get("dirty");
+    r.canvas.nodes.push({ id: "n1", kind: "rect", x: 0, y: 0 });
+    r.version = 99;
+    r.dirty = true;
+    persistence!.scheduleSave("dirty", r);
+
+    const target = join(dir, "..", "dirty-export.json");
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/dirty/export", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to: target }),
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const { readFileSync } = await import("node:fs");
+    const env = JSON.parse(readFileSync(target, "utf8"));
+    expect(env.version).toBe(99);
+
+    rmSync(target, { force: true });
+  });
+
+  test("404 on non-existent room", async () => {
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/nope/export", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to: "/tmp/nope.json" }),
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  test("400 if body missing `to`", async () => {
+    seedRoom("r", () => {});
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/r/export", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+});

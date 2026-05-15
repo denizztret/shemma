@@ -57,6 +57,15 @@ export function parseHeader(raw: string): EnvelopeHeader | null {
   }
 }
 
+export function serializeExport(roomId: string, s: RoomState): string {
+  const base = JSON.parse(serialize(roomId, s)) as PersistedEnvelope;
+  const exp: ExportEnvelope = {
+    ...base,
+    exportedAt: new Date().toISOString(),
+  };
+  return JSON.stringify(exp, null, 2);
+}
+
 export function parseFull(raw: string): PersistedEnvelope {
   const j = JSON.parse(raw) as Partial<PersistedEnvelope>;
   if (j.schemaVersion !== ENVELOPE_SCHEMA_VERSION) {
