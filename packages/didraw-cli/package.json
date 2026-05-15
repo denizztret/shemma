@@ -1,0 +1,12 @@
+{
+  "name": "didraw",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": { "didraw": "src/index.ts" },
+  "scripts": { "test": "bun test" },
+  "dependencies": {
+    "@didraw/client": "workspace:*",
+    "@didraw/backend": "workspace:*"
+  }
+}

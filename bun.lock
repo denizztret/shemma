@@ -38,6 +38,20 @@
         "vite": "^5.4.0",
       },
     },
+    "packages/didraw-cli": {
+      "name": "didraw",
+      "version": "0.0.1",
+      "bin": {
+        "didraw": "src/index.ts",
+      },
+      "dependencies": {
+        "@didraw/backend": "workspace:*",
+        "@didraw/client": "workspace:*",
+      },
+    },
+    "packages/didraw-client": {
+      "name": "@didraw/client",
+    },
   },
   "packages": {
     "@antfu/install-pkg": ["@antfu/install-pkg@1.1.0", "", { "dependencies": { "package-manager-detector": "^1.3.0", "tinyexec": "^1.0.1" } }, "sha512-MGQsmw10ZyI+EJo45CdSER4zEb+p31LpDAFp2Z3gkSd1yqVZGi0Ebx++YTEMonJy4oChEMLsxZ64j8FH6sSqtQ=="],
@@ -133,6 +147,8 @@
     "@csstools/css-tokenizer": ["@csstools/css-tokenizer@4.0.0", "", {}, "sha512-QxULHAm7cNu72w97JUNCBFODFaXpbDg+dP8b/oWFAZ2MTRppA3U00Y2L1HqaS4J6yBqxwa/Y3nMBaxVKbB/NsA=="],
 
     "@didraw/backend": ["@didraw/backend@workspace:apps/backend"],
+
+    "@didraw/client": ["@didraw/client@workspace:packages/didraw-client"],
 
     "@didraw/frontend": ["@didraw/frontend@workspace:apps/frontend"],
 
@@ -673,6 +689,8 @@
     "delaunator": ["delaunator@5.1.0", "", { "dependencies": { "robust-predicates": "^3.0.2" } }, "sha512-AGrQ4QSgssa1NGmWmLPqN5NY2KajF5MqxetNEO+o0n3ZwZZeTmt7bBnvzHWrmkZFxGgr4HdyFgelzgi06otLuQ=="],
 
     "detect-node-es": ["detect-node-es@1.1.0", "", {}, "sha512-ypdmJU/TbBby2Dxibuv7ZLW3Bs1QEmM7nHjEANfohJLvE0XVujisn1qPJcZxg+qDucsr+bP6fLD1rPS3AhJ7EQ=="],
+
+    "didraw": ["didraw@workspace:packages/didraw-cli"],
 
     "dompurify": ["dompurify@3.4.3", "", { "optionalDependencies": { "@types/trusted-types": "^2.0.7" } }, "sha512-VVwJidIJcp1hpg2OMXML3ZVRPYSZiq4aX7qBh83BSIpOaRDqI+qxhXjjIWnpzkOXhmp0L81lnoME1mnCc9H48A=="],
 
