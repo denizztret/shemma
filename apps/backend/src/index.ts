@@ -7,6 +7,7 @@ import { layoutRoutes } from "./routes/layout";
 import { patchRoutes } from "./routes/patch";
 import { promptRoutes } from "./routes/prompts";
 import { stateRoutes } from "./routes/state";
+import { versionRoutes } from "./routes/version";
 import { DEFAULT_ROOM, type RoomState } from "./types";
 import { type Sock, WsHub } from "./ws";
 
@@ -32,6 +33,7 @@ export function makeApp(opts: AppOpts = {}) {
     ? (id: string, room: RoomState) => persistence.scheduleSave(id, room)
     : undefined;
   app.route("/", healthRoutes);
+  app.route("/", versionRoutes);
   app.route("/", stateRoutes(rooms));
   app.route("/", patchRoutes(rooms, bus, { onDirty }));
   app.route("/", layoutRoutes(rooms, bus, { onDirty }));
