@@ -3,14 +3,18 @@ import { config } from "./config";
 import { FilePersistence } from "./persistence";
 import { type RoomStore, Rooms } from "./rooms";
 import { healthRoutes } from "./routes/health";
-import { type PatchBus, patchRoutes } from "./routes/patch";
+import { patchRoutes } from "./routes/patch";
 import { stateRoutes } from "./routes/state";
+import { WsHub } from "./ws";
 
-export type AppOpts = { inMemory?: boolean; storageDir?: string };
+export type AppOpts = {
+  inMemory?: boolean;
+  port?: number;
+  storageDir?: string;
+};
 
 export function makeApp(opts: AppOpts = {}) {
-  // Fix vs plan: don't double-join — config.storageDir already ends in the correct path
-  const storageDir = opts.storageDir ?? config.storageDir;
+  const storageDir = opts.storageDir ?? config.storageDir; // Fix: no double-join
   const persistence = opts.inMemory ? null : new FilePersistence(storageDir);
   const store: RoomStore = persistence
     ? {
@@ -19,7 +23,7 @@ export function makeApp(opts: AppOpts = {}) {
       }
     : { load: async () => null, save: async () => {} };
   const rooms = new Rooms(store);
-  const bus: PatchBus = { publish: () => {} };
+  const bus = new WsHub();
   const app = new Hono();
   app.route("/", healthRoutes);
   app.route("/", stateRoutes(rooms));
@@ -36,8 +40,57 @@ export function makeApp(opts: AppOpts = {}) {
   return { app, rooms, bus, persistence };
 }
 
+export async function startServer(opts: AppOpts = {}) {
+  const { app, bus, persistence } = makeApp(opts);
+  const server = Bun.serve({
+    port: opts.port ?? config.port,
+    fetch: (req, srv) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/ws") {
+        const room = url.searchParams.get("room") ?? "default";
+        if (srv.upgrade(req, { data: { room } })) return;
+        return new Response("upgrade failed", { status: 500 });
+      }
+      return app.fetch(req);
+    },
+    websocket: {
+      open(ws) {
+        const { room } = ws.data as { room: string };
+        // biome-ignore lint/suspicious/noExplicitAny: Bun ServerWebSocket structural compat
+        bus.attach(room, ws as any);
+        ws.send(JSON.stringify({ kind: "hello", version: 0 }));
+      },
+      message() {},
+      close(ws) {
+        const { room } = ws.data as { room: string };
+        // biome-ignore lint/suspicious/noExplicitAny: Bun ServerWebSocket structural compat
+        bus.detach(room, ws as any);
+      },
+    },
+  });
+
+  const shutdown = async (signal: string) => {
+    console.log(`[didraw] ${signal} received, flushing…`);
+    server.stop();
+    if (persistence) await persistence.flushAll();
+    process.exit(0);
+  };
+  if (import.meta.main) {
+    process.on("SIGTERM", () => void shutdown("SIGTERM"));
+    process.on("SIGINT", () => void shutdown("SIGINT"));
+  }
+
+  return {
+    port: server.port,
+    close: async () => {
+      server.stop();
+      if (persistence) await persistence.flushAll();
+    },
+  };
+}
+
 if (import.meta.main) {
-  const { app } = makeApp();
-  const server = Bun.serve({ port: config.port, fetch: app.fetch });
-  console.log(`[didraw] listening on http://localhost:${server.port}`);
+  void startServer().then((s) =>
+    console.log(`[didraw] listening on :${s.port} (profile=${config.profile})`),
+  );
 }
