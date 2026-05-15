@@ -1,9 +1,11 @@
 import { promises as fs, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { config } from "./config";
+import { emptyCanvasState } from "./rooms";
+import type { RoomStore } from "./rooms";
 import type { RoomId, RoomState } from "./types";
 
-export class FilePersistence {
+export class FilePersistence implements RoomStore {
   // pending хранит и timer, и сами данные — без этого flushAll не сможет записать debounce'нутые состояния
   private pending = new Map<
     RoomId,
@@ -19,7 +21,7 @@ export class FilePersistence {
       const raw = await fs.readFile(path, "utf8");
       const j = JSON.parse(raw) as Partial<RoomState>;
       return {
-        canvas: j.canvas ?? { version: 1, nodes: [], edges: [], groups: [] },
+        canvas: j.canvas ?? emptyCanvasState(),
         prompts: j.prompts ?? [],
         version: j.version ?? 0,
         opLog: [],
@@ -42,6 +44,12 @@ export class FilePersistence {
     await fs.writeFile(path, dump, "utf8");
   }
 
+  /**
+   * Schedule a debounced save (default 300ms). The `state` argument MUST be
+   * the live RoomState held by Rooms — the timer closure captures the reference,
+   * so mutations applied between schedule and fire WILL be included in the write.
+   * Passing a deep-clone here would silently freeze the persisted state.
+   */
   scheduleSave(id: RoomId, s: RoomState): void {
     const existing = this.pending.get(id);
     if (existing) clearTimeout(existing.timer);

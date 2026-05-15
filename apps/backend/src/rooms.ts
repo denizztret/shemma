@@ -1,13 +1,17 @@
-import type { RoomId, RoomState } from "./types";
+import type { CanvasState, RoomId, RoomState } from "./types";
 
 export type RoomStore = {
   load: (id: RoomId) => Promise<RoomState | null>;
   save: (id: RoomId, state: RoomState) => Promise<void>;
 };
 
+export function emptyCanvasState(): CanvasState {
+  return { version: 1, nodes: [], edges: [], groups: [] };
+}
+
 export function makeRoomState(): RoomState {
   return {
-    canvas: { version: 1, nodes: [], edges: [], groups: [] },
+    canvas: emptyCanvasState(),
     opLog: [],
     prompts: [],
     version: 0,
@@ -56,14 +60,18 @@ export class Rooms {
 
   async evictIdle(maxIdleMs: number): Promise<number> {
     const cutoff = Date.now() - maxIdleMs;
-    let n = 0;
+    const evicted: Array<[RoomId, RoomState]> = [];
     for (const [id, s] of this.map) {
       if (s.lastTouched < cutoff) {
-        if (s.dirty) await this.store.save(id, s);
         this.map.delete(id);
-        n++;
+        evicted.push([id, s]);
       }
     }
-    return n;
+    await Promise.all(
+      evicted
+        .filter(([, s]) => s.dirty)
+        .map(([id, s]) => this.store.save(id, s)),
+    );
+    return evicted.length;
   }
 }
