@@ -6,7 +6,8 @@
       "**/node_modules/**",
       ".claude/settings*.json",
       "**/frontend-dist/**",
-      "apps/frontend/src/**/*.js"
+      "apps/frontend/src/**/*.js",
+      "release/**"
     ]
   },
   "linter": { "enabled": true, "rules": { "recommended": true } },

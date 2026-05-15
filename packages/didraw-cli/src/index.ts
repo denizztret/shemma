@@ -5,6 +5,7 @@ import { cmdLayout } from "./layout";
 import { exportRoom, list, open, rmRoom } from "./lifecycle";
 import { applyProfile, parseProfile } from "./profile";
 import { cmdPrompts } from "./prompts";
+import { cmdUpdate, cmdUpdateCheck, cmdUpdateSetChannel } from "./update";
 import { cmdVersion } from "./version-cmd";
 
 const argv = process.argv.slice(2);
@@ -31,6 +32,11 @@ async function main() {
   if (cmd === "layout") return cmdLayout(argv.slice(1));
   if (cmd === "prompts") return cmdPrompts(argv.slice(1));
   if (cmd === "version") return cmdVersion();
+  if (cmd === "update") {
+    if (sub === "--check") return cmdUpdateCheck();
+    if (sub === "--channel" && argv[2]) return cmdUpdateSetChannel(argv[2]);
+    return cmdUpdate();
+  }
 
   if (cmd === "daemon") {
     if (sub === "start") return start(profile);
