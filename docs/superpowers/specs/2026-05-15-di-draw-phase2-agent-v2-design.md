@@ -1,12 +1,13 @@
 # di.draw Phase 2.1 — Agent v2: domain-first model + layout intelligence
 
-> **Status:** design (v2.1.1, 2026-05-15) — pending user review
+> **Status:** design (v2.1.2, 2026-05-15) — pending user review
 > **Predecessor:** `2026-05-14-di-draw-design.md` v3.7 (Phase 1 MVP, shipped)
 > **Revision history:**
 >   - v1 — palette-based actions;
 >   - v2 — pivot to domain-first («роли важнее цвета»);
 >   - v2.1 — full ELK + extensibility map;
->   - v2.1.1 — после review закрыты 7 системных gap'ов: shared `@didraw/domain` пакет для role→preset, унификация на `mode` (drop `direction`), transactions only для actions + layout best-effort, pin inference в `/api/patch source:user`, container model canonical через `Group.children`, v1 edge routing — ports/anchors only, UI overlay reserve вынесен из layout в frontend camera.
+>   - v2.1.1 — 7 системных gap'ов: shared `@didraw/domain` пакет, унификация на `mode`, transactions/layout split, pin inference, canonical `Group.children`, edge routing v1 scope, UI overlay вынесен из layout;
+>   - v2.1.2 — cleanup pass: stale parent-формулировки в action table и worked example, edge-routing wording в feature table и coverage map, SSOT clarification (`@didraw/domain/role-preset.ts`), context `pinned` flag вместо `position` координат.
 > **Roadmap context:** one of six Phase 2 sub-projects (см. §0)
 
 ## 0. Phase 2 roadmap (контекст)
@@ -39,7 +40,7 @@ di.draw — инструмент для **визуализации архите�
 ### 1.2. Что должно стать правдой после Phase 2.1
 
 1. **Domain model — primary API.** Агент пишет в canvas через `define-element`/`connect`/`group`/`note`/`layout`/`delete` с обязательными `role` и `name`, а не через сырой PatchOp. Single API surface — нет двойного пути «action + patch для агента».
-2. **Visual is a function of role.** Каждой роли (`actor`, `service`, `datastore`, `queue`, `network`, `boundary`, `external`, `note`) соответствует tldraw-preset (shape kind + base style). Frontend `role-render.ts` — single source of truth. AI не выбирает цвет/форму, не сочиняет.
+2. **Visual is a function of role.** Каждой роли (`actor`, `service`, `datastore`, `queue`, `network`, `boundary`, `external`, `note`) соответствует tldraw-preset (shape kind + base style). **Single source of truth — `packages/didraw-domain/role-preset.ts`** (shared workspace package). Backend `domain/compile.ts` и frontend `canvas/role-render.ts` импортируют из него — никаких дубликатов таблицы. `role-render.ts` — только renderer, не источник. AI не выбирает цвет/форму, не сочиняет.
 3. **Layout intelligence — first-class.** При каждом mutation auto-recompute layout: новые элементы встают в место, существующие не дёргаются без нужды. Group-aware (`network`/`boundary` держат детей внутри), mode-driven (`layered-lr` / `layered-tb` / `tree` / `pack` / `force` — выбор per-batch или per-group). После любого batch агенту не нужно отдельной командой «layout».
 4. **Token-cheap context.** AI читает компактное view-aware представление вместо full snapshot. Целевой объём для 100-элементного canvas ≤ 8KB JSON (≤ ~2K tokens) против 20-40KB сегодня. Context включает domain summary (counts by role, top-level groups, recent ops в человекочитаемом виде), не raw nodes/edges.
 5. **PatchOp остаётся** как **транспорт между frontend и backend** для пользовательских правок (user перетащил, перекрасил вручную). Агент через patch не ходит — этот путь невидим для AI. Это снимает риск двух конкурирующих агентских API.
@@ -108,7 +109,7 @@ PatchOp — естественный output frontend'а: tldraw editor выда�
 
 DomainAction — это **единственный** канал для агента. На backend он компилируется в PatchOp (через `domain/compile.ts`) и проходит через тот же `applyPatch`/opLog/bus pipeline. Никакого второго storage, никакого parallel state — компилятор и есть «склейка» между уровнями.
 
-Когда через 6 месяцев захочется поменять визуальное оформление роли (например, `datastore` начнёт рендериться cylinder shape) — меняется **только** `role-render.ts`. Когда захочется добавить роль (`cache`, `lambda`, `cdn`) — добавляется одна строка в типах + одна в renderer. Никакого rolling-refactor по слоям, потому что слой один.
+Когда через 6 месяцев захочется поменять визуальное оформление роли (например, `datastore` начнёт рендериться cylinder shape) — меняется **только** одна запись в `packages/didraw-domain/role-preset.ts` (источник) + соответствующий renderer-case в `apps/frontend/src/canvas/role-render.ts` если нужен новый shape util. Backend `domain/compile.ts` подхватит новый preset автоматически. Когда захочется добавить роль (`cache`, `lambda`, `cdn`) — одна строка в Role enum + одна в `role-preset.ts`. Никакого rolling-refactor.
 
 ### 2.2. UX контракт для пользовательских правок
 
@@ -204,9 +205,9 @@ type ActionError = {
 
 | Kind | Args | Notes |
 |---|---|---|
-| `define` | `{role: Role; name: string; label?: string; in?: ElementId; meta?: object}` | `name` — human-readable id (`auth`, `users-db`). Unique per room. `in` — container parent. `label` default = `name`. **Upsert semantics**: повторный define c тем же `name` обновляет `label`/`meta`/`in`; попытка сменить `role` → 422 `role-conflict`. |
+| `define` | `{role: Role; name: string; label?: string; in?: ElementId; meta?: object}` | `name` — human-readable id (`auth`, `users-db`). Unique per room. `in` — добавляет элемент в `Group.children` указанного container'а (single source per §3.1, никакого `parent` поля у элемента). `label` default = `name`. **Upsert semantics**: повторный define c тем же `name` обновляет `label`/`meta` и переносит между containers через `Group.children`-ops; попытка сменить `role` → 422 `role-conflict`. |
 | `connect` | `{from: ElementId; to: ElementId; kind?: ConnectionKind; label?: string; meta?: object}` | Default `kind` = `sync`. `from`/`to` ссылаются на existing element by name. |
-| `group` | `{ids: ElementId[]; as: "network"\|"boundary"; name: string; label?: string}` | Объединить existing элементы в container. Children получают `parent`. |
+| `group` | `{ids: ElementId[]; as: "network"\|"boundary"; name: string; label?: string}` | Создаёт container и добавляет указанные ids в его `Group.children`. Состав container'а живёт только в `Group.children`. |
 | `note` | `{about?: ElementId; text: string; name?: string}` | Annotation. Если `about` задан — нота визуально привязана (arrow binding). |
 | `layout` | `{mode?: LayoutMode; scope?: "all"\|ElementId; spacing?: "compact"\|"normal"\|"loose"}` | Explicit re-layout. Обычно не нужен — auto-layout по умолчанию. `direction` не существует — направление выводится из mode. |
 | `delete` | `{id: ElementId} \| {ids: ElementId[]} \| {ids:[...], cascade: true}` | Cascade-aware: удаление container с детьми требует `cascade:true`, иначе 422 `cascade-confirm-required` с `affected` (для UX «вы уверены?»). |
@@ -258,11 +259,11 @@ type LayoutHint = {
 |---|---|---|---|
 | `elk.algorithm` | layout-engine | flat string | mode-driven через `mode-to-elk-options` |
 | `elk.direction` | layered modes | not used | `RIGHT`/`DOWN` per mode |
-| `elk.edgeRouting` | архитектурные схемы | not used | `ORTHOGONAL` для layered modes (rectangular bendpoints — естественно для архитектурных диаграмм) |
+| `elk.edgeRouting` | архитектурные схемы | not used | `ORTHOGONAL` для layered modes — ELK **вычисляет** orthogonal routing; tldraw v1 рендерит только endpoints, см. §3.6.5 |
 | `elk.spacing.*` | spacing levels | default | компактный/нормальный/loose preset |
 | `compound nodes` | network/boundary containers | not used | **критично**: containers становятся ELK compound nodes с children, ELK сам располагает внутренности |
-| `ports` | edge anchors | not used | для service↔service connections — северный/южный/восточный/западный port (tldraw `normalizedAnchor` пересчитывается из ELK port-side) |
-| `bendpoints` | tldraw arrow waypoints | not used | ELK возвращает sections с bend points → tldraw arrow получает waypoints (через property update; см. §3.6.5) |
+| `ports` | edge anchors | not used | для service↔service connections — северный/южный/восточный/западный port (tldraw `normalizedAnchor` пересчитывается из ELK port-side) — **в render v1** |
+| `bendpoints` | будущие multi-segment arrows | not used | ELK **возвращает и backend сохраняет** в `meta.routing.bendPoints`; tldraw v1 **не рендерит** их (см. §3.6.5). Forward-compat для Phase 3 custom arrow shape. |
 | `elk.fixed = true` | pin support | not used | элементы с `meta.position` и `meta.pinned=true` получают fixed constraint |
 | partial layout | affected scope | not used | only `affected` subgraph отправляется в ELK; неаффектнутые ноды передаются как fixed (pinned) |
 
@@ -353,9 +354,12 @@ type ElementCompact = {
   id: string;            // name, e.g. "auth"
   role: Role;
   label?: string;
-  parent?: string;       // container name
-  position?: {x,y};      // только если pinned via meta.position
+  parent?: string;       // container name (derived from Group.children)
+  pinned?: true;         // FLAG (boolean), не координаты — агенту достаточно знать факт pin
 };
+// NB: geometry (x/y/w/h) намеренно отсутствует в default response.
+// Если когда-то понадобится (debug, custom view) — отдельный query param
+// `?include=geometry` с явным opt-in; default остаётся geometry-free.
 
 type ConnectionCompact = {
   from: string; to: string;
@@ -377,9 +381,10 @@ type OpSummary = {
 ### 4.3. Token-budget regression test
 
 Тест в `apps/backend/tests/agent-context.test.ts`:
-- Seed: 100 elements (mix: 60 services, 20 datastores, 10 queues, 5 actors, 3 networks, 2 boundaries), 80 connections, ~30 видны в viewport 800×600.
+- Seed: 100 elements (mix: 60 services, 20 datastores, 10 queues, 5 actors, 3 networks, 2 boundaries), 80 connections, ~30 видны в viewport 800×600. Из них 10 pinned (meta.pinned=true).
 - Assert: `JSON.stringify(response).length < 8000` для default response.
-- Assert: response не содержит keys `x`/`y`/`w`/`h`/`fill`/`color` (защита от регрессии — геометрия не должна утекать в context).
+- Assert: response не содержит keys `x`/`y`/`w`/`h`/`fill`/`color` — геометрия не утекает (regression guard). Pinned элементы передают только `pinned: true`, без координат.
+- Assert: opt-in `?include=geometry` ровно для 10 pinned элементов добавляет `position:{x,y}` и не добавляет для остальных. (Опциональный path — может уйти в Phase 2.5 если не понадобится.)
 
 Цель: для 100-элементного canvas context умещается в ~2K токенов.
 
@@ -411,7 +416,7 @@ AI отправляет один batch:
 
 Backend:
 1. Validate: все роли известны, ссылки `auth`/`users-db` есть после define-шагов в этом же batch (compile.ts знает intra-batch refs).
-2. Compile → PatchOp[]: 2 add-node, 1 add-edge, 1 add-group + установка `parent` у двух нод.
+2. Compile → PatchOp[]: 2 add-node, 1 add-edge, 1 add-group (с `children: ["auth", "users-db"]` сразу в group payload — никакого второго прохода по нодам).
 3. ELK layered layout (direction LR, scope `affected`) → расставляет auth слева, users-db справа, обе внутри vpc-prod boundary rect. Backend пишет `update node {x,y}` ops для каждой ноды.
 4. applyPatch как одна транзакция; opLog получает один entry с source `ai`.
 5. WS bus.publish → frontend рендерит через `role-render.ts`: auth = rounded rect grey, users-db = rounded rect blue-ish, arrow с label «reads/writes», vpc-prod = dashed boundary rect охватывающий обе.
@@ -682,7 +687,7 @@ CLI integration tests — `packages/didraw-cli/tests/domain.test.ts`.
 |---|---|
 | диалог → красивая архитектурная диаграмма | §3, §5.1 (worked example) |
 | правильные роли (сеть, сервис, БД, юзер) | §3.1 Role enum |
-| красивая компоновка, не хочется перерисовывать | §3.6 (full ELK: compound, ports, orthogonal, bendpoints, post-processing snap-to-grid + min-spacing + preserve-order) |
+| красивая компоновка, не хочется перерисовывать | §3.6 (full ELK: compound nodes + ports/anchors + orthogonal computation + pin/affected-scope + post-processing snap-to-grid/min-spacing/preserve-order). Multi-bendpoint render — в backlog Phase 3 (см. §3.6.5) |
 | user правит цвет точечно сам (не агент) | §6.2 user-override discipline |
 | persistence предыдущих схем в папке | Phase 2.0 (отдельная спека) |
 | backup/share схем между папками | Phase 2.0 §2.4 (`didraw rooms export/import` to JSON) |
@@ -690,7 +695,7 @@ CLI integration tests — `packages/didraw-cli/tests/domain.test.ts`.
 | dialog-driven (диалог → доска) | §5.1 worked example |
 | **расширяемость без переписывания** | §13 Extensibility map — каждый axis расширения = 1-2 файла, никаких rolling refactors |
 | layout-алгоритмы вместо LLM-творчества | §3.6 — ELK primary, post-processing, agent даёт intent, не coords |
-| ELK на полную (compound/ports/edge routing) | §3.6.2 feature table |
+| ELK на полную (compound/ports/edge routing) | §3.6.2 feature table — backend использует все возможности; render v1 ограничен tldraw 5.x arrow API |
 | fix misleading `algorithm:"dagre"` → `elk.force` | §3.6.1 — переименование в `mode: "force"` с deprecation period |
 | Cola/fCoSE «untangle» | Phase 3.x (через extension point §13 — engine registry) |
 | import (Mermaid/SVG/D2/Miro) | Phase 2.4 (registry-based) |

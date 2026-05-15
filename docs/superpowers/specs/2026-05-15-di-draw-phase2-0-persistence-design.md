@@ -1,7 +1,10 @@
 # di.draw Phase 2.0 — Persistence hardening
 
-> **Status:** design (v1.1, 2026-05-15) — pending user review
-> **Revision history:** v1 (2026-05-15) — session-scoped storage; v1.1 (2026-05-15) — после review: workspace-scoped storage / session-scoped room, daemon-safe ops, drop `rooms use`, explicit `--force` semantics, collision-resistant slugify.
+> **Status:** design (v1.2, 2026-05-15) — pending user review
+> **Revision history:**
+>   - v1 — session-scoped storage;
+>   - v1.1 — workspace-scoped storage / session-scoped room, daemon-safe ops, drop `rooms use`, `--force` semantics, collision-resistant slugify;
+>   - v1.2 — cleanup: persisted envelope формализован (storage = export schema), room resolution chain расщеплён backend/CLI vs frontend (env только у backend).
 > **Scope:** minimal pre-2.1 prerequisite. Закрывает P3 + добавляет rooms discovery, чтобы Phase 2.1 (Agent v2) при старте сессии видел уже существующие схемы из текущей папки.
 
 ## 1. Зачем сейчас, отдельно от 2.1
@@ -46,7 +49,11 @@ projectSlug → slugify → safe path segment
 - Collapse runs of `-`.
 - **Collision-resistant suffix**: финальный slug = `slugBody + "-" + sha1(originalInput).slice(0,8)`. Это гарантирует, что разные пути с одинаковой sluggified-частью (`/home/u1/proj` и `/home/u2/proj`) не сольются в одну директорию.
 
-#### Room id resolution chain (новый, в backend route handler + frontend transport)
+#### Room id resolution chain
+
+Резолвинг **различается** между backend/CLI (есть доступ к env) и frontend (нет доступа к `CLAUDE_SESSION_ID`).
+
+**Backend / CLI** (`apps/backend/src/routes/*`, `packages/didraw-cli/src/*`):
 
 ```
 roomId =
@@ -56,7 +63,21 @@ roomId =
   "default"
 ```
 
-Validation: roomId должен матчить `/^[a-zA-Z0-9_-]{1,64}$/`. Не-matching id → **422 error**, не silent mangle (UX явный — пользователь увидит, что не так с именем).
+**Frontend** (`apps/frontend/src/*`):
+
+```
+roomId =
+  URL ?room=<id>   OR
+  "default"
+```
+
+Frontend **не** имеет доступа к env переменным процесса (browser sandbox). Чтобы фронт открыл нужную room — вызов должен включать `?room=<id>` в URL. Чтобы пользователю не делать это руками:
+
+- `didraw open <id>` всегда формирует URL с `?room=<id>` (см. `apps/backend/src/lifecycle.ts:open`, уже работает так).
+- При запуске Claude Code skill cheat-sheet генерирует «open canvas» link с явным `?room=$CLAUDE_SESSION_ID` подстановкой через bash-инжекцию.
+- Если пользователь открывает `http://localhost:8787/` напрямую без `?room` — он попадает в `default` room. Это намеренно: явный default, нет скрытой магии.
+
+Validation (везде): roomId должен матчить `/^[a-zA-Z0-9_-]{1,64}$/`. Не-matching → **422 error**, не silent mangle.
 
 #### Что **не** делаем (v1)
 
@@ -86,9 +107,34 @@ DELETE /api/rooms/:id                  # hard delete; requires {confirm:true} bo
 
 `flushIfDirty` уже частично существует в backend (autosave debounce таймер), но публичного API для синхронного flush сейчас нет. Phase 2.0 его добавляет в `apps/backend/src/rooms.ts`.
 
+#### Persisted envelope (storage schema)
+
+Phase 2.0 формализует формат файлов в `<storageDir>/<roomId>.json` — он становится **единым контрактом** между persistence, listing, export и import. Текущий MVP пишет «канвас как есть» без оболочки; Phase 2.0 оборачивает.
+
+```json
+{
+  "schemaVersion": 1,
+  "roomId": "design-v1",
+  "version": 42,
+  "lastTouched": "2026-05-15T12:00:00Z",
+  "elementCount": 12,
+  "canvas": { ... },
+  "prompts": [ ... ]
+}
+```
+
+Поля `roomId/version/lastTouched/elementCount` — **в самом начале** файла, перед `canvas`. JSON-парсер всё равно читает целиком, поэтому «header-only» формализуется через `streamRead → разобрать только эти 4 поля → ignore rest`. Для 100 rooms в дир-листинге это ~50ms (читаем mtime + первые ~200 байт каждого файла).
+
 #### Metadata listing
 
-`GET /api/rooms` сканирует `<storageDir>/*.json`. Для каждого файла читает **только header**: первые ~2KB или явный `{schemaVersion, version, elementCount, lastTouched}` блок в начале payload. Без full-parse — это для 100 rooms не должно быть медленнее ~50ms. Cache: in-memory dict с mtime check; реcканируется при изменении любого файла в директории.
+`GET /api/rooms` сканирует `<storageDir>/*.json`. Для каждого файла:
+1. Mtime от `fs.stat`.
+2. Streaming-parser читает первые 4 envelope-поля (`schemaVersion`, `roomId`, `version`, `lastTouched`, `elementCount`), скип `canvas`/`prompts`.
+3. Cache: in-memory dict с mtime check; rescans при изменении.
+
+Если streaming-parser не подойдёт (Bun runtime quirks) — v1 fallback на **full parse** с TTL-кешем (60s). Это менее красиво, но честно: «листинг быстрее full-parse только когда streaming работает», а не «обещаем header-read и тихо парсим всё».
+
+Export reuses этот envelope (добавляя `exportedAt` поверх) — round-trip между storage и export-файл становится тривиальным.
 
 ### 2.3. CLI surface
 
@@ -111,18 +157,22 @@ didraw rooms rm <id> --confirm                   # via DELETE /api/rooms/:id
 
 #### Export schema
 
+Export file — это **persisted envelope** (см. §2.2) с добавленным `exportedAt`:
+
 ```json
 {
   "schemaVersion": 1,
-  "exportedAt": "2026-05-15T12:00:00Z",
-  "roomId": "<original id>",
+  "roomId": "design-v1",
   "version": 42,
+  "lastTouched": "2026-05-15T12:00:00Z",
+  "elementCount": 12,
+  "exportedAt": "2026-05-15T12:00:00Z",
   "canvas": { "version": 1, "nodes": [...], "edges": [...], "groups": [...] },
   "prompts": [...]
 }
 ```
 
-`version` (op-counter, не schema) обязателен — чтобы import восстанавливал byte-equivalent state, иначе incremental sync поломается.
+Структура совпадает с storage envelope — export-import roundtrip сводится к `fs.copy` через flush'нутый файл и обратно. `version` (op-counter) обязателен — чтобы import восстанавливал byte-equivalent state, иначе incremental sync поломается.
 
 #### Overwrite semantics
 
