@@ -21,29 +21,29 @@ export function App({ room }: { room: string }) {
   const [selection, setSelection] = useState<string[]>([]);
   const [promptsTick, setPromptsTick] = useState(0);
   const [cameraTick, setCameraTick] = useState(0);
-  // PromptInput shows only while user holds ⌘ (or Alt) — avoids the input
-  // appearing on every selection during routine editing/moving.
-  const [askModifierHeld, setAskModifierHeld] = useState(false);
+  // PromptInput is toggled by ⌘K (Ctrl+K on non-Mac) — opens for the current
+  // selection and stays open until Send/Esc/selection cleared. Holding a
+  // modifier was the previous design but conflicted with tldraw drag tools.
+  const [promptOpen, setPromptOpen] = useState(false);
 
   useEffect(() => {
-    const isMod = (e: KeyboardEvent) => e.key === "Meta" || e.key === "Alt";
-    const down = (e: KeyboardEvent) => {
-      if (isMod(e)) setAskModifierHeld(true);
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPromptOpen((v) => !v);
+      } else if (e.key === "Escape") {
+        setPromptOpen(false);
+      }
     };
-    const up = (e: KeyboardEvent) => {
-      if (isMod(e)) setAskModifierHeld(false);
-    };
-    // Window may lose focus while the modifier is held (e.g. ⌘Tab) — reset on blur.
-    const blur = () => setAskModifierHeld(false);
-    window.addEventListener("keydown", down);
-    window.addEventListener("keyup", up);
-    window.addEventListener("blur", blur);
-    return () => {
-      window.removeEventListener("keydown", down);
-      window.removeEventListener("keyup", up);
-      window.removeEventListener("blur", blur);
-    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
   }, []);
+
+  // Close the prompt input when selection is cleared so it doesn't dangle
+  // anchored to nothing.
+  useEffect(() => {
+    if (selection.length === 0) setPromptOpen(false);
+  }, [selection.length]);
 
   useEffect(() => {
     if (!editor) return;
@@ -116,18 +116,34 @@ export function App({ room }: { room: string }) {
               }
             }
           });
-          // If a remote batch added new nodes that landed outside the user's
-          // current viewport, gently zoom-to-fit those new shapes so they
-          // become visible. Skip when at least one new shape is already in
-          // view (don't disturb the user's camera unnecessarily).
+          // Centre the camera on what the AI just added so the user sees the
+          // change without hunting for it. We compute the union bounds of the
+          // new shapes and zoom to those — not zoomToFit() over the whole
+          // canvas, which would also include unrelated old content.
           if (newNodeIds.length > 0) {
-            const vp = editor.getViewportPageBounds();
-            const anyVisible = newNodeIds.some((id) => {
+            let minX = Number.POSITIVE_INFINITY;
+            let minY = Number.POSITIVE_INFINITY;
+            let maxX = Number.NEGATIVE_INFINITY;
+            let maxY = Number.NEGATIVE_INFINITY;
+            for (const id of newNodeIds) {
               const b = editor.getShapePageBounds(id);
-              return b ? vp.includes(b) : false;
-            });
-            if (!anyVisible) {
-              editor.zoomToFit({ animation: { duration: 300 } });
+              if (!b) continue;
+              if (b.x < minX) minX = b.x;
+              if (b.y < minY) minY = b.y;
+              if (b.x + b.w > maxX) maxX = b.x + b.w;
+              if (b.y + b.h > maxY) maxY = b.y + b.h;
+            }
+            if (minX < maxX) {
+              const padding = 80;
+              editor.zoomToBounds(
+                {
+                  x: minX - padding,
+                  y: minY - padding,
+                  w: maxX - minX + padding * 2,
+                  h: maxY - minY + padding * 2,
+                },
+                { animation: { duration: 300 } },
+              );
             }
           }
         },
@@ -242,7 +258,8 @@ export function App({ room }: { room: string }) {
               editor={editor}
               selection={selection}
               cameraTick={cameraTick}
-              visible={askModifierHeld}
+              visible={promptOpen}
+              onClose={() => setPromptOpen(false)}
             />
           )}
           <PromptDrawer tick={promptsTick} />

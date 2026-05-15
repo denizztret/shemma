@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Editor } from "tldraw";
 import { tokens } from "../design-tokens";
 import { postPrompt } from "../transport/prompts";
@@ -8,15 +8,24 @@ export function PromptInput({
   selection,
   cameraTick: _cameraTick,
   visible,
+  onClose,
 }: {
   editor: Editor;
   selection: string[];
   /** Bumped on every viewport change so anchor re-computes on pan/zoom. */
   cameraTick: number;
-  /** Gated by App: `selection.length > 0 && modifierHeld`. */
+  /** Toggled by ⌘K in App; closed by Send/Esc/selection-cleared. */
   visible: boolean;
+  onClose: () => void;
 }) {
   const [text, setText] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Autofocus when the input opens so the user can type immediately.
+  useEffect(() => {
+    if (visible) inputRef.current?.focus();
+  }, [visible]);
+
   if (!visible || selection.length === 0) return null;
 
   const bounds = editor.getSelectionPageBounds();
@@ -28,6 +37,7 @@ export function PromptInput({
     if (!text.trim()) return;
     await postPrompt(selection, text);
     setText("");
+    onClose();
   };
 
   return (
@@ -50,6 +60,7 @@ export function PromptInput({
       }}
     >
       <input
+        ref={inputRef}
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder={`Ask AI about ${selection.length} selected…`}
@@ -64,6 +75,8 @@ export function PromptInput({
         }}
         onKeyDown={(e) => {
           if (e.key === "Enter") void send();
+          // Stop propagation so tldraw editor doesn't steal hotkeys (e.g. delete) while typing.
+          e.stopPropagation();
         }}
       />
       <button
