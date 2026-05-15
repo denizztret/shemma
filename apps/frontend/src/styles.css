@@ -8,3 +8,18 @@ body,
 body {
   font-family: system-ui, sans-serif;
 }
+
+/* B-mini: force horizontal toolbar at bottom-center.
+ * tldraw 5.0.0 default has .tlui-toolbar* as `display: block`, which makes
+ * tool buttons stack vertically. Make them lay out as a horizontal row. */
+.tlui-toolbar,
+.tlui-toolbar__inner,
+.tlui-toolbar__left,
+.tlui-toolbar__tools,
+.tlui-toolbar__tools__list {
+  display: flex !important;
+  flex-direction: row !important;
+  width: auto !important;
+  height: auto !important;
+  align-items: center;
+}
