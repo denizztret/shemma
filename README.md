@@ -1,8 +1,23 @@
 # di.draw
 
-AI-driven canvas board для Claude Code сессий. tldraw 5.x frontend + Bun backend + `didraw` CLI + skill cheat-sheet.
+> **Применимо к:** di.draw `0.0.1` (2026-05-15).
+> Документ описывает поведение текущей версии. Поведение может измениться — сверяйтесь с [CHANGELOG.md](CHANGELOG.md) для следующих версий.
+
+AI-driven canvas board для Claude Code сессий. tldraw 5.x frontend + Bun backend + `didraw` CLI + skill cheat-sheet + persistent watcher pattern.
 
 Один single-binary `didraw`, в который вшиты backend, embedded UI и CLI dispatcher (`bun build --compile` + generated embedded-assets manifest).
+
+## Features (0.0.1)
+
+- **Multi-room canvas** — `~/.claude/projects/<slug>/canvas/<room>.json`, изоляция по сессии Claude Code.
+- **Real-time collaboration** через WebSocket (`patch`, `prompt-created`, `prompt-resolved`, `prompt-removed`, `ai-activity`).
+- **AI workflow** через Bash CLI: skill `/draw` инжектит canvas state + pending prompts в каждый AI turn.
+- **AI activity badge** — оранжевый чип сверху по центру показывает, что агент что-то делает (actor + task), пока работает.
+- **Per-shape prompts** — выдели shape, нажми `⌘K`/`Ctrl+K`, введи команду; она попадает в drawer слева. Удаление: `×` per-card или `🗑 N` (purge non-pending) с confirm.
+- **Persistent watcher pattern** — Sonnet subagent в фоне обрабатывает pending prompts: применяет patch + резолвит. Latency 3–10с. См. [Watcher workflow](#ai-workflow-watcher-vs-manual).
+- **Style roundtrip** — изменение цвета/заливки в любую сторону (AI ↔ backend ↔ tldraw). Ограничение: tldraw 5.x использует один `color` для stroke и fill (см. known issues).
+- **Auto-center camera** на shapes, добавленных AI; персистентность позиции/zoom per room в localStorage.
+- **Mermaid импорт** в браузере: `await window.didrawImportMermaid('graph LR\n  app --> db')`.
 
 ## Quick start (manual mode)
 
@@ -19,7 +34,16 @@ bun --cwd packages/didraw-cli src/index.ts open scratch
 
 - `/draw нарисуй …` — skill инжектит state + cheat-sheet + pending prompts; AI обновляет canvas через `didraw patch --stdin`.
 - Браузер можно открыть в любой момент: `http://localhost:8787/?room=<CLAUDE_SESSION_ID>`.
-- На canvas: выдели объект(ы), напиши промпт — он попадёт в drawer слева с привязкой к ID. AI увидит pending prompts через `didraw prompts list` и ответит через `didraw prompts resolve`.
+- На canvas: выдели объект(ы), нажми `⌘K`, введи промпт — он попадёт в drawer слева с привязкой к ID. AI увидит pending prompts через `didraw prompts list` и ответит через `didraw prompts resolve`.
+
+## AI workflow: watcher vs manual
+
+В версии `0.0.1` есть два пути обработки prompts:
+
+1. **Manual / `/draw` invocation.** Pending prompts видны AI только при следующем явном вызове skill'а или `didraw prompts list`. Подходит для редких команд.
+2. **Persistent watcher** — Sonnet subagent в фоне опрашивает pending каждые 1–4с и применяет. Запускается из родительской Claude Code сессии через Agent tool с `subagent_type=general-purpose, model=sonnet, run_in_background=true`. Описание паттерна — в [`docs/handoff/watcher-pattern.md`](docs/handoff/watcher-pattern.md) (TODO в этой версии).
+
+> ⚠️ Stand-alone `didraw watch` (без Claude Code, через Anthropic API напрямую) — **не реализован** в `0.0.1`, см. backlog.
 
 ## CLI reference
 
@@ -42,8 +66,21 @@ didraw layout --algorithm elk-layered [--node-ids n1,n2] [--room <id>]
 didraw prompts list [--status pending|resolved|dismissed|all]
 didraw prompts resolve <id> [--response "text"]
 didraw prompts dismiss <id>
+didraw prompts delete <id>          # remove a single prompt (any status)
+didraw prompts purge                # remove all non-pending in one shot
 didraw clear --confirm
 ```
+
+AI-activity badge (показывает в UI, что агент работает):
+
+```bash
+didraw ai start --actor watcher --task "applying prompts"
+# ... do work ...
+didraw ai stop
+didraw ai status                     # current activity (or null)
+```
+
+Stale activity auto-clear через 5 минут на server-side, но явный `stop` — правильный шаблон.
 
 Versioning + update:
 
@@ -77,7 +114,7 @@ Exit codes: `0` ok, `1` usage/error, `2` not-found, `3` daemon-not-healthy.
 ## Tests
 
 ```bash
-bun run test                              # backend + client + cli (50+ unit/integration)
+bun run test                              # 64 unit/integration: 50 backend + 4 client + 7 cli + 3 autosave/persistence
 cd apps/frontend && bunx playwright test  # golden-path e2e
 bun run lint                              # biome
 ```
