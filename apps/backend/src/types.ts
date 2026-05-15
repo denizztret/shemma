@@ -1,3 +1,5 @@
+export const DEFAULT_ROOM = "default";
+
 export type CanvasState = {
   version: 1;
   nodes: Node[];
@@ -115,3 +117,15 @@ export type WsMessage =
     }
   | { kind: "prompt-created"; prompt: Prompt }
   | { kind: "prompt-resolved"; id: string; response?: string };
+
+export type PatchBus = {
+  publish: (
+    room: string,
+    msg: {
+      ops: PatchOp[];
+      source: "ai" | "user";
+      version: number;
+      originClientId?: string;
+    },
+  ) => void;
+};

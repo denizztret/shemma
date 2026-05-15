@@ -1,7 +1,6 @@
-import type { PatchBus } from "./routes/patch";
-import type { PatchOp, Prompt, WsMessage } from "./types";
+import type { PatchBus, PatchOp, Prompt, WsMessage } from "./types";
 
-type Sock = { send: (data: string) => void; readyState: number };
+export type Sock = { send: (data: string) => void; readyState: number };
 const OPEN = 1;
 
 export class WsHub implements PatchBus {
@@ -13,7 +12,10 @@ export class WsHub implements PatchBus {
     this.rooms.get(room)!.add(sock);
   }
   detach(room: string, sock: Sock) {
-    this.rooms.get(room)?.delete(sock);
+    const set = this.rooms.get(room);
+    if (!set) return;
+    set.delete(sock);
+    if (set.size === 0) this.rooms.delete(room);
   }
 
   publish(

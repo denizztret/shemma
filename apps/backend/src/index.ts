@@ -5,7 +5,8 @@ import { type RoomStore, Rooms } from "./rooms";
 import { healthRoutes } from "./routes/health";
 import { patchRoutes } from "./routes/patch";
 import { stateRoutes } from "./routes/state";
-import { WsHub } from "./ws";
+import { DEFAULT_ROOM } from "./types";
+import { type Sock, WsHub } from "./ws";
 
 export type AppOpts = {
   inMemory?: boolean;
@@ -31,8 +32,8 @@ export function makeApp(opts: AppOpts = {}) {
     "/",
     patchRoutes(rooms, bus, {
       onDirty: persistence
-        ? (id) => {
-            void rooms.get(id).then((s) => persistence.scheduleSave(id, s));
+        ? (id, room) => {
+            persistence.scheduleSave(id, room);
           }
         : undefined,
     }),
@@ -47,7 +48,7 @@ export async function startServer(opts: AppOpts = {}) {
     fetch: (req, srv) => {
       const url = new URL(req.url);
       if (url.pathname === "/ws") {
-        const room = url.searchParams.get("room") ?? "default";
+        const room = url.searchParams.get("room") ?? DEFAULT_ROOM;
         if (srv.upgrade(req, { data: { room } })) return;
         return new Response("upgrade failed", { status: 500 });
       }
@@ -56,15 +57,13 @@ export async function startServer(opts: AppOpts = {}) {
     websocket: {
       open(ws) {
         const { room } = ws.data as { room: string };
-        // biome-ignore lint/suspicious/noExplicitAny: Bun ServerWebSocket structural compat
-        bus.attach(room, ws as any);
+        bus.attach(room, ws as Sock);
         ws.send(JSON.stringify({ kind: "hello", version: 0 }));
       },
       message() {},
       close(ws) {
         const { room } = ws.data as { room: string };
-        // biome-ignore lint/suspicious/noExplicitAny: Bun ServerWebSocket structural compat
-        bus.detach(room, ws as any);
+        bus.detach(room, ws as Sock);
       },
     },
   });
