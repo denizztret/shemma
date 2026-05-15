@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { type Editor, Tldraw } from "tldraw";
+import { type Editor, type TLShape, Tldraw } from "tldraw";
 import "tldraw/tldraw.css";
-import { isOurOp } from "./canvas/echo-guard";
+import { isOurOp, rememberOurOpId } from "./canvas/echo-guard";
 import { nodeToShape } from "./canvas/from-canvas-state";
+import { diffToOps } from "./canvas/to-patch";
 import { AppChrome } from "./chrome/AppChrome";
 import { buildTldrawComponents } from "./chrome/TldrawComponents";
-import { getState } from "./transport/api";
+import { getState, sendPatch } from "./transport/api";
 import { openWs } from "./transport/ws";
 
 export function App({ room }: { room: string }) {
@@ -15,6 +16,7 @@ export function App({ room }: { room: string }) {
     if (!editor) return;
     let active = true;
     let close: (() => void) | undefined;
+    let unsubStore: (() => void) | undefined;
     (async () => {
       const s = await getState();
       if (!active) return;
@@ -43,10 +45,35 @@ export function App({ room }: { room: string }) {
           }
         },
       });
+
+      const snap = new Map<string, TLShape>(
+        editor
+          .getCurrentPageShapes()
+          .map((s) => [s.id as unknown as string, s]),
+      );
+      unsubStore = editor.store.listen(
+        () => {
+          const cur = new Map<string, TLShape>(
+            editor
+              .getCurrentPageShapes()
+              .map((s) => [s.id as unknown as string, s]),
+          );
+          const ops = diffToOps(snap, cur);
+          snap.clear();
+          for (const [k, v] of cur) snap.set(k, v);
+          if (ops.length === 0) return;
+          const cid = crypto.randomUUID();
+          rememberOurOpId(cid);
+          // biome-ignore lint/suspicious/noExplicitAny: SimpleOp is compatible with backend PatchOp schema
+          void sendPatch(ops as any, cid);
+        },
+        { source: "user", scope: "document" },
+      );
     })();
     return () => {
       active = false;
       close?.();
+      unsubStore?.();
     };
   }, [editor]);
 
