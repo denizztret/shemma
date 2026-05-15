@@ -35,7 +35,7 @@ async function main() {
   if (cmd === "update") {
     if (sub === "--check") return cmdUpdateCheck();
     if (sub === "--channel" && argv[2]) return cmdUpdateSetChannel(argv[2]);
-    return cmdUpdate();
+    return cmdUpdate(argv.slice(1));
   }
 
   if (cmd === "daemon") {
