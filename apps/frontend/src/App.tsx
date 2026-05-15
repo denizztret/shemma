@@ -3,6 +3,8 @@ import { type Editor, type TLShape, Tldraw } from "tldraw";
 import "tldraw/tldraw.css";
 import { isOurOp, rememberOurOpId } from "./canvas/echo-guard";
 import { nodeToShape } from "./canvas/from-canvas-state";
+import { toShapeId } from "./canvas/id-prefix";
+import { labelToRichText } from "./canvas/richtext";
 import { diffToOps } from "./canvas/to-patch";
 import { AppChrome } from "./chrome/AppChrome";
 import { buildTldrawComponents } from "./chrome/TldrawComponents";
@@ -29,18 +31,24 @@ export function App({ room }: { room: string }) {
             if (op.op === "add" && op.target === "node") {
               editor.createShapes([nodeToShape(op.value)]);
             } else if (op.op === "delete" && op.target === "node") {
-              // biome-ignore lint/suspicious/noExplicitAny: tldraw shape ID branded type
-              editor.deleteShapes([`shape:${op.id}` as any]);
+              editor.deleteShapes([toShapeId(op.id)]);
             } else if (op.op === "update" && op.target === "node") {
-              editor.updateShapes([
-                {
-                  // biome-ignore lint/suspicious/noExplicitAny: tldraw shape ID branded type
-                  id: `shape:${op.id}` as any,
-                  type: "geo",
-                  x: op.set.x,
-                  y: op.set.y,
-                },
-              ]);
+              const sid = toShapeId(op.id);
+              const existing = editor.getShape(sid);
+              if (!existing) continue;
+              // Build update payload with the shape's actual type so non-geo shapes update too.
+              const updates: Record<string, unknown> = {};
+              if (op.set.x !== undefined) updates.x = op.set.x;
+              if (op.set.y !== undefined) updates.y = op.set.y;
+              if (op.set.label !== undefined) {
+                updates.props = { richText: labelToRichText(op.set.label) };
+              }
+              if (Object.keys(updates).length > 0) {
+                editor.updateShapes([
+                  // biome-ignore lint/suspicious/noExplicitAny: tldraw updateShapes expects shape-specific type literal
+                  { id: sid, type: existing.type, ...updates } as any,
+                ]);
+              }
             }
           }
         },
@@ -51,6 +59,7 @@ export function App({ room }: { room: string }) {
           .getCurrentPageShapes()
           .map((s) => [s.id as unknown as string, s]),
       );
+      let inflight = false;
       unsubStore = editor.store.listen(
         () => {
           const cur = new Map<string, TLShape>(
@@ -61,11 +70,14 @@ export function App({ room }: { room: string }) {
           const ops = diffToOps(snap, cur);
           snap.clear();
           for (const [k, v] of cur) snap.set(k, v);
-          if (ops.length === 0) return;
+          if (ops.length === 0 || inflight) return;
+          inflight = true;
           const cid = crypto.randomUUID();
           rememberOurOpId(cid);
           // biome-ignore lint/suspicious/noExplicitAny: SimpleOp is compatible with backend PatchOp schema
-          void sendPatch(ops as any, cid);
+          void sendPatch(ops as any, cid).finally(() => {
+            inflight = false;
+          });
         },
         { source: "user", scope: "document" },
       );

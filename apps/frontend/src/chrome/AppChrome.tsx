@@ -13,7 +13,14 @@ export function AppChrome({
   children: ReactNode;
 }) {
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
+    <div
+      style={{
+        height: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        position: "relative",
+      }}
+    >
       {banner ? (
         <div style={{ zIndex: tokens.z.banner, position: "relative" }}>
           {banner}
