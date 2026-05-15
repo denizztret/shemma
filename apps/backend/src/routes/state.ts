@@ -12,6 +12,17 @@ export function stateRoutes(rooms: Rooms) {
 
     if (sinceRaw !== undefined && !Number.isNaN(Number(sinceRaw))) {
       const since = Number(sinceRaw);
+      // opLog is in-memory only (lost on restart). If the requested window
+      // predates the oldest retained entry, we cannot honour incremental sync —
+      // signal `truncated:true` so the client knows to fetch a full snapshot
+      // instead of silently treating the gap as no-op.
+      const minLogVersion = r.opLog[0]?.version;
+      const canServe =
+        since >= r.version ||
+        (minLogVersion !== undefined && minLogVersion <= since + 1);
+      if (!canServe) {
+        return c.json({ since, version: r.version, truncated: true });
+      }
       return c.json({
         since,
         version: r.version,
