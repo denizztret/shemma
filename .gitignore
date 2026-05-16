@@ -9,3 +9,6 @@ apps/frontend/src/**/*.js
 
 release/
 apps/backend/src/frontend-dist/
+
+# Backlog.md (local-only task management, не коммитим)
+backlog/

@@ -70,7 +70,28 @@ tldraw 5.x frontend + Bun backend (`:8787` release, `:8788` dev) + `didraw` CLI 
 
 **Phase 2.2 SHIPPED как 0.3.0.** Новые фазы пока НЕ запускаем. Текущий режим — интенсивное тестирование + bug-fix из backlog.
 
-**Where the backlog lives:** `docs/backlog.md` — единый файл с независимыми задачами. Дополняется по мере находки багов. Порядок не фиксирован; задача берётся по приоритету/необходимости.
+**Где живут задачи:**
+- **Backlog.md** (primary, с этого момента) — `backlog/tasks/` (gitignored, local-only), task prefix `DRW`. CLI + MCP-сервер `backlog`.
+- **`docs/backlog.md`** (legacy) — справочник по немигрированным D2/D4-D11/B-T*/B-F*/P-2.x задачам. Новые задачи туда НЕ добавлять — только в Backlog.md.
+
+## Task management — Backlog.md (обязательно)
+
+**Все операции с задачами — через `backlog` CLI или MCP-сервер `backlog`.** Не редактировать `backlog/tasks/*.md` вручную (нарушает frontmatter consistency, ломает индексы / MCP / Web UI / branch-scanning).
+
+**Команды:**
+- **Создание:** `backlog task create "Title" --priority high|medium|low --labels "bug,critical" -d "Description" --ac "Criterion 1" --ac "Criterion 2" --modified-file "path/to/file" --plain`. После создания **переименовать файл** в формат `drw-NNN-short-name.md` (backlog по дефолту делает длинные имена по title; 2-3 слова после префикса достаточно — CLI продолжает работать).
+- **Статус:** `backlog task edit DRW-NNN -s "In Progress"` / `"Done"`. Валидные: `To Do`, `In Progress`, `Done`.
+- **AC / plan / notes:** `backlog task edit DRW-NNN --ac "..."` / `--plan "..."` / `--notes "..."` / `--final-summary "..."`.
+- **Список / поиск:** `backlog task list --plain`, `backlog search "keyword" --plain`.
+- **Board:** `backlog board` (TUI) или `backlog board export <path> --force` (markdown).
+- **Архив:** `backlog task archive DRW-NNN` после завершения.
+
+**Ограничения (backlog v1.45.1 hardcoded):**
+- Имя файла — **только lowercase** в префиксе (`drw-001-foo.md`). Uppercase префикс (`DRW-001-foo.md`) ломает list/view/search.
+- ID в frontmatter + CLI output — uppercase `DRW-001` (нормально).
+- `taskPrefix` — read-only после `init`; смена только через удаление `backlog/` и `--task-prefix` при init.
+
+**Исключение:** phase-level планы/specs остаются в `docs/superpowers/plans/` и `docs/superpowers/specs/`, НЕ дублируются в Backlog.md. Backlog — только независимые bug-fix / improvement задачи.
 
 ## How to execute (when phase mode resumes)
 

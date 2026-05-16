@@ -1,0 +1,8 @@
+{
+  "monospaceFontFamily": "JetBrains Mono",
+  "cssTheme": "",
+  "theme": "obsidian",
+  "enabledCssSnippets": [
+    "warp-style"
+  ]
+}

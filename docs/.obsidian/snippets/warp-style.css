@@ -1,0 +1,152 @@
+/*
+ * Warp-like terminal style for Obsidian
+ * Compact layout, monospace font, terminal-like inline code
+ */
+
+/* ===== Base: monospace font everywhere ===== */
+
+.markdown-preview-view,
+.markdown-source-view .cm-content {
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", "Menlo", monospace;
+  font-size: 14px;
+  font-weight: 300;
+  line-height: 1.55;
+}
+
+/* ===== Headers: compact, no color accent ===== */
+
+.markdown-preview-view h1,
+.markdown-preview-view h2,
+.markdown-preview-view h3,
+.markdown-preview-view h4 {
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", monospace;
+  color: var(--text-normal);
+  font-weight: 700;
+  margin-top: 1em;
+  margin-bottom: 0.3em;
+  border-bottom: none;
+}
+
+.markdown-preview-view h1 { font-size: 1.3em; }
+.markdown-preview-view h2 { font-size: 1.15em; }
+.markdown-preview-view h3 { font-size: 1.05em; }
+.markdown-preview-view h4 { font-size: 1em; }
+
+/* Live Preview headers */
+.cm-header-1 { font-size: 1.3em !important; }
+.cm-header-2 { font-size: 1.15em !important; }
+.cm-header-3 { font-size: 1.05em !important; }
+
+/* ===== Inline code: green text, no background (terminal-like) ===== */
+
+/* Reading mode */
+.theme-dark .markdown-preview-view code:not(pre code) {
+  background: transparent;
+  color: #5bf5a0;
+  padding: 0 2px;
+  border-radius: 0;
+  font-size: 1em;
+  border: none;
+}
+
+/* Live Preview */
+.theme-dark .cm-s-obsidian .cm-inline-code:not(.cm-formatting-code) {
+  color: #5bf5a0;
+  background-color: transparent;
+  padding: 0 2px;
+  border-radius: 0;
+}
+
+/* Backtick markers — dim */
+.theme-dark .cm-s-obsidian .cm-formatting-code {
+  color: #5bf5a055;
+}
+
+/* ===== Code blocks: minimal, no card effect ===== */
+
+.markdown-preview-view pre {
+  background: rgba(255, 255, 255, 0.03);
+  border: none;
+  border-radius: 4px;
+  padding: 8px 12px;
+  box-shadow: none;
+  margin: 0.4em 0;
+}
+
+.markdown-preview-view pre code {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Live Preview code blocks */
+.theme-dark .cm-s-obsidian .HyperMD-codeblock {
+  background: rgba(255, 255, 255, 0.03) !important;
+}
+
+/* ===== Compact spacing ===== */
+
+.markdown-preview-view p {
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
+}
+
+.markdown-preview-view ul,
+.markdown-preview-view ol {
+  margin-top: 0.2em;
+  margin-bottom: 0.2em;
+  padding-left: 1.5em;
+}
+
+.markdown-preview-view li {
+  margin-top: 0.1em;
+  margin-bottom: 0.1em;
+}
+
+/* ===== HR: thin subtle line ===== */
+
+.markdown-preview-view hr {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin: 0.8em 0;
+}
+
+/* ===== Bold: slightly brighter ===== */
+
+.markdown-preview-view strong {
+  color: var(--text-normal);
+  font-weight: 700;
+}
+
+/* ===== Tables: readable size ===== */
+
+.markdown-preview-view table {
+  font-size: 14px !important;
+  font-weight: 300 !important;
+  line-height: 1.55 !important;
+  width: max-content !important;
+}
+
+.markdown-preview-view th,
+.markdown-preview-view td {
+  font-size: 14px !important;
+  padding: 3px 8px !important;
+  white-space: nowrap !important;
+}
+
+.markdown-preview-view th {
+  font-weight: 600 !important;
+}
+
+/* Status icon column: larger emoji, minimal padding (only in pages with cssclass: status-icons) */
+.status-icons td:first-child {
+  font-size: 20px !important;
+  padding: 2px 4px !important;
+  line-height: 1 !important;
+  text-align: center !important;
+}
+
+/* ===== Content width ===== */
+
+.markdown-preview-view.is-readable-line-width .markdown-preview-sizer {
+  max-width: 900px;
+}

@@ -3,7 +3,8 @@
     "allow": [
       "WebSearch",
       "WebFetch(domain:tldraw.dev)",
-      "Skill(superpowers:brainstorming)"
+      "Skill(superpowers:brainstorming)",
+      "Bash(backlog --version)"
     ]
   }
 }
