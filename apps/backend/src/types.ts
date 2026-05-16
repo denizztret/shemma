@@ -1,54 +1,112 @@
-export const DEFAULT_ROOM = "default";
+// apps/backend/src/types.ts
+import type {
+  StoreChangeBatch,
+  StoreOpLogEntry,
+  TLStoreSnapshot,
+} from "./store-types";
 
-export type CanvasState = {
-  version: 1;
-  nodes: Node[];
-  edges: Edge[];
-  groups: Group[];
+export const DEFAULT_ROOM = "default";
+export type RoomId = string;
+
+export type Prompt = {
+  id: string;
+  selection: string[];
+  text: string;
+  createdAt: number;
+  status: "pending" | "resolved" | "dismissed";
+  response?: string;
+  resolvedAt?: number;
 };
 
-export type Node = {
+export type AiActivity = {
+  actor: string;
+  task: string;
+  startedAt: number;
+};
+
+export type RoomState = {
+  store: TLStoreSnapshot;
+  opLog: StoreOpLogEntry[];
+  prompts: Prompt[];
+  version: number;
+  dirty: boolean;
+  lastTouched: number;
+  aiActivity?: AiActivity;
+  // Индекс meta.didrawName → shape.id для O(1) lookup в compile.ts.
+  // Перестраивается при каждой apply через store-ops.rebuildDidrawIndex().
+  didrawIndex: Map<string, string>;
+};
+
+export type WsClientMessage = { kind: "hello"; lastVersion: number };
+
+export type WsMessage =
+  | { kind: "hello"; version: number }
+  | { kind: "sync-ack"; version: number }
+  | { kind: "replay"; changes: StoreChangeBatch[]; version: number }
+  | { kind: "truncated"; version: number }
+  | {
+      kind: "store-change";
+      source: "ai" | "user";
+      changes: StoreChangeBatch;
+      version: number;
+      originClientId?: string;
+    }
+  | { kind: "prompt-created"; prompt: Prompt }
+  | { kind: "prompt-resolved"; id: string; response?: string }
+  | { kind: "prompt-removed"; ids: string[] }
+  | { kind: "ai-activity"; activity: AiActivity | null };
+
+export type StoreChangeBus = {
+  publish: (
+    room: string,
+    msg: {
+      changes: StoreChangeBatch;
+      source: "ai" | "user";
+      version: number;
+      originClientId?: string;
+    },
+  ) => void;
+};
+
+// ---- Legacy types (Phase 2.x), kept ONLY for migrate-v2.ts ----
+// Не импортировать из новых модулей. Будут удалены в Task 20 кроме migrate-v2.
+
+/** @deprecated v2 only — для migrate-v2 */
+export type LegacyCanvasState = {
+  version: 1;
+  nodes: LegacyNode[];
+  edges: LegacyEdge[];
+  groups: LegacyGroup[];
+};
+
+/** @deprecated v2 only — для migrate-v2 */
+export type LegacyNode = {
   id: string;
-  // DRW-024: canonical whitelist. Unsupported tldraw shapes (draw/line/image/
-  // video/embed/bookmark/highlight) НЕ сериализуются — см. domain/supported-kinds.ts.
   kind: "rect" | "ellipse" | "diamond" | "sticky" | "text";
   label?: string;
   x: number;
   y: number;
   w?: number;
   h?: number;
-  style?: NodeStyle;
+  style?: { color?: string; fill?: string; stroke?: string; fontSize?: number; rotation?: number };
   meta?: Record<string, unknown>;
 };
 
-export type NodeStyle = {
-  color?: string;
-  fill?: string;
-  stroke?: string;
-  fontSize?: number;
-  rotation?: number;
-};
+/** @deprecated v2 only — для migrate-v2 */
+export type LegacyEndpoint = { kind: "node"; id: string } | { kind: "point"; x: number; y: number };
 
-export type Endpoint =
-  | { kind: "node"; id: string }
-  | { kind: "point"; x: number; y: number };
-
-export type Edge = {
+/** @deprecated v2 only — для migrate-v2 */
+export type LegacyEdge = {
   id: string;
-  from: Endpoint;
-  to: Endpoint;
+  from: LegacyEndpoint;
+  to: LegacyEndpoint;
   label?: string;
-  style?: EdgeStyle;
+  style?: { color?: string; dashed?: boolean; arrow?: "none" | "to" | "both" };
   meta?: Record<string, unknown>;
 };
 
-export type EdgeStyle = {
-  color?: string;
-  dashed?: boolean;
-  arrow?: "none" | "to" | "both";
-};
-
-export type Group = {
+/** @deprecated v2 only — для migrate-v2 */
+export type LegacyGroup = {
   id: string;
   kind: "frame" | "group";
   children: string[];
@@ -61,80 +119,19 @@ export type Group = {
   collapsed?: boolean;
 };
 
-export type Target = "node" | "edge" | "group";
-
-export type PatchOp =
-  | { op: "add"; target: "node"; value: Node }
-  | { op: "add"; target: "edge"; value: Edge }
-  | { op: "add"; target: "group"; value: Group }
-  | { op: "update"; target: "node"; id: string; set: Partial<Node> }
-  | { op: "update"; target: "edge"; id: string; set: Partial<Edge> }
-  | { op: "update"; target: "group"; id: string; set: Partial<Group> }
-  | { op: "delete"; target: Target; id: string };
-
-export type Prompt = {
-  id: string;
-  selection: string[];
-  text: string;
-  createdAt: number;
-  status: "pending" | "resolved" | "dismissed";
-  response?: string;
-  resolvedAt?: number;
-};
-
-export type RoomId = string;
-
-export type OpLogEntry = {
-  ops: PatchOp[];
+/** @deprecated v2 only — для migrate-v2 */
+export type LegacyOpLogEntry = {
+  ops: unknown[]; // legacy PatchOp[] — не интерпретируется
   source: "ai" | "user";
   version: number;
   at: number;
   clientOpId?: string;
 };
 
-export type AiActivity = {
-  actor: string;
-  task: string;
-  startedAt: number;
-};
-
-export type RoomState = {
-  canvas: CanvasState;
-  opLog: OpLogEntry[];
-  prompts: Prompt[];
-  version: number;
-  dirty: boolean;
-  lastTouched: number;
-  aiActivity?: AiActivity;
-};
-
-export type WsClientMessage = { kind: "hello"; lastVersion: number };
-
-export type WsMessage =
-  | { kind: "hello"; version: number } // legacy initial — sent on open
-  | { kind: "sync-ack"; version: number }
-  | { kind: "replay"; ops: OpLogEntry[]; version: number }
-  | { kind: "truncated"; version: number }
-  | {
-      kind: "patch";
-      source: "ai" | "user";
-      ops: PatchOp[];
-      version: number;
-      originClientId?: string;
-    }
-  | { kind: "prompt-created"; prompt: Prompt }
-  | { kind: "prompt-resolved"; id: string; response?: string }
-  | { kind: "prompt-removed"; ids: string[] }
-  | { kind: "ai-activity"; activity: AiActivity | null };
-
-export type PatchBus = {
-  publish: (
-    room: string,
-    msg: {
-      ops: PatchOp[];
-      source: "ai" | "user";
-      version: number;
-      originClientId?: string;
-    },
-  ) => void;
-};
+// Stubs to keep tsc errors targeted. Будут удалены в Task 20.
+export type CanvasState = never;
+export type Node = never;
+export type Edge = never;
+export type Group = never;
+export type PatchOp = never;
+export type PatchBus = never;
