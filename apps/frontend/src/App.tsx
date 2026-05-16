@@ -4,6 +4,7 @@ import {
   type TLArrowBinding,
   type TLShape,
   type TLShapeId,
+  type TLShapePartial,
   Tldraw,
 } from "tldraw";
 import "tldraw/tldraw.css";
@@ -108,14 +109,23 @@ export function App({ room }: { room: string }) {
     // the WS server cannot replay the gap between our `lastVersion` and the
     // current room version.
     const replaceCanvasFromState = (s: Awaited<ReturnType<typeof getState>>) => {
-      const nodeShapes = s.canvas.nodes.map(nodeToShape);
+      // DRW-024: nodeToShape возвращает null для unsupported kinds — скипаем.
+      const nodeShapes: TLShapePartial[] = s.canvas.nodes
+        .map((n: Parameters<typeof nodeToShape>[0]) => nodeToShape(n))
+        .filter((sh: TLShapePartial | null): sh is TLShapePartial => sh !== null);
       const edgeData: ReturnType<typeof edgeToShape>[] =
         s.canvas.edges.map(edgeToShape);
       const allShapes = [...nodeShapes, ...edgeData.map((d) => d.shape)];
       const allBindings = edgeData.flatMap((d) => d.bindings);
       editor.store.mergeRemoteChanges(() => {
-        const existing = editor.getCurrentPageShapes().map((sh) => sh.id);
-        if (existing.length) editor.deleteShapes(existing);
+        // Удаляем только shapes которыми владеет backend (synced) — local-only
+        // shapes (draw/line/image из tldraw native persistence) оставляем нетронутыми.
+        // Признак synced shape: meta.canvasId — наш id-маркер из nodeToShape/edgeToShape.
+        const syncedIds = editor
+          .getCurrentPageShapes()
+          .filter((sh) => sh.meta && typeof sh.meta.canvasId === "string")
+          .map((sh) => sh.id);
+        if (syncedIds.length) editor.deleteShapes(syncedIds);
         if (allShapes.length) editor.createShapes(allShapes);
         if (allBindings.length) editor.createBindings(allBindings);
       });
@@ -166,8 +176,12 @@ export function App({ room }: { room: string }) {
           editor.store.mergeRemoteChanges(() => {
             for (const op of m.ops) {
               if (op.op === "add" && op.target === "node") {
-                editor.createShapes([nodeToShape(op.value)]);
-                newNodeIds.push(toShapeId(op.value.id));
+                // DRW-024: пропускаем unsupported kinds — иначе tldraw crash на createShapes.
+                const shape = nodeToShape(op.value);
+                if (shape) {
+                  editor.createShapes([shape]);
+                  newNodeIds.push(toShapeId(op.value.id));
+                }
               } else if (op.op === "add" && op.target === "edge") {
                 const { shape, bindings } = edgeToShape(op.value);
                 editor.createShapes([shape]);
@@ -425,6 +439,13 @@ export function App({ room }: { room: string }) {
       }
     >
       <Tldraw
+        // tldraw native local persistence (IndexedDB) per-room.
+        // Сохраняет ВСЕ shape types — включая draw/line/image/highlight которые
+        // не в нашем backend синхронизаторе. После reload они возвращаются
+        // локально (multi-tab same key — общий IndexedDB).
+        // Backend остаётся source of truth для supported types (geo/note/text/arrow);
+        // unsupported живут только локально. Roadmap: Phase 3.0 — tldraw-as-primary.
+        persistenceKey={`didraw-${room}`}
         onMount={(ed) => {
           setEditor(ed);
           if (import.meta.env.DEV) {

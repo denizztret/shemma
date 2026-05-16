@@ -101,9 +101,11 @@ export function shapeToNode(s: TLShape): NodeValue | null {
       style: readStyle(p),
     };
   }
-  if (s.type === "draw") {
-    return { id: fromShapeId(s.id), kind: "freeform", x: s.x, y: s.y };
-  }
+  // DRW-024: tldraw shapes без custom serialiser (draw/line/image/video/embed/
+  // bookmark/highlight) НЕ синхронизируются. Без props.points / assetId на read
+  // path tldraw crash'ит в getGeometry (Polyline2d / Image). Сделаем silent skip:
+  // фигура остаётся локально в tldraw store, но на backend и second client не
+  // уходит. Roadmap'd to Phase 3.x custom shapes registry.
   return null;
 }
 

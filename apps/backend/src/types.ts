@@ -9,14 +9,9 @@ export type CanvasState = {
 
 export type Node = {
   id: string;
-  kind:
-    | "rect"
-    | "ellipse"
-    | "diamond"
-    | "sticky"
-    | "text"
-    | "image"
-    | "freeform";
+  // DRW-024: canonical whitelist. Unsupported tldraw shapes (draw/line/image/
+  // video/embed/bookmark/highlight) НЕ сериализуются — см. domain/supported-kinds.ts.
+  kind: "rect" | "ellipse" | "diamond" | "sticky" | "text";
   label?: string;
   x: number;
   y: number;
