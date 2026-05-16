@@ -3,6 +3,9 @@ import type { CanvasState, RoomId, RoomState } from "./types";
 import { DEFAULT_ROOM } from "./types";
 
 const ROOM_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+// Stored viewport hints expire after this window of inactivity so a stale
+// hint can't bias `/api/agent/context` long after the user has navigated away.
+const VIEWPORT_TTL_MS = 30 * 60 * 1000;
 
 export function validateRoomId(id: string): boolean {
   return ROOM_ID_RE.test(id);
@@ -59,8 +62,7 @@ export class Rooms {
   getViewport(id: string): { x: number; y: number; w: number; h: number; zoom?: number } | null {
     const v = this.viewports.get(id);
     if (!v) return null;
-    // Wipe after 30 min inactivity.
-    if (Date.now() - v.at > 30 * 60 * 1000) {
+    if (Date.now() - v.at > VIEWPORT_TTL_MS) {
       this.viewports.delete(id);
       return null;
     }
