@@ -42,6 +42,10 @@ function parsePort(raw: string | undefined, fallback: number): number {
   return n;
 }
 
+// Cap on the slug body so that `${body}-${8-char hash}` ≤ 255 bytes —
+// иначе на длинных путях mkdir падает с ENAMETOOLONG (Phase 2.0 follow-up I1).
+const MAX_SLUG_BODY = 246; // 246 + 1 ("-") + 8 (sha1[0:8]) = 255
+
 export function slugifyProject(input: string | undefined): string {
   if (!input) return "default-project";
   const base = basename(input.replace(/[\\/]+$/, "")) || input;
@@ -52,8 +56,10 @@ export function slugifyProject(input: string | undefined): string {
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
   if (!body) return "default-project";
+  const truncated =
+    body.length > MAX_SLUG_BODY ? body.slice(0, MAX_SLUG_BODY) : body;
   const hash = createHash("sha1").update(input).digest("hex").slice(0, 8);
-  return `${body}-${hash}`;
+  return `${truncated}-${hash}`;
 }
 
 export function resolveProjectSlug(): string {
