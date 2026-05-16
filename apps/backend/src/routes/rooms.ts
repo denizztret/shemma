@@ -187,13 +187,22 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
     } catch {}
 
     if (exists && !body.force) {
+      // I5 (Phase 2.0): expose `existingId` so callers can decide how to retry
+      // (force-overwrite vs different `as`). The error string is a stable
+      // machine-checkable token; details go in the message-free fields.
       return c.json(
-        { ok: false, error: `room "${targetId}" exists; pass force:true to overwrite` },
+        { ok: false, error: "room exists", existingId: targetId },
         409,
       );
     }
 
     if (exists) {
+      // I2 (Phase 2.0): explicit flush BEFORE evict. `evict` already calls
+      // `flushIfDirty` internally, but the daemon-safe pattern
+      // (flushIfDirty → stat → op) demands the call be visible at every
+      // file-mutating site so future refactors of `evict` can't silently drop
+      // pending writes.
+      await rooms.flushIfDirty(targetId);
       await rooms.evict(targetId);
     }
 
