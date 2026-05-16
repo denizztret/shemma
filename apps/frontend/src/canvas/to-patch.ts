@@ -107,14 +107,15 @@ export function shapeToNode(s: TLShape): NodeValue | null {
   return null;
 }
 
-function geoToKind(g: string) {
-  return g === "rectangle"
-    ? "rect"
-    : g === "ellipse"
-      ? "ellipse"
-      : g === "diamond"
-        ? "diamond"
-        : "rect";
+function geoToKind(g: string): "rect" | "ellipse" | "diamond" {
+  switch (g) {
+    case "ellipse":
+      return "ellipse";
+    case "diamond":
+      return "diamond";
+    default:
+      return "rect"; // includes "rectangle" and anything unrecognised
+  }
 }
 
 function endpointFor(
