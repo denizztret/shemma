@@ -1,25 +1,8 @@
 import { useEffect, useState } from "react";
-import {
-  type Editor,
-  type TLArrowBinding,
-  type TLShape,
-  type TLShapeId,
-  type TLShapePartial,
-  Tldraw,
-} from "tldraw";
+import { type Editor, Tldraw } from "tldraw";
 import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
-import { isOurOp, rememberOurOpId } from "./canvas/echo-guard";
-import { edgeToShape, nodeToShape } from "./canvas/from-canvas-state";
-import {
-  fromEdgeShapeId,
-  fromShapeId,
-  toEdgeShapeId,
-  toShapeId,
-} from "./canvas/id-prefix";
-import { mermaidToOps } from "./canvas/mermaid-import";
-import { labelToRichText } from "./canvas/richtext";
-import { diffToOps } from "./canvas/to-patch";
+import { getDidrawName } from "./canvas/id-prefix";
 import { AiActivityBadge } from "./chrome/AiActivityBadge";
 import { AppChrome } from "./chrome/AppChrome";
 import { ErrorBanner } from "./chrome/ErrorBanner";
@@ -27,9 +10,9 @@ import { buildTldrawComponents } from "./chrome/TldrawComponents";
 import { UpdateBanner } from "./chrome/UpdateBanner";
 import { PromptDrawer } from "./prompts/PromptDrawer";
 import { PromptInput } from "./prompts/PromptInput";
-import { getState, sendPatch } from "./transport/api";
+import { getState } from "./transport/api";
 import { viewportReporter } from "./transport/viewport";
-import { type AiActivity, openWs } from "./transport/ws";
+import { type AiActivity, startStoreSync } from "./transport/ws";
 
 export function App({ room }: { room: string }) {
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -37,11 +20,11 @@ export function App({ room }: { room: string }) {
   const [promptsTick, setPromptsTick] = useState(0);
   const [cameraTick, setCameraTick] = useState(0);
   // PromptInput is toggled by ⌘K (Ctrl+K on non-Mac) — opens for the current
-  // selection and stays open until Send/Esc/selection cleared. Holding a
-  // modifier was the previous design but conflicted with tldraw drag tools.
+  // selection and stays open until Send/Esc/selection cleared.
   const [promptOpen, setPromptOpen] = useState(false);
   const [aiActivity, setAiActivity] = useState<AiActivity | null>(null);
 
+  // ⌘K / Esc keyboard handler for PromptInput visibility.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -61,11 +44,8 @@ export function App({ room }: { room: string }) {
     if (selection.length === 0) setPromptOpen(false);
   }, [selection.length]);
 
-  // Periodic re-fetch of AI activity. WS broadcasts the same updates, but a
-  // tab that was backgrounded long enough to drop its WebSocket can otherwise
-  // sit on stale "AI is busy" or miss a freshly-started run. Cheap (one
-  // request every 10s) and also re-fires immediately when the tab regains
-  // focus.
+  // Periodic re-fetch of AI activity (10s). Cheap insurance against WS drops
+  // that leave the badge in a stale state; also re-fires on tab focus.
   useEffect(() => {
     let cancelled = false;
     const refetch = async () => {
@@ -76,7 +56,7 @@ export function App({ room }: { room: string }) {
         const j = await r.json();
         if (!cancelled) setAiActivity(j.activity ?? null);
       } catch {
-        // network blip; the next tick will retry.
+        // network blip; next tick retries.
       }
     };
     const id = setInterval(refetch, 10_000);
@@ -89,272 +69,124 @@ export function App({ room }: { room: string }) {
     };
   }, [room]);
 
-  // Viewport reporter: sends camera position/zoom to the backend on each
-  // debounced camera change. Best-effort — network errors are silently swallowed.
+  // Chrome (prompt drawer + AI badge) listens to ws-bus dispatched events
+  // from transport/ws.ts (`didraw:ws-message`). Transport itself stays
+  // decoupled — it does not import App/Drawer/Badge components.
+  useEffect(() => {
+    // biome-ignore lint/suspicious/noExplicitAny: window CustomEvent payload is opaque
+    const handler = (e: any) => {
+      const m = e.detail;
+      if (!m || typeof m !== "object") return;
+      switch (m.kind) {
+        case "prompt-created":
+        case "prompt-resolved":
+        case "prompt-removed":
+          setPromptsTick((x) => x + 1);
+          break;
+        case "ai-activity":
+          setAiActivity(m.activity ?? null);
+          break;
+      }
+    };
+    window.addEventListener("didraw:ws-message", handler);
+    return () => window.removeEventListener("didraw:ws-message", handler);
+  }, []);
+
+  // Viewport reporter (camera → backend, debounced 500ms).
   useEffect(() => {
     if (!editor) return;
     const stop = viewportReporter(editor, { roomId: room });
     return () => stop();
   }, [editor, room]);
 
+  // Primary lifecycle: hydrate tldraw from /api/state, start WS store-sync,
+  // wire selection/camera listeners. All shape mutations go through tldraw's
+  // own store — outbound sync is handled by startStoreSync via store.listen
+  // (source:'user', scope:'document').
   useEffect(() => {
     if (!editor) return;
     let active = true;
-    let close: (() => void) | undefined;
-    let unsubStore: (() => void) | undefined;
+    let stopSync: (() => void) | undefined;
     let unsubSel: (() => void) | undefined;
     let camSaveTimer: ReturnType<typeof setTimeout> | undefined;
-    // Replace the entire canvas with shapes/bindings derived from server state.
-    // Used both for the initial mount and as a `truncated` recovery path when
-    // the WS server cannot replay the gap between our `lastVersion` and the
-    // current room version.
-    const replaceCanvasFromState = (s: Awaited<ReturnType<typeof getState>>) => {
-      // DRW-024: nodeToShape возвращает null для unsupported kinds — скипаем.
-      const nodeShapes: TLShapePartial[] = s.canvas.nodes
-        .map((n: Parameters<typeof nodeToShape>[0]) => nodeToShape(n))
-        .filter((sh: TLShapePartial | null): sh is TLShapePartial => sh !== null);
-      const edgeData: ReturnType<typeof edgeToShape>[] =
-        s.canvas.edges.map(edgeToShape);
-      const allShapes = [...nodeShapes, ...edgeData.map((d) => d.shape)];
-      const allBindings = edgeData.flatMap((d) => d.bindings);
-      editor.store.mergeRemoteChanges(() => {
-        // Удаляем только shapes которыми владеет backend (synced) — local-only
-        // shapes (draw/line/image из tldraw native persistence) оставляем нетронутыми.
-        // Признак synced shape: meta.canvasId — наш id-маркер из nodeToShape/edgeToShape.
-        const syncedIds = editor
-          .getCurrentPageShapes()
-          .filter((sh) => sh.meta && typeof sh.meta.canvasId === "string")
-          .map((sh) => sh.id);
-        if (syncedIds.length) editor.deleteShapes(syncedIds);
-        if (allShapes.length) editor.createShapes(allShapes);
-        if (allBindings.length) editor.createBindings(allBindings);
-      });
-      return allShapes.length;
-    };
-    (async () => {
+
+    const hydrateAndSync = async () => {
       const s = await getState();
       if (!active) return;
-      // Initial AI-activity snapshot so a tab opened mid-task already shows
-      // the badge before the next WS event arrives.
+
+      // Загружаем серверный snapshot — backend = source of truth. Это полностью
+      // переписывает локальный store (record-by-record). Если у пользователя
+      // были несинхронизированные локальные изменения — они потеряются; ради
+      // этого мы убрали persistenceKey (раньше IndexedDB их сохранял локально и
+      // создавал split-brain при ребуте бэка).
+      editor.store.mergeRemoteChanges(() => {
+        editor.loadSnapshot(s.store);
+      });
+
+      // Initial AI-activity snapshot.
       fetch(`/api/ai/activity?room=${encodeURIComponent(room)}`)
         .then((r) => r.json())
         .then((j) => active && setAiActivity(j.activity ?? null))
         .catch(() => {});
-      const shapesCount = replaceCanvasFromState(s);
+
+      // Camera: restore from localStorage, otherwise zoomToFit if there's content.
       const cam = loadCamera(room);
       if (cam) {
         editor.setCamera(cam, { immediate: true });
-      } else if (shapesCount) {
-        // First visit: fit to content so the room doesn't open blank.
-        editor.zoomToFit({ animation: { duration: 0 } });
+      } else {
+        const shapesCount = editor.getCurrentPageShapes().length;
+        if (shapesCount) editor.zoomToFit({ animation: { duration: 0 } });
       }
-      close = openWs(
-        {
-        onPromptCreated: () => setPromptsTick((x) => x + 1),
-        onPromptResolved: () => setPromptsTick((x) => x + 1),
-        onPromptRemoved: () => setPromptsTick((x) => x + 1),
-        onAiActivity: (a) => setAiActivity(a),
+
+      // Start WS store sync.
+      const wsUrl = `ws://${location.host}/ws?room=${encodeURIComponent(room)}`;
+      const sync = startStoreSync({
+        editor,
+        wsUrl,
+        initialVersion: s.version,
         onTruncated: () => {
-          // Server signalled our lastVersion is outside the opLog window;
-          // re-fetch full state and replace the canvas.
+          // Server says we're too far behind to replay → re-fetch full state.
           void (async () => {
             try {
               const fresh = await getState();
               if (!active) return;
-              replaceCanvasFromState(fresh);
+              editor.store.mergeRemoteChanges(() => {
+                editor.loadSnapshot(fresh.store);
+              });
+              // Re-arm sync with the fresh version.
+              stopSync?.();
+              const restart = startStoreSync({
+                editor,
+                wsUrl,
+                initialVersion: fresh.version,
+                onTruncated: () => {
+                  // Pathological loop — log and stop trying.
+                  console.warn("[didraw] truncated recovery looped, giving up");
+                },
+              });
+              stopSync = restart.stop;
             } catch (e) {
               console.warn("[didraw] truncated recovery failed:", e);
             }
           })();
         },
-        onPatch: (m) => {
-          if (isOurOp(m.originClientId)) return;
-          const newNodeIds: TLShapeId[] = [];
-          // mergeRemoteChanges marks the inner mutations as `source: "remote"`
-          // so our `source: "user"` listener below doesn't echo them back to
-          // the server (per tldraw collaboration docs).
-          editor.store.mergeRemoteChanges(() => {
-            for (const op of m.ops) {
-              if (op.op === "add" && op.target === "node") {
-                // DRW-024: пропускаем unsupported kinds — иначе tldraw crash на createShapes.
-                const shape = nodeToShape(op.value);
-                if (shape) {
-                  editor.createShapes([shape]);
-                  newNodeIds.push(toShapeId(op.value.id));
-                }
-              } else if (op.op === "add" && op.target === "edge") {
-                const { shape, bindings } = edgeToShape(op.value);
-                editor.createShapes([shape]);
-                if (bindings.length) editor.createBindings(bindings);
-              } else if (op.op === "delete" && op.target === "node") {
-                editor.deleteShapes([toShapeId(op.id)]);
-              } else if (op.op === "delete" && op.target === "edge") {
-                editor.deleteShapes([toEdgeShapeId(op.id)]);
-              } else if (op.op === "update" && op.target === "node") {
-                const sid = toShapeId(op.id);
-                const existing = editor.getShape(sid);
-                if (!existing) continue;
-                const updates: Record<string, unknown> = {};
-                if (op.set.x !== undefined) updates.x = op.set.x;
-                if (op.set.y !== undefined) updates.y = op.set.y;
-                const propsPatch: Record<string, unknown> = {};
-                if (op.set.w !== undefined) propsPatch.w = op.set.w;
-                if (op.set.h !== undefined) propsPatch.h = op.set.h;
-                if (op.set.label !== undefined) {
-                  propsPatch.richText = labelToRichText(op.set.label);
-                }
-                if (op.set.style?.color) propsPatch.color = op.set.style.color;
-                if (op.set.style?.fill) propsPatch.fill = op.set.style.fill;
-                if (Object.keys(propsPatch).length > 0) {
-                  updates.props = propsPatch;
-                }
-                if (Object.keys(updates).length > 0) {
-                  editor.updateShapes([
-                    // biome-ignore lint/suspicious/noExplicitAny: tldraw updateShapes expects shape-specific type literal
-                    { id: sid, type: existing.type, ...updates } as any,
-                  ]);
-                }
-              } else if (op.op === "update" && op.target === "edge") {
-                // TODO(B1 endpoint move): `op.set.from`/`op.set.to` would require
-                // rebuilding tldraw arrow bindings (delete old + create new with
-                // correct terminals). Out of scope for sync-hardening; only
-                // style/label deltas are propagated here.
-                const sid = toEdgeShapeId(op.id);
-                const existing = editor.getShape(sid);
-                if (!existing) continue;
-                const propsPatch: Record<string, unknown> = {};
-                if (op.set.label !== undefined) {
-                  propsPatch.richText = labelToRichText(op.set.label);
-                }
-                if (op.set.style?.dashed !== undefined) {
-                  propsPatch.dash = op.set.style.dashed ? "dashed" : "solid";
-                }
-                if (op.set.style?.color !== undefined) {
-                  propsPatch.color = op.set.style.color;
-                }
-                if (op.set.style?.arrow !== undefined) {
-                  const arrow = op.set.style.arrow;
-                  propsPatch.arrowheadStart = arrow === "both" ? "arrow" : "none";
-                  propsPatch.arrowheadEnd = arrow === "none" ? "none" : "arrow";
-                }
-                if (Object.keys(propsPatch).length > 0) {
-                  editor.updateShapes([
-                    // biome-ignore lint/suspicious/noExplicitAny: tldraw updateShapes expects shape-specific type literal
-                    { id: sid, type: "arrow", props: propsPatch } as any,
-                  ]);
-                }
-              }
-            }
-          });
-          // Centre the camera on what the AI just added so the user sees the
-          // change without hunting for it. We compute the union bounds of the
-          // new shapes and zoom to those — not zoomToFit() over the whole
-          // canvas, which would also include unrelated old content.
-          if (newNodeIds.length > 0) {
-            let minX = Number.POSITIVE_INFINITY;
-            let minY = Number.POSITIVE_INFINITY;
-            let maxX = Number.NEGATIVE_INFINITY;
-            let maxY = Number.NEGATIVE_INFINITY;
-            for (const id of newNodeIds) {
-              const b = editor.getShapePageBounds(id);
-              if (!b) continue;
-              if (b.x < minX) minX = b.x;
-              if (b.y < minY) minY = b.y;
-              if (b.x + b.w > maxX) maxX = b.x + b.w;
-              if (b.y + b.h > maxY) maxY = b.y + b.h;
-            }
-            if (minX < maxX) {
-              const padding = 80;
-              editor.zoomToBounds(
-                {
-                  x: minX - padding,
-                  y: minY - padding,
-                  w: maxX - minX + padding * 2,
-                  h: maxY - minY + padding * 2,
-                },
-                { animation: { duration: 300 } },
-              );
-            }
-          }
-        },
-        },
-        // Seed the WS client's high-water-mark from the initial state we just
-        // applied. Otherwise a reconnect on a non-fresh room would replay all
-        // ops from version 1 and re-create shapes that already exist.
-        { initialLastVersion: s.version },
-      );
-
-      const snapshotBindings = (
-        shapes: TLShape[],
-      ): Map<TLShapeId, TLArrowBinding[]> => {
-        const m = new Map<TLShapeId, TLArrowBinding[]>();
-        for (const s of shapes) {
-          if (s.type !== "arrow") continue;
-          m.set(s.id, editor.getBindingsFromShape(s, "arrow"));
-        }
-        return m;
-      };
-      const initialShapes = editor.getCurrentPageShapes();
-      const snap = new Map<string, TLShape>(
-        initialShapes.map((s) => [s.id as unknown as string, s]),
-      );
-      let snapBindings = snapshotBindings(initialShapes);
-      let inflight = false;
-      // Skip listener-driven send during programmatic mass-imports (mermaid).
-      // The importer issues its own explicit sendPatch with deduplicated ops.
-      let suppressLocalSend = false;
-      const trySend = () => {
-        if (inflight || suppressLocalSend) return;
-        const curShapes = editor.getCurrentPageShapes();
-        const cur = new Map<string, TLShape>(
-          curShapes.map((s) => [s.id as unknown as string, s]),
-        );
-        const curBindings = snapshotBindings(curShapes);
-        const ops = diffToOps(snap, cur, snapBindings, curBindings);
-        if (ops.length === 0) return;
-        inflight = true;
-        const cid = crypto.randomUUID();
-        rememberOurOpId(cid);
-        // biome-ignore lint/suspicious/noExplicitAny: SimpleOp is compatible with backend PatchOp schema
-        void sendPatch(ops as any, cid).then((result) => {
-          if (result.ok) {
-            // Snap moves to what we just sent. Diffs after this are relative
-            // to that baseline; changes made during the in-flight window are
-            // captured by the next trySend below.
-            snap.clear();
-            for (const [k, v] of cur) snap.set(k, v);
-            snapBindings = curBindings;
-          } else {
-            // Patch was rejected (422) or the network failed. Leave snap on
-            // the last successfully-sent baseline so the rejected ops will
-            // be re-diffed and re-sent on the next trySend tick.
-            console.warn(
-              "[didraw] sendPatch failed, will retry:",
-              result.error,
-            );
-          }
-          inflight = false;
-          trySend();
-        });
-      };
-      unsubStore = editor.store.listen(trySend, {
-        source: "user",
-        scope: "document",
       });
+      stopSync = sync.stop;
 
-      // Session-scope listener fires on every user interaction. Guard the
-      // PromptInput re-anchor against camera-only no-op ticks (pan emits one
-      // event per pointer move ≈ 60 Hz; without the guard React re-renders
-      // every frame).
+      // Selection + camera listener (session scope) for PromptInput anchor.
       let lastCamKey = "";
       unsubSel = editor.store.listen(
         () => {
-          // Edge shapes use a different prefix ("shape:edge-<id>"); strip the
-          // right one so prompt selection sends backend ids the AI can match.
-          const ids = editor
-            .getSelectedShapeIds()
-            .map((id) => fromEdgeShapeId(id) ?? fromShapeId(id));
+          // Selection → emit didrawName когда оно есть (AI-created shapes), иначе
+          // raw shape id (user-drawn). Domain APIs принимают оба.
+          const ids = editor.getSelectedShapeIds().map((id) => {
+            const sh = editor.getShape(id);
+            const name = sh ? getDidrawName(sh) : undefined;
+            return name ?? (id as unknown as string);
+          });
           setSelection(ids);
+
+          // Re-anchor PromptInput on camera change; debounce save to localStorage.
           const cam = editor.getCamera();
           const camKey = `${cam.x}|${cam.y}|${cam.z}`;
           if (camKey !== lastCamKey) {
@@ -366,55 +198,18 @@ export function App({ room }: { room: string }) {
         },
         { source: "user", scope: "session" },
       );
+    };
 
-      // biome-ignore lint/suspicious/noExplicitAny: attaching helper to window for AI/dev console use
-      (window as any).didrawImportMermaid = async (source: string) => {
-        // mermaidToOps mutates the editor store while extracting ops. Suppress
-        // the local-send path so the listener does not also send those shapes;
-        // we then explicitly sendPatch the deduplicated ops ourselves.
-        suppressLocalSend = true;
-        let ops: Awaited<ReturnType<typeof mermaidToOps>>;
-        try {
-          ops = await mermaidToOps(editor, source);
-        } catch (e) {
-          suppressLocalSend = false;
-          return { ok: false, error: String(e) };
-        }
-        if (ops.length === 0) {
-          suppressLocalSend = false;
-          return { ok: false, error: "no ops produced" };
-        }
-        const cid = crypto.randomUUID();
-        rememberOurOpId(cid);
-        // biome-ignore lint/suspicious/noExplicitAny: MermaidOp is compatible with backend PatchOp schema
-        const result = await sendPatch(ops as any, cid);
-        // Only re-baseline snap when the patch actually landed. Otherwise the
-        // listener will pick up the unsynced shapes on the next tick and retry.
-        if (result.ok) {
-          snap.clear();
-          const cur = editor.getCurrentPageShapes();
-          for (const s of cur) {
-            snap.set(s.id as unknown as string, s);
-          }
-          snapBindings = snapshotBindings(cur);
-        }
-        suppressLocalSend = false;
-        return result;
-      };
-    })();
+    void hydrateAndSync();
+
     return () => {
       active = false;
-      close?.();
-      unsubStore?.();
+      stopSync?.();
       unsubSel?.();
       if (camSaveTimer) {
-        // Pending debounced save — flush now so reload keeps the latest camera.
         clearTimeout(camSaveTimer);
-        if (editor) saveCamera(room, editor.getCamera());
+        saveCamera(room, editor.getCamera());
       }
-      // biome-ignore lint/suspicious/noExplicitAny: cleaning up window helper
-      // biome-ignore lint/performance/noDelete: intentional property removal from window
-      delete (window as any).didrawImportMermaid;
     };
   }, [editor, room]);
 
@@ -439,13 +234,9 @@ export function App({ room }: { room: string }) {
       }
     >
       <Tldraw
-        // tldraw native local persistence (IndexedDB) per-room.
-        // Сохраняет ВСЕ shape types — включая draw/line/image/highlight которые
-        // не в нашем backend синхронизаторе. После reload они возвращаются
-        // локально (multi-tab same key — общий IndexedDB).
-        // Backend остаётся source of truth для supported types (geo/note/text/arrow);
-        // unsupported живут только локально. Roadmap: Phase 3.0 — tldraw-as-primary.
-        persistenceKey={`didraw-${room}`}
+        // Phase 3.0: NO persistenceKey. Backend TLStoreSnapshot — единственный
+        // источник правды; IndexedDB persistence создавал split-brain между
+        // tab'ами и бэкендом (см. spec §3.x). Refresh → /api/state → loadSnapshot.
         onMount={(ed) => {
           setEditor(ed);
           if (import.meta.env.DEV) {
