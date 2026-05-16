@@ -1,3 +1,17 @@
+## 0.3.1 — 2026-05-16
+
+### Fixed
+
+- **CLI multi-room:** `--room <id>` теперь принимается всеми domain командами (`define`, `connect`, `group`, `note`, `layout`, `delete`, `apply --stdin`, `context`). Раньше флаг игнорировался — все mutations шли в `default` room. Backend `/api/domain` уже корректно читал `?room=` через `resolveRoomId`; проблема была в CLI client: `clientFor(profile)` создавал `CanvasClient` без передачи room, а dispatcher не парсил `--room`. Default behavior unchanged (`default` room) — backward-compat. [DRW-009, DRW-010]
+
+### Tests
+
+- `packages/didraw-cli/tests/room-flag.test.ts` — 11 новых кейсов; явно убирает `CLAUDE_SESSION_ID` из env, чтобы `--room` был единственным путём маршрутизации (исключает env-fallback false positives). Покрытие: apply, define, connect, group, note, layout, delete, context + invalid-room id + изоляция параллельных rooms.
+
+**Test counts:** 301 pass (58 domain + 213 backend + 4 client + 26 CLI).
+
+---
+
 ## 0.3.0 — 2026-05-16
 
 ### Phase 2.2 — Sync hardening + user-arrows
