@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { config } from "./config";
 import { EMBEDDED_ASSETS } from "./embedded-assets";
 import { FilePersistence } from "./persistence";
-import { type RoomStore, Rooms } from "./rooms";
+import { type RoomStore, Rooms, validateRoomId } from "./rooms";
 import { aiRoutes } from "./routes/ai";
 import { domainRoutes } from "./routes/domain";
 import { healthRoutes } from "./routes/health";
@@ -75,6 +75,9 @@ export async function startServer(opts: AppOpts = {}) {
       const url = new URL(req.url);
       if (url.pathname === "/ws") {
         const room = url.searchParams.get("room") ?? DEFAULT_ROOM;
+        if (!validateRoomId(room)) {
+          return new Response("invalid room id", { status: 422 });
+        }
         if (srv.upgrade(req, { data: { room } })) return;
         return new Response("upgrade failed", { status: 500 });
       }

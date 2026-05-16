@@ -124,11 +124,9 @@ export class Rooms {
         evicted.push([id, s]);
       }
     }
-    await Promise.all(
-      evicted
-        .filter(([, s]) => s.dirty)
-        .map(([id, s]) => this.store.save(id, s)),
-    );
+    // Use flushIfDirty (not store.save) so the pending debounce timer is
+    // cancelled — otherwise a second write fires after eviction.
+    await Promise.all(evicted.map(([id]) => this.flushIfDirty(id)));
     return evicted.length;
   }
 }

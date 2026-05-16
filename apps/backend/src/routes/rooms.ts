@@ -41,6 +41,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
       for (const f of files) {
         if (!f.endsWith(".json")) continue;
         const id = f.slice(0, -5);
+        if (!validateRoomId(id)) continue;
         try {
           const raw = await readFile(join(storageDir, f), "utf8");
           const hdr = parseHeader(raw);

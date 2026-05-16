@@ -84,5 +84,21 @@ export function parseFull(raw: string): PersistedEnvelope {
   ) {
     throw new Error("malformed envelope");
   }
-  return j as PersistedEnvelope;
+  // Backfill optional header fields so the returned envelope is fully typed
+  // even for legacy files that pre-date strict header validation.
+  return {
+    schemaVersion: j.schemaVersion,
+    roomId: j.roomId,
+    version: j.version,
+    lastTouched:
+      typeof j.lastTouched === "string"
+        ? j.lastTouched
+        : new Date().toISOString(),
+    elementCount:
+      typeof j.elementCount === "number"
+        ? j.elementCount
+        : j.canvas.nodes.length + j.canvas.edges.length + j.canvas.groups.length,
+    canvas: j.canvas,
+    prompts: j.prompts,
+  };
 }

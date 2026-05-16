@@ -81,6 +81,18 @@ describe("GET /api/rooms", () => {
     const body = (await res.json()) as { rooms: Array<{ id: string }> };
     expect(body.rooms.map((r) => r.id)).toEqual(["good"]);
   });
+
+  test("ignores filenames that fail validateRoomId", async () => {
+    // Filenames containing chars outside [a-zA-Z0-9_-] must be skipped before
+    // any read attempt — guards against accidental path-traversal listings.
+    writeFileSync(join(dir, "bad name.json"), "{}", "utf8");
+    writeFileSync(join(dir, "with!bang.json"), "{}", "utf8");
+    seedRoom("ok", () => {});
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(new Request("http://localhost/api/rooms"));
+    const body = (await res.json()) as { rooms: Array<{ id: string }> };
+    expect(body.rooms.map((r) => r.id)).toEqual(["ok"]);
+  });
 });
 
 describe("POST /api/rooms/:id/archive", () => {

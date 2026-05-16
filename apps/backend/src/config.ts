@@ -98,3 +98,9 @@ export const config = new Proxy({} as ReturnType<typeof getConfig>, {
     return _cache[k as keyof ReturnType<typeof getConfig>];
   },
 });
+
+// Test-only: drop the cached config so the next read re-evaluates env vars.
+// Не вызывать в production-коде.
+export function __resetConfigForTests(): void {
+  _cache = null;
+}
