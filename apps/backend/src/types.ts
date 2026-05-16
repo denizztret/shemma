@@ -37,7 +37,9 @@ export type RoomState = {
   didrawIndex: Map<string, string>;
 };
 
-export type WsClientMessage = { kind: "hello"; lastVersion: number };
+export type WsClientMessage =
+  | { kind: "hello"; lastVersion: number }
+  | { kind: "user-change"; changes: StoreChangeBatch; clientOpId?: string };
 
 export type WsMessage =
   | { kind: "hello"; version: number }

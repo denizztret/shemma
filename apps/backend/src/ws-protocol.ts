@@ -1,4 +1,31 @@
+import type { StoreChangeBatch, TLRecord } from "./store-types";
 import type { RoomState, WsClientMessage, WsMessage } from "./types";
+
+// Validate that a parsed JSON value matches StoreChangeBatch shape minimally:
+// added/updated/removed are plain objects (record-by-id). Values themselves
+// stay opaque — server treats records as JSON black-boxes (frontend owns the
+// tldraw schema). Returns null on shape mismatch.
+function parseStoreChangeBatch(value: unknown): StoreChangeBatch | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as { added?: unknown; updated?: unknown; removed?: unknown };
+  const a = v.added;
+  const u = v.updated;
+  const r = v.removed;
+  if (!a || typeof a !== "object" || Array.isArray(a)) return null;
+  if (!u || typeof u !== "object" || Array.isArray(u)) return null;
+  if (!r || typeof r !== "object" || Array.isArray(r)) return null;
+  // Updated values must each be a 2-tuple [old, new]. Other entries are
+  // accepted opaquely (the server already treats TLRecord as JSON).
+  for (const id in u as Record<string, unknown>) {
+    const pair = (u as Record<string, unknown>)[id];
+    if (!Array.isArray(pair) || pair.length !== 2) return null;
+  }
+  return {
+    added: a as Record<string, TLRecord>,
+    updated: u as Record<string, [TLRecord, TLRecord]>,
+    removed: r as Record<string, TLRecord>,
+  };
+}
 
 // Parse client → server WS frame. Returns null on malformed input so callers
 // can silently ignore (server must never crash on garbage).
@@ -20,13 +47,25 @@ export function parseClientMessage(
     return null;
   }
   if (!parsed || typeof parsed !== "object") return null;
-  const obj = parsed as { kind?: unknown; lastVersion?: unknown };
+  const obj = parsed as {
+    kind?: unknown;
+    lastVersion?: unknown;
+    changes?: unknown;
+    clientOpId?: unknown;
+  };
   if (
     obj.kind === "hello" &&
     typeof obj.lastVersion === "number" &&
     Number.isFinite(obj.lastVersion)
   ) {
     return { kind: "hello", lastVersion: obj.lastVersion };
+  }
+  if (obj.kind === "user-change") {
+    const changes = parseStoreChangeBatch(obj.changes);
+    if (!changes) return null;
+    const clientOpId =
+      typeof obj.clientOpId === "string" ? obj.clientOpId : undefined;
+    return { kind: "user-change", changes, clientOpId };
   }
   return null;
 }
