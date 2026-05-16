@@ -7,6 +7,26 @@ import type { RoomStore } from "./rooms";
 import { rebuildDidrawIndex } from "./store-ops";
 import type { RoomId, RoomState } from "./types";
 
+/**
+ * Atomic file write: пишем в `<file>.tmp` и переименовываем в `<file>`.
+ * `rename` атомарен на POSIX — частично записанный файл не виден консьюмерам.
+ * При ошибке записи попытаемся удалить tmp, чтобы не оставлять мусор.
+ */
+async function writeAtomic(file: string, content: string): Promise<void> {
+  const tmp = `${file}.tmp`;
+  try {
+    await fs.writeFile(tmp, content, "utf8");
+    await fs.rename(tmp, file);
+  } catch (e) {
+    try {
+      await fs.unlink(tmp);
+    } catch {
+      // ignore: tmp может не существовать
+    }
+    throw e;
+  }
+}
+
 export class FilePersistence implements RoomStore {
   // pending хранит и timer, и сами данные — без этого flushAll не сможет записать debounce'нутые состояния
   private pending = new Map<
@@ -31,16 +51,27 @@ export class FilePersistence implements RoomStore {
       throw e;
     }
     const header = parseHeader(raw);
-    // v2/v1 → мигрируем в v3 в памяти. Phase 3.0 Task 11 добавит .v2.bak + rewrite на диск.
-    if (header?.schemaVersion === 2 || (header as { schemaVersion?: number } | null)?.schemaVersion === 1) {
+    const schemaVersion =
+      header?.schemaVersion ??
+      ((): number | undefined => {
+        try {
+          return (JSON.parse(raw) as { schemaVersion?: number }).schemaVersion;
+        } catch {
+          return undefined;
+        }
+      })();
+    // v2/v1 envelope → migrate to v3, backup original as .v2.bak, atomic rewrite v3.
+    if (schemaVersion === 2 || schemaVersion === 1) {
       const v2 = parseV2OrThrow(raw);
       const v3 = migrateV2ToV3(v2 as Parameters<typeof migrateV2ToV3>[0]);
       const backupPath = `${file}.v2.bak`;
+      // Backup ДО переименования: если backup уже есть (повторный load после crash),
+      // не перезатираем его. rename(file → backup) удаляет file атомарно.
       if (!existsSync(backupPath)) {
         try {
           await fs.rename(file, backupPath);
         } catch {
-          // best-effort: если backup не получился (concurrent rename, FS-error) — продолжаем
+          // best-effort: concurrent rename / FS error — пропускаем
         }
       }
       const state: RoomState = {
@@ -52,12 +83,11 @@ export class FilePersistence implements RoomStore {
         lastTouched: Date.now(),
         didrawIndex: rebuildDidrawIndex(v3.store),
       };
-      // Atomic rewrite as v3 — best-effort. Не критично для load: пусть дебаунс/flush сохранят.
       try {
-        await fs.writeFile(file, serialize(id, state), "utf8");
+        await writeAtomic(file, serialize(id, state));
         state.dirty = false;
       } catch {
-        // оставляем dirty=true; следующий flush допишет
+        // оставляем dirty=true; следующий flush допишет v3 на диск
       }
       return state;
     }
@@ -74,7 +104,7 @@ export class FilePersistence implements RoomStore {
   }
 
   async save(id: RoomId, s: RoomState): Promise<void> {
-    await fs.writeFile(this.pathFor(id), serialize(id, s), "utf8");
+    await writeAtomic(this.pathFor(id), serialize(id, s));
   }
 
   /**
