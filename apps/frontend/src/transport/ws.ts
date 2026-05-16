@@ -6,19 +6,18 @@ export type AiActivity = {
   startedAt: number;
 };
 
-// biome-ignore lint/suspicious/noExplicitAny: patch ops are opaque backend schema
-type AnyOps = any[];
-
 export type PatchFrame = {
   kind: "patch";
   source: "ai" | "user";
-  ops: AnyOps;
+  // biome-ignore lint/suspicious/noExplicitAny: patch ops are opaque backend schema
+  ops: any[];
   version: number;
   originClientId?: string;
 };
 
 export type OpLogEntry = {
-  ops: AnyOps;
+  // biome-ignore lint/suspicious/noExplicitAny: patch ops are opaque backend schema
+  ops: any[];
   source: "ai" | "user";
   version: number;
   at: number;
@@ -78,28 +77,41 @@ export function openWs(handlers: {
     };
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data as string) as WsMessage;
-      if (m.kind === "patch") {
-        handlers.onPatch?.(m);
-        if (m.version > lastReceivedVersion) lastReceivedVersion = m.version;
-      } else if (m.kind === "sync-ack") {
-        if (m.version > lastReceivedVersion) lastReceivedVersion = m.version;
-      } else if (m.kind === "replay") {
-        for (const entry of m.ops) dispatchEntry(entry);
-        if (m.version > lastReceivedVersion) lastReceivedVersion = m.version;
-      } else if (m.kind === "truncated") {
-        handlers.onTruncated?.();
-        if (m.version > lastReceivedVersion) lastReceivedVersion = m.version;
-      } else if (m.kind === "prompt-created") {
-        handlers.onPromptCreated?.(m);
-      } else if (m.kind === "prompt-resolved") {
-        handlers.onPromptResolved?.(m);
-      } else if (m.kind === "prompt-removed") {
-        handlers.onPromptRemoved?.(m.ids);
-      } else if (m.kind === "ai-activity") {
-        handlers.onAiActivity?.(m.activity);
+      // Track high-water-mark version for any frame that carries one (except
+      // the legacy initial `hello`, which is intentionally ignored — initial
+      // state already came through GET /api/state on App mount).
+      if (
+        m.kind !== "hello" &&
+        "version" in m &&
+        m.version > lastReceivedVersion
+      ) {
+        lastReceivedVersion = m.version;
       }
-      // Legacy `{kind:"hello", version}` is intentionally ignored: initial
-      // state already came through GET /api/state on App mount.
+      switch (m.kind) {
+        case "patch":
+          handlers.onPatch?.(m);
+          break;
+        case "replay":
+          for (const entry of m.ops) dispatchEntry(entry);
+          break;
+        case "truncated":
+          handlers.onTruncated?.();
+          break;
+        case "prompt-created":
+          handlers.onPromptCreated?.(m);
+          break;
+        case "prompt-resolved":
+          handlers.onPromptResolved?.(m);
+          break;
+        case "prompt-removed":
+          handlers.onPromptRemoved?.(m.ids);
+          break;
+        case "ai-activity":
+          handlers.onAiActivity?.(m.activity);
+          break;
+        // "sync-ack" and legacy "hello": no handler side-effect beyond the
+        // version-tracking above.
+      }
     };
     ws.onclose = () => {
       if (stopped) return;
