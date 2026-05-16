@@ -69,6 +69,9 @@ function nodeToCompact(canvas: CanvasState, n: Node): ElementCompact {
   return out;
 }
 
+const DEFAULT_IN_VIEW_LIMIT = 30;
+const RECENT_OPS_LIMIT = 20;
+
 function summarizeOp(e: OpLogEntry): string {
   const counts = { add: 0, update: 0, delete: 0 } as Record<string, number>;
   for (const op of e.ops) counts[op.op] = (counts[op.op] ?? 0) + 1;
@@ -84,7 +87,7 @@ export function buildContext(
   opts: { viewport: Viewport; selection?: string[]; limit?: number; since?: number } = { viewport: null },
 ): ContextResponse {
   const canvas = room.canvas;
-  const limit = opts.limit ?? 30;
+  const limit = opts.limit ?? DEFAULT_IN_VIEW_LIMIT;
   const vp = opts.viewport;
   const since = opts.since;
 
@@ -113,22 +116,20 @@ export function buildContext(
   const visible: Node[] = vp ? canvas.nodes.filter((n) => inViewport(n, vp)) : canvas.nodes;
   const inViewSliced = visible.slice(0, limit);
 
-  // Build selection compacts
+  // Selection can come in as either raw shape id or meta.name; match on both.
   const selectionSet = new Set(opts.selection ?? []);
-  const selection = canvas.nodes
-    .filter((n) => selectionSet.has(n.id) || (n.meta?.name && selectionSet.has(n.meta.name as string)))
-    .map((n) => nodeToCompact(canvas, n));
+  const isSelected = (n: Node): boolean =>
+    selectionSet.has(n.id) ||
+    (typeof n.meta?.name === "string" && selectionSet.has(n.meta.name));
+  const selectedNodes = canvas.nodes.filter(isSelected);
+  const selection = selectedNodes.map((n) => nodeToCompact(canvas, n));
 
-  // Collect IDs visible in view (raw shape IDs for edge matching)
+  // Build connections — only for edges touching inView or selection nodes.
   const inViewShapeIds = new Set<string>(inViewSliced.map((n) => n.id));
-
-  // Build connections — only for edges touching inView or selection nodes
-  const selectionShapeIds = new Set(
-    canvas.nodes
-      .filter((n) => selectionSet.has(n.id) || (n.meta?.name && selectionSet.has(n.meta.name as string)))
-      .map((n) => n.id),
-  );
-  const relevantShapeIds = new Set([...inViewShapeIds, ...selectionShapeIds]);
+  const relevantShapeIds = new Set([
+    ...inViewShapeIds,
+    ...selectedNodes.map((n) => n.id),
+  ]);
 
   const connections: ConnectionCompact[] = canvas.edges
     .filter((e) => e.from.kind === "node" && e.to.kind === "node")
@@ -151,7 +152,7 @@ export function buildContext(
   // Recent ops — filtered by since if provided
   const filteredOps = since !== undefined ? room.opLog.filter((e) => e.version > since) : room.opLog;
   const recentOps: OpSummary[] = filteredOps
-    .slice(-20)
+    .slice(-RECENT_OPS_LIMIT)
     .map((e) => ({ version: e.version, source: e.source, summary: summarizeOp(e) }));
 
   // Offscreen summary — only when viewport is set and some nodes are outside
