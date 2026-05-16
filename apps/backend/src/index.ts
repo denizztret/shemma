@@ -4,6 +4,7 @@ import { EMBEDDED_ASSETS } from "./embedded-assets";
 import { FilePersistence } from "./persistence";
 import { type RoomStore, Rooms, validateRoomId } from "./rooms";
 import { aiRoutes } from "./routes/ai";
+import { contextRoutes } from "./routes/context";
 import { domainRoutes } from "./routes/domain";
 import { healthRoutes } from "./routes/health";
 import { layoutRoutes } from "./routes/layout";
@@ -13,9 +14,9 @@ import { roomsRoutes } from "./routes/rooms";
 import { stateRoutes } from "./routes/state";
 import { versionRoutes } from "./routes/version";
 import { viewportRoutes } from "./routes/viewport";
-import { contextRoutes } from "./routes/context";
 import { DEFAULT_ROOM, type RoomState } from "./types";
 import { type Sock, WsHub } from "./ws";
+import { handleHello, parseClientMessage } from "./ws-protocol";
 
 export type AppOpts = {
   inMemory?: boolean;
@@ -68,7 +69,7 @@ async function tryServeFrontend(pathname: string): Promise<Response | null> {
 }
 
 export async function startServer(opts: AppOpts = {}) {
-  const { app, bus, persistence } = makeApp(opts);
+  const { app, bus, persistence, rooms } = makeApp(opts);
   const server = Bun.serve({
     port: opts.port ?? config.port,
     fetch: async (req, srv) => {
@@ -94,7 +95,16 @@ export async function startServer(opts: AppOpts = {}) {
         bus.attach(room, ws as Sock);
         ws.send(JSON.stringify({ kind: "hello", version: 0 }));
       },
-      message() {},
+      async message(ws, raw) {
+        const { room } = ws.data as { room: string };
+        const msg = parseClientMessage(raw);
+        if (!msg) return; // malformed → ignore (must not crash)
+        if (msg.kind === "hello") {
+          const r = await rooms.get(room);
+          const reply = handleHello(r, msg.lastVersion);
+          ws.send(JSON.stringify(reply));
+        }
+      },
       close(ws) {
         const { room } = ws.data as { room: string };
         bus.detach(room, ws as Sock);

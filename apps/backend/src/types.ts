@@ -113,8 +113,13 @@ export type RoomState = {
   aiActivity?: AiActivity;
 };
 
+export type WsClientMessage = { kind: "hello"; lastVersion: number };
+
 export type WsMessage =
-  | { kind: "hello"; version: number }
+  | { kind: "hello"; version: number } // legacy initial — sent on open
+  | { kind: "sync-ack"; version: number }
+  | { kind: "replay"; ops: OpLogEntry[]; version: number }
+  | { kind: "truncated"; version: number }
   | {
       kind: "patch";
       source: "ai" | "user";
