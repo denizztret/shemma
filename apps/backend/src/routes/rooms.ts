@@ -215,15 +215,9 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
       await rooms.evict(targetId);
     }
 
-    const newEnv = {
-      schemaVersion: env.schemaVersion,
-      roomId: targetId,
-      version: env.version,
-      lastTouched: env.lastTouched,
-      elementCount: env.elementCount,
-      canvas: env.canvas,
-      prompts: env.prompts,
-    };
+    // Drop the source opLog by design: import resets history.
+    const { opLog: _drop, ...rest } = env;
+    const newEnv = { ...rest, roomId: targetId };
     await writeFile(dstPath, JSON.stringify(newEnv, null, 2), "utf8");
 
     return c.json({ ok: true, roomId: targetId, version: env.version });
