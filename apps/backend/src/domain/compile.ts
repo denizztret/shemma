@@ -1,228 +1,338 @@
+// apps/backend/src/domain/compile.ts
+//
+// Phase 3.0: compile DomainAction[] → StoreChangeBatch поверх TLStoreSnapshot.
+// Cross-action coherence: staging store + index пересобираются после каждой
+// action, чтобы action N мог ссылаться на shapes/groups, созданные в action N-1.
+// `layout` — no-op на этом уровне (ELK orchestrate'ится routes/domain.ts).
+
 import { connectionPreset, rolePreset, type Role } from "@didraw/domain";
-import type { CanvasState, Edge, Group, Node, NodeStyle, PatchOp } from "../types";
+import { applyStoreChanges, cascadeDeleteShape, rebuildDidrawIndex } from "../store-ops";
+import type { StoreChangeBatch, TLRecord, TLStoreSnapshot } from "../store-types";
 import type { DomainAction, ElementId } from "./types";
 
-export function nameToShapeId(name: string): string {
-  // Phase 2.1 §3.5: deterministic shape:e_<slug(name)>.
-  return `shape:e_${name}`;
+function rand(): string {
+  return Math.random().toString(36).slice(2, 12);
+}
+function shapeId(): string {
+  return `shape:${rand()}`;
+}
+function bindingId(): string {
+  return `binding:${rand()}`;
 }
 
-type WorkingCanvas = {
-  nodes: Map<string, Node>;
-  groups: Map<string, Group>;
-  edges: Map<string, Edge>;
-};
+function richText(label: string): unknown {
+  return label
+    ? { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: label }] }] }
+    : { type: "doc", content: [{ type: "paragraph" }] };
+}
 
-function snapshotCanvas(c: CanvasState): WorkingCanvas {
+function mergeBatch(a: StoreChangeBatch, b: StoreChangeBatch): StoreChangeBatch {
   return {
-    nodes: new Map(c.nodes.map((n) => [n.id, n])),
-    groups: new Map(c.groups.map((g) => [g.id, g])),
-    edges: new Map(c.edges.map((e) => [e.id, e])),
+    added: { ...a.added, ...b.added },
+    updated: { ...a.updated, ...b.updated },
+    removed: { ...a.removed, ...b.removed },
   };
-}
-
-function findNodeByName(c: WorkingCanvas, name: string): Node | undefined {
-  for (const n of c.nodes.values()) if (n.meta?.name === name) return n;
-  return undefined;
-}
-
-function findGroupByName(c: WorkingCanvas, name: string): Group | undefined {
-  for (const g of c.groups.values()) {
-    const nm = (g as { meta?: { name?: string } }).meta?.name;
-    if (nm === name || g.label === name) return g;
-  }
-  return undefined;
-}
-
-function findContainerOf(c: WorkingCanvas, shapeId: string): Group | undefined {
-  for (const g of c.groups.values()) {
-    if (g.children.includes(shapeId)) return g;
-  }
-  return undefined;
-}
-
-function nextEdgeId(c: WorkingCanvas): string {
-  let n = c.edges.size;
-  while (c.edges.has(`shape:c_${n}`)) n++;
-  return `shape:c_${n}`;
-}
-
-function nextNoteName(wc: WorkingCanvas): string {
-  let n = wc.nodes.size;
-  while (wc.nodes.has(nameToShapeId(`note-${n}`))) n++;
-  return `note-${n}`;
 }
 
 export function compile(
   actions: DomainAction[],
-  canvas: CanvasState,
-): { ops: PatchOp[]; elementIds: (ElementId | undefined)[] } {
-  const ops: PatchOp[] = [];
+  store: TLStoreSnapshot,
+  index: Map<string, string>,
+): { batch: StoreChangeBatch; elementIds: (ElementId | undefined)[] } {
+  let stagingStore: TLStoreSnapshot = store;
+  let stagingIndex: Map<string, string> = new Map(index);
+  let batch: StoreChangeBatch = { added: {}, updated: {}, removed: {} };
   const elementIds: (ElementId | undefined)[] = [];
-  const wc = snapshotCanvas(canvas);
+
+  const stage = (sub: StoreChangeBatch) => {
+    batch = mergeBatch(batch, sub);
+    stagingStore = applyStoreChanges(stagingStore, sub);
+    stagingIndex = rebuildDidrawIndex(stagingStore);
+  };
 
   for (const a of actions) {
     switch (a.kind) {
       case "define": {
-        const sid = nameToShapeId(a.name);
-        const existing = wc.nodes.get(sid);
+        const existingId = stagingIndex.get(a.name);
         const preset = rolePreset(a.role as Role);
-        if (existing) {
-          // Upsert: don't clobber pinned/position/styleOwnedBy; only update label/meta safe fields.
-          const set: Partial<Node> = {};
-          if (a.label !== undefined) set.label = a.label;
-          // Build new meta without touching user-owned fields (pinned, position, styleOwnedBy).
-          const existingMeta = existing.meta ?? {};
-          const { pinned, position, styleOwnedBy, ...restMeta } = existingMeta as {
+        if (existingId) {
+          const old = stagingStore.store[existingId];
+          // preserve user-owned meta (pinned/position/styleOwnedBy)
+          const oldMeta = (old.meta ?? {}) as Record<string, unknown>;
+          const { pinned, position, styleOwnedBy, ...rest } = oldMeta as {
             pinned?: unknown;
             position?: unknown;
             styleOwnedBy?: unknown;
             [key: string]: unknown;
           };
-          set.meta = { ...restMeta, name: a.name, role: a.role, ...(a.meta ?? {}) };
-          ops.push({ op: "update", target: "node", id: sid, set });
-          wc.nodes.set(sid, { ...existing, ...set, meta: set.meta });
-          elementIds.push(a.name);
-          // Move between containers if `in` changed.
-          if (a.in !== undefined) {
-            const newContainer = findGroupByName(wc, a.in);
-            const oldContainer = findContainerOf(wc, sid);
-            if (oldContainer && oldContainer !== newContainer) {
-              const oldKids = oldContainer.children.filter((c) => c !== sid);
-              ops.push({ op: "update", target: "group", id: oldContainer.id, set: { children: oldKids } });
-              wc.groups.set(oldContainer.id, { ...oldContainer, children: oldKids });
-            }
-            if (newContainer && (!oldContainer || oldContainer.id !== newContainer.id)) {
-              const newKids = [...newContainer.children, sid];
-              ops.push({ op: "update", target: "group", id: newContainer.id, set: { children: newKids } });
-              wc.groups.set(newContainer.id, { ...newContainer, children: newKids });
-            }
+          const newMeta: Record<string, unknown> = {
+            ...rest,
+            didrawName: a.name,
+            role: a.role,
+            ...(a.meta ?? {}),
+          };
+          if (pinned !== undefined) newMeta.pinned = pinned;
+          if (position !== undefined) newMeta.position = position;
+          if (styleOwnedBy !== undefined) newMeta.styleOwnedBy = styleOwnedBy;
+          const newR: TLRecord = { ...old, meta: newMeta };
+          if (a.label !== undefined) {
+            (newR as { props?: Record<string, unknown> }).props = {
+              ...((old.props as Record<string, unknown>) ?? {}),
+              richText: richText(a.label),
+            };
           }
+          stage({ added: {}, updated: { [existingId]: [old, newR] }, removed: {} });
+          elementIds.push(a.name);
         } else {
-          // Map "frame" kind (container roles) to "rect" — Node.kind doesn't include "frame".
-          const nodeKind = preset.kind === "frame" ? "rect" : preset.kind;
-          const node: Node = {
-            id: sid,
-            kind: nodeKind,
+          const id = shapeId();
+          const shape: TLRecord = {
+            id,
+            typeName: "shape",
+            type: "geo",
             x: 0,
             y: 0,
-            w: preset.defaultW,
-            h: preset.defaultH,
-            label: a.label ?? a.name,
-            style: preset.style as NodeStyle,
-            meta: { name: a.name, role: a.role, ...(a.meta ?? {}) },
-          };
-          ops.push({ op: "add", target: "node", value: node });
-          wc.nodes.set(sid, node);
-          if (a.in !== undefined) {
-            const g = findGroupByName(wc, a.in);
-            if (g) {
-              const kids = [...g.children, sid];
-              ops.push({ op: "update", target: "group", id: g.id, set: { children: kids } });
-              wc.groups.set(g.id, { ...g, children: kids });
-            }
-          }
+            parentId: "page:page",
+            index: "a1",
+            isLocked: false,
+            opacity: 1,
+            rotation: 0,
+            props: {
+              w: preset.defaultW,
+              h: preset.defaultH,
+              geo: "rectangle",
+              color: "black",
+              labelColor: "black",
+              fill: "none",
+              dash: "draw",
+              size: "m",
+              font: "draw",
+              align: "middle",
+              verticalAlign: "middle",
+              growY: 0,
+              url: "",
+              scale: 1,
+              richText: richText(a.label ?? a.name),
+            },
+            meta: { didrawName: a.name, role: a.role, ...(a.meta ?? {}) },
+          } as TLRecord;
+          stage({ added: { [id]: shape }, updated: {}, removed: {} });
           elementIds.push(a.name);
         }
         break;
       }
       case "connect": {
-        const fromN = findNodeByName(wc, a.from);
-        const toN = findNodeByName(wc, a.to);
-        // validate.ts must catch missing refs before compile reaches this point.
-        // If we got here with a missing endpoint, it's a bug — fail loud, not silent.
-        if (!fromN) throw new Error(`compile: connect.from "${a.from}" not found (validate did not catch)`);
-        if (!toN) throw new Error(`compile: connect.to "${a.to}" not found (validate did not catch)`);
+        const fromId = stagingIndex.get(a.from);
+        const toId = stagingIndex.get(a.to);
+        if (!fromId) throw new Error(`compile.connect: missing endpoint "from=${a.from}"`);
+        if (!toId) throw new Error(`compile.connect: missing endpoint "to=${a.to}"`);
+        const aid = shapeId();
         const ck = a.connectionKind ?? "sync";
         const preset = connectionPreset(ck);
-        const eid = nextEdgeId(wc);
-        const edge: Edge = {
-          id: eid,
-          from: { kind: "node", id: fromN.id },
-          to: { kind: "node", id: toN.id },
-          label: a.label ?? preset.defaultLabel,
-          style: { dashed: preset.dashed, arrow: preset.arrow },
-          meta: { kind: ck, ...(a.meta ?? {}) },
-        };
-        ops.push({ op: "add", target: "edge", value: edge });
-        wc.edges.set(eid, edge);
-        elementIds.push(eid);
+        const arrow: TLRecord = {
+          id: aid,
+          typeName: "shape",
+          type: "arrow",
+          x: 0,
+          y: 0,
+          parentId: "page:page",
+          index: "a1",
+          isLocked: false,
+          opacity: 1,
+          rotation: 0,
+          props: {
+            color: "black",
+            labelColor: "black",
+            fill: "none",
+            dash: preset.dashed ? "dashed" : "draw",
+            size: "m",
+            arrowheadStart: "none",
+            arrowheadEnd: "arrow",
+            font: "draw",
+            start: { x: 0, y: 0 },
+            end: { x: 0, y: 0 },
+            bend: 0,
+            text: "",
+            labelPosition: 0.5,
+            scale: 1,
+            richText: richText(a.label ?? preset.defaultLabel ?? ""),
+          },
+          meta: { connectionKind: ck, ...(a.meta ?? {}) },
+        } as TLRecord;
+        const b1: TLRecord = {
+          id: bindingId(),
+          typeName: "binding",
+          type: "arrow",
+          fromId: aid,
+          toId: fromId,
+          props: {
+            terminal: "start",
+            normalizedAnchor: { x: 0.5, y: 0.5 },
+            isExact: false,
+            isPrecise: false,
+          },
+          meta: {},
+        } as TLRecord;
+        const b2: TLRecord = {
+          id: bindingId(),
+          typeName: "binding",
+          type: "arrow",
+          fromId: aid,
+          toId: toId,
+          props: {
+            terminal: "end",
+            normalizedAnchor: { x: 0.5, y: 0.5 },
+            isExact: false,
+            isPrecise: false,
+          },
+          meta: {},
+        } as TLRecord;
+        stage({
+          added: { [aid]: arrow, [b1.id]: b1, [b2.id]: b2 },
+          updated: {},
+          removed: {},
+        });
+        elementIds.push(aid);
         break;
       }
       case "group": {
-        const gid = nameToShapeId(a.name);
-        const childIds = a.ids.map((nm) => {
-          const node = findNodeByName(wc, nm);
-          return node ? node.id : nameToShapeId(nm);
-        });
-        const preset = rolePreset(a.as as Role);
-        const grp: Group = {
-          id: gid,
-          kind: "frame",
-          children: childIds,
-          label: a.label ?? a.name,
-          style: { fill: preset.style.fill, stroke: preset.style.stroke },
-        };
-        // Store role/name in group meta (extend Group with meta field via cast since type doesn't include it).
-        (grp as { meta?: Record<string, unknown> }).meta = { name: a.name, role: a.as };
-        ops.push({ op: "add", target: "group", value: grp });
-        wc.groups.set(gid, grp);
+        const fid = shapeId();
+        const frame: TLRecord = {
+          id: fid,
+          typeName: "shape",
+          type: "frame",
+          x: 0,
+          y: 0,
+          parentId: "page:page",
+          index: "a1",
+          isLocked: false,
+          opacity: 1,
+          rotation: 0,
+          props: { w: 400, h: 300, name: a.label ?? a.name },
+          meta: { didrawName: a.name, didrawIsGroup: true, role: a.as },
+        } as TLRecord;
+        const sub: StoreChangeBatch = { added: { [fid]: frame }, updated: {}, removed: {} };
+        for (const memberName of a.ids) {
+          const mid = stagingIndex.get(memberName);
+          if (!mid) continue;
+          const old = stagingStore.store[mid];
+          sub.updated[mid] = [old, { ...old, parentId: fid }];
+        }
+        stage(sub);
         elementIds.push(a.name);
         break;
       }
       case "note": {
-        const name = a.name ?? nextNoteName(wc);
-        const sid = nameToShapeId(name);
-        const preset = rolePreset("note");
-        const node: Node = {
-          id: sid,
-          kind: "sticky",
+        const name = a.name ?? `note-${rand()}`;
+        const id = shapeId();
+        const note: TLRecord = {
+          id,
+          typeName: "shape",
+          type: "note",
           x: 0,
           y: 0,
-          w: preset.defaultW,
-          h: preset.defaultH,
-          label: a.text,
-          style: preset.style as NodeStyle,
-          meta: { name, role: "note" },
-        };
-        ops.push({ op: "add", target: "node", value: node });
-        wc.nodes.set(sid, node);
+          parentId: "page:page",
+          index: "a1",
+          isLocked: false,
+          opacity: 1,
+          rotation: 0,
+          props: {
+            color: "yellow",
+            size: "m",
+            font: "draw",
+            align: "middle",
+            verticalAlign: "middle",
+            growY: 0,
+            fontSizeAdjustment: 0,
+            url: "",
+            scale: 1,
+            richText: richText(a.text),
+          },
+          meta: { didrawName: name, role: "note" },
+        } as TLRecord;
+        const sub: StoreChangeBatch = { added: { [id]: note }, updated: {}, removed: {} };
         if (a.about) {
-          const target = findNodeByName(wc, a.about);
-          if (target) {
-            const eid = nextEdgeId(wc);
-            const edge: Edge = {
-              id: eid,
-              from: { kind: "node", id: sid },
-              to: { kind: "node", id: target.id },
-              style: { dashed: true, arrow: "to" },
-              meta: { kind: "dep", noteBinding: true },
-            };
-            ops.push({ op: "add", target: "edge", value: edge });
-            wc.edges.set(eid, edge);
+          const targetId = stagingIndex.get(a.about);
+          if (targetId) {
+            const aid = shapeId();
+            const arrow: TLRecord = {
+              id: aid,
+              typeName: "shape",
+              type: "arrow",
+              x: 0,
+              y: 0,
+              parentId: "page:page",
+              index: "a1",
+              isLocked: false,
+              opacity: 1,
+              rotation: 0,
+              props: {
+                color: "black",
+                labelColor: "black",
+                fill: "none",
+                dash: "dashed",
+                size: "m",
+                arrowheadStart: "none",
+                arrowheadEnd: "arrow",
+                font: "draw",
+                start: { x: 0, y: 0 },
+                end: { x: 0, y: 0 },
+                bend: 0,
+                text: "",
+                labelPosition: 0.5,
+                scale: 1,
+                richText: richText(""),
+              },
+              meta: { connectionKind: "dep", noteBinding: true },
+            } as TLRecord;
+            const b1: TLRecord = {
+              id: bindingId(),
+              typeName: "binding",
+              type: "arrow",
+              fromId: aid,
+              toId: id,
+              props: {
+                terminal: "start",
+                normalizedAnchor: { x: 0.5, y: 0.5 },
+                isExact: false,
+                isPrecise: false,
+              },
+              meta: {},
+            } as TLRecord;
+            const b2: TLRecord = {
+              id: bindingId(),
+              typeName: "binding",
+              type: "arrow",
+              fromId: aid,
+              toId: targetId,
+              props: {
+                terminal: "end",
+                normalizedAnchor: { x: 0.5, y: 0.5 },
+                isExact: false,
+                isPrecise: false,
+              },
+              meta: {},
+            } as TLRecord;
+            sub.added[aid] = arrow;
+            sub.added[b1.id] = b1;
+            sub.added[b2.id] = b2;
           }
         }
+        stage(sub);
         elementIds.push(name);
         break;
       }
-      case "layout":
-        // No PatchOps from layout action itself — orchestrator runs ELK in routes/domain.ts.
+      case "layout": {
+        // No-op в compile. ELK orchestrate'ится routes/domain.ts через domain/layout.ts.
         elementIds.push(undefined);
         break;
+      }
       case "delete": {
         const ids = "ids" in a ? a.ids : [a.id];
         for (const nm of ids) {
-          const node = findNodeByName(wc, nm);
-          if (node) {
-            ops.push({ op: "delete", target: "node", id: node.id });
-            wc.nodes.delete(node.id);
-            continue;
-          }
-          const grp = findGroupByName(wc, nm);
-          if (grp) {
-            ops.push({ op: "delete", target: "group", id: grp.id });
-            wc.groups.delete(grp.id);
-          }
+          const id = stagingIndex.get(nm);
+          if (!id) continue;
+          const sub = cascadeDeleteShape(stagingStore, id);
+          stage(sub);
         }
         elementIds.push(undefined);
         break;
@@ -230,5 +340,5 @@ export function compile(
     }
   }
 
-  return { ops, elementIds };
+  return { batch, elementIds };
 }
