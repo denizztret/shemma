@@ -58,7 +58,7 @@ Spec: docs/superpowers/specs/2026-05-16-di-draw-phase2-2-sync-hardening-design.m
 Start: Task 1
 ```
 
-Skill спавнит свежий subagent на каждую задачу. **Review policy: batched** (3-5 задач в блоке, потом spec+quality review одним проходом — см. memory `feedback-batched-reviews`). Финальный full code review — обязателен перед release commit.
+Skill спавнит свежий subagent на каждую задачу. **Review policy: phase-end only** — ни spec, ни quality review между задачами не делаем. Implementer-subagent коммитит каждую задачу, идём дальше. **В конце фазы** (после последней задачи плана): (1) `code-simplifier` agent проходит по diff'у фазы и упрощает, (2) затем единый full spec+quality review одним проходом, (3) fixes, (4) release commit + tag. См. memory `feedback-batched-reviews`.
 
 ## Debug tooling
 
