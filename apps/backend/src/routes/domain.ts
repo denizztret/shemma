@@ -258,11 +258,17 @@ export function domainRoutes(
           for (const g of room.canvas.groups) {
             const p = adjusted[g.id];
             if (!p) continue;
+            // DRW-004: postProcess стрипает w/h, поэтому w/h тянем напрямую
+            // из ELK output (lr.positions). Иначе Group остаётся с w=h=null.
+            const elkOut = lr.positions[g.id];
+            const set: Partial<typeof g> = { x: p.x, y: p.y };
+            if (elkOut?.w !== undefined) set.w = elkOut.w;
+            if (elkOut?.h !== undefined) set.h = elkOut.h;
             posOps.push({
               op: "update" as const,
               target: "group" as const,
               id: g.id,
-              set: { x: p.x, y: p.y },
+              set,
             });
           }
           for (const [eid, routing] of Object.entries(lr.edgeRouting)) {

@@ -159,6 +159,58 @@ export async function runLayout(
     }
   }
 
+  // DRW-003: ELK layered не учитывает pinned positions при placement новых
+  // (affected) nodes без edges к pinned — disconnected affected уезжает в (0,0)
+  // и после snap'а пересекается с pinned, которые тоже были placed near origin.
+  // Displace affected nodes которые overlap'ят с pinned bbox: ставим их справа
+  // за pinned bbox с y-стэккингом, чтобы каждый занял свою строку.
+  if (pinnedSet.size > 0) {
+    const COLLISION_SLACK = 10;
+    const NODE_SPACING_X = 40;
+    const NODE_SPACING_Y = 20;
+    const nodeBox = (id: string) => {
+      const p = positions[id];
+      if (!p) return null;
+      const n = canvas.nodes.find((x) => x.id === id);
+      return { x: p.x, y: p.y, w: n?.w ?? 120, h: n?.h ?? 60 };
+    };
+    const pinnedBoxes = [...pinnedSet]
+      .map((id) => nodeBox(id))
+      .filter((b): b is { x: number; y: number; w: number; h: number } => b !== null);
+    if (pinnedBoxes.length > 0) {
+      const pinnedRight = Math.max(...pinnedBoxes.map((b) => b.x + b.w));
+      const pinnedTop = Math.min(...pinnedBoxes.map((b) => b.y));
+      const overlapsAnyPinned = (b: { x: number; y: number; w: number; h: number }) =>
+        pinnedBoxes.some(
+          (pb) =>
+            !(
+              b.x + b.w + COLLISION_SLACK <= pb.x ||
+              pb.x + pb.w + COLLISION_SLACK <= b.x ||
+              b.y + b.h + COLLISION_SLACK <= pb.y ||
+              pb.y + pb.h + COLLISION_SLACK <= b.y
+            ),
+        );
+      // Affected = not in pinnedSet. Сортируем по id для детерминированной раскладки.
+      const affectedIds = canvas.nodes
+        .filter((n) => !pinnedSet.has(n.id))
+        .map((n) => n.id)
+        .sort();
+      let nextY = pinnedTop;
+      for (const aid of affectedIds) {
+        const box = nodeBox(aid);
+        if (!box) continue;
+        if (!overlapsAnyPinned(box)) continue;
+        // Сдвигаем affected node вправо за pinned bbox; y — стэк с верха pinned.
+        positions[aid] = {
+          ...positions[aid],
+          x: pinnedRight + NODE_SPACING_X,
+          y: nextY,
+        };
+        nextY += box.h + NODE_SPACING_Y;
+      }
+    }
+  }
+
   function sideOf(box: { x: number; y: number; w: number; h: number }, p: { x: number; y: number }): Side {
     const left = Math.abs(p.x - box.x);
     const right = Math.abs(p.x - (box.x + box.w));
