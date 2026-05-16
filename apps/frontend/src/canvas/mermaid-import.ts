@@ -1,143 +1,108 @@
-import { type Editor, type TLShape, renderPlaintextFromRichText } from "tldraw";
-import { fromShapeId } from "./id-prefix";
-import type { NodeValue, SimpleOp } from "./to-patch";
+import {
+  type Editor,
+  type TLShape,
+  type TLShapeId,
+  renderPlaintextFromRichText,
+} from "tldraw";
 
-type EdgeOp = {
-  op: "add";
-  target: "edge";
-  value: {
-    id: string;
-    from: { kind: "node"; id: string };
-    to: { kind: "node"; id: string };
-    label?: string;
-  };
-};
+// Phase 3.0: mermaid import пишет shapes напрямую в tldraw store через
+// createMermaidDiagram(editor, source). Эти мутации идут как source:'user' →
+// startStoreSync (transport/ws.ts) автоматически шлёт их батчем в backend.
+// Нет промежуточного "build ops → sendPatch" — store сам и есть транспортный
+// слой.
 
-/** Full op type produced by mermaid import (nodes + edges). */
-export type MermaidOp = SimpleOp | EdgeOp;
-
-// Lazy-load @tldraw/mermaid because it pulls in mermaid + heavy deps; only paid when user actually imports.
+// Lazy-load @tldraw/mermaid — pulls in mermaid + heavy deps; only paid когда
+// пользователь реально импортирует.
 async function loadMermaid() {
   return await import("@tldraw/mermaid");
 }
 
-function readLabel(editor: Editor, s: TLShape): string | undefined {
-  // biome-ignore lint/suspicious/noExplicitAny: tldraw shape props are not typed via public API
+function plaintextLabel(editor: Editor, s: TLShape): string | undefined {
+  // biome-ignore lint/suspicious/noExplicitAny: tldraw shape props not in public types
   const rt = (s as any).props?.richText;
   if (!rt) return undefined;
   const text = renderPlaintextFromRichText(editor, rt);
   return text || undefined;
 }
 
-function shapeToNodeValue(editor: Editor, s: TLShape): NodeValue | null {
-  if (s.type === "geo") {
-    // biome-ignore lint/suspicious/noExplicitAny: tldraw shape props are not typed via public API
-    const p = (s as any).props ?? {};
-    return {
-      id: fromShapeId(s.id),
-      kind: "rect",
-      x: s.x,
-      y: s.y,
-      w: p.w,
-      h: p.h,
-      label: readLabel(editor, s),
-    };
-  }
-  if (s.type === "note") {
-    return {
-      id: fromShapeId(s.id),
-      kind: "sticky",
-      x: s.x,
-      y: s.y,
-      label: readLabel(editor, s) ?? "",
-    };
-  }
-  if (s.type === "text") {
-    return {
-      id: fromShapeId(s.id),
-      kind: "text",
-      x: s.x,
-      y: s.y,
-      label: readLabel(editor, s) ?? "",
-    };
-  }
-  if (s.type === "line" || s.type === "draw") {
-    return { id: fromShapeId(s.id), kind: "freeform", x: s.x, y: s.y };
-  }
-  return null;
+/** Slugify shape label / type into a stable didrawName candidate. Same idea как
+ * у backend identifiers: lowercase, dash-separated, ascii-safe.
+ * Без коллизий: caller (importMermaid) дописывает индекс при дубликате. */
+function slugify(s: string): string {
+  return (
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "shape"
+  );
 }
 
+export type MermaidImportResult = {
+  ok: true;
+  shapeIds: TLShapeId[];
+};
+
 /**
- * Convert Mermaid source to patch ops for the di.draw backend.
- * Requires the live tldraw Editor (DOM-mounted) for createMermaidDiagram's layout pass.
+ * Импортировать Mermaid diagram в editor store. createMermaidDiagram мутирует
+ * store напрямую (добавляет shapes / arrow bindings); мы лишь:
+ *   1) запоминаем set'ы до/после, чтобы знать какие записи добавлены;
+ *   2) проставляем meta.didrawName на новых shapes (через updateShapes) —
+ *      backend rebuild'ит didrawIndex из этих имён;
+ *   3) даём caller'у список новых shape id (для zoom-to / debug).
  *
- * createMermaidDiagram adds shapes directly to the editor store (does not return a value).
- * We snapshot shape IDs before/after to derive the new ops.
- * Arrow connections are read via editor.getBindingsFromShape() (tldraw 5.x bindings API).
+ * Сами WS-фреймы шлёт startStoreSync — ничего вручную здесь не нужно.
  *
- * Throws if the source is invalid Mermaid.
+ * Throws MermaidDiagramError на невалидный source.
  */
-export async function mermaidToOps(
+export async function importMermaid(
   editor: Editor,
   source: string,
-): Promise<MermaidOp[]> {
+): Promise<MermaidImportResult> {
   const mod = await loadMermaid();
-  // tldraw 5.x: createMermaidDiagram(editor, text, options?) — mutates editor store directly
-  // biome-ignore lint/suspicious/noExplicitAny: dynamic import; createMermaidDiagram is not in our typings
+  // biome-ignore lint/suspicious/noExplicitAny: createMermaidDiagram не в public d.ts'ках
   const mermaidMod = mod as any;
 
-  // Snapshot existing shapes before import
-  const before = new Set(
-    editor.getCurrentPageShapes().map((s) => s.id as string),
+  const beforeIds = new Set<string>(
+    editor.getCurrentPageShapes().map((s) => s.id as unknown as string),
   );
 
-  // createMermaidDiagram mutates editor store; throws MermaidDiagramError on invalid input
   await mermaidMod.createMermaidDiagram(editor, source);
 
-  // Collect newly added shapes
   const after = editor.getCurrentPageShapes();
-  const newShapes = after.filter((s) => !before.has(s.id as string));
+  const newShapes = after.filter(
+    (s) => !beforeIds.has(s.id as unknown as string),
+  );
 
-  if (newShapes.length === 0) throw new Error("mermaid produced no shapes");
-
-  const ops: MermaidOp[] = [];
-  for (const s of newShapes) {
-    if (s.type === "arrow") {
-      // tldraw 5.x: arrow connections are stored as bindings, not in props
-      // biome-ignore lint/suspicious/noExplicitAny: binding record shape varies by diagram type
-      const bindings = editor.getBindingsFromShape(s, "arrow") as any[];
-      const startBinding = bindings.find((b) => b.props?.terminal === "start");
-      const endBinding = bindings.find((b) => b.props?.terminal === "end");
-
-      const fromId = startBinding
-        ? fromShapeId(startBinding.toId)
-        : `${fromShapeId(s.id)}-from`;
-      const toId = endBinding
-        ? fromShapeId(endBinding.toId)
-        : `${fromShapeId(s.id)}-to`;
-
-      // tldraw 5.x stores arrow labels in props.richText (ProseMirror doc),
-      // not props.text. Use the official extractor so multi-paragraph / marks
-      // round-trip cleanly.
-      const label = readLabel(editor, s);
-
-      ops.push({
-        op: "add",
-        target: "edge",
-        value: {
-          id: fromShapeId(s.id),
-          from: { kind: "node", id: fromId },
-          to: { kind: "node", id: toId },
-          label,
-        },
-      });
-      continue;
-    }
-    const nodeVal = shapeToNodeValue(editor, s);
-    if (nodeVal) {
-      ops.push({ op: "add", target: "node", value: nodeVal });
-    }
+  if (newShapes.length === 0) {
+    throw new Error("mermaid produced no shapes");
   }
 
-  return ops;
+  // Назначим meta.didrawName для добавленных shapes. Берём label / shape.type,
+  // дедуплицируем суффиксами -2, -3, … per-import.
+  const usedNames = new Set<string>();
+  // biome-ignore lint/suspicious/noExplicitAny: tldraw partial update types verbose; safe by id+type
+  const updates: any[] = [];
+  for (const s of newShapes) {
+    const base =
+      s.type === "arrow"
+        ? `edge-${slugify(plaintextLabel(editor, s) ?? "arrow")}`
+        : slugify(plaintextLabel(editor, s) ?? s.type);
+    let candidate = base;
+    let n = 2;
+    while (usedNames.has(candidate)) {
+      candidate = `${base}-${n++}`;
+    }
+    usedNames.add(candidate);
+    updates.push({
+      id: s.id,
+      type: s.type,
+      meta: { ...s.meta, didrawName: candidate },
+    });
+  }
+  if (updates.length > 0) {
+    editor.updateShapes(updates);
+  }
+
+  return { ok: true, shapeIds: newShapes.map((s) => s.id) };
 }

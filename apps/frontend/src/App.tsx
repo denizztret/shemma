@@ -3,6 +3,7 @@ import { type Editor, Tldraw } from "tldraw";
 import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
+import { importMermaid } from "./canvas/mermaid-import";
 import { AiActivityBadge } from "./chrome/AiActivityBadge";
 import { AppChrome } from "./chrome/AppChrome";
 import { ErrorBanner } from "./chrome/ErrorBanner";
@@ -173,6 +174,17 @@ export function App({ room }: { room: string }) {
       });
       stopSync = sync.stop;
 
+      // Dev-console helper: window.didrawImportMermaid(source). Mutates store;
+      // startStoreSync auto-forwards the batch to backend over WS.
+      // biome-ignore lint/suspicious/noExplicitAny: attaching helper to window
+      (window as any).didrawImportMermaid = async (source: string) => {
+        try {
+          return await importMermaid(editor, source);
+        } catch (e) {
+          return { ok: false, error: String(e) };
+        }
+      };
+
       // Selection + camera listener (session scope) for PromptInput anchor.
       let lastCamKey = "";
       unsubSel = editor.store.listen(
@@ -210,6 +222,9 @@ export function App({ room }: { room: string }) {
         clearTimeout(camSaveTimer);
         saveCamera(room, editor.getCamera());
       }
+      // biome-ignore lint/suspicious/noExplicitAny: cleaning up window helper
+      // biome-ignore lint/performance/noDelete: intentional property removal
+      delete (window as any).didrawImportMermaid;
     };
   }, [editor, room]);
 
