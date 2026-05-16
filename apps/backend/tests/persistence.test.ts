@@ -29,19 +29,23 @@ describe("FilePersistence", () => {
     const { readFileSync } = await import("node:fs");
     const raw = readFileSync(`${dir}/t.json`, "utf8");
     const env = JSON.parse(raw);
-    expect(env.schemaVersion).toBe(1);
+    expect(env.schemaVersion).toBe(2);
     expect(env.roomId).toBe("t");
     expect(env.elementCount).toBe(1);
   });
 
-  test("opLog and dirty NOT persisted", async () => {
+  test("opLog persisted (v2), dirty NOT persisted", async () => {
+    // T11: opLog is durable from envelope v2. dirty stays in-memory only —
+    // a freshly-loaded room is by definition in-sync with disk.
     const p = new FilePersistence(dir);
     const s = makeRoomState();
     s.opLog.push({ ops: [], source: "user", version: 1, at: 0 });
     s.dirty = true;
     await p.save("o", s);
     const l = await p.load("o");
-    expect(l?.opLog).toEqual([]);
+    expect(l?.opLog).toHaveLength(1);
+    expect(l?.opLog[0].version).toBe(1);
+    expect(l?.opLog[0].source).toBe("user");
     expect(l?.dirty).toBe(false);
   });
 

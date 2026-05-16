@@ -18,7 +18,7 @@ describe("envelope", () => {
     const raw = serialize("room-a", s);
     const env = parseFull(raw);
 
-    expect(env.schemaVersion).toBe(1);
+    expect(env.schemaVersion).toBe(2);
     expect(env.roomId).toBe("room-a");
     expect(env.version).toBe(5);
     expect(env.elementCount).toBe(1);
@@ -53,7 +53,7 @@ describe("envelope", () => {
     expect(hdr!.roomId).toBe("room-b");
     expect(hdr!.version).toBe(7);
     expect(hdr!.elementCount).toBe(1);
-    expect(hdr!.schemaVersion).toBe(1);
+    expect(hdr!.schemaVersion).toBe(2);
     expect((hdr as Record<string, unknown>).canvas).toBeUndefined();
     expect((hdr as Record<string, unknown>).prompts).toBeUndefined();
   });

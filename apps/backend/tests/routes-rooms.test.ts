@@ -277,7 +277,7 @@ describe("POST /api/rooms/:id/export", () => {
 
     const { readFileSync } = await import("node:fs");
     const env = JSON.parse(readFileSync(target, "utf8"));
-    expect(env.schemaVersion).toBe(1);
+    expect(env.schemaVersion).toBe(2);
     expect(env.roomId).toBe("design");
     expect(env.version).toBe(4);
     expect(env.elementCount).toBe(1);

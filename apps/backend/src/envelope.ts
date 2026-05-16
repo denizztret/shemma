@@ -1,9 +1,15 @@
-import type { RoomState } from "./types";
+import { config } from "./config";
+import type { OpLogEntry, RoomState } from "./types";
 
-export const ENVELOPE_SCHEMA_VERSION = 1;
+// Envelope schemaVersion history:
+//   1 — initial canvas + prompts payload (Phase 1).
+//   2 — adds durable `opLog` (Phase 2.2). Serializer always emits v2;
+//       parser still accepts v1 for backward-compat (opLog defaulted to []).
+export const ENVELOPE_SCHEMA_VERSION = 2;
+export const SUPPORTED_SCHEMA_VERSIONS = [1, 2] as const;
 
 export type EnvelopeHeader = {
-  schemaVersion: number;
+  schemaVersion: 1 | 2;
   roomId: string;
   version: number;
   lastTouched: string; // ISO
@@ -13,6 +19,7 @@ export type EnvelopeHeader = {
 export type PersistedEnvelope = EnvelopeHeader & {
   canvas: RoomState["canvas"];
   prompts: RoomState["prompts"];
+  opLog?: OpLogEntry[]; // present on v2 envelopes; absent on legacy v1 files
 };
 
 export type ExportEnvelope = PersistedEnvelope & {
@@ -20,6 +27,7 @@ export type ExportEnvelope = PersistedEnvelope & {
 };
 
 export function serialize(roomId: string, s: RoomState): string {
+  const cap = config.opLogMaxSize;
   const env: PersistedEnvelope = {
     schemaVersion: ENVELOPE_SCHEMA_VERSION,
     roomId,
@@ -29,6 +37,7 @@ export function serialize(roomId: string, s: RoomState): string {
       s.canvas.nodes.length + s.canvas.edges.length + s.canvas.groups.length,
     canvas: s.canvas,
     prompts: s.prompts,
+    opLog: s.opLog.slice(-cap),
   };
   return JSON.stringify(env, null, 2);
 }
@@ -45,6 +54,7 @@ export function parseHeader(raw: string): EnvelopeHeader | null {
     ) {
       return null;
     }
+    if (j.schemaVersion !== 1 && j.schemaVersion !== 2) return null;
     return {
       schemaVersion: j.schemaVersion,
       roomId: j.roomId,
@@ -68,9 +78,9 @@ export function serializeExport(roomId: string, s: RoomState): string {
 
 export function parseFull(raw: string): PersistedEnvelope {
   const j = JSON.parse(raw) as Partial<PersistedEnvelope>;
-  if (j.schemaVersion !== ENVELOPE_SCHEMA_VERSION) {
+  if (j.schemaVersion !== 1 && j.schemaVersion !== 2) {
     throw new Error(
-      `unsupported schemaVersion: ${j.schemaVersion} (expected ${ENVELOPE_SCHEMA_VERSION})`,
+      `unsupported schemaVersion: ${j.schemaVersion} (expected ${SUPPORTED_SCHEMA_VERSIONS.join("|")})`,
     );
   }
   if (
@@ -84,6 +94,10 @@ export function parseFull(raw: string): PersistedEnvelope {
   ) {
     throw new Error("malformed envelope");
   }
+  // v1 → []: graceful migration. v2 → opLog ?? [] (defensive: a malformed v2
+  // file with no opLog field still loads; we just lose replay history).
+  const opLog: OpLogEntry[] =
+    j.schemaVersion === 2 && Array.isArray(j.opLog) ? j.opLog : [];
   // Backfill optional header fields so the returned envelope is fully typed
   // even for legacy files that pre-date strict header validation.
   return {
@@ -100,5 +114,6 @@ export function parseFull(raw: string): PersistedEnvelope {
         : j.canvas.nodes.length + j.canvas.edges.length + j.canvas.groups.length,
     canvas: j.canvas,
     prompts: j.prompts,
+    opLog,
   };
 }

@@ -2,7 +2,12 @@ import { readdir, readFile, rename, mkdir, stat, writeFile, unlink } from "node:
 import { join } from "node:path";
 import type { Context } from "hono";
 import { Hono } from "hono";
-import { parseHeader, parseFull, serializeExport } from "../envelope";
+import {
+  ENVELOPE_SCHEMA_VERSION,
+  parseFull,
+  parseHeader,
+  serializeExport,
+} from "../envelope";
 import type { Rooms } from "../rooms";
 import { validateRoomId } from "../rooms";
 
@@ -145,7 +150,11 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
     const raw = serializeExport(id, room);
     await writeFile(body.to, raw, "utf8");
 
-    return c.json({ ok: true, path: body.to, schemaVersion: 1 });
+    return c.json({
+      ok: true,
+      path: body.to,
+      schemaVersion: ENVELOPE_SCHEMA_VERSION,
+    });
   });
 
   app.post("/api/rooms/import", async (c) => {

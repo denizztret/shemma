@@ -27,7 +27,9 @@ export class FilePersistence implements RoomStore {
         canvas: env.canvas,
         prompts: env.prompts,
         version: env.version,
-        opLog: [],
+        // T11: opLog is now durable. v1 envelopes load with [] (graceful
+        // migration); v2 envelopes restore the capped slice persisted at save.
+        opLog: env.opLog ?? [],
         dirty: false,
         lastTouched: Date.now(),
       };
