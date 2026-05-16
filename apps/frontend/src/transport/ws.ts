@@ -36,25 +36,32 @@ export type WsMessage =
   | { kind: "prompt-removed"; ids: string[] }
   | { kind: "ai-activity"; activity: AiActivity | null };
 
-export function openWs(handlers: {
-  onPatch?: (m: PatchFrame) => void;
-  // biome-ignore lint/suspicious/noExplicitAny: prompt message passed through opaquely
-  onPromptCreated?: (m: any) => void;
-  // biome-ignore lint/suspicious/noExplicitAny: prompt-resolved message passed through opaquely
-  onPromptResolved?: (m: any) => void;
-  onPromptRemoved?: (ids: string[]) => void;
-  onAiActivity?: (activity: AiActivity | null) => void;
-  // Called when the server reports the client is too far behind to replay.
-  // Implementation should re-fetch full state and replace canvas contents.
-  onTruncated?: () => void;
-}) {
+export function openWs(
+  handlers: {
+    onPatch?: (m: PatchFrame) => void;
+    // biome-ignore lint/suspicious/noExplicitAny: prompt message passed through opaquely
+    onPromptCreated?: (m: any) => void;
+    // biome-ignore lint/suspicious/noExplicitAny: prompt-resolved message passed through opaquely
+    onPromptResolved?: (m: any) => void;
+    onPromptRemoved?: (ids: string[]) => void;
+    onAiActivity?: (activity: AiActivity | null) => void;
+    // Called when the server reports the client is too far behind to replay.
+    // Implementation should re-fetch full state and replace canvas contents.
+    onTruncated?: () => void;
+  },
+  // Seed the high-water-mark from the initial GET /api/state.version so the
+  // first `hello` frame reports our actual baseline (spec §4.1). Without this
+  // a reconnect to a non-fresh room would request replay-from-0 and re-apply
+  // ops for shapes the initial state already created → duplicate-id errors.
+  options: { initialLastVersion?: number } = {},
+) {
   let ws: WebSocket | null = null;
   let attempt = 0;
   let stopped = false;
   // Tracks the highest room version this client has observed. Sent in the
   // `hello` frame on each (re)connect so the server can decide between
   // sync-ack / replay / truncated.
-  let lastReceivedVersion = 0;
+  let lastReceivedVersion = options.initialLastVersion ?? 0;
   const dispatchEntry = (entry: OpLogEntry) => {
     handlers.onPatch?.({
       kind: "patch",

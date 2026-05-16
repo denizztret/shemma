@@ -138,7 +138,8 @@ export function App({ room }: { room: string }) {
         // First visit: fit to content so the room doesn't open blank.
         editor.zoomToFit({ animation: { duration: 0 } });
       }
-      close = openWs({
+      close = openWs(
+        {
         onPromptCreated: () => setPromptsTick((x) => x + 1),
         onPromptResolved: () => setPromptsTick((x) => x + 1),
         onPromptRemoved: () => setPromptsTick((x) => x + 1),
@@ -199,6 +200,35 @@ export function App({ room }: { room: string }) {
                     { id: sid, type: existing.type, ...updates } as any,
                   ]);
                 }
+              } else if (op.op === "update" && op.target === "edge") {
+                // TODO(B1 endpoint move): `op.set.from`/`op.set.to` would require
+                // rebuilding tldraw arrow bindings (delete old + create new with
+                // correct terminals). Out of scope for sync-hardening; only
+                // style/label deltas are propagated here.
+                const sid = toEdgeShapeId(op.id);
+                const existing = editor.getShape(sid);
+                if (!existing) continue;
+                const propsPatch: Record<string, unknown> = {};
+                if (op.set.label !== undefined) {
+                  propsPatch.richText = labelToRichText(op.set.label);
+                }
+                if (op.set.style?.dashed !== undefined) {
+                  propsPatch.dash = op.set.style.dashed ? "dashed" : "solid";
+                }
+                if (op.set.style?.color !== undefined) {
+                  propsPatch.color = op.set.style.color;
+                }
+                if (op.set.style?.arrow !== undefined) {
+                  const arrow = op.set.style.arrow;
+                  propsPatch.arrowheadStart = arrow === "both" ? "arrow" : "none";
+                  propsPatch.arrowheadEnd = arrow === "none" ? "none" : "arrow";
+                }
+                if (Object.keys(propsPatch).length > 0) {
+                  editor.updateShapes([
+                    // biome-ignore lint/suspicious/noExplicitAny: tldraw updateShapes expects shape-specific type literal
+                    { id: sid, type: "arrow", props: propsPatch } as any,
+                  ]);
+                }
               }
             }
           });
@@ -233,7 +263,12 @@ export function App({ room }: { room: string }) {
             }
           }
         },
-      });
+        },
+        // Seed the WS client's high-water-mark from the initial state we just
+        // applied. Otherwise a reconnect on a non-fresh room would replay all
+        // ops from version 1 and re-create shapes that already exist.
+        { initialLastVersion: s.version },
+      );
 
       const snapshotBindings = (
         shapes: TLShape[],
