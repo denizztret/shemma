@@ -57,6 +57,49 @@ describe("POST /api/patch — inference for source:user", () => {
     expect(n.meta?.pinned).toBe(true);
   });
 
+  test("user edge style change sets meta.styleOwnedBy=user", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const r = await rooms.get("test");
+    r.canvas.nodes.push({ id: "shape:e_a", kind: "rect", x: 0, y: 0, label: "a" });
+    r.canvas.nodes.push({ id: "shape:e_b", kind: "rect", x: 0, y: 0, label: "b" });
+    r.canvas.edges.push({
+      id: "shape:c_0",
+      from: { kind: "node", id: "shape:e_a" },
+      to: { kind: "node", id: "shape:e_b" },
+      meta: { name: "c_0" },
+    });
+
+    await postPatch(
+      app,
+      [{ op: "update", target: "edge", id: "shape:c_0", set: { style: { dashed: true } } }],
+      "user",
+    );
+    const edge = (await rooms.get("test")).canvas.edges.find((e) => e.id === "shape:c_0")!;
+    expect((edge.meta as { styleOwnedBy?: string }).styleOwnedBy).toBe("user");
+    // existing meta fields preserved
+    expect((edge.meta as { name?: string }).name).toBe("c_0");
+  });
+
+  test("ai edge style change does NOT set styleOwnedBy", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const r = await rooms.get("test");
+    r.canvas.nodes.push({ id: "shape:e_a", kind: "rect", x: 0, y: 0, label: "a" });
+    r.canvas.nodes.push({ id: "shape:e_b", kind: "rect", x: 0, y: 0, label: "b" });
+    r.canvas.edges.push({
+      id: "shape:c_1",
+      from: { kind: "node", id: "shape:e_a" },
+      to: { kind: "node", id: "shape:e_b" },
+    });
+
+    await postPatch(
+      app,
+      [{ op: "update", target: "edge", id: "shape:c_1", set: { style: { dashed: true } } }],
+      "ai",
+    );
+    const edge = (await rooms.get("test")).canvas.edges.find((e) => e.id === "shape:c_1")!;
+    expect((edge.meta as { styleOwnedBy?: string } | undefined)?.styleOwnedBy).toBeUndefined();
+  });
+
   test("partial move (only y) preserves the unchanged x in meta.position", async () => {
     const { app, rooms } = makeApp({ inMemory: true });
     const r = await rooms.get("test");

@@ -217,11 +217,12 @@ export function diffToOps(
     }
   }
   for (const [id, s] of prev) {
-    // Arrow deletion is wired up in Task 9; for now leave arrows out of the
-    // delete pass so we don't surface a half-implemented contract.
-    if (s.type === "arrow") continue;
-    if (!next.has(id))
+    if (next.has(id)) continue;
+    if (s.type === "arrow") {
+      ops.push({ op: "delete", target: "edge", id: tlArrowIdToEdgeId(s.id) });
+    } else {
       ops.push({ op: "delete", target: "node", id: fromShapeId(s.id) });
+    }
   }
   return ops;
 }

@@ -10,33 +10,50 @@ import type { PatchBus, PatchOp, RoomState } from "../types";
 // using the current node values rather than producing `undefined`.
 function inferUserMetadata(
   ops: PatchOp[],
-  canvas: { nodes: Array<{ id: string; x: number; y: number; meta?: Record<string, unknown> }> },
+  canvas: {
+    nodes: Array<{ id: string; x: number; y: number; meta?: Record<string, unknown> }>;
+    edges: Array<{ id: string; meta?: Record<string, unknown> }>;
+  },
 ): PatchOp[] {
   return ops.map((op) => {
-    if (op.op !== "update" || op.target !== "node") return op;
-    const set = op.set as { x?: number; y?: number; style?: unknown; meta?: Record<string, unknown> };
-    const movedX = set.x !== undefined;
-    const movedY = set.y !== undefined;
-    const styled = set.style !== undefined;
-    if (!movedX && !movedY && !styled) return op;
+    if (op.op !== "update") return op;
+    if (op.target === "node") {
+      const set = op.set as { x?: number; y?: number; style?: unknown; meta?: Record<string, unknown> };
+      const movedX = set.x !== undefined;
+      const movedY = set.y !== undefined;
+      const styled = set.style !== undefined;
+      if (!movedX && !movedY && !styled) return op;
 
-    const current = canvas.nodes.find((n) => n.id === op.id);
-    const currentMeta = (current?.meta ?? {}) as Record<string, unknown>;
-    const currentPos = currentMeta.position as { x?: number; y?: number } | undefined;
-    // Deep-merge for meta — applyPatch shallow-merges nested objects, so we
-    // build the FULL new meta.position here rather than relying on merge.
-    const meta = { ...currentMeta, ...(set.meta ?? {}) } as Record<string, unknown>;
-    if (movedX || movedY) {
-      meta.pinned = true;
-      meta.position = {
-        x: movedX ? (set.x as number) : (currentPos?.x ?? current?.x ?? 0),
-        y: movedY ? (set.y as number) : (currentPos?.y ?? current?.y ?? 0),
+      const current = canvas.nodes.find((n) => n.id === op.id);
+      const currentMeta = (current?.meta ?? {}) as Record<string, unknown>;
+      const currentPos = currentMeta.position as { x?: number; y?: number } | undefined;
+      // Deep-merge for meta — applyPatch shallow-merges nested objects, so we
+      // build the FULL new meta.position here rather than relying on merge.
+      const meta = { ...currentMeta, ...(set.meta ?? {}) } as Record<string, unknown>;
+      if (movedX || movedY) {
+        meta.pinned = true;
+        meta.position = {
+          x: movedX ? (set.x as number) : (currentPos?.x ?? current?.x ?? 0),
+          y: movedY ? (set.y as number) : (currentPos?.y ?? current?.y ?? 0),
+        };
+      }
+      if (styled) {
+        meta.styleOwnedBy = "user";
+      }
+      return { ...op, set: { ...set, meta } };
+    }
+    if (op.target === "edge") {
+      const set = op.set as { style?: unknown; meta?: Record<string, unknown> };
+      if (set.style === undefined) return op;
+      const current = canvas.edges.find((e) => e.id === op.id);
+      const meta = {
+        ...((current?.meta ?? {}) as Record<string, unknown>),
+        ...(set.meta ?? {}),
+        styleOwnedBy: "user",
       };
+      return { ...op, set: { ...set, meta } };
     }
-    if (styled) {
-      meta.styleOwnedBy = "user";
-    }
-    return { ...op, set: { ...set, meta } };
+    return op;
   });
 }
 
