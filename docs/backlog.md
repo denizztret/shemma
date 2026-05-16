@@ -14,7 +14,62 @@
 
 > _Заполняется по ходу интенсивного тестирования. Каждая запись: краткое описание + steps to reproduce + ожидаемое vs фактическое + severity (critical/major/minor)._
 
-_Пусто._
+### D1 — Version badge показывает `v0.3.0` вместо `0.3.0`
+
+- **Severity:** minor (cosmetic, inconsistency с новой tag policy).
+- **Repro:** Открыть frontend на dev (`bun run dev` → http://localhost:5173/), глянуть top-right.
+- **Expected:** Badge `0.3.0` (без префикса `v`) — соответствует numeric-tag policy ([[feedback-gitflow-semver-tags]]).
+- **Actual:** Badge `v0.3.0`. Frontend (вероятно `chrome/RoomBadge.tsx` или `transport/version.ts`) добавляет `v` префикс.
+- **Suggested fix:** Удалить `v` из template'а в UI; показывать чистый semver.
+- **Files:** `apps/frontend/src/chrome/RoomBadge.tsx` (или `transport/version.ts` — выявить точно перед фиксом).
+
+### D2 — `/favicon.ico` 404
+
+- **Severity:** minor (cosmetic; не ломает функциональность, но засоряет console).
+- **Repro:** Открыть frontend, посмотреть Network — `GET /favicon.ico → 404`.
+- **Expected:** Favicon отдаётся (любой — di.draw логотип или нейтральный).
+- **Actual:** 404 в console errors каждой загрузки.
+- **Suggested fix:** Положить `apps/frontend/public/favicon.ico` (или `.svg`); Vite автоматически отдаст.
+- **Files:** `apps/frontend/public/` (создать), `apps/frontend/index.html` (опционально `<link rel="icon">`).
+
+### D3 — AI `define` + layout пин'ит узлы через `meta.position` → overlap при последующих define
+
+- **Severity:** **CRITICAL** — ломает основной AI workflow для домена.
+- **Repro:**
+  1. `didraw define service api --label "API Gateway"` (зум 335%, узел в (10,10)).
+  2. `didraw define datastore db --label "PostgreSQL"` — узел db ставится в (10,120), api остаётся в (10,10) (ok так далеко).
+  3. `didraw define service worker; define queue queue; connect api queue; connect queue worker; group worker,queue --as boundary --name async-side`.
+  4. `didraw layout --mode layered-lr --spacing loose`.
+  5. Curl `GET /api/state` → почти все узлы (api, worker, queue) в координатах **(10,10)**. Только `db` в (10,120). Визуально 3 узла перекрываются в одной точке.
+- **Expected:** Layered-lr раскладка разносит узлы по horizontal lanes; группа async-side обрамляет worker+queue; нет overlap'а.
+- **Actual:** Backend записывает `meta.position: {x:10,y:10}` в КАЖДЫЙ AI-defined node при первом layout pass (`apps/backend/src/routes/domain.ts:250`, "Per spec §3.6.4: meta.position carries last layout-known coords"). Последующий ELK layered ignore'ит `elk.position` → app-level pin post-process читает `meta.position` как pin marker → НЕ двигает узел. Узлы зависают в (10,10).
+- **Корневая причина:** Двусмысленность `meta.position`: spec §3.6.4 называет его "layout cache", CLAUDE.md invariant — "user-owned pin marker" (вместе с `meta.pinned`). Layout-postprocess (или pin-respect code) трактует `meta.position` как pin **без проверки `meta.pinned === true`**.
+- **Suggested fix:**
+  - Вариант A (recommended): layout-postprocess respect'ит pin ТОЛЬКО при `meta.pinned === true` (и тогда uses `meta.position` для координат). AI-defined узлы без `meta.pinned` свободно двигаются.
+  - Вариант B: AI domain action НЕ ставит `meta.position`; только user-edit через `/api/patch` источник=user ставит pin pair.
+  - В любом случае: добавить регрессионный тест "define 3 nodes + layout → no two nodes share (x,y)".
+- **Files:** `apps/backend/src/routes/domain.ts:248-256`, `apps/backend/src/domain/layout-postprocess.ts`, `apps/backend/tests/routes-domain.test.ts` (новый тест).
+- **Related:** D4, D5 — все три проблемы каскадируют от этого корня.
+
+### D4 — Group bbox (w/h) после `group` action — `null`
+
+- **Severity:** major (визуально группа не отрисовывается как контейнер).
+- **Repro:** После cascade от D3 — `curl /api/state | jq '.canvas.groups'` показывает `{x:180, y:160, w:null, h:null}`. На frontend визуально нет рамки/fill вокруг детей group.
+- **Expected:** Group имеет рассчитанный bbox: bounding box над всеми children + padding.
+- **Actual:** w/h = null. Frontend, видимо, не рендерит группу.
+- **Suggested fix:** При компиляции `group` action либо при layout pass рассчитывать bbox от children. Учесть pin (если все дети pinned — статичная bbox; если двигаются — bbox follow).
+- **Files:** `apps/backend/src/domain/compile.ts` (group case), `apps/backend/src/domain/layout-postprocess.ts`.
+- **Related:** D3 (если pin'ятся дети — bbox не пересчитан).
+
+### D5 — Children node coords при rendering в группе — absolute или relative?
+
+- **Severity:** major.
+- **Repro:** Continued from D3 — `async-side` group в (180, 160), children `worker`/`queue` в (10, 10). Frontend визуально показывает worker/queue в (10,10), НЕ внутри группы.
+- **Expected:** Либо backend хранит absolute coords для children (тогда они должны быть updated при group), либо frontend учитывает parent group offset при render.
+- **Actual:** Расхождение между backend storage и frontend interpretation. Spec неоднозначен.
+- **Suggested fix:** Принять решение в ADR — рекомендую absolute coords для children (`Group` — это только контейнер-marker, без coord transform). Тогда layout должен ставить worker/queue в absolute (180+padding, 160+padding) после group action.
+- **Files:** ADR new, `apps/backend/src/domain/{compile,layout-postprocess}.ts`, `apps/frontend/src/canvas/from-canvas-state.ts`.
+- **Related:** D3, D4.
 
 ---
 
