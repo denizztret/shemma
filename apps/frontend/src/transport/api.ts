@@ -1,3 +1,5 @@
+import { pushError } from "../state/error-bus";
+
 export const room =
   new URLSearchParams(location.search).get("room") ?? "default";
 
@@ -29,8 +31,12 @@ export async function sendPatch(
     });
     // Backend returns ok:true or ok:false in JSON body for both 200 and 422.
     // Network failures fall through to the catch.
-    return (await r.json()) as PatchResult;
+    const result = (await r.json()) as PatchResult;
+    if (!result.ok) pushError(`patch rejected: ${result.error}`);
+    return result;
   } catch (e) {
-    return { ok: false, error: String(e) };
+    const error = String(e);
+    pushError(`patch rejected: ${error}`);
+    return { ok: false, error };
   }
 }

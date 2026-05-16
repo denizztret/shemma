@@ -18,7 +18,9 @@ export const tokens = {
     warnBg: "#fef3c7",
     warnBorder: "#f59e0b",
     warnText: "#78350f",
+    errorBg: "#c1273a",
+    errorText: "#ffffff",
   },
   radius: { sm: 3, md: 6, lg: 8 },
-  z: { overlay: 90, banner: 100, modal: 1000 },
+  z: { overlay: 90, banner: 100, modal: 1000, toast: 9999 },
 } as const;

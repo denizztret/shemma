@@ -21,6 +21,7 @@ import { labelToRichText } from "./canvas/richtext";
 import { diffToOps } from "./canvas/to-patch";
 import { AiActivityBadge } from "./chrome/AiActivityBadge";
 import { AppChrome } from "./chrome/AppChrome";
+import { ErrorBanner } from "./chrome/ErrorBanner";
 import { buildTldrawComponents } from "./chrome/TldrawComponents";
 import { UpdateBanner } from "./chrome/UpdateBanner";
 import { PromptDrawer } from "./prompts/PromptDrawer";
@@ -384,6 +385,7 @@ export function App({ room }: { room: string }) {
           )}
           <PromptDrawer tick={promptsTick} />
           <AiActivityBadge activity={aiActivity} />
+          <ErrorBanner />
         </>
       }
     >
