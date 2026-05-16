@@ -1,6 +1,26 @@
+// apps/backend/src/domain/layout.ts
+//
+// Phase 3.0: runLayout поверх TLStoreSnapshot.
+//   - Вход: TLStoreSnapshot + LayoutHint + didrawIndex.
+//   - Выход: StoreChangeBatch (updated only — позиции/размеры shape-записей).
+//
+// Сохранены invariants из Phase 2.x:
+//   * DRW-003 pin discipline: shapes с meta.pinned === true НЕ двигаются;
+//     non-pinned, пересекающие pinned bbox, смещаются вправо со y-стэккингом.
+//   * DRW-004 group bbox writeback: frame-shapes получают props.w/props.h
+//     из ELK output.
+//   * ADR-0002 absolute coords: дети frame'а получают absolute x/y
+//     (parent offset аккумулируется при сборе positions).
+//   * ELK exception → возвращаем empty batch с reason: 'elk-error', не бросаем.
+//
+// Arrows (type === 'arrow') в ELK input/output НЕ участвуют: их геометрия
+// задаётся bindings (start/end terminals), shape.x/y у arrow декоративные.
+// Edges для ELK реконструируются по binding'ам (typeName === 'binding').
+// Если у arrow != 2 bindings (висячая) — стрелка пропускается.
+
 import { modeToElkOptions, type LayoutMode, type Spacing } from "@didraw/domain";
 import elkWorkerPath from "../../node_modules/elkjs/lib/elk-worker.min.js" with { type: "file" };
-import type { CanvasState, Edge, Group, Node } from "../types";
+import type { StoreChangeBatch, TLRecord, TLStoreSnapshot } from "../store-types";
 import type { ElementId, LayoutHint } from "./types";
 
 // biome-ignore lint/suspicious/noExplicitAny: third-party CJS module
@@ -8,125 +28,160 @@ const ELK = require("elkjs/lib/main.js") as any;
 // biome-ignore lint/suspicious/noExplicitAny: elk instance
 const elk = new ELK({ workerUrl: elkWorkerPath }) as any;
 
-type Side = "N" | "S" | "E" | "W";
+const DEFAULT_W = 120;
+const DEFAULT_H = 60;
+const DEFAULT_FRAME_W = 400;
+const DEFAULT_FRAME_H = 300;
 
-export type EdgeRouting = {
-  fromSide?: Side;
-  toSide?: Side;
-  bendPoints?: Array<{ x: number; y: number }>;
+// DRW-003 displacement constants (preserved from Phase 2.x layout.ts).
+const COLLISION_SLACK = 10;
+const NODE_SPACING_X = 40;
+const NODE_SPACING_Y = 20;
+
+type ShapeRec = TLRecord & {
+  type?: string;
+  x?: number;
+  y?: number;
+  props?: Record<string, unknown>;
+  meta?: Record<string, unknown>;
 };
 
-export type LayoutOk = {
-  ok: true;
-  positions: Record<string, { x: number; y: number; w?: number; h?: number }>;
-  edgeRouting: Record<string, EdgeRouting>;
-  affected: ElementId[];
+type BindingRec = TLRecord & {
+  fromId?: string;
+  toId?: string;
+  props?: { terminal?: string };
 };
 
-export type LayoutFail = { ok: false; reason: string };
+type Bounds = { x: number; y: number; w: number; h: number };
 
-function isPinned(n: Node): boolean {
-  return n.meta?.pinned === true;
+function readNumberProp(props: Record<string, unknown> | undefined, key: string, fallback: number): number {
+  const v = props?.[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
 
-function nodeChildrenOfGroup(c: CanvasState, gid: string): Node[] {
-  const g = c.groups.find((x) => x.id === gid);
-  if (!g) return [];
-  return c.nodes.filter((n) => g.children.includes(n.id));
+function shapeBounds(r: ShapeRec): Bounds {
+  const isFrame = r.type === "frame";
+  const w = readNumberProp(r.props, "w", isFrame ? DEFAULT_FRAME_W : DEFAULT_W);
+  const h = readNumberProp(r.props, "h", isFrame ? DEFAULT_FRAME_H : DEFAULT_H);
+  const x = typeof r.x === "number" ? r.x : 0;
+  const y = typeof r.y === "number" ? r.y : 0;
+  return { x, y, w, h };
 }
 
-function topLevelNodes(c: CanvasState): Node[] {
-  const groupedIds = new Set(c.groups.flatMap((g) => g.children));
-  return c.nodes.filter((n) => !groupedIds.has(n.id));
+function isShape(r: TLRecord): r is ShapeRec {
+  return r.typeName === "shape";
 }
 
+function isLayoutCandidate(r: ShapeRec): boolean {
+  // Arrows позиционируются через bindings → не участвуют в ELK input/output.
+  return r.type !== "arrow";
+}
+
+function isPinned(r: ShapeRec): boolean {
+  return r.meta?.pinned === true;
+}
+
+function collectShapes(store: TLStoreSnapshot): ShapeRec[] {
+  const out: ShapeRec[] = [];
+  for (const id in store.store) {
+    const r = store.store[id];
+    if (r && isShape(r) && isLayoutCandidate(r)) out.push(r);
+  }
+  return out;
+}
+
+function collectArrows(store: TLStoreSnapshot): ShapeRec[] {
+  const out: ShapeRec[] = [];
+  for (const id in store.store) {
+    const r = store.store[id];
+    if (r && isShape(r) && r.type === "arrow") out.push(r);
+  }
+  return out;
+}
+
+function bindingsForArrow(store: TLStoreSnapshot, arrowId: string): BindingRec[] {
+  const out: BindingRec[] = [];
+  for (const id in store.store) {
+    const r = store.store[id] as BindingRec | undefined;
+    if (r && r.typeName === "binding" && r.fromId === arrowId) out.push(r);
+  }
+  return out;
+}
+
+/** Build ELK graph from shapes + arrow-bindings, treating frames as compound nodes. */
 function buildElkGraph(
-  c: CanvasState,
+  store: TLStoreSnapshot,
+  shapes: ShapeRec[],
   hint: Required<LayoutHint>,
-  pinnedSet: Set<string>,
-) {
+): unknown {
   const opts = modeToElkOptions(hint.mode, hint.spacing);
 
-  function buildGroupNode(g: Group): unknown {
-    return {
-      id: g.id,
-      width: g.w ?? 400,
-      height: g.h ?? 300,
-      layoutOptions: { ...opts, "elk.padding": "[top=40,left=20,bottom=20,right=20]" },
-      children: nodeChildrenOfGroup(c, g.id).map(buildLeafNode),
-    };
+  // Partition shapes: frames vs leaves.
+  const frames = shapes.filter((s) => s.type === "frame");
+  const leaves = shapes.filter((s) => s.type !== "frame");
+
+  // Children of frame: shapes whose parentId === frame.id (and which are layout candidates).
+  const childrenByFrame = new Map<string, ShapeRec[]>();
+  for (const f of frames) childrenByFrame.set(f.id, []);
+  const topLevel: ShapeRec[] = [];
+  for (const s of leaves) {
+    if (s.parentId && childrenByFrame.has(s.parentId)) {
+      childrenByFrame.get(s.parentId)!.push(s);
+    } else {
+      topLevel.push(s);
+    }
   }
 
-  function buildLeafNode(n: Node): unknown {
+  const buildLeaf = (s: ShapeRec) => {
+    const b = shapeBounds(s);
     return {
-      id: n.id,
-      width: Math.max(20, n.w ?? 120),
-      height: Math.max(20, n.h ?? 60),
+      id: s.id,
+      width: Math.max(20, b.w),
+      height: Math.max(20, b.h),
       ports: [],
     };
+  };
+
+  const buildFrame = (f: ShapeRec) => {
+    const b = shapeBounds(f);
+    return {
+      id: f.id,
+      width: b.w,
+      height: b.h,
+      layoutOptions: { ...opts, "elk.padding": "[top=40,left=20,bottom=20,right=20]" },
+      children: (childrenByFrame.get(f.id) ?? []).map(buildLeaf),
+    };
+  };
+
+  // Edges from bindings: per arrow, find 2 bindings (start/end), use their toId endpoints.
+  const arrows = collectArrows(store);
+  const edges: Array<{ id: string; sources: string[]; targets: string[] }> = [];
+  for (const a of arrows) {
+    const bs = bindingsForArrow(store, a.id);
+    if (bs.length !== 2) continue;
+    const start = bs.find((b) => (b.props as { terminal?: string } | undefined)?.terminal === "start");
+    const end = bs.find((b) => (b.props as { terminal?: string } | undefined)?.terminal === "end");
+    const src = start?.toId ?? bs[0]?.toId;
+    const tgt = end?.toId ?? bs[1]?.toId;
+    if (!src || !tgt) continue;
+    edges.push({ id: a.id, sources: [src], targets: [tgt] });
   }
 
   return {
     id: "root",
-    // elk.hierarchyHandling: INCLUDE_CHILDREN — valid per ELK layered algorithm docs
     layoutOptions: { ...opts, "elk.hierarchyHandling": "INCLUDE_CHILDREN" },
-    children: [
-      ...topLevelNodes(c).map(buildLeafNode),
-      ...c.groups.map(buildGroupNode),
-    ],
-    edges: c.edges
-      .filter((e) => e.from.kind === "node" && e.to.kind === "node")
-      .map((e) => ({
-        id: e.id,
-        sources: [(e.from as { id: string }).id],
-        targets: [(e.to as { id: string }).id],
-      })),
+    children: [...topLevel.map(buildLeaf), ...frames.map(buildFrame)],
+    edges,
   };
 }
 
-export type AffectedSet = { affected: ElementId[] };
+type Positions = Record<string, { x: number; y: number; w?: number; h?: number }>;
 
-export async function runLayout(
-  canvas: CanvasState,
-  hint: LayoutHint,
-  affectedSet?: AffectedSet,
-): Promise<LayoutOk | LayoutFail> {
-  const fullHint: Required<LayoutHint> = {
-    mode: (hint.mode ?? "layered-lr") as LayoutMode,
-    scope: hint.scope ?? "affected",
-    spacing: (hint.spacing ?? "normal") as Spacing,
-  };
-
-  const pinnedSet = new Set<string>();
-  // TODO: scope = ElementId (subgraph layout around a specific element) is not yet
-  // implemented; non-"affected" / non-"all" strings silently fall through to "all".
-  // Tracked for Phase 2.2 sync hardening.
-  // In "affected" scope: all nodes NOT in the affected set are treated as pinned
-  if (fullHint.scope === "affected" && affectedSet) {
-    const affectedIds = new Set(affectedSet.affected);
-    for (const n of canvas.nodes) {
-      if (!affectedIds.has(n.id)) pinnedSet.add(n.id);
-    }
-  }
-  // Explicitly pinned nodes (meta.pinned = true) are always fixed
-  for (const n of canvas.nodes) {
-    if (isPinned(n)) pinnedSet.add(n.id);
-  }
-
-  const graph = buildElkGraph(canvas, fullHint, pinnedSet);
-
-  let res: { children?: unknown[]; edges?: unknown[] };
-  try {
-    res = await elk.layout(graph as never);
-  } catch (e) {
-    return { ok: false, reason: (e as Error).message };
-  }
-
-  const positions: LayoutOk["positions"] = {};
-  const edgeRouting: LayoutOk["edgeRouting"] = {};
-  const affected: ElementId[] = [];
-
-  function collectChildren(children: unknown[] | undefined, offsetX = 0, offsetY = 0) {
+function collectPositions(
+  res: { children?: unknown[] },
+): Positions {
+  const positions: Positions = {};
+  const walk = (children: unknown[] | undefined, offsetX: number, offsetY: number) => {
     for (const ch of children ?? []) {
       const c = ch as {
         id?: string;
@@ -140,116 +195,166 @@ export async function runLayout(
       const absX = (c.x ?? 0) + offsetX;
       const absY = (c.y ?? 0) + offsetY;
       positions[c.id] = { x: absX, y: absY, w: c.width, h: c.height };
-      affected.push(c.id);
-      collectChildren(c.children, absX, absY);
+      walk(c.children, absX, absY);
     }
-  }
+  };
+  walk(res.children, 0, 0);
+  return positions;
+}
 
-  collectChildren(res.children);
-
-  // Post-process: restore pinned node coordinates from the input canvas.
-  // ELK's layered algorithm does not support fixed-position nodes natively —
-  // elk.position in layoutOptions is a hint for some algorithms but layered ignores it.
-  // We apply pinned positions after layout so consumers see the correct coordinates.
-  // (Deviation from plan: plan's elk.position + FIRST_SEPARATE combo does not preserve
-  //  coordinates in elkjs 0.9.3; verified via runtime test.)
-  for (const n of canvas.nodes) {
-    if (pinnedSet.has(n.id) && positions[n.id] !== undefined) {
-      positions[n.id] = { ...positions[n.id], x: n.x, y: n.y };
-    }
-  }
-
-  // DRW-003: ELK layered не учитывает pinned positions при placement новых
-  // (affected) nodes без edges к pinned — disconnected affected уезжает в (0,0)
-  // и после snap'а пересекается с pinned, которые тоже были placed near origin.
-  // Displace affected nodes которые overlap'ят с pinned bbox: ставим их справа
-  // за pinned bbox с y-стэккингом, чтобы каждый занял свою строку.
-  if (pinnedSet.size > 0) {
-    const COLLISION_SLACK = 10;
-    const NODE_SPACING_X = 40;
-    const NODE_SPACING_Y = 20;
-    const nodeBox = (id: string) => {
-      const p = positions[id];
-      if (!p) return null;
-      const n = canvas.nodes.find((x) => x.id === id);
-      return { x: p.x, y: p.y, w: n?.w ?? 120, h: n?.h ?? 60 };
-    };
-    const pinnedBoxes = [...pinnedSet]
-      .map((id) => nodeBox(id))
-      .filter((b): b is { x: number; y: number; w: number; h: number } => b !== null);
-    if (pinnedBoxes.length > 0) {
-      const pinnedRight = Math.max(...pinnedBoxes.map((b) => b.x + b.w));
-      const pinnedTop = Math.min(...pinnedBoxes.map((b) => b.y));
-      const overlapsAnyPinned = (b: { x: number; y: number; w: number; h: number }) =>
-        pinnedBoxes.some(
-          (pb) =>
-            !(
-              b.x + b.w + COLLISION_SLACK <= pb.x ||
-              pb.x + pb.w + COLLISION_SLACK <= b.x ||
-              b.y + b.h + COLLISION_SLACK <= pb.y ||
-              pb.y + pb.h + COLLISION_SLACK <= b.y
-            ),
-        );
-      // Affected = not in pinnedSet. Сортируем по id для детерминированной раскладки.
-      const affectedIds = canvas.nodes
-        .filter((n) => !pinnedSet.has(n.id))
-        .map((n) => n.id)
-        .sort();
-      let nextY = pinnedTop;
-      for (const aid of affectedIds) {
-        const box = nodeBox(aid);
-        if (!box) continue;
-        if (!overlapsAnyPinned(box)) continue;
-        // Сдвигаем affected node вправо за pinned bbox; y — стэк с верха pinned.
-        positions[aid] = {
-          ...positions[aid],
-          x: pinnedRight + NODE_SPACING_X,
-          y: nextY,
-        };
-        nextY += box.h + NODE_SPACING_Y;
-      }
-    }
-  }
-
-  function sideOf(box: { x: number; y: number; w: number; h: number }, p: { x: number; y: number }): Side {
-    const left = Math.abs(p.x - box.x);
-    const right = Math.abs(p.x - (box.x + box.w));
-    const top = Math.abs(p.y - box.y);
-    const bottom = Math.abs(p.y - (box.y + box.h));
-    const min = Math.min(left, right, top, bottom);
-    if (min === left) return "W";
-    if (min === right) return "E";
-    if (min === top) return "N";
-    return "S";
-  }
-
-  const sizeFor = (id: string): { x: number; y: number; w: number; h: number } | null => {
+/** DRW-003: смещение non-pinned shapes, пересекающих pinned bbox. */
+function applyDisplacement(
+  positions: Positions,
+  shapes: ShapeRec[],
+  pinnedSet: Set<string>,
+): void {
+  if (pinnedSet.size === 0) return;
+  const shapeById = new Map(shapes.map((s) => [s.id, s]));
+  const boxOf = (id: string): Bounds | null => {
     const p = positions[id];
     if (!p) return null;
-    return { x: p.x, y: p.y, w: p.w ?? 100, h: p.h ?? 50 };
+    const s = shapeById.get(id);
+    const fallback = s ? shapeBounds(s) : { x: 0, y: 0, w: DEFAULT_W, h: DEFAULT_H };
+    return {
+      x: p.x,
+      y: p.y,
+      w: p.w ?? fallback.w,
+      h: p.h ?? fallback.h,
+    };
   };
 
-  for (const e of (res.edges ?? []) as Array<{
-    id?: string;
-    sources?: string[];
-    targets?: string[];
-    sections?: Array<{
-      startPoint: { x: number; y: number };
-      endPoint: { x: number; y: number };
-      bendPoints?: Array<{ x: number; y: number }>;
-    }>;
-  }>) {
-    if (!e.id) continue;
-    const seg = e.sections?.[0];
-    if (!seg) continue;
-    const r: EdgeRouting = {};
-    const srcBox = e.sources?.[0] ? sizeFor(e.sources[0]) : null;
-    const tgtBox = e.targets?.[0] ? sizeFor(e.targets[0]) : null;
-    if (srcBox) r.fromSide = sideOf(srcBox, seg.startPoint);
-    if (tgtBox) r.toSide = sideOf(tgtBox, seg.endPoint);
-    if (seg.bendPoints && seg.bendPoints.length > 0) r.bendPoints = seg.bendPoints;
-    edgeRouting[e.id] = r;
+  const pinnedBoxes: Bounds[] = [];
+  for (const pid of pinnedSet) {
+    const b = boxOf(pid);
+    if (b) pinnedBoxes.push(b);
+  }
+  if (pinnedBoxes.length === 0) return;
+
+  const pinnedRight = Math.max(...pinnedBoxes.map((b) => b.x + b.w));
+  const pinnedTop = Math.min(...pinnedBoxes.map((b) => b.y));
+  const overlapsAnyPinned = (b: Bounds) =>
+    pinnedBoxes.some(
+      (pb) =>
+        !(
+          b.x + b.w + COLLISION_SLACK <= pb.x ||
+          pb.x + pb.w + COLLISION_SLACK <= b.x ||
+          b.y + b.h + COLLISION_SLACK <= pb.y ||
+          pb.y + pb.h + COLLISION_SLACK <= b.y
+        ),
+    );
+
+  // Affected ids: все non-pinned shapes с position'ом, отсортированы по id для детерминизма.
+  const affectedIds = shapes
+    .filter((s) => !pinnedSet.has(s.id) && positions[s.id] !== undefined)
+    .map((s) => s.id)
+    .sort();
+
+  let nextY = pinnedTop;
+  for (const aid of affectedIds) {
+    const box = boxOf(aid);
+    if (!box) continue;
+    if (!overlapsAnyPinned(box)) continue;
+    positions[aid] = {
+      ...positions[aid],
+      x: pinnedRight + NODE_SPACING_X,
+      y: nextY,
+    };
+    nextY += box.h + NODE_SPACING_Y;
+  }
+}
+
+/**
+ * Run ELK layout over a TLStoreSnapshot and produce a StoreChangeBatch
+ * updating only position (x/y) and, for frames, props.w/props.h.
+ *
+ * `index` параметр (didrawName → recordId) сейчас не используется — keep
+ * в сигнатуре для совместимости с orchestrator-call'ом в routes/domain.ts;
+ * пригодится при future "scope=ElementId" реализации (subgraph layout).
+ */
+export async function runLayout(
+  store: TLStoreSnapshot,
+  hint: LayoutHint,
+  // biome-ignore lint/correctness/noUnusedFunctionParameters: kept for API stability, see jsdoc
+  index: Map<string, string>,
+): Promise<{ batch: StoreChangeBatch; affected: string[]; reason?: string }> {
+  const fullHint: Required<LayoutHint> = {
+    mode: (hint.mode ?? "layered-lr") as LayoutMode,
+    scope: hint.scope ?? "affected",
+    spacing: (hint.spacing ?? "normal") as Spacing,
+  };
+
+  const emptyBatch: StoreChangeBatch = { added: {}, updated: {}, removed: {} };
+
+  const shapes = collectShapes(store);
+  if (shapes.length === 0) {
+    return { batch: emptyBatch, affected: [] };
   }
 
-  return { ok: true, positions, edgeRouting, affected };
+  // Pin set: только meta.pinned === true. Scope=affected pinning теперь
+  // ответственность orchestrator'а (routes/domain.ts может пометить узлы
+  // как pinned через staging-патчи перед вызовом runLayout).
+  const pinnedSet = new Set<string>();
+  for (const s of shapes) {
+    if (isPinned(s)) pinnedSet.add(s.id);
+  }
+
+  const graph = buildElkGraph(store, shapes, fullHint);
+
+  let res: { children?: unknown[]; edges?: unknown[] };
+  try {
+    res = await elk.layout(graph as never);
+  } catch (_e) {
+    return { batch: emptyBatch, affected: [], reason: "elk-error" };
+  }
+
+  const positions = collectPositions(res);
+
+  // Restore pinned coords (ELK layered ignores fixed-position hints in elkjs 0.9.3 —
+  // override after layout. См. layout.ts pre-Phase-3 commentary).
+  for (const s of shapes) {
+    if (pinnedSet.has(s.id) && positions[s.id] !== undefined) {
+      positions[s.id] = { ...positions[s.id], x: s.x ?? 0, y: s.y ?? 0 };
+    }
+  }
+
+  // DRW-003 displacement.
+  applyDisplacement(positions, shapes, pinnedSet);
+
+  // Build updated batch — only записи, у которых реально поменялись x/y/w/h.
+  const updated: Record<string, [TLRecord, TLRecord]> = {};
+  const affected: string[] = [];
+  const EPS = 1e-6;
+
+  for (const s of shapes) {
+    const p = positions[s.id];
+    if (!p) continue;
+    const oldB = shapeBounds(s);
+    const isFrame = s.type === "frame";
+    const newX = p.x;
+    const newY = p.y;
+    // DRW-004: для frame пишем bbox обратно в props.w/props.h.
+    const newW = isFrame && typeof p.w === "number" ? p.w : undefined;
+    const newH = isFrame && typeof p.h === "number" ? p.h : undefined;
+
+    const xChanged = Math.abs(newX - oldB.x) > EPS;
+    const yChanged = Math.abs(newY - oldB.y) > EPS;
+    const wChanged = newW !== undefined && Math.abs(newW - oldB.w) > EPS;
+    const hChanged = newH !== undefined && Math.abs(newH - oldB.h) > EPS;
+    if (!xChanged && !yChanged && !wChanged && !hChanged) continue;
+
+    const newRec: TLRecord = { ...s, x: newX, y: newY };
+    if (newW !== undefined || newH !== undefined) {
+      const oldProps = (s.props ?? {}) as Record<string, unknown>;
+      const newProps: Record<string, unknown> = { ...oldProps };
+      if (newW !== undefined) newProps.w = newW;
+      if (newH !== undefined) newProps.h = newH;
+      (newRec as { props?: Record<string, unknown> }).props = newProps;
+    }
+    updated[s.id] = [s, newRec];
+    affected.push(s.id);
+  }
+
+  return { batch: { added: {}, updated, removed: {} }, affected };
 }
+
+export type { ElementId };
