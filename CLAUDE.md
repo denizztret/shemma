@@ -2,52 +2,80 @@
 
 **AI-driven canvas board for Claude Code sessions.**
 
-tldraw 5.x frontend + Bun backend (`:8787`) + `didraw` CLI + skill cheat-sheet. Per-session canvas-документы в `~/.claude/projects/<slug>/canvas/<room>.json`. Multi-room, runtime profiles (dev/release/debug), single-binary distribution через `bun build --compile`.
+tldraw 5.x frontend + Bun backend (`:8787` release, `:8788` dev) + `didraw` CLI + skill cheat-sheet. Per-workspace canvas-документы в `~/.claude/projects/<slug-hash>/canvas/<room>.json`. Multi-room, runtime profiles (dev/release/debug), single-binary distribution через `bun build --compile`.
 
 ## Project status
 
-- **Spec:** `docs/superpowers/specs/2026-05-14-di-draw-design.md` (v3.7, approved)
-- **Plan:** `docs/superpowers/plans/2026-05-14-di-draw-implementation.md` (v5, 47 tasks, ~5080 строк)
-- **Stage:** Brainstorm/spec/plan завершены. Готов к исполнению. **Кода ещё нет.**
+- **v0.0.1** (Phase 1 MVP) — shipped.
+- **v0.1.0** (Phase 2.0 persistence hardening) — shipped (tag на `e10174f`).
+- **v0.2.0** (Phase 2.1 Agent v2 domain-first) — shipped (tag на `0af178d`). 255 tests across 4 packages.
+- **Phase 2.2** (Sync hardening + B1 user-arrows + 2.0/2.1 follow-ups) — spec+plan ready (commit `7b0c4b5`), executor mode pending. Target v0.3.0.
+
+## Git policy — repository is LOCAL-ONLY
+
+**Не пушим.** Remote `origin` не настроен и настраивать пока не надо. Все ветки + теги — только локально. Если в future ситуация изменится, user скажет явно. Не предлагай push в каждом ответе.
+
+## Plan workflow (важно)
+
+1. Brainstorm → spec в `docs/superpowers/specs/`.
+2. Plan в `docs/superpowers/plans/`.
+3. **Plan approval gate** — user читает план, могут быть правки и ревью. Не запускать execution самостоятельно.
+4. Перед execution — **подготовка к compact/новой сессии**: убедиться, что memory отражает current state (plan path, executor mode, baseline commit) для clean resume.
+5. После compact/new session — запуск execution по утверждённому плану.
+
+Этот workflow повторяется для каждой phase. Don't skip the approval gate.
 
 ## Architecture summary
 
 - **Core:** `CanvasState + PatchOp` REST/WS API в Bun backend.
+- **Domain layer (v0.2.0+):** typed actions (define/connect/group/note/layout/delete) поверх `@didraw/domain` shared package. AI работает через `POST /api/domain` (`didraw` CLI обёртка), не через сырой `/api/patch`.
+- **Token-cheap context:** `GET /api/agent/context?since=N` отдаёт domain summary без геометрии (≤8KB на 100 элементов).
 - **Machine interface:** `didraw` CLI (lifecycle + data commands), shared `@didraw/client` HTTP wrapper. AI работает через Bash в skill cheat-sheet'е.
 - **Runtime profiles:** `release` (8787, embedded UI) / `dev` (8788, Vite HMR) / `debug` (release + verbose). Параллельная работа без конфликтов.
-- **MCP — Phase 2.1**, тонкий adapter над тем же `@didraw/client`. В MVP нет.
-- **UI:** tldraw editor — primary; di.draw добавляет минимальный service-layer через `components`/`overrides` (room badge, prompts, version footer, update banner). См. spec §3.8.
+- **MCP — Phase 2.3** (не 2.1 — спека сдвинула). Тонкий adapter поверх `/api/domain`, не сырой patch.
+- **UI:** tldraw editor — primary; di.draw добавляет минимальный service-layer через `components`/`overrides`. См. Phase 2.1 spec §3.8.
 
-## Key files
+## Key files (current)
 
-- `docs/superpowers/specs/2026-05-14-di-draw-design.md` — design contract (читай ПЕРЕД любыми архитектурными решениями)
-- `docs/superpowers/plans/2026-05-14-di-draw-implementation.md` — implementation plan, 47 задач в TDD-формате
-- `docs/decisions/` — ADRs (будут появляться по ходу исполнения; первая — ADR-0001 в Task 4)
+- `docs/superpowers/specs/2026-05-14-di-draw-design.md` v3.7 — Phase 1 MVP (shipped).
+- `docs/superpowers/specs/2026-05-15-di-draw-phase2-0-persistence-design.md` v1.2 — Phase 2.0 (shipped).
+- `docs/superpowers/specs/2026-05-15-di-draw-phase2-agent-v2-design.md` v2.1.3 — Phase 2.1 (shipped).
+- `docs/superpowers/specs/2026-05-16-di-draw-phase2-2-sync-hardening-design.md` v0.1 — Phase 2.2 (plan-ready, not executed).
+- `docs/superpowers/plans/` — implementation plans, по одному на phase.
+- `docs/decisions/` — ADRs (ADR-0001 Mermaid frontend-side).
+- `CHANGELOG.md` — версии 0.0.1, 0.1.0, 0.2.0.
+- `MEMORY.md` (auto-memory, в `~/.claude/projects/.../memory/`) — индекс активных memory-файлов.
 
-## How to execute
+## How to execute (current phase)
 
-Запустить subagent-driven-development по плану:
+Запустить subagent-driven-development по утверждённому плану:
 
 ```
 /superpowers:subagent-driven-development
 
-Plan: docs/superpowers/plans/2026-05-14-di-draw-implementation.md
-Spec: docs/superpowers/specs/2026-05-14-di-draw-design.md
+Plan: docs/superpowers/plans/2026-05-16-di-draw-phase2-2-sync-hardening-implementation.md
+Spec: docs/superpowers/specs/2026-05-16-di-draw-phase2-2-sync-hardening-design.md
 Start: Task 1
 ```
 
-Skill сам спавнит свежий subagent на каждую задачу, у которой checkbox `- [ ]` ещё не отмечен. Между задачами — review checkpoint.
+Skill спавнит свежий subagent на каждую задачу. **Review policy: batched** (3-5 задач в блоке, потом spec+quality review одним проходом — см. memory `feedback-batched-reviews`). Финальный full code review — обязателен перед release commit.
 
 ## Debug tooling
 
-- **chrome-devtools MCP** — для visual verification UI (см. Tasks 11.5, 28, 38, 39). Команды: `navigate_page`, `take_screenshot`, `take_snapshot`, `list_console_messages`, `click`.
-- **bun test** — backend, CLI, client (`bun run test` из корня).
-- **Playwright** — UI smoke (Task 39).
+- **chrome-devtools MCP** — для visual verification UI.
+- **bun test** — backend, CLI, client, domain (`bun run test` из корня — 255+ тестов).
+- **Playwright** — пока нет suite, но dependency установлен.
 
 ## Constraints (важно)
 
 - **Не упрощай спеку**. Если что-то непонятно — спросить пользователя или зафиксировать в ADR, не "догадаться".
-- **Cascade-delete, graceful shutdown, deep-merge для style/meta, echo-guard** — не оптимизации, а требования spec. Тесты в Tasks 6/8/10/13 их фиксируют.
-- **tldraw 5.x обязателен** (npm `tldraw@^3.0` соответствует SDK 5.x; для `@tldraw/mermaid`). Проверь `npm view tldraw versions` при install.
-- **CLI — стабильный machine interface**. Если меняешь output, обнови integration-тесты (Task 18) и `CHANGELOG.md` (Phase 1.11).
-- **§3.8 UI design**: tldraw остаётся primary UI, наши элементы — service-layer. Никаких произвольных `position:fixed` overlay'ев.
+- **Cascade-delete, graceful shutdown, deep-merge для style/meta, echo-guard, pin discipline, atomic domain mutations + best-effort layout** — не оптимизации, а требования spec.
+- **tldraw 5.x обязателен.** Проверять `https://tldraw.dev/docs/editor` ПЕРЕД написанием tldraw кода (см. memory `feedback-tldraw-docs`).
+- **CLI — стабильный machine interface.** Меняешь output → обнови integration-тесты + `CHANGELOG.md`.
+- **§3.8 UI design**: tldraw остаётся primary UI, наши элементы — service-layer через components/overrides API. Никаких произвольных `position:fixed` overlay'ев.
+- **Commits:** только описание изменений; никаких `Co-Authored-By`/`Signed-off-by`/`Generated by` trailers (см. global `~/.claude/CLAUDE.md`).
+- **Domain SSOT:** все Role/ConnectionKind/LayoutMode/presets из `@didraw/domain` package. Никаких локальных redeclaration в backend/frontend.
+- **Element identity:** `nameToShapeId(name) === "shape:e_<name>"` — детерминистично.
+- **Container model:** `Group.children: ElementId[]` каноничен; `meta.parent` на узлах НЕ пишется.
+- **Pin/style ownership:** `meta.pinned + meta.position` и `meta.styleOwnedBy === "user"` — user-owned, AI не перетирает.
+- **Daemon-safe room ops:** `flushIfDirty(id) → stat → op`; для restore — evict ПОСЛЕ rename.
