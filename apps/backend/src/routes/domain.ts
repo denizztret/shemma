@@ -24,6 +24,17 @@ function isDeleteWithIds(
   return "ids" in a;
 }
 
+// Groups are addressed by `meta.name` (set by the domain layer) and fall back
+// to `label` for legacy data; the raw `id` is internal and not user-visible.
+function findGroupByName(
+  canvas: RoomState["canvas"],
+  name: string,
+): RoomState["canvas"]["groups"][number] | undefined {
+  return canvas.groups.find(
+    (g) => ((g as { meta?: { name?: string } }).meta?.name ?? g.label) === name,
+  );
+}
+
 function computeAffected(_actions: DomainAction[], ops: PatchOp[]): ElementId[] {
   const out = new Set<string>();
   for (const op of ops) {
@@ -43,10 +54,7 @@ function expandCascadeDeletes(
     const ids = isDeleteWithIds(a) ? a.ids : [a.id];
     const cascade = isDeleteWithIds(a) ? a.cascade === true : false;
     for (const nm of ids) {
-      const grp = canvas.groups.find((g) => {
-        const gname = (g as { meta?: { name?: string } }).meta?.name ?? g.label;
-        return gname === nm;
-      });
+      const grp = findGroupByName(canvas, nm);
       if (grp && grp.children.length > 0 && !cascade) {
         return { cascadeError: { actionIndex: i, affected: [...grp.children] } };
       }
@@ -142,13 +150,10 @@ export function domainRoutes(
       if (!wantsCascade) continue;
       const ids = isDeleteWithIds(a) ? a.ids : [a.id];
       for (const nm of ids) {
-        const grp = room.canvas.groups.find(
-          (g) => ((g as { meta?: { name?: string } }).meta?.name ?? g.label) === nm,
-        );
-        if (grp) {
-          for (const childId of grp.children) {
-            cascadeOps.push({ op: "delete", target: "node", id: childId });
-          }
+        const grp = findGroupByName(room.canvas, nm);
+        if (!grp) continue;
+        for (const childId of grp.children) {
+          cascadeOps.push({ op: "delete", target: "node", id: childId });
         }
       }
     }
