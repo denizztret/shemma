@@ -15,6 +15,26 @@ tldraw 5.x frontend + Bun backend (`:8787` release, `:8788` dev) + `didraw` CLI 
 
 **Не пушим.** Remote `origin` не настроен и настраивать пока не надо. Все ветки + теги — только локально. Если в future ситуация изменится, user скажет явно. Не предлагай push в каждом ответе.
 
+## Git workflow — GitFlow + SemVer
+
+**Branches:**
+- `main` — production-ready. Только merge'ы из feature/hotfix веток + release-коммиты + теги. Прямые коммиты в `main` запрещены (кроме docs/memory изменений вне feature scope).
+- `feature/<short-name>` — новые фазы и крупные feature'ы. От `main`, merge обратно по готовности.
+- `fix/<short-name>` или `hotfix/<short-name>` — баг-фиксы из backlog. От `main`, merge обратно.
+- Merge style: `--no-ff` (сохраняем merge-коммит как явную метку конца ветки).
+- Удалять ветку после merge (локально).
+
+**SemVer (https://semver.org):**
+- `MAJOR.MINOR.PATCH`. Pre-1.0 (`0.x.y`) — нет гарантий API stability, любая `MINOR` может ломать.
+- `MAJOR` (после 1.0) — breaking API change.
+- `MINOR` — backward-compat feature (новая phase обычно).
+- `PATCH` — backward-compat bug fix (фикс из backlog).
+
+**Tags:**
+- Чистые числа без префикса: `0.3.0`, `0.3.1`, `0.4.0` и т.д.
+- НЕ использовать `v0.x.y` — это устаревший формат. Старые `v0.1.0` / `v0.2.0` / `v0.3.0` остаются как legacy; решение про переименование — отдельно.
+- Tag ставится локально на `main` после release-коммита.
+
 ## Plan workflow (важно)
 
 1. Brainstorm → spec в `docs/superpowers/specs/`.
@@ -46,19 +66,25 @@ tldraw 5.x frontend + Bun backend (`:8787` release, `:8788` dev) + `didraw` CLI 
 - `CHANGELOG.md` — версии 0.0.1, 0.1.0, 0.2.0.
 - `MEMORY.md` (auto-memory, в `~/.claude/projects/.../memory/`) — индекс активных memory-файлов.
 
-## How to execute (current phase)
+## Current stage — Stabilization (testing + bugfix)
 
-Запустить subagent-driven-development по утверждённому плану:
+**Phase 2.2 SHIPPED как 0.3.0.** Новые фазы пока НЕ запускаем. Текущий режим — интенсивное тестирование + bug-fix из backlog.
+
+**Where the backlog lives:** `docs/backlog.md` — единый файл с независимыми задачами. Дополняется по мере находки багов. Порядок не фиксирован; задача берётся по приоритету/необходимости.
+
+## How to execute (when phase mode resumes)
+
+Запустить subagent-driven-development по утверждённому плану в отдельной feature-ветке:
 
 ```
+git checkout -b feature/<phase-name>
 /superpowers:subagent-driven-development
-
-Plan: docs/superpowers/plans/2026-05-16-di-draw-phase2-2-sync-hardening-implementation.md
-Spec: docs/superpowers/specs/2026-05-16-di-draw-phase2-2-sync-hardening-design.md
+Plan: docs/superpowers/plans/<plan>.md
+Spec: docs/superpowers/specs/<spec>.md
 Start: Task 1
 ```
 
-Skill спавнит свежий subagent на каждую задачу. **Review policy: phase-end only** — ни spec, ни quality review между задачами не делаем. Implementer-subagent коммитит каждую задачу, идём дальше. **В конце фазы** (после последней задачи плана): (1) `code-simplifier` agent проходит по diff'у фазы и упрощает, (2) затем единый full spec+quality review одним проходом, (3) fixes, (4) release commit + tag. См. memory `feedback-batched-reviews`.
+Skill спавнит свежий subagent на каждую задачу. **Review policy: phase-end only** — ни spec, ни quality review между задачами не делаем. Implementer-subagent коммитит каждую задачу, идём дальше. **В конце фазы** (после последней задачи плана): (1) `code-simplifier` agent проходит по diff'у фазы и упрощает, (2) затем единый full spec+quality review одним проходом, (3) fixes, (4) release commit + tag (числовой, без `v`), (5) merge feature-ветки в `main` через `--no-ff`. См. memory `feedback-batched-reviews`.
 
 ## Debug tooling
 
