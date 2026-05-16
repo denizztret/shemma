@@ -38,9 +38,7 @@ function expandCascadeDeletes(
   actions: DomainAction[],
   canvas: RoomState["canvas"],
 ): { cascadeError?: { actionIndex: number; affected: string[] } } {
-  let i = -1;
-  for (const a of actions) {
-    i += 1;
+  for (const [i, a] of actions.entries()) {
     if (a.kind !== "delete") continue;
     const ids = isDeleteWithIds(a) ? a.ids : [a.id];
     const cascade = isDeleteWithIds(a) ? a.cascade === true : false;

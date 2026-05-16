@@ -42,9 +42,7 @@ export function validateBatch(
   // followed by `connect a b` correctly fail at validation time.
   const known = seedKnown(canvas);
 
-  let i = -1;
-  for (const a of actions) {
-    i += 1;
+  for (const [i, a] of actions.entries()) {
     switch (a.kind) {
       case "define": {
         if (!isValidRole(a.role)) {
