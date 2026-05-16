@@ -1,5 +1,5 @@
-import type { TLShape } from "tldraw";
-import { fromShapeId } from "./id-prefix";
+import type { TLArrowBinding, TLShape, TLShapeId } from "tldraw";
+import { fromShapeId, tlArrowIdToEdgeId } from "./id-prefix";
 import { richTextToString } from "./richtext";
 
 export type NodeValue = {
@@ -11,6 +11,18 @@ export type NodeValue = {
   h?: number;
   label?: string;
   style?: { color?: string; fill?: string };
+};
+
+type Endpoint =
+  | { kind: "node"; id: string }
+  | { kind: "point"; x: number; y: number };
+
+export type EdgeValue = {
+  id: string;
+  from: Endpoint;
+  to: Endpoint;
+  label?: string;
+  style?: { dashed?: boolean };
 };
 
 export type SimpleOp =
@@ -28,7 +40,19 @@ export type SimpleOp =
         style?: { color?: string; fill?: string };
       };
     }
-  | { op: "delete"; target: "node"; id: string };
+  | { op: "delete"; target: "node"; id: string }
+  | { op: "add"; target: "edge"; value: EdgeValue }
+  | {
+      op: "update";
+      target: "edge";
+      id: string;
+      set: Partial<EdgeValue>;
+    }
+  | { op: "delete"; target: "edge"; id: string };
+
+// Snapshot of arrow bindings keyed by arrow shape id. Captured at the same
+// moment as the shapes snapshot so prev/next diffs are coherent.
+export type BindingsSnapshot = Map<TLShapeId, TLArrowBinding[]>;
 
 // biome-ignore lint/suspicious/noExplicitAny: tldraw shape props are not typed via public API
 function readStyle(p: any): { color?: string; fill?: string } | undefined {
@@ -93,15 +117,73 @@ function geoToKind(g: string) {
         : "rect";
 }
 
+function endpointFor(
+  binding: TLArrowBinding | undefined,
+  fallback: { x: number; y: number },
+): Endpoint {
+  if (binding) return { kind: "node", id: fromShapeId(binding.toId) };
+  return { kind: "point", x: fallback.x, y: fallback.y };
+}
+
+function endpointEq(a: Endpoint, b: Endpoint): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "node") return a.id === (b as { id: string }).id;
+  const bp = b as { x: number; y: number };
+  return a.x === bp.x && a.y === bp.y;
+}
+
+function arrowToEdge(
+  s: TLShape,
+  bindings: TLArrowBinding[] | undefined,
+): EdgeValue {
+  const bs = bindings ?? [];
+  const startBinding = bs.find((b) => b.props?.terminal === "start");
+  const endBinding = bs.find((b) => b.props?.terminal === "end");
+  // biome-ignore lint/suspicious/noExplicitAny: tldraw shape props are not typed via public API
+  const p = (s as any).props ?? {};
+  const fallbackStart = { x: p.start?.x ?? 0, y: p.start?.y ?? 0 };
+  const fallbackEnd = { x: p.end?.x ?? 0, y: p.end?.y ?? 0 };
+  const label = richTextToString(p.richText) || undefined;
+  const dashed = p.dash === "dashed";
+  return {
+    id: tlArrowIdToEdgeId(s.id),
+    from: endpointFor(startBinding, fallbackStart),
+    to: endpointFor(endBinding, fallbackEnd),
+    label,
+    style: { dashed },
+  };
+}
+
+// `prevBindings`/`nextBindings` carry arrow bindings keyed by arrow shape id.
+// Callers must snapshot them alongside `prev`/`next` so the diff is coherent.
 export function diffToOps(
   prev: Map<string, TLShape>,
   next: Map<string, TLShape>,
+  prevBindings?: BindingsSnapshot,
+  nextBindings?: BindingsSnapshot,
 ): SimpleOp[] {
   const ops: SimpleOp[] = [];
   for (const [id, s] of next) {
-    // User-created/moved arrows aren't yet round-tripped to backend (edge reverse-flow
-    // is backlog). Skip arrows entirely so cascades from node moves don't leak ops.
-    if (s.type === "arrow") continue;
+    if (s.type === "arrow") {
+      const before = prev.get(id);
+      const curEdge = arrowToEdge(s, nextBindings?.get(s.id));
+      if (!before) {
+        ops.push({ op: "add", target: "edge", value: curEdge });
+        continue;
+      }
+      const prevEdge = arrowToEdge(before, prevBindings?.get(before.id));
+      const set: Partial<EdgeValue> = {};
+      if (!endpointEq(prevEdge.from, curEdge.from)) set.from = curEdge.from;
+      if (!endpointEq(prevEdge.to, curEdge.to)) set.to = curEdge.to;
+      if (prevEdge.label !== curEdge.label) set.label = curEdge.label ?? "";
+      if (prevEdge.style?.dashed !== curEdge.style?.dashed) {
+        set.style = { dashed: curEdge.style?.dashed };
+      }
+      if (Object.keys(set).length > 0) {
+        ops.push({ op: "update", target: "edge", id: curEdge.id, set });
+      }
+      continue;
+    }
     const before = prev.get(id);
     if (!before) {
       const v = shapeToNode(s);
@@ -135,9 +217,12 @@ export function diffToOps(
     }
   }
   for (const [id, s] of prev) {
+    // Arrow deletion is wired up in Task 9; for now leave arrows out of the
+    // delete pass so we don't surface a half-implemented contract.
     if (s.type === "arrow") continue;
     if (!next.has(id))
       ops.push({ op: "delete", target: "node", id: fromShapeId(s.id) });
   }
   return ops;
 }
+

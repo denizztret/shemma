@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { type Editor, type TLShape, type TLShapeId, Tldraw } from "tldraw";
+import {
+  type Editor,
+  type TLArrowBinding,
+  type TLShape,
+  type TLShapeId,
+  Tldraw,
+} from "tldraw";
 import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { isOurOp, rememberOurOpId } from "./canvas/echo-guard";
@@ -203,23 +209,33 @@ export function App({ room }: { room: string }) {
         },
       });
 
+      const snapshotBindings = (
+        shapes: TLShape[],
+      ): Map<TLShapeId, TLArrowBinding[]> => {
+        const m = new Map<TLShapeId, TLArrowBinding[]>();
+        for (const s of shapes) {
+          if (s.type !== "arrow") continue;
+          m.set(s.id, editor.getBindingsFromShape(s, "arrow"));
+        }
+        return m;
+      };
+      const initialShapes = editor.getCurrentPageShapes();
       const snap = new Map<string, TLShape>(
-        editor
-          .getCurrentPageShapes()
-          .map((s) => [s.id as unknown as string, s]),
+        initialShapes.map((s) => [s.id as unknown as string, s]),
       );
+      let snapBindings = snapshotBindings(initialShapes);
       let inflight = false;
       // Skip listener-driven send during programmatic mass-imports (mermaid).
       // The importer issues its own explicit sendPatch with deduplicated ops.
       let suppressLocalSend = false;
       const trySend = () => {
         if (inflight || suppressLocalSend) return;
+        const curShapes = editor.getCurrentPageShapes();
         const cur = new Map<string, TLShape>(
-          editor
-            .getCurrentPageShapes()
-            .map((s) => [s.id as unknown as string, s]),
+          curShapes.map((s) => [s.id as unknown as string, s]),
         );
-        const ops = diffToOps(snap, cur);
+        const curBindings = snapshotBindings(curShapes);
+        const ops = diffToOps(snap, cur, snapBindings, curBindings);
         if (ops.length === 0) return;
         inflight = true;
         const cid = crypto.randomUUID();
@@ -232,6 +248,7 @@ export function App({ room }: { room: string }) {
             // captured by the next trySend below.
             snap.clear();
             for (const [k, v] of cur) snap.set(k, v);
+            snapBindings = curBindings;
           } else {
             // Patch was rejected (422) or the network failed. Leave snap on
             // the last successfully-sent baseline so the rejected ops will
@@ -300,9 +317,11 @@ export function App({ room }: { room: string }) {
         // listener will pick up the unsynced shapes on the next tick and retry.
         if (result.ok) {
           snap.clear();
-          for (const s of editor.getCurrentPageShapes()) {
+          const cur = editor.getCurrentPageShapes();
+          for (const s of cur) {
             snap.set(s.id as unknown as string, s);
           }
+          snapBindings = snapshotBindings(cur);
         }
         suppressLocalSend = false;
         return result;
