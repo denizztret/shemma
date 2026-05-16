@@ -21,6 +21,33 @@ describe("buildContext", () => {
     expect(ctx.summary.byRole.network).toBe(1);
   });
 
+  test("nodes without meta.role contribute to total but not to byRole", () => {
+    const s = seedState();
+    // Add a node with no role in meta.
+    s.canvas.nodes.push({
+      id: "shape:e_unknown",
+      kind: "rect",
+      x: 500,
+      y: 100,
+      w: 120,
+      h: 60,
+      label: "unknown",
+      meta: { name: "unknown" },
+    });
+    const ctx = buildContext(s, { viewport: null });
+    // total counts every node + group.
+    expect(ctx.summary.total).toBe(s.canvas.nodes.length + s.canvas.groups.length);
+    // byRole entries unchanged — the unknown-role node is not counted.
+    expect(ctx.summary.byRole.service).toBe(1);
+    expect(ctx.summary.byRole.datastore).toBe(1);
+    expect(ctx.summary.byRole.network).toBe(1);
+    // ElementCompact omits role field when meta.role is absent.
+    const unknown = ctx.inView.find((e) => e.id === "unknown");
+    expect(unknown).toBeDefined();
+    expect(unknown?.role).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(unknown!, "role")).toBe(false);
+  });
+
   test("no geometry leaks — inView/selection/connections never carry x/y/w/h/fill", () => {
     // Use a non-null viewport so that the bug (geometry leaking into an element)
     // would actually be distinguishable from the legitimate ctx.viewport block.

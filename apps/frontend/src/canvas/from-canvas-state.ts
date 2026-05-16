@@ -1,9 +1,13 @@
 import type { TLShapeId, TLShapePartial } from "tldraw";
-import type { Role } from "@didraw/domain";
+import type { ConnectionKind, Role } from "@didraw/domain";
 import { toEdgeShapeId, toShapeId } from "./id-prefix";
 import { kindToTldraw } from "./kinds";
 import { labelToRichText } from "./richtext";
-import { PORT_SIDE_TO_ANCHOR, rolePropsForNode } from "./role-render";
+import {
+  PORT_SIDE_TO_ANCHOR,
+  connectionPropsForEdge,
+  rolePropsForNode,
+} from "./role-render";
 
 // TLBindingCreate is not re-exported from tldraw root; mirror the minimal shape we use.
 export type ArrowBindingCreate = {
@@ -149,6 +153,13 @@ export function edgeToShape(e: EdgeValue): {
   const arrowheadStart = arrow === "both" ? "arrow" : "none";
   const arrowheadEnd = arrow === "none" ? "none" : "arrow";
 
+  // Apply ConnectionKind preset: dashed defaults from preset (explicit style wins),
+  // and defaultLabel fills in when the edge has no own label.
+  const kind = e.meta?.kind as ConnectionKind | undefined;
+  const connProps = connectionPropsForEdge(kind);
+  const dashed = e.style?.dashed ?? connProps.dashed;
+  const labelText = e.label && e.label.length > 0 ? e.label : connProps.defaultLabel;
+
   const shape: TLShapePartial = {
     id: arrowId,
     type: "arrow",
@@ -159,8 +170,8 @@ export function edgeToShape(e: EdgeValue): {
       end: endCoord,
       arrowheadStart,
       arrowheadEnd,
-      dash: e.style?.dashed ? "dashed" : "solid",
-      richText: labelToRichText(e.label),
+      dash: dashed ? "dashed" : "solid",
+      richText: labelToRichText(labelText),
     },
     meta: { canvasId: e.id, kind: "edge" },
   };

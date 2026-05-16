@@ -5,7 +5,7 @@ export type Viewport = { x: number; y: number; w: number; h: number } | null;
 
 export type ElementCompact = {
   id: string;
-  role: Role;
+  role?: Role;
   label?: string;
   parent?: string;
   pinned?: true;
@@ -59,10 +59,9 @@ function parentOf(canvas: CanvasState, nodeId: string): string | undefined {
 }
 
 function nodeToCompact(canvas: CanvasState, n: Node): ElementCompact {
-  const out: ElementCompact = {
-    id: (n.meta?.name as string) ?? n.id,
-    role: (n.meta?.role as Role) ?? "service",
-  };
+  const out: ElementCompact = { id: (n.meta?.name as string) ?? n.id };
+  const role = n.meta?.role as Role | undefined;
+  if (role) out.role = role;
   if (n.label && n.label !== out.id) out.label = n.label;
   const p = parentOf(canvas, n.id);
   if (p) out.parent = p;
@@ -89,14 +88,18 @@ export function buildContext(
   const vp = opts.viewport;
   const since = opts.since;
 
-  // Build byRole counts from nodes and groups
+  // Build byRole counts from nodes and groups. Nodes/groups without meta.role
+  // contribute to summary.total but are intentionally skipped here — see
+  // [[phase-2-1-followups]] m2.
   const byRole: Partial<Record<Role, number>> = {};
   for (const n of canvas.nodes) {
-    const r = (n.meta?.role as Role | undefined) ?? "service";
+    const r = n.meta?.role as Role | undefined;
+    if (!r) continue;
     byRole[r] = (byRole[r] ?? 0) + 1;
   }
   for (const g of canvas.groups) {
-    const r = ((g as { meta?: { role?: Role } }).meta?.role) ?? "network";
+    const r = (g as { meta?: { role?: Role } }).meta?.role;
+    if (!r) continue;
     byRole[r] = (byRole[r] ?? 0) + 1;
   }
 
@@ -157,7 +160,8 @@ export function buildContext(
         const byR: Partial<Record<Role, number>> = {};
         for (const n of canvas.nodes) {
           if (inViewport(n, vp)) continue;
-          const r = (n.meta?.role as Role | undefined) ?? "service";
+          const r = n.meta?.role as Role | undefined;
+          if (!r) continue;
           byR[r] = (byR[r] ?? 0) + 1;
         }
         return { byRole: byR };

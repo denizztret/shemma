@@ -259,6 +259,11 @@ export function domainRoutes(
                 room.opLog.splice(0, room.opLog.length - config.opLogMaxSize);
               }
               opts.onDirty?.(id, room);
+              // Intentional second publish: clients receive a two-phase render —
+              // first the semantic mutation, then the layout-adjusted positions.
+              // Echo-guard de-dupes own-origin clientOpId; for cross-client, this
+              // gives a visible "rearrange" animation. Combining into one publish
+              // would defeat that. See [[phase-2-1-followups]] m1.
               bus.publish(id, { ops: posOps, source: "ai", version: room.version });
             }
           }
