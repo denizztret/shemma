@@ -127,10 +127,9 @@ function endpointFor(
 }
 
 function endpointEq(a: Endpoint, b: Endpoint): boolean {
-  if (a.kind !== b.kind) return false;
-  if (a.kind === "node") return a.id === (b as { id: string }).id;
-  const bp = b as { x: number; y: number };
-  return a.x === bp.x && a.y === bp.y;
+  if (a.kind === "node" && b.kind === "node") return a.id === b.id;
+  if (a.kind === "point" && b.kind === "point") return a.x === b.x && a.y === b.y;
+  return false;
 }
 
 function arrowToEdge(
