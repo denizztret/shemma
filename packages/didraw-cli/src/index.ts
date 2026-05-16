@@ -59,12 +59,14 @@ async function main() {
     let mode: string | undefined;
     let scope: string | undefined;
     let spacing: string | undefined;
+    let room: string | undefined;
     for (let i = 1; i < argv.length; i++) {
       if (argv[i] === "--mode") mode = argv[++i];
       else if (argv[i] === "--scope") scope = argv[++i];
       else if (argv[i] === "--spacing") spacing = argv[++i];
+      else if (argv[i] === "--room") room = argv[++i];
     }
-    return layoutCmd({ mode, scope, spacing, profile });
+    return layoutCmd({ mode, scope, spacing, profile, room });
   }
   if (cmd === "prompts") return cmdPrompts(argv.slice(1));
   if (cmd === "ai") {
@@ -168,11 +170,13 @@ async function main() {
     if (!role || !name) { console.error(JSON.stringify({ ok: false, error: "expected <role> <name>" })); process.exit(1); }
     let label: string | undefined;
     let inContainer: string | undefined;
+    let room: string | undefined;
     for (let i = 3; i < argv.length; i++) {
       if (argv[i] === "--label") label = argv[++i];
       else if (argv[i] === "--in") inContainer = argv[++i];
+      else if (argv[i] === "--room") room = argv[++i];
     }
-    return define({ role, name, label, in: inContainer, profile });
+    return define({ role, name, label, in: inContainer, profile, room });
   }
 
   if (cmd === "connect") {
@@ -181,11 +185,13 @@ async function main() {
     if (!from || !to) { console.error(JSON.stringify({ ok: false, error: "expected <from> <to>" })); process.exit(1); }
     let kind: string | undefined;
     let label: string | undefined;
+    let room: string | undefined;
     for (let i = 3; i < argv.length; i++) {
       if (argv[i] === "--kind") kind = argv[++i];
       else if (argv[i] === "--label") label = argv[++i];
+      else if (argv[i] === "--room") room = argv[++i];
     }
-    return connectCmd({ from, to, kind, label, profile });
+    return connectCmd({ from, to, kind, label, profile, room });
   }
 
   if (cmd === "group") {
@@ -193,46 +199,60 @@ async function main() {
     let asKind: string | undefined;
     let name: string | undefined;
     let label: string | undefined;
+    let room: string | undefined;
     for (let i = 2; i < argv.length; i++) {
       if (argv[i] === "--as") asKind = argv[++i];
       else if (argv[i] === "--name") name = argv[++i];
       else if (argv[i] === "--label") label = argv[++i];
+      else if (argv[i] === "--room") room = argv[++i];
     }
     if (!asKind || !name) { console.error(JSON.stringify({ ok: false, error: "expected --as <kind> --name <name>" })); process.exit(1); }
-    return group({ ids, as: asKind, name, label, profile });
+    return group({ ids, as: asKind, name, label, profile, room });
   }
 
   if (cmd === "note") {
     let text: string | undefined;
     let about: string | undefined;
+    let room: string | undefined;
     for (let i = 1; i < argv.length; i++) {
       if (argv[i] === "--text") text = argv[++i];
       else if (argv[i] === "--about") about = argv[++i];
+      else if (argv[i] === "--room") room = argv[++i];
     }
     if (!text) { console.error(JSON.stringify({ ok: false, error: "expected --text \"...\"" })); process.exit(1); }
-    return note({ text, about, profile });
+    return note({ text, about, profile, room });
   }
 
   if (cmd === "delete") {
     const ids = argv[1]?.split(",") ?? [];
     const cascade = argv.includes("--cascade");
+    let room: string | undefined;
+    for (let i = 2; i < argv.length; i++) {
+      if (argv[i] === "--room") room = argv[++i];
+    }
     if (ids.length === 0) { console.error(JSON.stringify({ ok: false, error: "expected <id1,id2,...>" })); process.exit(1); }
-    return deleteCmd({ ids, cascade, profile });
+    return deleteCmd({ ids, cascade, profile, room });
   }
 
   if (cmd === "apply") {
     if (!argv.includes("--stdin")) { console.error(JSON.stringify({ ok: false, error: "expected --stdin" })); process.exit(1); }
-    return applyStdin({ profile });
+    let room: string | undefined;
+    for (let i = 1; i < argv.length; i++) {
+      if (argv[i] === "--room") room = argv[++i];
+    }
+    return applyStdin({ profile, room });
   }
 
   if (cmd === "context") {
     let since: number | undefined;
     let viewport: string | undefined;
+    let room: string | undefined;
     for (let i = 1; i < argv.length; i++) {
       if (argv[i] === "--since") since = Number(argv[++i]);
       else if (argv[i] === "--viewport") viewport = argv[++i];
+      else if (argv[i] === "--room") room = argv[++i];
     }
-    return context({ since, viewport, profile });
+    return context({ since, viewport, profile, room });
   }
 
   usage();
@@ -252,15 +272,15 @@ Lifecycle:
   rooms import   <path> [--as <id>] [--force]
   rooms rm       <id> --confirm
 
-Domain (preferred AI interface):
-  define <role> <name> [--label "..."] [--in <container>]
-  connect <from> <to> [--kind sync|async|data|dep] [--label "..."]
-  group <id1,id2,...> --as network|boundary --name <name> [--label "..."]
-  note --text "..." [--about <name>]
-  layout [--mode layered-lr|layered-tb|tree|pack|force] [--scope all|<group>] [--spacing compact|normal|loose]
-  delete <id1,id2,...> [--cascade]
-  apply --stdin       # JSON batch on stdin
-  context [--since N] [--viewport x,y,w,h]
+Domain (preferred AI interface) — каждая команда принимает [--room <id>] (default = "default"):
+  define <role> <name> [--label "..."] [--in <container>] [--room <id>]
+  connect <from> <to> [--kind sync|async|data|dep] [--label "..."] [--room <id>]
+  group <id1,id2,...> --as network|boundary --name <name> [--label "..."] [--room <id>]
+  note --text "..." [--about <name>] [--room <id>]
+  layout [--mode layered-lr|layered-tb|tree|pack|force] [--scope all|<group>] [--spacing compact|normal|loose] [--room <id>]
+  delete <id1,id2,...> [--cascade] [--room <id>]
+  apply --stdin [--room <id>]                 # JSON batch on stdin
+  context [--since N] [--viewport x,y,w,h] [--room <id>]
 
 Data:
   state    --room <id> [--compact] [--since <v>]
