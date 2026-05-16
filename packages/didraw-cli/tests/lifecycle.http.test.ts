@@ -50,21 +50,16 @@ describe("didraw rooms via subprocess CLI", () => {
   });
 
   test("rooms export → import roundtrip via CLI", async () => {
+    // Phase 3.0: room populated via /api/domain (the only mutation path now);
+    // /api/patch was removed (spec §10).
     const body = JSON.stringify({
-      ops: [
-        {
-          op: "add",
-          target: "node",
-          value: { id: "n1", kind: "rect", x: 0, y: 0 },
-        },
-      ],
-      source: "user",
+      actions: [{ kind: "define", role: "service", name: "n1" }],
     });
-    const patch = await cli(["patch", "--stdin"], {
+    const seed = await cli(["apply", "--stdin"], {
       env: { ...envBase(), CLAUDE_SESSION_ID: "src-room" },
       input: body,
     });
-    expect(patch.status).toBe(0);
+    expect(seed.status).toBe(0);
 
     const target = join(dir, "..", "exp-via-cli.json");
     const exp = await cli(["rooms", "export", "src-room", "--to", target]);
@@ -87,16 +82,9 @@ describe("didraw rooms via subprocess CLI", () => {
 
   test("rooms archive then restore via CLI", async () => {
     const body = JSON.stringify({
-      ops: [
-        {
-          op: "add",
-          target: "node",
-          value: { id: "n1", kind: "rect", x: 0, y: 0 },
-        },
-      ],
-      source: "user",
+      actions: [{ kind: "define", role: "service", name: "n1" }],
     });
-    await cli(["patch", "--stdin"], {
+    await cli(["apply", "--stdin"], {
       env: { ...envBase(), CLAUDE_SESSION_ID: "to-archive" },
       input: body,
     });

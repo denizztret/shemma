@@ -42,16 +42,42 @@ async function cli(args: string[], input?: string) {
   return { status, stdout, stderr };
 }
 
-async function stateOf(room: string): Promise<{
-  nodes: Array<{ id: string }>;
-  edges: Array<{ id: string }>;
-  groups: Array<{ id: string }>;
-}> {
+type RoomView = {
+  nodes: Array<{ id: string; role?: string }>;
+  edges: Array<{ id: string; from?: string; to?: string }>;
+  groups: Array<{ id: string; children?: string[] }>;
+};
+
+// Phase 3.0: /api/state.canvas removed. We project /api/agent/context into the
+// same node/edge/group buckets used by these tests so the assertions remain
+// expressive without coupling to the new view shape inline.
+async function stateOf(room: string): Promise<RoomView> {
   const r = await fetch(
-    `http://localhost:${srv.port}/api/state?room=${encodeURIComponent(room)}&fmt=compact`,
+    `http://localhost:${srv.port}/api/agent/context?room=${encodeURIComponent(room)}`,
   );
-  const j = (await r.json()) as { canvas: { nodes: unknown[]; edges: unknown[]; groups: unknown[] } };
-  return j.canvas as ReturnType<typeof stateOf> extends Promise<infer T> ? T : never;
+  const j = (await r.json()) as {
+    ok: true;
+    elements: Array<{
+      id: string;
+      type: "shape" | "connection" | "group" | "note";
+      role?: string;
+      from?: string;
+      to?: string;
+      children?: string[];
+    }>;
+  };
+  const view: RoomView = { nodes: [], edges: [], groups: [] };
+  for (const el of j.elements) {
+    if (el.type === "connection") {
+      view.edges.push({ id: el.id, from: el.from, to: el.to });
+    } else if (el.type === "group") {
+      view.groups.push({ id: el.id, children: el.children });
+    } else {
+      // shape | note
+      view.nodes.push({ id: el.id, role: el.role });
+    }
+  }
+  return view;
 }
 
 describe("DRW-009: apply --room", () => {
@@ -78,7 +104,8 @@ describe("DRW-009: apply --room", () => {
     expect(r.status).toBe(0);
 
     const def = await stateOf("default");
-    expect(def.nodes.some((n) => n.id === "shape:e_auth2")).toBe(true);
+    // Phase 3.0: element.id is the didrawName ("auth2"), not "shape:e_auth2".
+    expect(def.nodes.some((n) => n.id === "auth2")).toBe(true);
   });
 
   test("apply --room с невалидным id → exit 1, ничего не создано", async () => {
@@ -97,7 +124,7 @@ describe("DRW-010: domain commands --room", () => {
     expect(JSON.parse(r.stdout).ok).toBe(true);
 
     const target = await stateOf("drw010-def");
-    expect(target.nodes.some((n) => n.id === "shape:e_svc1")).toBe(true);
+    expect(target.nodes.some((n) => n.id === "svc1")).toBe(true);
   });
 
   test("connect --room соединяет в указанной room", async () => {
@@ -153,14 +180,19 @@ describe("DRW-010: domain commands --room", () => {
     expect(target.nodes.length).toBe(0);
   });
 
-  test("context --room возвращает summary указанной room", async () => {
+  test("context --room возвращает view указанной room", async () => {
     await cli(["define", "service", "ctx1", "--room", "drw010-ctx"]);
     const r = await cli(["context", "--room", "drw010-ctx"]);
     expect(r.status).toBe(0);
+    // Phase 3.0: context view shape changed (spec §8) — `summary.byRole` is
+    // gone; assert via `elements[]` projection instead.
     const body = JSON.parse(r.stdout) as {
-      summary: { byRole: Record<string, number> };
+      ok: true;
+      elements: Array<{ id: string; role?: string }>;
     };
-    expect(body.summary.byRole.service).toBe(1);
+    const services = body.elements.filter((e) => e.role === "service");
+    expect(services.length).toBe(1);
+    expect(services[0].id).toBe("ctx1");
   });
 
   test("две параллельные комнаты изолированы", async () => {
@@ -169,9 +201,9 @@ describe("DRW-010: domain commands --room", () => {
 
     const a = await stateOf("drw010-iso-a");
     const b = await stateOf("drw010-iso-b");
-    expect(a.nodes.some((n) => n.id === "shape:e_left")).toBe(true);
-    expect(a.nodes.some((n) => n.id === "shape:e_right")).toBe(false);
-    expect(b.nodes.some((n) => n.id === "shape:e_right")).toBe(true);
-    expect(b.nodes.some((n) => n.id === "shape:e_left")).toBe(false);
+    expect(a.nodes.some((n) => n.id === "left")).toBe(true);
+    expect(a.nodes.some((n) => n.id === "right")).toBe(false);
+    expect(b.nodes.some((n) => n.id === "right")).toBe(true);
+    expect(b.nodes.some((n) => n.id === "left")).toBe(false);
   });
 });

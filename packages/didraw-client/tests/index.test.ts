@@ -19,31 +19,42 @@ describe("CanvasClient", () => {
     delete process.env.CLAUDE_SESSION_ID;
   });
 
-  test("getState returns empty for new room", async () => {
+  test("getState returns empty store for new room", async () => {
     const c = new CanvasClient({
       baseUrl: `http://localhost:${srv.port}`,
       room: "test1",
     });
-    const s = await c.getState();
-    expect(s.canvas.nodes).toEqual([]);
+    const s = (await c.getState({ fmt: "full" })) as {
+      version: number;
+      store: { store?: Record<string, unknown> };
+    };
+    expect(s.version).toBe(0);
+    // Empty room ships with the tldraw scaffolding records (document + first
+    // page) but zero user-created shapes/bindings.
+    const records = Object.values(s.store.store ?? {}) as Array<{
+      typeName?: string;
+    }>;
+    expect(records.some((r) => r.typeName === "shape")).toBe(false);
+    expect(records.some((r) => r.typeName === "binding")).toBe(false);
   });
 
-  test("applyPatch + getState round-trip", async () => {
+  test("applyDomain + getContext round-trip", async () => {
+    // Phase 3.0: /api/patch removed; canonical mutation path is /api/domain.
     const c = new CanvasClient({
       baseUrl: `http://localhost:${srv.port}`,
       room: "test2",
     });
-    const r = await c.applyPatch([
-      {
-        op: "add",
-        target: "node",
-        value: { id: "n1", kind: "rect", x: 0, y: 0 },
-      },
-    ]);
+    const r = (await c.applyDomain({
+      actions: [{ kind: "define", role: "service", name: "n1" }],
+    })) as { ok: boolean; version: number };
     expect(r.ok).toBe(true);
-    expect(r.version).toBe(1);
-    const s = await c.getState();
-    expect(s.canvas.nodes[0].id).toBe("n1");
+    expect(r.version).toBeGreaterThan(0);
+
+    const view = (await c.getContext()) as {
+      ok: true;
+      elements: Array<{ id: string; role?: string }>;
+    };
+    expect(view.elements.some((e) => e.id === "n1" && e.role === "service")).toBe(true);
   });
 
   test("deletePrompt + purgePrompts", async () => {

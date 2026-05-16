@@ -42,8 +42,15 @@ describe("didraw domain CLI", () => {
 
     const ctx = await cli(["context"], env);
     expect(ctx.status).toBe(0);
-    const body = JSON.parse(ctx.stdout);
-    expect(body.summary.byRole.service).toBe(1);
+    // Phase 3.0: context view shape changed (spec §8) — `summary.byRole` is
+    // gone; the canonical projection is `elements[]` with `role` per element.
+    const body = JSON.parse(ctx.stdout) as {
+      ok: true;
+      elements: Array<{ id: string; role?: string }>;
+    };
+    const services = body.elements.filter((e) => e.role === "service");
+    expect(services.length).toBe(1);
+    expect(services[0].id).toBe("auth");
   });
 
   test("apply --stdin with batch", async () => {
