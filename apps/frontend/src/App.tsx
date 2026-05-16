@@ -102,6 +102,24 @@ export function App({ room }: { room: string }) {
     let unsubStore: (() => void) | undefined;
     let unsubSel: (() => void) | undefined;
     let camSaveTimer: ReturnType<typeof setTimeout> | undefined;
+    // Replace the entire canvas with shapes/bindings derived from server state.
+    // Used both for the initial mount and as a `truncated` recovery path when
+    // the WS server cannot replay the gap between our `lastVersion` and the
+    // current room version.
+    const replaceCanvasFromState = (s: Awaited<ReturnType<typeof getState>>) => {
+      const nodeShapes = s.canvas.nodes.map(nodeToShape);
+      const edgeData: ReturnType<typeof edgeToShape>[] =
+        s.canvas.edges.map(edgeToShape);
+      const allShapes = [...nodeShapes, ...edgeData.map((d) => d.shape)];
+      const allBindings = edgeData.flatMap((d) => d.bindings);
+      editor.store.mergeRemoteChanges(() => {
+        const existing = editor.getCurrentPageShapes().map((sh) => sh.id);
+        if (existing.length) editor.deleteShapes(existing);
+        if (allShapes.length) editor.createShapes(allShapes);
+        if (allBindings.length) editor.createBindings(allBindings);
+      });
+      return allShapes.length;
+    };
     (async () => {
       const s = await getState();
       if (!active) return;
@@ -111,17 +129,11 @@ export function App({ room }: { room: string }) {
         .then((r) => r.json())
         .then((j) => active && setAiActivity(j.activity ?? null))
         .catch(() => {});
-      const nodeShapes = s.canvas.nodes.map(nodeToShape);
-      const edgeData: ReturnType<typeof edgeToShape>[] =
-        s.canvas.edges.map(edgeToShape);
-      const allShapes = [...nodeShapes, ...edgeData.map((d) => d.shape)];
-      const allBindings = edgeData.flatMap((d) => d.bindings);
-      if (allShapes.length) editor.createShapes(allShapes);
-      if (allBindings.length) editor.createBindings(allBindings);
+      const shapesCount = replaceCanvasFromState(s);
       const cam = loadCamera(room);
       if (cam) {
         editor.setCamera(cam, { immediate: true });
-      } else if (allShapes.length) {
+      } else if (shapesCount) {
         // First visit: fit to content so the room doesn't open blank.
         editor.zoomToFit({ animation: { duration: 0 } });
       }
@@ -130,6 +142,19 @@ export function App({ room }: { room: string }) {
         onPromptResolved: () => setPromptsTick((x) => x + 1),
         onPromptRemoved: () => setPromptsTick((x) => x + 1),
         onAiActivity: (a) => setAiActivity(a),
+        onTruncated: () => {
+          // Server signalled our lastVersion is outside the opLog window;
+          // re-fetch full state and replace the canvas.
+          void (async () => {
+            try {
+              const fresh = await getState();
+              if (!active) return;
+              replaceCanvasFromState(fresh);
+            } catch (e) {
+              console.warn("[didraw] truncated recovery failed:", e);
+            }
+          })();
+        },
         onPatch: (m) => {
           if (isOurOp(m.originClientId)) return;
           const newNodeIds: TLShapeId[] = [];
