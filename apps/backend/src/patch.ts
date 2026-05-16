@@ -1,3 +1,4 @@
+import { isSupportedNodeKind, SUPPORTED_NODE_KINDS } from "./domain/supported-kinds";
 import type { CanvasState, Edge, Group, Node, PatchOp } from "./types";
 
 export type ApplyResult =
@@ -32,6 +33,15 @@ function addOp(
   if (op.target === "node") {
     if (s.nodes.some((n) => n.id === op.value.id))
       return { ok: false, state: s, error: `node ${op.value.id} exists` };
+    // DRW-024: reject unsupported tldraw shape kinds at the boundary so they
+    // can't corrupt the persisted envelope (frontend whitelist is defence-in-depth).
+    if (!isSupportedNodeKind(op.value.kind)) {
+      return {
+        ok: false,
+        state: s,
+        error: `unsupported node kind "${op.value.kind}" (expected one of: ${SUPPORTED_NODE_KINDS.join(", ")})`,
+      };
+    }
     return { ok: true, state: { ...s, nodes: [...s.nodes, op.value] } };
   }
   if (op.target === "edge") {
@@ -69,6 +79,14 @@ function updateOp(
     const idx = s.nodes.findIndex((n) => n.id === op.id);
     if (idx === -1)
       return { ok: false, state: s, error: `node ${op.id} not found` };
+    // DRW-024: если update меняет kind — проверить что новый kind поддержан.
+    if (op.set.kind !== undefined && !isSupportedNodeKind(op.set.kind)) {
+      return {
+        ok: false,
+        state: s,
+        error: `unsupported node kind "${op.set.kind}" (expected one of: ${SUPPORTED_NODE_KINDS.join(", ")})`,
+      };
+    }
     const merged = mergeRecord(s.nodes[idx], op.set, ["style", "meta"]) as Node;
     const nodes = [...s.nodes];
     nodes[idx] = merged;

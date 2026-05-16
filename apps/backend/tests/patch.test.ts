@@ -9,6 +9,76 @@ const empty = (): CanvasState => ({
   groups: [],
 });
 
+describe("DRW-024: applyPatch reject unsupported node kinds", () => {
+  test("add node с kind=freeform → reject + не модифицирует state", () => {
+    const r = applyPatch(empty(), [
+      {
+        op: "add",
+        target: "node",
+        // biome-ignore lint/suspicious/noExplicitAny: deliberately testing untyped input
+        value: { id: "broken", kind: "freeform" as any, x: 0, y: 0 },
+      },
+    ]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toContain("unsupported node kind");
+      expect(r.error).toContain("freeform");
+    }
+  });
+
+  test("add node с kind=draw → reject", () => {
+    const r = applyPatch(empty(), [
+      {
+        op: "add",
+        target: "node",
+        // biome-ignore lint/suspicious/noExplicitAny: deliberately testing untyped input
+        value: { id: "d1", kind: "draw" as any, x: 0, y: 0 },
+      },
+    ]);
+    expect(r.ok).toBe(false);
+  });
+
+  test("add node с kind=image → reject", () => {
+    const r = applyPatch(empty(), [
+      {
+        op: "add",
+        target: "node",
+        // biome-ignore lint/suspicious/noExplicitAny: deliberately testing untyped input
+        value: { id: "img1", kind: "image" as any, x: 0, y: 0 },
+      },
+    ]);
+    expect(r.ok).toBe(false);
+  });
+
+  test("update node меняет kind на unsupported → reject", () => {
+    const s: CanvasState = {
+      version: 1,
+      nodes: [{ id: "n1", kind: "rect", x: 0, y: 0 }],
+      edges: [],
+      groups: [],
+    };
+    const r = applyPatch(s, [
+      {
+        op: "update",
+        target: "node",
+        id: "n1",
+        // biome-ignore lint/suspicious/noExplicitAny: deliberately testing untyped input
+        set: { kind: "freeform" as any },
+      },
+    ]);
+    expect(r.ok).toBe(false);
+  });
+
+  test("add node с supported kinds — accept", () => {
+    for (const k of ["rect", "ellipse", "diamond", "sticky", "text"] as const) {
+      const r = applyPatch(empty(), [
+        { op: "add", target: "node", value: { id: `n-${k}`, kind: k, x: 0, y: 0 } },
+      ]);
+      expect(r.ok).toBe(true);
+    }
+  });
+});
+
 describe("applyPatch", () => {
   test("add node", () => {
     const r = applyPatch(empty(), [

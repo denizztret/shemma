@@ -38,6 +38,8 @@ function styleToProps(style?: NodeStyle): Record<string, string> {
   return out;
 }
 
+// DRW-024: возвращаем null для unsupported / unknown kind — caller skips.
+// Это защищает tldraw от crash'а на reload corrupted envelope с broken kind.
 export function nodeToShape(n: {
   id: string;
   kind: string;
@@ -48,8 +50,9 @@ export function nodeToShape(n: {
   label?: string;
   style?: NodeStyle;
   meta?: Record<string, unknown>;
-}): TLShapePartial {
+}): TLShapePartial | null {
   const tld = kindToTldraw(n.kind);
+  if (tld === null) return null;
   const styleProps = styleToProps(n.style);
   const role = n.meta?.role as Role | undefined;
   if (role) {
@@ -80,16 +83,6 @@ export function nodeToShape(n: {
       x: n.x,
       y: n.y,
       props: { ...styleProps, richText: labelToRichText(n.label) },
-      meta: { canvasId: n.id, kind: n.kind },
-    };
-  }
-
-  if (tld === "draw") {
-    return {
-      id: toShapeId(n.id),
-      type: "draw",
-      x: n.x,
-      y: n.y,
       meta: { canvasId: n.id, kind: n.kind },
     };
   }
