@@ -61,6 +61,58 @@
 - **Files:** `apps/backend/src/domain/compile.ts` (group case), `apps/backend/src/domain/layout-postprocess.ts`.
 - **Related:** D3 (если pin'ятся дети — bbox не пересчитан).
 
+### D6 — Frontend retries rejected patch вместо stop-on-422 (loop runaway)
+
+- **Severity:** **CRITICAL** — порождает 27000+ ошибок 422 за минуту при первой rejection.
+- **Repro:** В chrome-devtools `editor.createShape({type:"arrow",...})` без `markHistoryStoppingPoint` → frontend пытается отправить patch с дубликатом существующих node-id → 422 → retry → 422 → ... loop.
+- **Network panel:** 15637 requests + 27820 console errors за минуту.
+- **Expected:** После 422 frontend пишет в ErrorBanner и НЕ retry'ит ту же mutation; ждёт следующего store change.
+- **Actual:** Каждый WS message и/или store tick re-вычисляет diff (baseline ≠ server state) и снова шлёт rejected ops.
+- **Suggested fix:** В `transport/api.ts:sendPatch` после 422 — bump `lastReceivedVersion` или reset diff baseline на текущий server state (re-fetch + replaceCanvasFromState). Также добавить error throttle (no более N retry/sec).
+- **Files:** `apps/frontend/src/transport/api.ts`, `apps/frontend/src/canvas/to-patch.ts` (baseline reset), `apps/frontend/src/App.tsx`.
+- **Related:** W3 (нет frontend tests на to-patch) — этот баг должен был бы покрываться unit-тестами на baseline reset.
+
+### D7 — Программный `createShape` без `markHistoryStoppingPoint` не триггерит patch send
+
+- **Severity:** major (тестовая обстановка).
+- **Repro:** `editor.createShape({type:"arrow",...}); editor.createBindings([...])` → frontend listener не отправляет `add edge` op на backend. С `markHistoryStoppingPoint` перед createShape — отправляет правильно.
+- **Expected:** Любое изменение в editor.store → diff → patch send (если source !== "remote").
+- **Actual:** Listener привязан к history mark, а не к raw store change. Программные mutations без mark игнорируются.
+- **Suggested fix:** Либо документировать (это intended — фильтр noise), либо listener'у дополнить event = store.listen('document') + diff vs prev baseline regardless of history mark.
+- **Files:** `apps/frontend/src/App.tsx` (где подписка).
+- **Workaround:** для tests / smoke использовать `editor.markHistoryStoppingPoint("...")` перед мутацией.
+
+### D10 — CLI `apply --room <id>` и body `"room":...` игнорируются — всё идёт в `default`
+
+- **Severity:** **CRITICAL** для multi-room flows.
+- **Repro:**
+  1. `didraw apply --stdin --room second <<< '{"actions":[{"kind":"define","role":"service","name":"X"}]}'` → response 200 + applied successfully.
+  2. `didraw rooms list` → нет комнаты `second`. Все mutations попали в `default` (виден affected list с старыми шейпами default'а).
+  3. Тот же эффект без `--room` (когда `"room"` положили в body JSON).
+- **Expected:** `--room <id>` или body.room меняет target room для apply; rooms list показывает новую комнату.
+- **Actual:** CLI `apply` не парсит `--room`, body.room игнорируется HTTP-route `/api/domain` (или body.room не передаётся в route'-router). Всё пишется в default.
+- **Suggested fix:** Проверить в `packages/didraw-cli/src/index.ts:apply` — передаётся ли `--room` как `?room=<id>` query param. Проверить в `apps/backend/src/routes/domain.ts` — читается ли `query.room` для маршрутизации.
+- **Files:** `packages/didraw-cli/src/index.ts`, `apps/backend/src/routes/domain.ts`.
+- **Workaround:** Использовать `rooms import` для создания новой комнаты. Define/connect не имеют `--room` опции и привязаны к default.
+
+### D11 — Все CLI domain команды (`define`, `connect`, `group`, ...) не поддерживают target room
+
+- **Severity:** **CRITICAL** для multi-room AI workflows.
+- **Repro:** `didraw --help` не показывает `--room` для define/connect/group/note/layout/delete. Команда `define service X` всегда пишет в default.
+- **Expected:** Все domain команды должны принимать `--room <id>`, по умолчанию = `default`.
+- **Suggested fix:** Добавить `--room` опцию во все domain dispatcher branches в `packages/didraw-cli/src/index.ts`. Передавать в HTTP request как `?room=<id>`.
+- **Files:** `packages/didraw-cli/src/index.ts`, `packages/didraw-client/src/index.ts` (HTTP wrapper).
+- **Related:** D10.
+
+### D8 — Polling `/api/version` каждые ~5ms
+
+- **Severity:** major (CPU + network spam).
+- **Repro:** Открыть Network panel → виден поток `GET /api/version`, тысячи запросов в минуту.
+- **Expected:** Polling на разумной частоте (раз в 10-30 секунд достаточно для update banner).
+- **Actual:** Огромный rate (≥ 200 req/sec).
+- **Suggested fix:** `setInterval(checkVersion, 30000)` или вообще через WS message kind `version-update`. Текущая реализация в `apps/frontend/src/transport/version.ts` — найти и проверить interval.
+- **Files:** `apps/frontend/src/transport/version.ts`, `apps/frontend/src/chrome/UpdateBanner.tsx`.
+
 ### D5 — Children node coords при rendering в группе — absolute или relative?
 
 - **Severity:** major.
