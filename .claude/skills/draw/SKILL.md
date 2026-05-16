@@ -81,3 +81,5 @@ echo '{"actions":[…],"dryRun":true}' | didraw apply --stdin
 ## User overrides — respect them
 
 If the user moved or recoloured a node (you'll see `pinned:true` or `styleOwnedBy:"user"` in context), your next `define` upserts must NOT clobber those fields. Backend enforces this — but be aware semantically.
+
+User-drawn arrows are now round-tripped to backend (Phase 2.2). They appear in `context` as connections with `meta.styleOwnedBy:"user"` if user-styled.
