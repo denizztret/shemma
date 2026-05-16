@@ -6,6 +6,7 @@ import { postProcess } from "../domain/layout-postprocess";
 import { validateBatch } from "../domain/validate";
 import type {
   ActionResult,
+  DeleteAction,
   DomainAction,
   DomainRequest,
   DomainResponse,
@@ -16,6 +17,12 @@ import { resolveRoomId } from "../rooms";
 import type { Rooms } from "../rooms";
 import type { PatchBus, PatchOp, RoomState } from "../types";
 import type { LayoutMode, Spacing } from "@didraw/domain";
+
+function isDeleteWithIds(
+  a: DeleteAction,
+): a is { kind: "delete"; ids: ElementId[]; cascade?: boolean } {
+  return "ids" in a;
+}
 
 function computeAffected(_actions: DomainAction[], ops: PatchOp[]): ElementId[] {
   const out = new Set<string>();
@@ -31,11 +38,12 @@ function expandCascadeDeletes(
   actions: DomainAction[],
   canvas: RoomState["canvas"],
 ): { cascadeError?: { actionIndex: number; affected: string[] } } {
-  for (let i = 0; i < actions.length; i++) {
-    const a = actions[i];
+  let i = -1;
+  for (const a of actions) {
+    i += 1;
     if (a.kind !== "delete") continue;
-    const ids = "ids" in a ? a.ids : [a.id];
-    const cascade = "cascade" in a ? a.cascade === true : false;
+    const ids = isDeleteWithIds(a) ? a.ids : [a.id];
+    const cascade = isDeleteWithIds(a) ? a.cascade === true : false;
     for (const nm of ids) {
       const grp = canvas.groups.find((g) => {
         const gname = (g as { meta?: { name?: string } }).meta?.name ?? g.label;
@@ -107,9 +115,9 @@ export function domainRoutes(
     const cascadeOps: PatchOp[] = [];
     for (const a of body.actions) {
       if (a.kind !== "delete") continue;
-      const wantsCascade = "cascade" in a ? a.cascade === true : false;
+      const wantsCascade = isDeleteWithIds(a) ? a.cascade === true : false;
       if (!wantsCascade) continue;
-      const ids = "ids" in a ? a.ids : [a.id];
+      const ids = isDeleteWithIds(a) ? a.ids : [a.id];
       for (const nm of ids) {
         const grp = room.canvas.groups.find(
           (g) => ((g as { meta?: { name?: string } }).meta?.name ?? g.label) === nm,

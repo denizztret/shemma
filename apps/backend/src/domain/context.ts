@@ -71,7 +71,7 @@ function nodeToCompact(canvas: CanvasState, n: Node): ElementCompact {
 
 function summarizeOp(e: OpLogEntry): string {
   const counts = { add: 0, update: 0, delete: 0 } as Record<string, number>;
-  for (const op of e.ops) counts[op.op]++;
+  for (const op of e.ops) counts[op.op] = (counts[op.op] ?? 0) + 1;
   const parts: string[] = [];
   if (counts.add) parts.push(`+${counts.add}`);
   if (counts.update) parts.push(`~${counts.update}`);

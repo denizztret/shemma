@@ -8,7 +8,8 @@ function parseViewport(s: string | undefined): Viewport {
   if (!s) return null;
   const parts = s.split(",").map(Number);
   if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) return null;
-  return { x: parts[0], y: parts[1], w: parts[2], h: parts[3] };
+  const [x, y, w, h] = parts as [number, number, number, number];
+  return { x, y, w, h };
 }
 
 export function contextRoutes(rooms: Rooms) {

@@ -6,7 +6,13 @@ import {
   type Role,
 } from "@didraw/domain";
 import type { CanvasState } from "../types";
-import type { ActionError, DomainAction } from "./types";
+import type { ActionError, DeleteAction, DomainAction, ElementId } from "./types";
+
+function isDeleteWithIds(
+  a: DeleteAction,
+): a is { kind: "delete"; ids: ElementId[]; cascade?: boolean } {
+  return "ids" in a;
+}
 
 type KnownElement = { role: Role; isContainer: boolean };
 
@@ -36,8 +42,9 @@ export function validateBatch(
   // followed by `connect a b` correctly fail at validation time.
   const known = seedKnown(canvas);
 
-  for (let i = 0; i < actions.length; i++) {
-    const a = actions[i];
+  let i = -1;
+  for (const a of actions) {
+    i += 1;
     switch (a.kind) {
       case "define": {
         if (!isValidRole(a.role)) {
@@ -123,7 +130,7 @@ export function validateBatch(
         // Always valid; mode/scope/spacing checked downstream (modeToElkOptions handles invalid mode).
         break;
       case "delete": {
-        const ids = "ids" in a ? a.ids : [a.id];
+        const ids = isDeleteWithIds(a) ? a.ids : [a.id];
         for (const id of ids) {
           if (!known.has(id)) {
             errors.push({ actionIndex: i, field: "id", code: "unknown-ref", message: `delete target "${id}" not found` });
