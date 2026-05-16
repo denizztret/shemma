@@ -45,8 +45,8 @@ export function handleHello(room: RoomState, lastVersion: number): WsMessage {
   // forces `truncated` for any client that is behind.
   const minLogVer = room.opLog[0]?.version ?? room.version + 1;
   if (last + 1 >= minLogVer) {
-    const ops = room.opLog.filter((e) => e.version > last);
-    return { kind: "replay", ops, version: room.version };
+    const changes = room.opLog.filter((e) => e.version > last).map((e) => e.ops);
+    return { kind: "replay", changes, version: room.version };
   }
   return { kind: "truncated", version: room.version };
 }
