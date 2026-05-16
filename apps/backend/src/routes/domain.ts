@@ -59,13 +59,38 @@ function expandCascadeDeletes(
 
 type LayoutInfo = { applied: boolean; affected?: ElementId[]; reason?: string };
 
+const MAX_IDEMPOTENCY_ENTRIES = 1000;
+
+function makeLruCache<K, V>(max: number) {
+  const m = new Map<K, V>();
+  return {
+    get(k: K): V | undefined {
+      const v = m.get(k);
+      if (v !== undefined) {
+        // Bump to most-recent: re-insert moves the key to the end of insertion order.
+        m.delete(k);
+        m.set(k, v);
+      }
+      return v;
+    },
+    set(k: K, v: V): void {
+      if (m.has(k)) m.delete(k);
+      m.set(k, v);
+      if (m.size > max) {
+        const oldest = m.keys().next().value;
+        if (oldest !== undefined) m.delete(oldest);
+      }
+    },
+  };
+}
+
 export function domainRoutes(
   rooms: Rooms,
   bus: PatchBus,
   opts: { onDirty?: (room: string, state: RoomState) => void } = {},
 ) {
-  // Per-instance idempotency cache: clientOpId → response. Ephemeral (no eviction).
-  const idempotencyCache = new Map<string, DomainResponse>();
+  // Per-instance idempotency cache: clientOpId → response. Bounded LRU (oldest evicted past max).
+  const idempotencyCache = makeLruCache<string, DomainResponse>(MAX_IDEMPOTENCY_ENTRIES);
 
   return new Hono().post("/api/domain", async (c) => {
     const rv = resolveRoomId(c.req.query("room"));

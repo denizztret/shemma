@@ -93,6 +93,32 @@ describe("POST /api/domain", () => {
     expect(b2.idempotent).toBe(true);
   });
 
+  test("idempotency cache evicts oldest entries past max (LRU bound)", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const MAX = 1000;
+    // Send MAX+1 unique-clientOpId domain requests; each defines a distinct node.
+    for (let i = 0; i <= MAX; i++) {
+      const r = await postDomain(app, {
+        actions: [{ kind: "define", role: "service", name: `n${i}` }],
+        clientOpId: `op-${i}`,
+        layoutHint: null,
+      });
+      expect(r.status).toBe(200);
+    }
+    // op-0 should be evicted now (oldest beyond MAX). Resending must hit the route fresh:
+    // version must bump, response must NOT have idempotent:true (would be true if still cached).
+    const before = (await rooms.get("d1")).version;
+    const res = await postDomain(app, {
+      actions: [{ kind: "define", role: "service", name: "n0" }],
+      clientOpId: "op-0",
+      layoutHint: null,
+    });
+    const body = (await res.json()) as { idempotent?: boolean; version: number };
+    expect(body.idempotent).toBeFalsy();
+    const after = (await rooms.get("d1")).version;
+    expect(after).toBeGreaterThan(before);
+  }, 30000);
+
   test("layout best-effort — domain mutations land even if ELK fails", async () => {
     const { app } = makeApp({ inMemory: true });
     const res = await postDomain(app, {
