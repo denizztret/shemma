@@ -26,9 +26,8 @@ export type ExportEnvelope = PersistedEnvelope & {
   exportedAt: string; // ISO
 };
 
-export function serialize(roomId: string, s: RoomState): string {
-  const cap = config.opLogMaxSize;
-  const env: PersistedEnvelope = {
+function buildEnvelope(roomId: string, s: RoomState): PersistedEnvelope {
+  return {
     schemaVersion: ENVELOPE_SCHEMA_VERSION,
     roomId,
     version: s.version,
@@ -37,9 +36,12 @@ export function serialize(roomId: string, s: RoomState): string {
       s.canvas.nodes.length + s.canvas.edges.length + s.canvas.groups.length,
     canvas: s.canvas,
     prompts: s.prompts,
-    opLog: s.opLog.slice(-cap),
+    opLog: s.opLog.slice(-config.opLogMaxSize),
   };
-  return JSON.stringify(env, null, 2);
+}
+
+export function serialize(roomId: string, s: RoomState): string {
+  return JSON.stringify(buildEnvelope(roomId, s), null, 2);
 }
 
 export function parseHeader(raw: string): EnvelopeHeader | null {
@@ -68,9 +70,8 @@ export function parseHeader(raw: string): EnvelopeHeader | null {
 }
 
 export function serializeExport(roomId: string, s: RoomState): string {
-  const base = JSON.parse(serialize(roomId, s)) as PersistedEnvelope;
   const exp: ExportEnvelope = {
-    ...base,
+    ...buildEnvelope(roomId, s),
     exportedAt: new Date().toISOString(),
   };
   return JSON.stringify(exp, null, 2);
