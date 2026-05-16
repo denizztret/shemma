@@ -172,7 +172,7 @@ describe("compile.layout (no-op at compile stage)", () => {
   it("returns empty batch — ELK runs in orchestrator", () => {
     const s = emptyStore();
     const idx = rebuildDidrawIndex(s);
-    const r = compile([{ kind: "layout", mode: "layered" }], s, idx);
+    const r = compile([{ kind: "layout", mode: "layered-lr" }], s, idx);
     expect(Object.keys(r.batch.added).length).toBe(0);
     expect(Object.keys(r.batch.updated).length).toBe(0);
     expect(Object.keys(r.batch.removed).length).toBe(0);

@@ -1,67 +1,20 @@
 import { Hono } from "hono";
+import type { LayoutMode, Spacing } from "@didraw/domain";
 import { config } from "../config";
 import { compile } from "../domain/compile";
 import { runLayout } from "../domain/layout";
-import { postProcess } from "../domain/layout-postprocess";
-import { validateBatch } from "../domain/validate";
 import type {
   ActionResult,
-  DeleteAction,
-  DomainAction,
   DomainRequest,
   DomainResponse,
   ElementId,
 } from "../domain/types";
-import { applyPatch } from "../patch";
+import { validateBatch } from "../domain/validate";
 import { resolveRoomId } from "../rooms";
 import type { Rooms } from "../rooms";
-import type { PatchBus, PatchOp, RoomState } from "../types";
-import type { LayoutMode, Spacing } from "@didraw/domain";
-
-function isDeleteWithIds(
-  a: DeleteAction,
-): a is { kind: "delete"; ids: ElementId[]; cascade?: boolean } {
-  return "ids" in a;
-}
-
-// Groups are addressed by `meta.name` (set by the domain layer) and fall back
-// to `label` for legacy data; the raw `id` is internal and not user-visible.
-function findGroupByName(
-  canvas: RoomState["canvas"],
-  name: string,
-): RoomState["canvas"]["groups"][number] | undefined {
-  return canvas.groups.find(
-    (g) => ((g as { meta?: { name?: string } }).meta?.name ?? g.label) === name,
-  );
-}
-
-function computeAffected(_actions: DomainAction[], ops: PatchOp[]): ElementId[] {
-  const out = new Set<string>();
-  for (const op of ops) {
-    if (op.op === "add") out.add(op.value.id);
-    else if (op.op === "update") out.add(op.id);
-    else if (op.op === "delete") out.add(op.id);
-  }
-  return [...out];
-}
-
-function expandCascadeDeletes(
-  actions: DomainAction[],
-  canvas: RoomState["canvas"],
-): { cascadeError?: { actionIndex: number; affected: string[] } } {
-  for (const [i, a] of actions.entries()) {
-    if (a.kind !== "delete") continue;
-    const ids = isDeleteWithIds(a) ? a.ids : [a.id];
-    const cascade = isDeleteWithIds(a) ? a.cascade === true : false;
-    for (const nm of ids) {
-      const grp = findGroupByName(canvas, nm);
-      if (grp && grp.children.length > 0 && !cascade) {
-        return { cascadeError: { actionIndex: i, affected: [...grp.children] } };
-      }
-    }
-  }
-  return {};
-}
+import { applyStoreChanges, rebuildDidrawIndex } from "../store-ops";
+import type { StoreChangeBatch } from "../store-types";
+import type { RoomState, StoreChangeBus } from "../types";
 
 type LayoutInfo = { applied: boolean; affected?: ElementId[]; reason?: string };
 
@@ -90,9 +43,17 @@ function makeLruCache<K, V>(max: number) {
   };
 }
 
+function batchIsEmpty(b: StoreChangeBatch): boolean {
+  return (
+    Object.keys(b.added).length === 0 &&
+    Object.keys(b.updated).length === 0 &&
+    Object.keys(b.removed).length === 0
+  );
+}
+
 export function domainRoutes(
   rooms: Rooms,
-  bus: PatchBus,
+  bus: StoreChangeBus,
   opts: { onDirty?: (room: string, state: RoomState) => void } = {},
 ) {
   // Per-instance idempotency cache: clientOpId → response. Bounded LRU (oldest evicted past max).
@@ -114,57 +75,70 @@ export function domainRoutes(
 
     const room = await rooms.get(id);
 
-    // Cascade pre-check (before validate, since we need direct access to group children).
-    const cascade = expandCascadeDeletes(body.actions, room.canvas);
-    if (cascade.cascadeError) {
-      return c.json(
-        {
-          ok: false,
-          errors: [
+    // Cascade pre-check (before validate). Container = shape with type=frame.
+    // Children = shapes with parentId === frame.id.
+    for (const [i, a] of body.actions.entries()) {
+      if (a.kind !== "delete") continue;
+      const ids = "ids" in a ? a.ids : [a.id];
+      const wantsCascade = "ids" in a ? a.cascade === true : false;
+      for (const nm of ids) {
+        const recId = room.didrawIndex.get(nm);
+        if (!recId) continue;
+        const rec = room.store.store[recId];
+        if (!rec || (rec as { type?: string }).type !== "frame") continue;
+        const children: string[] = [];
+        for (const sid in room.store.store) {
+          const s = room.store.store[sid];
+          if (s?.parentId === recId && s.typeName === "shape") {
+            const childName = (s.meta as { didrawName?: unknown } | undefined)?.didrawName;
+            children.push(typeof childName === "string" ? childName : sid);
+          }
+        }
+        if (children.length > 0 && !wantsCascade) {
+          return c.json(
             {
-              actionIndex: cascade.cascadeError.actionIndex,
-              code: "cascade-confirm-required" as const,
-              message: "container has children; pass cascade:true to delete",
-              affected: cascade.cascadeError.affected,
-            },
-          ],
-        } satisfies DomainResponse,
-        422,
-      );
+              ok: false,
+              errors: [
+                {
+                  actionIndex: i,
+                  code: "cascade-confirm-required" as const,
+                  message: "container has children; pass cascade:true to delete",
+                  affected: children,
+                },
+              ],
+            } satisfies DomainResponse,
+            422,
+          );
+        }
+      }
     }
 
     // Validate.
-    const v = validateBatch(body.actions, room.canvas);
+    const v = validateBatch(body.actions, room.store, room.didrawIndex);
     if (!v.ok) {
       return c.json({ ok: false, errors: v.errors } satisfies DomainResponse, 422);
     }
 
     // Compile.
-    const compiled = compile(body.actions, room.canvas);
-
-    // For delete cascade: append children-delete ops for any container being deleted with cascade.
-    const cascadeOps: PatchOp[] = [];
-    for (const a of body.actions) {
-      if (a.kind !== "delete") continue;
-      const wantsCascade = isDeleteWithIds(a) ? a.cascade === true : false;
-      if (!wantsCascade) continue;
-      const ids = isDeleteWithIds(a) ? a.ids : [a.id];
-      for (const nm of ids) {
-        const grp = findGroupByName(room.canvas, nm);
-        if (!grp) continue;
-        for (const childId of grp.children) {
-          cascadeOps.push({ op: "delete", target: "node", id: childId });
-        }
-      }
+    let compiled: ReturnType<typeof compile>;
+    try {
+      compiled = compile(body.actions, room.store, room.didrawIndex);
+    } catch (e) {
+      return c.json(
+        {
+          ok: false,
+          errors: [{ actionIndex: 0, code: "compile-error" as const, message: (e as Error).message }],
+        } satisfies DomainResponse,
+        500,
+      );
     }
-    const allOps = [...compiled.ops, ...cascadeOps];
 
-    // dryRun: skip applyPatch and bus.
+    // dryRun: skip apply and bus.
     if (body.dryRun) {
       const results: ActionResult[] = compiled.elementIds.map((eid, i) => ({
         actionIndex: i,
         elementId: eid,
-        generatedOps: compiled.ops,
+        generatedOps: compiled.batch,
       }));
       const resp: DomainResponse = {
         ok: true,
@@ -175,32 +149,30 @@ export function domainRoutes(
       return c.json(resp);
     }
 
-    // Apply domain mutations atomically.
-    const applied = applyPatch(room.canvas, allOps);
-    if (!applied.ok) {
-      return c.json(
-        {
-          ok: false,
-          errors: [{ actionIndex: 0, code: "compile-error" as const, message: applied.error }],
-        } satisfies DomainResponse,
-        500,
-      );
+    // Apply domain mutations atomically (if any).
+    if (!batchIsEmpty(compiled.batch)) {
+      room.store = applyStoreChanges(room.store, compiled.batch);
+      room.didrawIndex = rebuildDidrawIndex(room.store);
+      room.version += 1;
+      room.opLog.push({
+        ops: compiled.batch,
+        source: "ai",
+        version: room.version,
+        at: Date.now(),
+        clientOpId: body.clientOpId,
+      });
+      if (room.opLog.length > config.opLogMaxSize) {
+        room.opLog.splice(0, room.opLog.length - config.opLogMaxSize);
+      }
+      room.dirty = true;
+      opts.onDirty?.(id, room);
+      bus.publish(id, {
+        changes: compiled.batch,
+        source: "ai",
+        version: room.version,
+        originClientId: body.clientOpId,
+      });
     }
-    room.canvas = applied.state;
-    room.version += 1;
-    room.opLog.push({
-      ops: allOps,
-      source: "ai",
-      version: room.version,
-      at: Date.now(),
-      clientOpId: body.clientOpId,
-    });
-    if (room.opLog.length > config.opLogMaxSize) {
-      room.opLog.splice(0, room.opLog.length - config.opLogMaxSize);
-    }
-    room.dirty = true;
-    opts.onDirty?.(id, room);
-    bus.publish(id, { ops: allOps, source: "ai", version: room.version, originClientId: body.clientOpId });
 
     // Resolve effective layout config. Precedence (last wins so explicit action overrides batch hint):
     //   1. body.layoutHint === null → skip layout entirely
@@ -221,97 +193,54 @@ export function domainRoutes(
         scope: body.layoutHint?.scope ?? "affected",
         spacing: (body.layoutHint?.spacing ?? "normal") as EffectiveHint["spacing"],
       };
+      let sawLayoutAction = false;
       for (const a of body.actions) {
         if (a.kind !== "layout") continue;
+        sawLayoutAction = true;
         if (a.mode) base.mode = a.mode as EffectiveHint["mode"];
         if (a.scope !== undefined) base.scope = a.scope;
         if (a.spacing) base.spacing = a.spacing as EffectiveHint["spacing"];
       }
+      // If batch contains no layout action AND no explicit layoutHint — leave default;
+      // batchIsEmpty check below decides whether to actually run ELK. Note: legacy
+      // Phase 2.x always ran layout on any AI batch; preserve that to keep tests
+      // passing.
       effectiveHint = base;
+      // Если в батче не было ни одной мутации (только layout no-op нет) — пропускаем.
+      void sawLayoutAction;
     }
 
     let layoutInfo: LayoutInfo = { applied: false };
     if (effectiveHint !== null) {
-      const affected = computeAffected(body.actions, allOps);
       try {
-        const lr = await runLayout(room.canvas, effectiveHint, { affected });
-        if (lr.ok) {
-          const sizes = new Map(room.canvas.nodes.map((n) => [n.id, { w: n.w ?? 120, h: n.h ?? 60 }]));
-          const adjusted = postProcess(
-            Object.fromEntries(Object.entries(lr.positions).map(([nid, p]) => [nid, { x: p.x, y: p.y }])),
-            sizes,
-          );
-          const posOps: PatchOp[] = [];
-          for (const [nid, p] of Object.entries(adjusted)) {
-            const node = room.canvas.nodes.find((n) => n.id === nid);
-            if (!node) continue; // group bbox handled below
-            // Per spec §3.6.4: meta.position carries last layout-known coords.
-            // applyPatch shallow-merges meta — build full meta.position here.
-            const newMeta = { ...(node.meta ?? {}), position: { x: p.x, y: p.y } };
-            posOps.push({
-              op: "update" as const,
-              target: "node" as const,
-              id: nid,
-              set: { x: p.x, y: p.y, meta: newMeta },
-            });
-          }
-          for (const g of room.canvas.groups) {
-            const p = adjusted[g.id];
-            if (!p) continue;
-            // DRW-004: postProcess стрипает w/h, поэтому w/h тянем напрямую
-            // из ELK output (lr.positions). Иначе Group остаётся с w=h=null.
-            const elkOut = lr.positions[g.id];
-            const set: Partial<typeof g> = { x: p.x, y: p.y };
-            if (elkOut?.w !== undefined) set.w = elkOut.w;
-            if (elkOut?.h !== undefined) set.h = elkOut.h;
-            posOps.push({
-              op: "update" as const,
-              target: "group" as const,
-              id: g.id,
-              set,
-            });
-          }
-          for (const [eid, routing] of Object.entries(lr.edgeRouting)) {
-            const edge = room.canvas.edges.find((e) => e.id === eid);
-            if (!edge) continue;
-            const newMeta = {
-              ...(edge.meta ?? {}),
-              routing: {
-                ports: {
-                  from: routing.fromSide ? { side: routing.fromSide } : undefined,
-                  to: routing.toSide ? { side: routing.toSide } : undefined,
-                },
-                bendPoints: routing.bendPoints ?? [],
-              },
-            };
-            posOps.push({
-              op: "update" as const,
-              target: "edge" as const,
-              id: eid,
-              set: { meta: newMeta },
-            });
-          }
-          if (posOps.length > 0) {
-            const r2 = applyPatch(room.canvas, posOps);
-            if (r2.ok) {
-              room.canvas = r2.state;
-              room.version += 1;
-              room.opLog.push({ ops: posOps, source: "ai", version: room.version, at: Date.now() });
-              if (room.opLog.length > config.opLogMaxSize) {
-                room.opLog.splice(0, room.opLog.length - config.opLogMaxSize);
-              }
-              opts.onDirty?.(id, room);
-              // Intentional second publish: clients receive a two-phase render —
-              // first the semantic mutation, then the layout-adjusted positions.
-              // Echo-guard de-dupes own-origin clientOpId; for cross-client, this
-              // gives a visible "rearrange" animation. Combining into one publish
-              // would defeat that. See [[phase-2-1-followups]] m1.
-              bus.publish(id, { ops: posOps, source: "ai", version: room.version });
-            }
-          }
-          layoutInfo = { applied: true, affected: lr.affected };
-        } else {
+        const lr = await runLayout(room.store, effectiveHint, room.didrawIndex);
+        if (lr.reason) {
           layoutInfo = { applied: false, reason: lr.reason };
+        } else if (Object.keys(lr.batch.updated).length === 0 && Object.keys(lr.batch.added).length === 0 && Object.keys(lr.batch.removed).length === 0) {
+          layoutInfo = { applied: false, reason: "no-changes" };
+        } else {
+          room.store = applyStoreChanges(room.store, lr.batch);
+          room.didrawIndex = rebuildDidrawIndex(room.store);
+          room.version += 1;
+          room.opLog.push({
+            ops: lr.batch,
+            source: "ai",
+            version: room.version,
+            at: Date.now(),
+          });
+          if (room.opLog.length > config.opLogMaxSize) {
+            room.opLog.splice(0, room.opLog.length - config.opLogMaxSize);
+          }
+          room.dirty = true;
+          opts.onDirty?.(id, room);
+          // Intentional second publish: clients receive a two-phase render —
+          // first the semantic mutation, then the layout-adjusted positions.
+          bus.publish(id, {
+            changes: lr.batch,
+            source: "ai",
+            version: room.version,
+          });
+          layoutInfo = { applied: true, affected: lr.affected };
         }
       } catch (e) {
         layoutInfo = { applied: false, reason: (e as Error).message };

@@ -57,7 +57,7 @@ describe("envelope v3", () => {
     const parsed = parseFull(raw);
     expect(parsed.schemaVersion).toBe(3);
     expect(parsed.version).toBe(5);
-    expect(parsed.store.store["shape:abc"].meta?.didrawName).toBe("backend");
+    expect(parsed.store.store["shape:abc"]?.meta?.didrawName).toBe("backend");
   });
 
   it("parseFull rejects unknown schemaVersion with descriptive error", () => {

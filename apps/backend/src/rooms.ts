@@ -1,5 +1,7 @@
+import { defaultDocument, defaultPage, defaultSchema } from "./migrate-v2";
 import type { FilePersistence } from "./persistence";
-import type { CanvasState, RoomId, RoomState } from "./types";
+import type { TLStoreSnapshot } from "./store-types";
+import type { RoomId, RoomState } from "./types";
 import { DEFAULT_ROOM } from "./types";
 
 const ROOM_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -32,18 +34,25 @@ export type RoomStore = {
   save: (id: RoomId, state: RoomState) => Promise<void>;
 };
 
-export function emptyCanvasState(): CanvasState {
-  return { version: 1, nodes: [], edges: [], groups: [] };
+export function emptyTLStore(): TLStoreSnapshot {
+  return {
+    schema: defaultSchema() as TLStoreSnapshot["schema"],
+    store: {
+      "document:document": defaultDocument(),
+      "page:page": defaultPage(),
+    },
+  };
 }
 
 export function makeRoomState(): RoomState {
   return {
-    canvas: emptyCanvasState(),
+    store: emptyTLStore(),
     opLog: [],
     prompts: [],
     version: 0,
     dirty: false,
     lastTouched: Date.now(),
+    didrawIndex: new Map(),
   };
 }
 

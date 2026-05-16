@@ -55,8 +55,9 @@ export function compile(
       case "define": {
         const existingId = stagingIndex.get(a.name);
         const preset = rolePreset(a.role as Role);
-        if (existingId) {
-          const old = stagingStore.store[existingId];
+        const oldShape = existingId ? stagingStore.store[existingId] : undefined;
+        if (existingId && oldShape) {
+          const old = oldShape;
           // preserve user-owned meta (pinned/position/styleOwnedBy)
           const oldMeta = (old.meta ?? {}) as Record<string, unknown>;
           const { pinned, position, styleOwnedBy, ...rest } = oldMeta as {
@@ -215,6 +216,7 @@ export function compile(
           const mid = stagingIndex.get(memberName);
           if (!mid) continue;
           const old = stagingStore.store[mid];
+          if (!old) continue;
           sub.updated[mid] = [old, { ...old, parentId: fid }];
         }
         stage(sub);

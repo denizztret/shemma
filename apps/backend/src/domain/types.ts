@@ -1,5 +1,5 @@
 import type { ConnectionKind, LayoutMode, Role, Spacing } from "@didraw/domain";
-import type { PatchOp } from "../types";
+import type { StoreChangeBatch } from "../store-types";
 
 export type ElementId = string;
 
@@ -89,7 +89,7 @@ export type ActionError = {
 export type ActionResult = {
   actionIndex: number;
   elementId?: ElementId;
-  generatedOps?: PatchOp[];
+  generatedOps?: StoreChangeBatch;
 };
 
 export type DomainResponse =

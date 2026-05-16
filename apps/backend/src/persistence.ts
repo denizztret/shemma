@@ -1,8 +1,10 @@
 import { promises as fs, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { config } from "./config";
-import { parseFull, serialize } from "./envelope";
+import { parseFull, parseHeader, parseV2OrThrow, serialize } from "./envelope";
+import { migrateV2ToV3 } from "./migrate-v2";
 import type { RoomStore } from "./rooms";
+import { rebuildDidrawIndex } from "./store-ops";
 import type { RoomId, RoomState } from "./types";
 
 export class FilePersistence implements RoomStore {
@@ -20,23 +22,55 @@ export class FilePersistence implements RoomStore {
   }
 
   async load(id: RoomId): Promise<RoomState | null> {
+    const file = this.pathFor(id);
+    let raw: string;
     try {
-      const raw = await fs.readFile(this.pathFor(id), "utf8");
-      const env = parseFull(raw);
-      return {
-        canvas: env.canvas,
-        prompts: env.prompts,
-        version: env.version,
-        // T11: opLog is now durable. v1 envelopes load with [] (graceful
-        // migration); v2 envelopes restore the capped slice persisted at save.
-        opLog: env.opLog ?? [],
-        dirty: false,
-        lastTouched: Date.now(),
-      };
+      raw = await fs.readFile(file, "utf8");
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw e;
     }
+    const header = parseHeader(raw);
+    // v2/v1 → мигрируем в v3 в памяти. Phase 3.0 Task 11 добавит .v2.bak + rewrite на диск.
+    if (header?.schemaVersion === 2 || (header as { schemaVersion?: number } | null)?.schemaVersion === 1) {
+      const v2 = parseV2OrThrow(raw);
+      const v3 = migrateV2ToV3(v2 as Parameters<typeof migrateV2ToV3>[0]);
+      const backupPath = `${file}.v2.bak`;
+      if (!existsSync(backupPath)) {
+        try {
+          await fs.rename(file, backupPath);
+        } catch {
+          // best-effort: если backup не получился (concurrent rename, FS-error) — продолжаем
+        }
+      }
+      const state: RoomState = {
+        store: v3.store,
+        opLog: [],
+        prompts: v3.prompts,
+        version: v3.version,
+        dirty: true,
+        lastTouched: Date.now(),
+        didrawIndex: rebuildDidrawIndex(v3.store),
+      };
+      // Atomic rewrite as v3 — best-effort. Не критично для load: пусть дебаунс/flush сохранят.
+      try {
+        await fs.writeFile(file, serialize(id, state), "utf8");
+        state.dirty = false;
+      } catch {
+        // оставляем dirty=true; следующий flush допишет
+      }
+      return state;
+    }
+    const env = parseFull(raw);
+    return {
+      store: env.store,
+      prompts: env.prompts,
+      version: env.version,
+      opLog: env.opLog ?? [],
+      dirty: false,
+      lastTouched: Date.now(),
+      didrawIndex: rebuildDidrawIndex(env.store),
+    };
   }
 
   async save(id: RoomId, s: RoomState): Promise<void> {

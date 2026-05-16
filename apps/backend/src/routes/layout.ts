@@ -1,58 +1,59 @@
 import { Hono } from "hono";
 import { config } from "../config";
-import { layoutNodes } from "../layout-engine";
-import { applyPatch } from "../patch";
+import { runLayout } from "../domain/layout";
 import { resolveRoomId } from "../rooms";
 import type { Rooms } from "../rooms";
-import type { PatchBus, PatchOp, RoomState } from "../types";
+import { applyStoreChanges, rebuildDidrawIndex } from "../store-ops";
+import type { RoomState, StoreChangeBus } from "../types";
 
 export function layoutRoutes(
   rooms: Rooms,
-  bus: PatchBus,
+  bus: StoreChangeBus,
   opts: { onDirty?: (room: string, state: RoomState) => void } = {},
 ) {
   return new Hono().post("/api/layout", async (c) => {
     const rv = resolveRoomId(c.req.query("room"));
     if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
     const id = rv.id;
-    const body = await c.req.json().catch(() => ({}));
-    const algorithm: "elk-layered" | "dagre" = body.algorithm ?? "elk-layered";
-    const nodeIds: string[] | undefined = body.nodeIds;
+    const body = (await c.req.json().catch(() => ({}))) as {
+      mode?: string;
+      scope?: string;
+      spacing?: string;
+    };
 
     const r = await rooms.get(id);
-    const nodes = nodeIds
-      ? r.canvas.nodes.filter((n) => nodeIds.includes(n.id))
-      : r.canvas.nodes;
-    if (nodes.length === 0)
-      return c.json({ ok: true, version: r.version, count: 0 });
 
-    let positions: Record<string, { x: number; y: number }>;
+    const hint = {
+      mode: (body.mode ?? "layered-lr") as never,
+      scope: (body.scope ?? "all") as never,
+      spacing: (body.spacing ?? "normal") as never,
+    };
+
+    let lr: Awaited<ReturnType<typeof runLayout>>;
     try {
-      positions = await layoutNodes(nodes, r.canvas.edges, algorithm);
+      lr = await runLayout(r.store, hint, r.didrawIndex);
     } catch (e) {
       return c.json({ ok: false, error: (e as Error).message }, 500);
     }
+    if (lr.reason) {
+      return c.json({ ok: false, error: lr.reason }, 500);
+    }
+    const count = Object.keys(lr.batch.updated).length;
+    if (count === 0) {
+      return c.json({ ok: true, version: r.version, count: 0 });
+    }
 
-    const ops: PatchOp[] = Object.entries(positions).map(([nid, p]) => ({
-      op: "update" as const,
-      target: "node" as const,
-      id: nid,
-      set: { x: p.x, y: p.y },
-    }));
-
-    const result = applyPatch(r.canvas, ops);
-    if (!result.ok) return c.json({ ok: false, error: result.error }, 422);
-
-    r.canvas = result.state;
+    r.store = applyStoreChanges(r.store, lr.batch);
+    r.didrawIndex = rebuildDidrawIndex(r.store);
     r.version += 1;
-    r.opLog.push({ ops, source: "ai", version: r.version, at: Date.now() });
+    r.opLog.push({ ops: lr.batch, source: "ai", version: r.version, at: Date.now() });
     if (r.opLog.length > config.opLogMaxSize) {
       r.opLog.splice(0, r.opLog.length - config.opLogMaxSize);
     }
     r.dirty = true;
     opts.onDirty?.(id, r);
-    bus.publish(id, { ops, source: "ai", version: r.version });
+    bus.publish(id, { changes: lr.batch, source: "ai", version: r.version });
 
-    return c.json({ ok: true, version: r.version, count: ops.length });
+    return c.json({ ok: true, version: r.version, count });
   });
 }

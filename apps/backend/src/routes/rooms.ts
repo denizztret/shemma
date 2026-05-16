@@ -17,7 +17,7 @@ import { validateRoomId } from "../rooms";
 export function roomParam(c: Context):
   | { ok: true; id: string }
   | { ok: false; response: Response } {
-  const id = c.req.param("id");
+  const id = c.req.param("id") ?? "";
   if (!validateRoomId(id)) {
     return {
       ok: false,

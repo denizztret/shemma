@@ -1,18 +1,32 @@
 import { describe, expect, test } from "bun:test";
 import { startServer } from "../src/index";
 import { makeRoomState } from "../src/rooms";
-import type { OpLogEntry, PatchOp } from "../src/types";
+import type { StoreChangeBatch, StoreOpLogEntry } from "../src/store-types";
 import { handleHello, parseClientMessage } from "../src/ws-protocol";
 
-function makeOpLogEntry(version: number, label = "n"): OpLogEntry {
-  const ops: PatchOp[] = [
-    {
-      op: "add",
-      target: "node",
-      value: { id: `${label}${version}`, kind: "rect", x: 0, y: 0 },
+function makeOpLogEntry(version: number, label = "n"): StoreOpLogEntry {
+  const id = `shape:${label}${version}`;
+  const batch: StoreChangeBatch = {
+    added: {
+      [id]: {
+        id,
+        typeName: "shape",
+        type: "geo",
+        x: 0,
+        y: 0,
+        parentId: "page:page",
+        index: "a1",
+        isLocked: false,
+        opacity: 1,
+        rotation: 0,
+        props: { w: 100, h: 60, geo: "rectangle" },
+        meta: { didrawName: `${label}${version}` },
+      },
     },
-  ];
-  return { ops, source: "user", version, at: 0 };
+    updated: {},
+    removed: {},
+  };
+  return { ops: batch, source: "user", version, at: 0 };
 }
 
 describe("ws-protocol.parseClientMessage", () => {
@@ -61,7 +75,7 @@ describe("ws-protocol.handleHello", () => {
     expect(handleHello(r, 99)).toEqual({ kind: "sync-ack", version: 5 });
   });
 
-  test("replay returns ops since lastVersion", () => {
+  test("replay returns batches since lastVersion", () => {
     const r = makeRoomState();
     r.version = 5;
     r.opLog = [
@@ -74,7 +88,7 @@ describe("ws-protocol.handleHello", () => {
     expect(reply.kind).toBe("replay");
     if (reply.kind !== "replay") throw new Error("kind mismatch");
     expect(reply.version).toBe(5);
-    expect(reply.ops.map((e) => e.version)).toEqual([4, 5]);
+    expect(reply.changes.length).toBe(2);
   });
 
   test("replay covers the full opLog when lastVersion sits exactly at the boundary", () => {
@@ -90,7 +104,7 @@ describe("ws-protocol.handleHello", () => {
     const reply = handleHello(r, 3);
     expect(reply.kind).toBe("replay");
     if (reply.kind !== "replay") throw new Error("kind mismatch");
-    expect(reply.ops.map((e) => e.version)).toEqual([4, 5, 6, 7]);
+    expect(reply.changes.length).toBe(4);
   });
 
   test("truncated when gap exceeds opLog window", () => {
@@ -162,22 +176,16 @@ describe("WS hello/replay — end-to-end", () => {
   test("client hello with lastVersion<server.version receives replay", async () => {
     const srv = await startServer({ inMemory: true, port: 0 });
     try {
-      // Drive version up via HTTP patches.
+      // Drive version up via /api/domain (define actions).
       for (let i = 1; i <= 3; i++) {
         const res = await fetch(
-          `http://localhost:${srv.port}/api/patch?room=hr2`,
+          `http://localhost:${srv.port}/api/domain?room=hr2`,
           {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              ops: [
-                {
-                  op: "add",
-                  target: "node",
-                  value: { id: `n${i}`, kind: "rect", x: 0, y: 0 },
-                },
-              ],
-              source: "user",
+              actions: [{ kind: "define", role: "service", name: `svc${i}` }],
+              layoutHint: null,
             }),
           },
         );
@@ -192,9 +200,7 @@ describe("WS hello/replay — end-to-end", () => {
       const msgs = await wait;
       const replay = msgs.find((m) => m.kind === "replay");
       expect(replay.version).toBe(3);
-      expect(replay.ops.map((o: { version: number }) => o.version)).toEqual([
-        2, 3,
-      ]);
+      expect(replay.changes.length).toBe(2);
       ws.close();
     } finally {
       await srv.close();

@@ -127,11 +127,3 @@ export type LegacyOpLogEntry = {
   at: number;
   clientOpId?: string;
 };
-
-// Stubs to keep tsc errors targeted. Будут удалены в Task 20.
-export type CanvasState = never;
-export type Node = never;
-export type Edge = never;
-export type Group = never;
-export type PatchOp = never;
-export type PatchBus = never;

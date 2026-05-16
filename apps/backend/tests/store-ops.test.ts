@@ -86,6 +86,6 @@ describe("cascadeDeleteShape", () => {
     expect(batch.removed["shape:c"]).toBeUndefined();
     // updated: child gets parentId reset to page:page
     expect(batch.updated["shape:c"]).toBeDefined();
-    expect(batch.updated["shape:c"][1].parentId).toBe("page:page");
+    expect(batch.updated["shape:c"]?.[1].parentId).toBe("page:page");
   });
 });

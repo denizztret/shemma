@@ -3,11 +3,34 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeApp } from "../src/index";
+import type { RoomState } from "../src/types";
 
 // Spec §4.2 (workspace isolation): a backend's visibility of rooms is bounded
 // by the directory passed via `storageDir`. Two daemons pointed at the same
 // directory share rooms; pointed at different directories they cannot see
 // each other's data. Verifies the FilePersistence(dir) wiring through makeApp.
+
+function seedShape(s: RoomState, id: string, name: string) {
+  s.store.store[id] = {
+    id,
+    typeName: "shape",
+    type: "geo",
+    x: 0,
+    y: 0,
+    parentId: "page:page",
+    index: "a1",
+    isLocked: false,
+    opacity: 1,
+    rotation: 0,
+    props: { w: 100, h: 60, geo: "rectangle" },
+    meta: { didrawName: name },
+  };
+  s.didrawIndex.set(name, id);
+}
+
+function shapesOf(s: RoomState): unknown[] {
+  return Object.values(s.store.store).filter((r) => r.typeName === "shape");
+}
 
 describe("workspace isolation", () => {
   let dir1: string;
@@ -29,13 +52,7 @@ describe("workspace isolation", () => {
 
     // a writes
     const r1 = await a.rooms.get("shared");
-    r1.canvas.nodes.push({
-      id: "shape:e_a",
-      kind: "rect",
-      x: 0,
-      y: 0,
-      label: "a",
-    });
+    seedShape(r1, "shape:e_a", "a");
     r1.dirty = true;
     r1.version = 1;
     a.persistence?.scheduleSave("shared", r1);
@@ -45,8 +62,8 @@ describe("workspace isolation", () => {
     await b.rooms.evict("shared");
     const r2 = await b.rooms.get("shared");
 
-    expect(r2.canvas.nodes).toHaveLength(1);
-    expect(r2.canvas.nodes[0]?.id).toBe("shape:e_a");
+    expect(shapesOf(r2)).toHaveLength(1);
+    expect(r2.didrawIndex.get("a")).toBe("shape:e_a");
   });
 
   test("two daemons with DIFFERENT storageDir are isolated", async () => {
@@ -54,13 +71,7 @@ describe("workspace isolation", () => {
     const b = makeApp({ storageDir: dir2 });
 
     const r1 = await a.rooms.get("isolated");
-    r1.canvas.nodes.push({
-      id: "shape:e_x",
-      kind: "rect",
-      x: 0,
-      y: 0,
-      label: "x",
-    });
+    seedShape(r1, "shape:e_x", "x");
     r1.dirty = true;
     r1.version = 1;
     a.persistence?.scheduleSave("isolated", r1);
@@ -69,6 +80,6 @@ describe("workspace isolation", () => {
     // b reads the room from its own (empty) directory — must NOT see a's data.
     const r2 = await b.rooms.get("isolated");
 
-    expect(r2.canvas.nodes).toHaveLength(0);
+    expect(shapesOf(r2)).toHaveLength(0);
   });
 });

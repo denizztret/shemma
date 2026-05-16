@@ -17,8 +17,14 @@ export function applyStoreChanges(s: TLStoreSnapshot, batch: StoreChangeBatch): 
     if (id in batch.removed) throw new Error(`conflicting batch: id "${id}" both added and removed`);
   }
   const out: Record<string, TLRecord> = { ...s.store };
-  for (const id in batch.added) out[id] = batch.added[id];
-  for (const id in batch.updated) out[id] = batch.updated[id][1];
+  for (const id in batch.added) {
+    const rec = batch.added[id];
+    if (rec) out[id] = rec;
+  }
+  for (const id in batch.updated) {
+    const pair = batch.updated[id];
+    if (pair) out[id] = pair[1];
+  }
   for (const id in batch.removed) delete out[id];
   return { schema: s.schema, store: out };
 }
@@ -27,7 +33,7 @@ export function rebuildDidrawIndex(s: TLStoreSnapshot): Map<string, string> {
   const m = new Map<string, string>();
   for (const id in s.store) {
     const r = s.store[id];
-    if (r.typeName !== "shape") continue;
+    if (!r || r.typeName !== "shape") continue;
     const name = r.meta?.didrawName;
     if (typeof name === "string") m.set(name, id);
   }
@@ -59,7 +65,7 @@ export function cascadeDeleteShape(
   const arrowsTouched = new Set<string>();
   for (const id in s.store) {
     const r = s.store[id];
-    if (r.typeName !== "binding") continue;
+    if (!r || r.typeName !== "binding") continue;
     const bAny = r as unknown as { toId?: unknown; fromId?: unknown };
     if (bAny.toId === shapeId) {
       removed[id] = r;
@@ -71,8 +77,9 @@ export function cascadeDeleteShape(
     const remaining = Object.values(s.store).filter(
       (r) => r.typeName === "binding" && (r as unknown as { fromId?: unknown }).fromId === arrowId && !(r.id in removed),
     );
-    if (remaining.length < 2 && s.store[arrowId] && !(arrowId in removed)) {
-      removed[arrowId] = s.store[arrowId];
+    const arrowRec = s.store[arrowId];
+    if (remaining.length < 2 && arrowRec && !(arrowId in removed)) {
+      removed[arrowId] = arrowRec;
       // Плюс оставшиеся bindings этой стрелки тоже под нож.
       for (const r of remaining) removed[r.id] = r;
     }
@@ -83,6 +90,7 @@ export function cascadeDeleteShape(
   if (target.typeName === "shape" && (target as { type?: string }).type === "frame") {
     for (const id in s.store) {
       const r = s.store[id];
+      if (!r) continue;
       if (r.parentId === shapeId && !(id in removed)) {
         updated[id] = [r, { ...r, parentId: "page:page" }];
       }

@@ -1,34 +1,49 @@
 import { describe, expect, test } from "bun:test";
 import { makeApp } from "../src/index";
+import type { RoomState } from "../src/types";
+
+function seedShape(s: RoomState, id: string, name: string, role: string) {
+  s.store.store[id] = {
+    id,
+    typeName: "shape",
+    type: "geo",
+    x: 0,
+    y: 0,
+    parentId: "page:page",
+    index: "a1",
+    isLocked: false,
+    opacity: 1,
+    rotation: 0,
+    props: { w: 100, h: 60, geo: "rectangle" },
+    meta: { didrawName: name, role },
+  };
+  s.didrawIndex.set(name, id);
+}
 
 describe("GET /api/agent/context", () => {
-  test("returns domain-summary; no x/y/w/h fields", async () => {
+  test("returns domain-summary; no bounds field by default", async () => {
     const { app, rooms } = makeApp({ inMemory: true });
     const r = await rooms.get("c1");
-    r.canvas.nodes.push({ id: "shape:e_a", kind: "rect", x: 0, y: 0, label: "a", meta: { name: "a", role: "service" } });
+    seedShape(r, "shape:e_a", "a", "service");
     const res = await app.fetch(new Request("http://localhost/api/agent/context?room=c1"));
     expect(res.status).toBe(200);
-    const text = await res.text();
-    expect(text).not.toMatch(/"x":/);
-    expect(text).not.toMatch(/"y":/);
-    expect(text).not.toMatch(/"w":/);
-    expect(text).not.toMatch(/"h":/);
+    const body = (await res.json()) as { ok: boolean; elements: Array<{ id: string; bounds?: unknown }> };
+    expect(body.ok).toBe(true);
+    expect(body.elements.length).toBeGreaterThan(0);
+    const a = body.elements.find((e) => e.id === "a");
+    expect(a).toBeDefined();
+    expect(a?.bounds).toBeUndefined();
   });
 
-  test("uses last-known viewport if not given in query", async () => {
+  test("include=geometry includes bounds", async () => {
     const { app, rooms } = makeApp({ inMemory: true });
-    rooms.setViewport("c1", { x: 0, y: 0, w: 100, h: 100, zoom: 1 });
-    const res = await app.fetch(new Request("http://localhost/api/agent/context?room=c1"));
-    const body = (await res.json()) as { viewport: { w: number } | null };
-    expect(body.viewport?.w).toBe(100);
-  });
-
-  test("viewport query param overrides server-stored", async () => {
-    const { app, rooms } = makeApp({ inMemory: true });
-    rooms.setViewport("c1", { x: 0, y: 0, w: 100, h: 100 });
-    const res = await app.fetch(new Request("http://localhost/api/agent/context?room=c1&viewport=10,20,30,40"));
-    const body = (await res.json()) as { viewport: { x: number; y: number; w: number; h: number } | null };
-    expect(body.viewport).toEqual({ x: 10, y: 20, w: 30, h: 40 });
+    const r = await rooms.get("c2");
+    seedShape(r, "shape:e_b", "b", "service");
+    const res = await app.fetch(new Request("http://localhost/api/agent/context?room=c2&include=geometry"));
+    const body = (await res.json()) as { elements: Array<{ id: string; bounds?: { w: number } }> };
+    const b = body.elements.find((e) => e.id === "b");
+    expect(b?.bounds).toBeDefined();
+    expect(b?.bounds?.w).toBe(100);
   });
 
   test("invalid room → 422", async () => {
@@ -37,15 +52,19 @@ describe("GET /api/agent/context", () => {
     expect(res.status).toBe(422);
   });
 
-  test("?since=N filters recentOps to versions > N", async () => {
+  test("?since=N is echoed in response (diffSince)", async () => {
     const { app, rooms } = makeApp({ inMemory: true });
-    const r = await rooms.get("c1");
-    r.opLog.push({ ops: [], source: "ai", version: 1, at: 100 });
-    r.opLog.push({ ops: [], source: "ai", version: 2, at: 200 });
-    r.opLog.push({ ops: [], source: "ai", version: 3, at: 300 });
-    r.version = 3;
-    const res = await app.fetch(new Request("http://localhost/api/agent/context?room=c1&since=1"));
-    const body = (await res.json()) as { recentOps: Array<{ version: number }> };
-    expect(body.recentOps.map((o) => o.version)).toEqual([2, 3]);
+    const r = await rooms.get("c3");
+    r.version = 5;
+    const res = await app.fetch(new Request("http://localhost/api/agent/context?room=c3&since=2"));
+    const body = (await res.json()) as { diffSince?: number; version: number };
+    expect(body.diffSince).toBe(2);
+    expect(body.version).toBe(5);
+  });
+
+  test("?since= non-numeric → 400", async () => {
+    const { app } = makeApp({ inMemory: true });
+    const res = await app.fetch(new Request("http://localhost/api/agent/context?room=c4&since=abc"));
+    expect(res.status).toBe(400);
   });
 });

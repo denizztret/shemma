@@ -4,6 +4,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FilePersistence } from "../src/persistence";
 import { makeRoomState } from "../src/rooms";
+import type { RoomState } from "../src/types";
+
+function seedShape(s: RoomState, id: string, name: string) {
+  s.store.store[id] = {
+    id,
+    typeName: "shape",
+    type: "geo",
+    x: 0,
+    y: 0,
+    parentId: "page:page",
+    index: "a1",
+    isLocked: false,
+    opacity: 1,
+    rotation: 0,
+    props: { w: 100, h: 60, geo: "rectangle" },
+    meta: { didrawName: name },
+  };
+  s.didrawIndex.set(name, id);
+}
 
 let dir: string;
 beforeEach(() => {
@@ -19,33 +38,37 @@ describe("FilePersistence", () => {
   test("save + load round-trip", async () => {
     const p = new FilePersistence(dir);
     const s = makeRoomState();
-    s.canvas.nodes.push({ id: "n1", kind: "rect", x: 5, y: 10 });
+    seedShape(s, "shape:n1", "n1");
     s.version = 3;
     await p.save("t", s);
     const loaded = await p.load("t");
-    expect(loaded?.canvas.nodes[0].id).toBe("n1");
+    expect(loaded?.store.store["shape:n1"]).toBeDefined();
     expect(loaded?.version).toBe(3);
+    expect(loaded?.didrawIndex.get("n1")).toBe("shape:n1");
 
     const { readFileSync } = await import("node:fs");
     const raw = readFileSync(`${dir}/t.json`, "utf8");
     const env = JSON.parse(raw);
-    expect(env.schemaVersion).toBe(2);
+    expect(env.schemaVersion).toBe(3);
     expect(env.roomId).toBe("t");
     expect(env.elementCount).toBe(1);
   });
 
-  test("opLog persisted (v2), dirty NOT persisted", async () => {
-    // T11: opLog is durable from envelope v2. dirty stays in-memory only —
-    // a freshly-loaded room is by definition in-sync with disk.
+  test("opLog persisted, dirty NOT persisted", async () => {
     const p = new FilePersistence(dir);
     const s = makeRoomState();
-    s.opLog.push({ ops: [], source: "user", version: 1, at: 0 });
+    s.opLog.push({
+      ops: { added: {}, updated: {}, removed: {} },
+      source: "user",
+      version: 1,
+      at: 0,
+    });
     s.dirty = true;
     await p.save("o", s);
     const l = await p.load("o");
     expect(l?.opLog).toHaveLength(1);
-    expect(l?.opLog[0].version).toBe(1);
-    expect(l?.opLog[0].source).toBe("user");
+    expect(l?.opLog[0]?.version).toBe(1);
+    expect(l?.opLog[0]?.source).toBe("user");
     expect(l?.dirty).toBe(false);
   });
 
@@ -68,18 +91,18 @@ describe("FilePersistence", () => {
   test("flushAll writes pending immediately", async () => {
     const p = new FilePersistence(dir);
     const s = makeRoomState();
-    s.canvas.nodes.push({ id: "n1", kind: "rect", x: 0, y: 0 });
+    seedShape(s, "shape:n1", "n1");
     p.scheduleSave("urgent", s);
     // sub-debounce — yet flushAll должен записать
     await p.flushAll();
     const loaded = await p.load("urgent");
-    expect(loaded?.canvas.nodes[0].id).toBe("n1");
+    expect(loaded?.store.store["shape:n1"]).toBeDefined();
   });
 
   test("flushIfDirty writes pending state synchronously, clears timer", async () => {
     const p = new FilePersistence(dir);
     const s = makeRoomState();
-    s.canvas.nodes.push({ id: "x", kind: "rect", x: 0, y: 0 });
+    seedShape(s, "shape:x", "x");
     s.version = 1;
 
     p.scheduleSave("r", s);
@@ -90,7 +113,7 @@ describe("FilePersistence", () => {
     const raw = readFileSync(`${dir}/r.json`, "utf8");
     const env = JSON.parse(raw);
     expect(env.version).toBe(1);
-    expect(env.canvas.nodes[0].id).toBe("x");
+    expect(env.store.store["shape:x"]).toBeDefined();
   });
 
   test("flushIfDirty is idempotent — safe to call without pending", async () => {
