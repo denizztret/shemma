@@ -111,8 +111,24 @@ export type StoreSyncDeps = {
  *
  * Non-store frames (prompt-*, ai-activity) are forwarded to chrome layers via
  * a `didraw:ws-message` window event so transport stays decoupled.
+ *
+ * DRW-018 — pause gate:
+ *   `setPaused(true)` causes inbound `replay` / `store-change` frames to be
+ *   dropped instead of applied to `editor.store`. Used by App.tsx during the
+ *   `truncated → seedSchema → getState → loadSnapshot` recovery window to
+ *   prevent stale-baseline diffs from flickering between the truncated
+ *   detection and the fresh full snapshot.
+ *
+ *   Outbound `user-change` flow stays ENABLED while paused: the user may keep
+ *   drawing during recovery, and those mutations are real new state that the
+ *   server's fresh snapshot does not contain. They get flushed by the new
+ *   syncer instance once recovery completes. (Note: any mutations queued in
+ *   THIS syncer's `pending` at `stop()` time are dropped — pending is local
+ *   to each syncer instance. This pre-dates DRW-018.)
  */
-export function startStoreSync(deps: StoreSyncDeps): { stop: () => void } {
+export function startStoreSync(
+  deps: StoreSyncDeps,
+): { stop: () => void; setPaused: (p: boolean) => void } {
   const debounceMs = deps.debounceMs ?? 50;
   const clientOpId =
     typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -120,6 +136,7 @@ export function startStoreSync(deps: StoreSyncDeps): { stop: () => void } {
       : `fallback-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   let currentVersion = deps.initialVersion;
   let stopped = false;
+  let paused = false;
 
   const factory = deps.socketFactory ?? ((url: string) => new WebSocket(url));
   const ws = factory(deps.wsUrl);
@@ -186,6 +203,15 @@ export function startStoreSync(deps: StoreSyncDeps): { stop: () => void } {
         if (msg.version > currentVersion) currentVersion = msg.version;
         break;
       case "replay":
+        if (paused) {
+          // DRW-018: stale-baseline gate — drop the batch entirely. We don't
+          // advance currentVersion either: the caller will tear this syncer
+          // down and restart with fresh /api/state version anyway.
+          console.debug(
+            "[didraw] dropping inbound 'replay' while paused (recovery)",
+          );
+          break;
+        }
         deps.editor.store.mergeRemoteChanges(() => {
           for (const batch of msg.changes) {
             deps.editor.store.applyDiff(batchToDiff(batch));
@@ -206,6 +232,15 @@ export function startStoreSync(deps: StoreSyncDeps): { stop: () => void } {
         if (msg.originClientId === clientOpId) {
           // Echo of our own user-change — version still advances.
           if (msg.version > currentVersion) currentVersion = msg.version;
+          break;
+        }
+        if (paused) {
+          // DRW-018: see 'replay' case. The recovery snapshot will subsume
+          // this change (it's already in the server's authoritative state),
+          // applying it now against the stale store would just flicker.
+          console.debug(
+            "[didraw] dropping inbound 'store-change' while paused (recovery)",
+          );
           break;
         }
         deps.editor.store.mergeRemoteChanges(() => {
@@ -242,6 +277,9 @@ export function startStoreSync(deps: StoreSyncDeps): { stop: () => void } {
       } catch {
         /* ignore */
       }
+    },
+    setPaused(p: boolean) {
+      paused = p;
     },
   };
 }

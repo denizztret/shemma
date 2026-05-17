@@ -143,6 +143,7 @@ function makeDeps(initialVersion = 0) {
     sock,
     store,
     stop: sync.stop,
+    setPaused: sync.setPaused,
     truncatedCount: () => truncated,
   };
 }
@@ -290,6 +291,91 @@ describe("startStoreSync — inbound store-change", () => {
       version: 100,
     });
     expect(t.store.applied.length).toBe(0);
+    t.stop();
+  });
+});
+
+describe("startStoreSync — setPaused (DRW-018)", () => {
+  test("setPaused(true) drops inbound store-change without applying", () => {
+    const t = makeDeps(0);
+    t.sock.open();
+    t.setPaused(true);
+    t.sock.message({
+      kind: "store-change",
+      source: "ai",
+      changes: sampleBatch(),
+      version: 5,
+      originClientId: "someone-else",
+    });
+    expect(t.store.mergeCalls).toBe(0);
+    expect(t.store.applied.length).toBe(0);
+    t.stop();
+  });
+
+  test("setPaused(true) drops inbound replay without applying", () => {
+    const t = makeDeps(0);
+    t.sock.open();
+    t.setPaused(true);
+    t.sock.message({
+      kind: "replay",
+      changes: [sampleBatch(), sampleBatch()],
+      version: 9,
+    });
+    expect(t.store.mergeCalls).toBe(0);
+    expect(t.store.applied.length).toBe(0);
+    t.stop();
+  });
+
+  test("setPaused(false) restores normal application of subsequent frames", () => {
+    const t = makeDeps(0);
+    t.sock.open();
+    t.setPaused(true);
+    t.sock.message({
+      kind: "store-change",
+      source: "ai",
+      changes: sampleBatch(),
+      version: 1,
+      originClientId: "x",
+    });
+    expect(t.store.applied.length).toBe(0);
+    t.setPaused(false);
+    t.sock.message({
+      kind: "store-change",
+      source: "ai",
+      changes: sampleBatch(),
+      version: 2,
+      originClientId: "x",
+    });
+    expect(t.store.mergeCalls).toBe(1);
+    expect(t.store.applied.length).toBe(1);
+    t.stop();
+  });
+
+  test("outbound user-change keeps flowing while paused", async () => {
+    const t = makeDeps(0);
+    t.sock.open();
+    t.setPaused(true);
+    // User keeps drawing during recovery — their mutations must reach the wire.
+    t.store.emit({
+      added: { [`shape:p`]: rect("p", "p") as never },
+      updated: {},
+      removed: {},
+    });
+    await sleep(15); // > debounceMs
+    // hello + one user-change frame.
+    expect(t.sock.sent.length).toBe(2);
+    const frame = JSON.parse(t.sock.sent[1]!);
+    expect(frame.kind).toBe("user-change");
+    expect(Object.keys(frame.changes.added)).toEqual(["shape:p"]);
+    t.stop();
+  });
+
+  test("truncated still fires onTruncated while paused", () => {
+    const t = makeDeps(0);
+    t.sock.open();
+    t.setPaused(true);
+    t.sock.message({ kind: "truncated", version: 42 });
+    expect(t.truncatedCount()).toBe(1);
     t.stop();
   });
 });

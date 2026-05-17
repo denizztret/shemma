@@ -108,7 +108,7 @@ export function App({ room }: { room: string }) {
   useEffect(() => {
     if (!editor) return;
     let active = true;
-    let stopSync: (() => void) | undefined;
+    let syncHandle: ReturnType<typeof startStoreSync> | undefined;
     let unsubSel: (() => void) | undefined;
     let camSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -151,6 +151,13 @@ export function App({ room }: { room: string }) {
         wsUrl,
         initialVersion: s.version,
         onTruncated: () => {
+          // DRW-018: pause the (now zombie) syncer immediately so any frames
+          // that arrive between this callback and ws.close() — or any straggler
+          // queued in the JS event loop — are dropped instead of applied to
+          // the about-to-be-replaced store. The syncer also marks itself
+          // `stopped` in the 'truncated' handler, but `setPaused(true)` is
+          // belt-and-braces and explicit at the call site.
+          syncHandle?.setPaused(true);
           // Server says we're too far behind to replay → re-fetch full state.
           void (async () => {
             try {
@@ -169,8 +176,8 @@ export function App({ room }: { room: string }) {
                 editor.loadSnapshot(freshSnapshot);
               });
               // Re-arm sync with the fresh version.
-              stopSync?.();
-              const restart = startStoreSync({
+              syncHandle?.stop();
+              syncHandle = startStoreSync({
                 editor,
                 wsUrl,
                 initialVersion: fresh.version,
@@ -179,14 +186,13 @@ export function App({ room }: { room: string }) {
                   console.warn("[didraw] truncated recovery looped, giving up");
                 },
               });
-              stopSync = restart.stop;
             } catch (e) {
               console.warn("[didraw] truncated recovery failed:", e);
             }
           })();
         },
       });
-      stopSync = sync.stop;
+      syncHandle = sync;
 
       // Dev-console helper: window.didrawImportMermaid(source). Mutates store;
       // startStoreSync auto-forwards the batch to backend over WS.
@@ -230,7 +236,7 @@ export function App({ room }: { room: string }) {
 
     return () => {
       active = false;
-      stopSync?.();
+      syncHandle?.stop();
       unsubSel?.();
       if (camSaveTimer) {
         clearTimeout(camSaveTimer);
