@@ -4,7 +4,7 @@ import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
 import { importMermaid } from "./canvas/mermaid-import";
-import { isPlaceholderSchema } from "./canvas/schema-placeholder";
+import { backfillStoreRecords, isPlaceholderSchema } from "./canvas/schema-placeholder";
 import { AiActivityBadge } from "./chrome/AiActivityBadge";
 import { AppChrome } from "./chrome/AppChrome";
 import { ErrorBanner } from "./chrome/ErrorBanner";
@@ -122,9 +122,10 @@ export function App({ room }: { room: string }) {
       // placeholder и подменяем на текущую editor schema только в этом случае;
       // на втором же подключении backend уже отдаст реальную V2 — override
       // выключится сам.
+      const backfilledStore = backfillStoreRecords(s.store?.store);
       const snapshot = isPlaceholderSchema(s.store?.schema)
-        ? { ...s.store, schema: editor.store.schema.serialize() }
-        : s.store;
+        ? { ...s.store, store: backfilledStore, schema: editor.store.schema.serialize() }
+        : { ...s.store, store: backfilledStore };
       editor.store.mergeRemoteChanges(() => {
         editor.loadSnapshot(snapshot);
       });
@@ -156,9 +157,10 @@ export function App({ room }: { room: string }) {
             try {
               const fresh = await getState();
               if (!active) return;
+              const freshBackfilled = backfillStoreRecords(fresh.store?.store);
               const freshSnapshot = isPlaceholderSchema(fresh.store?.schema)
-                ? { ...fresh.store, schema: editor.store.schema.serialize() }
-                : fresh.store;
+                ? { ...fresh.store, store: freshBackfilled, schema: editor.store.schema.serialize() }
+                : { ...fresh.store, store: freshBackfilled };
               editor.store.mergeRemoteChanges(() => {
                 editor.loadSnapshot(freshSnapshot);
               });

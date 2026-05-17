@@ -141,6 +141,7 @@ export function compile(
           opacity: 1,
           rotation: 0,
           props: {
+            kind: "arc",
             color: "black",
             labelColor: "black",
             fill: "none",
@@ -268,6 +269,7 @@ export function compile(
               opacity: 1,
               rotation: 0,
               props: {
+                kind: "arc",
                 color: "black",
                 labelColor: "black",
                 fill: "none",
