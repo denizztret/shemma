@@ -3,7 +3,7 @@ import type { FilePersistence } from "./persistence";
 import type { StoreOpLogEntry, TLStoreSnapshot } from "./store-types";
 import type { RoomId, RoomState } from "./types";
 import { DEFAULT_ROOM } from "./types";
-import { config } from "./config";
+import { config, resolveWorkspaceDir } from "./config";
 
 const ROOM_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 // Stored viewport hints expire after this window of inactivity so a stale
@@ -116,12 +116,29 @@ export class Rooms {
     const p = (async () => {
       try {
         const loaded = await this.store.load(id);
+        const isNew = loaded === null;
         const s = loaded ?? makeRoomState();
+        let autoFieldsDirty = false;
         // Auto-populate linkedSession on first creation/load if not already set
         // and the env session matches this room id.
         if (s.linkedSession === undefined && config.sessionId !== null && config.sessionId === id) {
           s.linkedSession = id;
+          autoFieldsDirty = true;
+        }
+        // DRW-033: auto-populate projectDir on first creation/load if not set.
+        if (s.projectDir === undefined) {
+          s.projectDir = resolveWorkspaceDir();
+          autoFieldsDirty = true;
+        }
+        if (autoFieldsDirty) {
           s.dirty = true;
+          // For existing rooms on disk, schedule a back-fill save immediately so
+          // flushIfDirty (e.g. in archive route) can flush the new auto-fields.
+          // For brand-new rooms (no file yet), skip: the save will happen with
+          // the first real mutation — scheduling now would race with archive/restore.
+          if (!isNew && this.persistence) {
+            this.persistence.scheduleSave(id, s);
+          }
         }
         this.map.set(id, s);
         return s;

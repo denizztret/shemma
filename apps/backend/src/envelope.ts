@@ -27,6 +27,8 @@ export type EnvelopeV3 = EnvelopeHeader & {
   prompts: Prompt[];
   opLog: StoreOpLogEntry[];
   linkedSession?: string;
+  // DRW-033: workspace directory, stored optionally (additive, doesn't break existing v3).
+  projectDir?: string;
 };
 
 export type ExportEnvelope = EnvelopeV3 & { exportedAt: string };
@@ -50,6 +52,7 @@ function buildV3(roomId: string, s: RoomState): EnvelopeV3 {
     opLog: s.opLog.slice(-config.opLogMaxSize),
   };
   if (s.linkedSession !== undefined) env.linkedSession = s.linkedSession;
+  if (s.projectDir !== undefined) env.projectDir = s.projectDir;
   return env;
 }
 
@@ -111,6 +114,7 @@ export function parseFull(raw: string): EnvelopeV3 {
     opLog: Array.isArray(j.opLog) ? j.opLog : [],
   };
   if (typeof j.linkedSession === "string") parsed.linkedSession = j.linkedSession;
+  if (typeof j.projectDir === "string") parsed.projectDir = j.projectDir;
   return parsed;
 }
 

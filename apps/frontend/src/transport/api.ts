@@ -25,3 +25,83 @@ export async function getState(): Promise<StateResponse> {
   if (!r.ok) throw new Error(`getState ${r.status}`);
   return r.json();
 }
+
+// ─── Gallery API (DRW-029) ────────────────────────────────────────────────────
+
+export type RoomListItem = {
+  id: string;
+  version: number;
+  elementCount: number;
+  lastTouched: string;
+  schemaVersion: number;
+  linkedSession?: string;
+  projectDir?: string;
+  projectName?: string;
+  archived?: boolean;
+};
+
+export type ListRoomsResponse = {
+  ok: boolean;
+  rooms: RoomListItem[];
+  dir: string;
+};
+
+export async function listRooms(opts: {
+  includeArchived?: boolean;
+} = {}): Promise<ListRoomsResponse> {
+  const qs = opts.includeArchived ? "?include=archived" : "";
+  const r = await fetch(`/api/rooms${qs}`);
+  if (!r.ok) throw new Error(`listRooms ${r.status}`);
+  return r.json();
+}
+
+export async function archiveRoom(id: string): Promise<void> {
+  const r = await fetch(`/api/rooms/${encodeURIComponent(id)}/archive`, {
+    method: "POST",
+  });
+  if (!r.ok) throw new Error(`archiveRoom ${r.status}`);
+}
+
+export async function restoreRoom(id: string): Promise<void> {
+  const r = await fetch(`/api/rooms/${encodeURIComponent(id)}/restore`, {
+    method: "POST",
+  });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? `restoreRoom ${r.status}`);
+  }
+}
+
+export async function deleteRoom(
+  id: string,
+  opts: { mode: "archive" | "hard"; force?: boolean },
+): Promise<void> {
+  const r = await fetch(`/api/rooms/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ confirm: true, mode: opts.mode, force: opts.force }),
+  });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({})) as { error?: string };
+    throw new Error(body.error ?? `deleteRoom ${r.status}`);
+  }
+}
+
+export async function exportRoom(id: string, to: string): Promise<void> {
+  const r = await fetch(`/api/rooms/${encodeURIComponent(id)}/export`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ to }),
+  });
+  if (!r.ok) throw new Error(`exportRoom ${r.status}`);
+}
+
+export async function purgeArchive(): Promise<{ removed: number }> {
+  const r = await fetch("/api/rooms/purge-archive", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ confirm: true }),
+  });
+  if (!r.ok) throw new Error(`purgeArchive ${r.status}`);
+  return r.json();
+}

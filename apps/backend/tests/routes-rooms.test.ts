@@ -116,6 +116,91 @@ describe("GET /api/rooms", () => {
     const body = (await res.json()) as { rooms: Array<{ id: string }> };
     expect(body.rooms.map((r) => r.id)).toEqual(["ok"]);
   });
+
+  test("?include=archived joins active + archived items, archived have archived:true", async () => {
+    seedRoom("active-one", () => {});
+    seedRoom("will-archive", () => {});
+    mkdirSync(join(dir, ".archive"), { recursive: true });
+    const { renameSync } = await import("node:fs");
+    renameSync(join(dir, "will-archive.json"), join(dir, ".archive", "will-archive.json"));
+
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms?include=archived"),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      rooms: Array<{ id: string; archived?: boolean }>;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.rooms).toHaveLength(2);
+
+    const active = body.rooms.find((r) => r.id === "active-one");
+    expect(active).toBeDefined();
+    expect(active?.archived).toBeUndefined();
+
+    const archived = body.rooms.find((r) => r.id === "will-archive");
+    expect(archived).toBeDefined();
+    expect(archived?.archived).toBe(true);
+  });
+
+  test("?include=archived with empty archive returns only active rooms", async () => {
+    seedRoom("only-active", () => {});
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms?include=archived"),
+    );
+    const body = (await res.json()) as { rooms: Array<{ id: string }> };
+    expect(body.rooms).toHaveLength(1);
+    expect(body.rooms[0].id).toBe("only-active");
+  });
+
+  test("without ?include=archived, archived rooms are not returned", async () => {
+    seedRoom("active", () => {});
+    mkdirSync(join(dir, ".archive"), { recursive: true });
+    seedRoom("archived-hidden", () => {});
+    const { renameSync } = await import("node:fs");
+    renameSync(join(dir, "archived-hidden.json"), join(dir, ".archive", "archived-hidden.json"));
+
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(new Request("http://localhost/api/rooms"));
+    const body = (await res.json()) as { rooms: Array<{ id: string }> };
+    expect(body.rooms.map((r) => r.id)).toEqual(["active"]);
+  });
+
+  test("rooms have projectDir + projectName populated when env set", async () => {
+    const { __resetConfigForTests } = await import("../src/config");
+    process.env.DIDRAW_PROJECT_DIR = "/home/user/my-project";
+    __resetConfigForTests();
+    try {
+      // Seed a room that already exists on disk without projectDir.
+      seedRoom("proj-test", (s) => {
+        s.version = 1;
+      });
+
+      const { app, rooms, persistence } = makeApp({ storageDir: dir });
+      // GET state loads the room (existing file → isNew=false) → auto-populates projectDir.
+      await app.fetch(new Request("http://localhost/api/state?room=proj-test"));
+
+      // Flush the pending auto-backfill save.
+      await persistence!.flushIfDirty("proj-test");
+
+      // Drop in-memory cache to force re-read from disk.
+      await rooms.evict("proj-test");
+
+      const res = await app.fetch(new Request("http://localhost/api/rooms"));
+      const body = (await res.json()) as {
+        rooms: Array<{ id: string; projectDir?: string; projectName?: string }>;
+      };
+      const room = body.rooms.find((r) => r.id === "proj-test");
+      expect(room?.projectDir).toBe("/home/user/my-project");
+      expect(room?.projectName).toBe("my-project");
+    } finally {
+      delete process.env.DIDRAW_PROJECT_DIR;
+      __resetConfigForTests();
+    }
+  });
 });
 
 describe("POST /api/rooms/:id/archive", () => {

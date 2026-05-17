@@ -102,6 +102,7 @@ export class FilePersistence implements RoomStore {
       didrawIndex: rebuildDidrawIndex(env.store),
     };
     if (env.linkedSession !== undefined) state.linkedSession = env.linkedSession;
+    if (env.projectDir !== undefined) state.projectDir = env.projectDir;
     return state;
   }
 

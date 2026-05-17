@@ -1,5 +1,5 @@
 import { readdir, readFile, rename, mkdir, stat, writeFile, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import {
@@ -35,44 +35,72 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   const app = new Hono();
 
   app.get("/api/rooms", async (c) => {
-    try {
-      const files = await readdir(storageDir);
-      const out: Array<{
-        id: string;
-        version: number;
-        elementCount: number;
-        lastTouched: string;
-        schemaVersion: number;
-        linkedSession?: string;
-      }> = [];
+    const includeArchived = c.req.query("include") === "archived";
+    type RoomItem = {
+      id: string;
+      version: number;
+      elementCount: number;
+      lastTouched: string;
+      schemaVersion: number;
+      linkedSession?: string;
+      projectDir?: string;
+      projectName?: string;
+      archived?: boolean;
+    };
+
+    async function readRoomItems(fromDir: string, archived: boolean): Promise<RoomItem[]> {
+      let files: string[];
+      try {
+        files = await readdir(fromDir);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw e;
+      }
+      const out: RoomItem[] = [];
       for (const f of files) {
         if (!f.endsWith(".json")) continue;
         const id = f.slice(0, -5);
         if (!validateRoomId(id)) continue;
         try {
-          const raw = await readFile(join(storageDir, f), "utf8");
+          const raw = await readFile(join(fromDir, f), "utf8");
           const hdr = parseHeader(raw);
           if (!hdr) continue;
-          const item: (typeof out)[0] = {
+          const item: RoomItem = {
             id,
             version: hdr.version,
             elementCount: hdr.elementCount,
             lastTouched: hdr.lastTouched,
             schemaVersion: hdr.schemaVersion,
           };
-          // Best-effort: parse full envelope to read linkedSession.
+          if (archived) item.archived = true;
+          // Best-effort: parse full envelope to read linkedSession + projectDir.
           try {
             const full = parseFull(raw);
             if (full.linkedSession !== undefined) item.linkedSession = full.linkedSession;
+            if (full.projectDir !== undefined) {
+              item.projectDir = full.projectDir;
+              item.projectName = basename(full.projectDir);
+            }
           } catch {
-            // non-v3 or malformed — no linkedSession
+            // non-v3 or malformed — no extra fields
           }
           out.push(item);
         } catch (e) {
           console.error("[rooms] skip", id, (e as Error).message);
         }
       }
-      return c.json({ ok: true, rooms: out, dir: storageDir });
+      return out;
+    }
+
+    try {
+      const activeItems = await readRoomItems(storageDir, false);
+      let allItems = activeItems;
+      if (includeArchived) {
+        const archiveDir = join(storageDir, ".archive");
+        const archivedItems = await readRoomItems(archiveDir, true);
+        allItems = [...activeItems, ...archivedItems];
+      }
+      return c.json({ ok: true, rooms: allItems, dir: storageDir });
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") {
         return c.json({ ok: true, rooms: [], dir: storageDir });
