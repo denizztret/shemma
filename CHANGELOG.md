@@ -1,3 +1,18 @@
+## 0.8.0 (Unreleased)
+
+Накопительный stabilization-релиз поверх 0.7.2: фиксы из backlog без новых phase'ов.
+
+### Added
+
+- **`didraw daemon start --storage <path>`** (DRW-022) — CLI флаг для project-local storage без `export DIDRAW_STORAGE_DIR=…` + manual restart. Path может быть абсолютным или относительным к cwd; резолвится перед spawn'ом child process'а. Под user-provided path сохраняется profile-specific subdir convention: `<path>/canvas/` для `release`/`debug`, `<path>/canvas-dev/` для `dev` — параллельные daemons на одном `--storage` пути не конфликтуют по rooms. Path auto-`mkdir -p`; non-creatable path → JSON error в stderr + exit 1. Explicit `--storage` overrides ambient `DIDRAW_STORAGE_DIR`. Daemon startup log теперь печатает финальный `[didraw] storage: <path>`. CLI success-output дополнен полем `storage` когда флаг задан.
+- **CLI helper module `packages/didraw-cli/src/storage.ts`** — pure-functions `parseStorageArg(argv, cwd)`, `resolveStorageDirForProfile(base, profile)`, `ensureStorageDir(path)`. 11 новых unit-тестов + 4 integration через subprocess CLI.
+
+### Changed
+
+- **Frontend: pause inbound WS during truncated-recovery** (DRW-018) — `apps/frontend/src/transport/ws.ts:setPaused(p)` API на handle'е от `startStoreSync`. `App.tsx onTruncated` вызывает `setPaused(true)` перед `seedSchema`+`getState`+`loadSnapshot`, после успешного apply — `setPaused(false)`. Inbound `replay`/`store-change` фреймы дропаются пока paused; `sync-ack`/`truncated`/`prompt`/`ai-activity` продолжают идти. Outbound user mutations не блокируются — пользователь может рисовать во время recovery. Устраняет flicker от straggler-патчей. 5 новых тестов в `ws.test.ts`.
+
+---
+
 ## 0.7.2 — 2026-05-17 — Backend seed-schema endpoint + drop App.tsx schema workaround
 
 Закрывает class of bugs типа DRW-046 — arrow.kind drift и прочие миграции tldraw 5.x — за счёт того, что backend получает реальную V2-схему ДО первого `GET /api/state`, а не уже в момент WS hello. Frontend больше не подменяет схему в `loadSnapshot`. DRW-047.

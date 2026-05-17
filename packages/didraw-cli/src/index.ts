@@ -1,6 +1,11 @@
 #!/usr/bin/env bun
 import { cmdAiStart, cmdAiStatus, cmdAiStop } from "./ai";
 import { ensure, start, status, stop, stopAll } from "./daemon";
+import {
+  ensureStorageDir,
+  parseStorageArg,
+  resolveStorageDirForProfile,
+} from "./storage";
 import { cmdClear, cmdPatch, cmdState } from "./data";
 import { applyStdin, connectCmd, context, define, deleteCmd, group, layoutCmd, note } from "./domain";
 import {
@@ -69,6 +74,7 @@ async function main() {
     const c = getConfig();
     const srv = await startServer({ port: c.port });
     console.log(`[didraw] listening on :${srv.port} (profile=${c.profile})`);
+    console.log(`[didraw] storage: ${c.storageDir}`);
     await new Promise(() => {});
     return;
   }
@@ -131,7 +137,23 @@ async function main() {
   }
 
   if (cmd === "daemon") {
-    if (sub === "start") return start(profile);
+    if (sub === "start") {
+      const { storage, errors } = parseStorageArg(argv.slice(2), process.cwd());
+      if (errors.length > 0) {
+        console.error(JSON.stringify({ ok: false, error: errors[0] }));
+        process.exit(1);
+      }
+      if (storage !== undefined) {
+        const finalDir = resolveStorageDirForProfile(storage, profile);
+        const mkdirErr = ensureStorageDir(finalDir);
+        if (mkdirErr) {
+          console.error(JSON.stringify({ ok: false, error: mkdirErr }));
+          process.exit(1);
+        }
+        return start(profile, { storageDir: finalDir });
+      }
+      return start(profile);
+    }
     if (sub === "stop") {
       const all = argv.includes("--all");
       if (all) return stopAll(explicitProfileProvided ? profile : undefined);
@@ -344,7 +366,7 @@ function usage() {
   console.log(`didraw <command> [--profile dev|release|debug] [--debug]
 
 Lifecycle:
-  daemon start|stop [--all]|status|ensure
+  daemon start [--storage <path>] | stop [--all] | status | ensure
   open <room>
   ps                                          # JSON status for all profiles
   rooms list
