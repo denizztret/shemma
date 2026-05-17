@@ -51,6 +51,13 @@ function stripProfileFlag(a: string[]): string[] {
   return out;
 }
 
+function assertNotAllWithProfile(all: boolean): void {
+  if (all && explicitProfileProvided) {
+    console.error(JSON.stringify({ ok: false, error: "--all and --profile are mutually exclusive" }));
+    process.exit(1);
+  }
+}
+
 const cmd = argv[0];
 const sub = argv[1];
 
@@ -107,10 +114,7 @@ async function main() {
       else if (argv[i] === "--follow") follow = true;
       else if (argv[i] === "--all") all = true;
     }
-    if (all && explicitProfileProvided) {
-      console.error(JSON.stringify({ ok: false, error: "--all and --profile are mutually exclusive" }));
-      process.exit(1);
-    }
+    assertNotAllWithProfile(all);
     return cmdLogs({ profile, tail: tailN, follow, all });
   }
 
@@ -121,10 +125,7 @@ async function main() {
       if (argv[i] === "--all") all = true;
       else if (argv[i] === "--json") json = true;
     }
-    if (all && explicitProfileProvided) {
-      console.error(JSON.stringify({ ok: false, error: "--all and --profile are mutually exclusive" }));
-      process.exit(1);
-    }
+    assertNotAllWithProfile(all);
     return cmdDoctor({ profile, all, json });
   }
 

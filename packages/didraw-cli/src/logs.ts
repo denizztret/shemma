@@ -84,10 +84,6 @@ export interface LogsOptions {
 export async function cmdLogs(opts: LogsOptions): Promise<void> {
   const { profile, tail, follow, all } = opts;
 
-  if (all && opts.profile !== ("release" as Profile)) {
-    // --all conflicts with explicit --profile; check is done in index.ts
-  }
-
   if (all) {
     if (follow) {
       // Follow all profiles — multiplex with prefixes
@@ -110,13 +106,6 @@ export async function cmdLogs(opts: LogsOptions): Promise<void> {
 
   const path = logFile(profile);
   if (!existsSync(path)) {
-    if (follow) {
-      // --follow on missing file: don't crash, just wait
-      process.stderr.write(
-        JSON.stringify({ ok: false, error: `log file not found: ${path}` }) + "\n",
-      );
-      process.exit(2);
-    }
     process.stderr.write(
       JSON.stringify({ ok: false, error: `log file not found: ${path}` }) + "\n",
     );

@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { ALL_PROFILES, type Profile, portFor } from "./profile";
 import { isHealthy, status } from "./daemon";
@@ -172,8 +173,6 @@ function checkStorageWritable(p: Profile): CheckResult {
             process.env.DIDRAW_PROJECT_DIR ??
             process.env.CLAUDE_PROJECT_DIR ??
             process.cwd();
-          const { createHash } = require("node:crypto");
-          const { basename } = require("node:path");
           const b = basename(base.replace(/[\\/]+$/, "")) || base;
           const body = b
             .toLowerCase()
