@@ -256,6 +256,14 @@ export class CanvasClient {
     return r.json();
   }
 
+  async duplicateAuto(id: string): Promise<{ ok: true; id: string }> {
+    const r = await fetch(
+      `${this.base}/api/rooms/${encodeURIComponent(id)}/duplicate-auto`,
+      { method: "POST" },
+    );
+    return r.json();
+  }
+
   async purgeArchive(): Promise<{ ok: true; removed: number }> {
     const r = await fetch(`${this.base}/api/rooms/purge-archive`, {
       method: "POST",

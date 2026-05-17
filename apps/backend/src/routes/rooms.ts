@@ -11,6 +11,7 @@ import {
 import type { Rooms } from "../rooms";
 import { validateRoomId } from "../rooms";
 import { config } from "../config";
+import { renderThumbnail } from "../thumbnail";
 
 type RoomItem = {
   id: string;
@@ -444,6 +445,94 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
     await rooms.evict(id);
     await unlink(path);
     return c.json({ ok: true });
+  });
+
+  app.post("/api/rooms/:id/duplicate-auto", async (c) => {
+    const idParam = roomParam(c);
+    if (!idParam.ok) return idParam.response;
+    const id = idParam.id;
+
+    // Flush BEFORE stat — debounced save may not have written yet.
+    await rooms.flushIfDirty(id);
+
+    // Find source: active first, then archived
+    const srcActive = join(storageDir, `${id}.json`);
+    const srcArchived = join(storageDir, ".archive", `${id}.json`);
+    let srcPath: string | null = null;
+    try { await stat(srcActive); srcPath = srcActive; } catch { /* not active */ }
+    if (!srcPath) {
+      try { await stat(srcArchived); srcPath = srcArchived; } catch { /* not archived either */ }
+    }
+    if (!srcPath) {
+      return c.json({ ok: false, error: "room not found" }, 404);
+    }
+
+    // Find first available auto-suffix name: <id>-copy, <id>-copy2, <id>-copy3, ...
+    const archiveDir = join(storageDir, ".archive");
+    async function nameExists(candidate: string): Promise<boolean> {
+      try { await stat(join(storageDir, `${candidate}.json`)); return true; } catch { /* ok */ }
+      try { await stat(join(archiveDir, `${candidate}.json`)); return true; } catch { /* ok */ }
+      return false;
+    }
+
+    let newId = `${id}-copy`;
+    if (await nameExists(newId)) {
+      let n = 2;
+      while (await nameExists(`${id}-copy${n}`)) n++;
+      newId = `${id}-copy${n}`;
+    }
+
+    if (!validateRoomId(newId)) {
+      return c.json({ ok: false, error: `generated id "${newId}" failed validation` }, 500);
+    }
+
+    const raw = await readFile(srcPath, "utf8");
+    let envelope: Record<string, unknown>;
+    try {
+      envelope = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return c.json({ ok: false, error: "malformed envelope" }, 422);
+    }
+
+    // Reset per AC: new identity, empty opLog, version reset, no linkedSession
+    envelope.roomId = newId;
+    envelope.opLog = [];
+    envelope.version = 1;
+    delete envelope.linkedSession;
+
+    const dstPath = join(storageDir, `${newId}.json`);
+    await writeAtomic(dstPath, JSON.stringify(envelope, null, 2));
+
+    return c.json({ ok: true, id: newId });
+  });
+
+  app.get("/api/rooms/:id/thumbnail", async (c) => {
+    const idParam = roomParam(c);
+    if (!idParam.ok) return idParam.response;
+    const id = idParam.id;
+
+    const w = Math.min(Math.max(Number(c.req.query("w") ?? 240) || 240, 1), 2000);
+    const h = Math.min(Math.max(Number(c.req.query("h") ?? 160) || 160, 1), 2000);
+    const archived = c.req.query("archived") === "true";
+
+    const srcPath = archived
+      ? join(storageDir, ".archive", `${id}.json`)
+      : join(storageDir, `${id}.json`);
+
+    let snapshotStore: Record<string, unknown> = {};
+    try {
+      const raw = await readFile(srcPath, "utf8");
+      const envelope = parseFull(raw);
+      // envelope.store is TLStoreSnapshot { schema, store: Record<id, TLRecord> }
+      snapshotStore = (envelope.store?.store as Record<string, unknown>) ?? {};
+    } catch {
+      // File not found or parse error — render empty thumbnail
+    }
+
+    const svg = renderThumbnail({ store: snapshotStore }, w, h);
+    return new Response(svg, {
+      headers: { "content-type": "image/svg+xml" },
+    });
   });
 
   app.post("/api/rooms/purge-archive", async (c) => {

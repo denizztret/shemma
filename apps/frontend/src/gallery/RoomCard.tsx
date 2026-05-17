@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { tokens } from "../design-tokens";
 import {
   archiveRoom,
   deleteRoom,
-  duplicateRoom,
+  duplicateRoomAuto,
   exportRoom,
   renameRoom,
   restoreRoom,
@@ -11,52 +11,20 @@ import {
 import { pushError } from "../state/error-bus";
 import { humanize } from "./humanize";
 
-type InlineRoomFormProps = {
-  placeholder: string;
-  value: string;
-  onChange: (v: string) => void;
-  onSubmit: () => void;
-  onCancel: () => void;
-};
-
-function InlineRoomForm({ placeholder, value, onChange, onSubmit, onCancel }: InlineRoomFormProps) {
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter") onSubmit();
-    else if (e.key === "Escape") onCancel();
-  }
-  return (
-    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder}
-        // biome-ignore lint/a11y/noAutofocus: intentional UX — user just clicked the action button
-        autoFocus
-        style={inlineInputStyle}
-      />
-      <button type="button" onClick={onSubmit} style={actionBtnStyle}>
-        OK
-      </button>
-      <button type="button" onClick={onCancel} style={actionBtnStyle}>
-        ✕
-      </button>
-    </div>
-  );
-}
-
 const inlineInputStyle: React.CSSProperties = {
   fontFamily: tokens.font.mono,
-  fontSize: tokens.font.sm,
+  fontSize: tokens.font.base,
+  fontWeight: 600,
   color: tokens.color.text,
-  background: tokens.color.bgOverlay,
-  border: `1px solid ${tokens.color.border}`,
-  borderRadius: tokens.radius.sm,
-  padding: "4px 8px",
+  background: "transparent",
+  border: "none",
+  borderBottom: `2px solid ${tokens.color.accent}`,
+  borderRadius: 0,
+  padding: "0 2px",
   flex: 1,
   minWidth: 0,
   outline: "none",
+  width: "100%",
 };
 
 const actionBtnStyle: React.CSSProperties = {
@@ -102,19 +70,36 @@ export function RoomCard({
   onRefresh?: () => void;
 }) {
   const [undoState, setUndoState] = useState<UndoState | null>(null);
-  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameEditing, setRenameEditing] = useState(false);
   const [renameValue, setRenameValue] = useState("");
-  const [duplicateOpen, setDuplicateOpen] = useState(false);
-  const [duplicateValue, setDuplicateValue] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const isLinked =
     room.linkedSession !== undefined &&
     sessionId !== null &&
     room.linkedSession === sessionId;
 
-  async function handleRenameSubmit() {
+  function openRoom() {
+    location.assign(`/?room=${encodeURIComponent(room.id)}`);
+  }
+
+  function startRename() {
+    setRenameValue(room.id);
+    setRenameEditing(true);
+    // Focus happens via the input's autoFocus
+  }
+
+  function cancelRename() {
+    setRenameEditing(false);
+    setRenameValue("");
+  }
+
+  async function submitRename() {
     const to = renameValue.trim();
-    if (!to) return;
+    if (!to || to === room.id) {
+      cancelRename();
+      return;
+    }
     const res = await renameRoom(room.id, to);
     if (!res.ok) {
       pushError(
@@ -124,42 +109,34 @@ export function RoomCard({
       );
       return;
     }
-    setRenameOpen(false);
+    setRenameEditing(false);
     setRenameValue("");
     onRefresh?.();
   }
 
-  async function handleDuplicateSubmit() {
-    const as = duplicateValue.trim();
-    if (!as) return;
-    const res = await duplicateRoom(room.id, as);
+  function handleTitleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter") void submitRename();
+    else if (e.key === "Escape") cancelRename();
+  }
+
+  async function handleDuplicate() {
+    const res = await duplicateRoomAuto(room.id);
     if (!res.ok) {
-      pushError(
-        res.error === "room-exists"
-          ? `Cannot duplicate: room "${res.existingId}" already exists`
-          : `Duplicate failed: ${res.error ?? "unknown error"}`,
-      );
+      pushError(`Duplicate failed: ${res.error ?? "unknown error"}`);
       return;
     }
-    setDuplicateOpen(false);
-    setDuplicateValue("");
     onRefresh?.();
   }
 
   async function handleArchive() {
-    // Optimistic: notify parent to remove from active list immediately
     onArchived(room.id);
-
     try {
       await archiveRoom(room.id);
     } catch (e) {
-      // Revert optimistic update
       onRestored(room.id);
       pushError(`Failed to archive "${room.id}": ${(e as Error).message}`);
       return;
     }
-
-    // 5-second undo window
     const timer = setTimeout(() => {
       setUndoState(null);
     }, 5000);
@@ -170,7 +147,6 @@ export function RoomCard({
     if (!undoState) return;
     clearTimeout(undoState.timer);
     setUndoState(null);
-
     try {
       await restoreRoom(room.id);
       onRestored(room.id);
@@ -195,12 +171,10 @@ export function RoomCard({
       )
     )
       return;
-
     onDeleted(room.id);
     try {
       await deleteRoom(room.id, { mode: "hard", force: true });
     } catch (e) {
-      // Revert: add back
       onRestored(room.id);
       pushError(
         `Failed to permanently delete "${room.id}": ${(e as Error).message}`,
@@ -221,6 +195,8 @@ export function RoomCard({
     }
   }
 
+  const thumbnailSrc = `/api/rooms/${encodeURIComponent(room.id)}/thumbnail?v=${room.version}${room.archived ? "&archived=true" : ""}`;
+
   return (
     <div
       style={{
@@ -234,7 +210,7 @@ export function RoomCard({
         position: "relative",
       }}
     >
-      {/* Header: room id + linked badge */}
+      {/* Header: room id (clickable to open, or inline edit) + linked badge */}
       <div
         style={{
           display: "flex",
@@ -243,17 +219,57 @@ export function RoomCard({
           flexWrap: "wrap",
         }}
       >
-        <span
-          style={{
-            fontFamily: tokens.font.mono,
-            fontSize: tokens.font.base,
-            fontWeight: 600,
-            color: tokens.color.text,
-            wordBreak: "break-all",
-          }}
-        >
-          {room.id}
-        </span>
+        {renameEditing ? (
+          <input
+            ref={inputRef}
+            type="text"
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={handleTitleKeyDown}
+            onBlur={cancelRename}
+            // biome-ignore lint/a11y/noAutofocus: intentional UX — user just clicked Rename
+            autoFocus
+            style={inlineInputStyle}
+          />
+        ) : room.archived ? (
+          <span
+            style={{
+              fontFamily: tokens.font.mono,
+              fontSize: tokens.font.base,
+              fontWeight: 600,
+              color: tokens.color.text,
+              wordBreak: "break-all",
+            }}
+          >
+            {room.id}
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={openRoom}
+            style={{
+              fontFamily: tokens.font.mono,
+              fontSize: tokens.font.base,
+              fontWeight: 600,
+              color: tokens.color.text,
+              background: "transparent",
+              border: "none",
+              padding: "2px 4px",
+              borderRadius: tokens.radius.sm,
+              cursor: "pointer",
+              wordBreak: "break-all",
+              textAlign: "left",
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.background = "rgba(0,0,0,0.06)";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+            }}
+          >
+            {room.id}
+          </button>
+        )}
         {isLinked && (
           <span
             style={{
@@ -285,24 +301,22 @@ export function RoomCard({
         )}
       </div>
 
-      {/* Thumbnail placeholder — TODO DRW-030: replace with actual canvas preview */}
-      <div
-        style={{
-          background: "rgba(0,0,0,0.04)",
-          borderRadius: tokens.radius.sm,
-          padding: "12px 8px",
-          textAlign: "center",
-          fontFamily: tokens.font.mono,
-          fontSize: tokens.font.sm,
-          color: tokens.color.textMuted,
-          minHeight: 48,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        📐 {room.elementCount} element{room.elementCount !== 1 ? "s" : ""}
-      </div>
+      {/* Thumbnail — clickable to open (non-archived) */}
+      {room.archived ? (
+        <ThumbnailArea
+          src={thumbnailSrc}
+          elementCount={room.elementCount}
+          roomId={room.id}
+          onClick={undefined}
+        />
+      ) : (
+        <ThumbnailArea
+          src={thumbnailSrc}
+          elementCount={room.elementCount}
+          roomId={room.id}
+          onClick={openRoom}
+        />
+      )}
 
       {/* Metadata */}
       <div
@@ -358,27 +372,6 @@ export function RoomCard({
       {/* Action row */}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         {!room.archived && (
-          <a
-            href={`/?room=${encodeURIComponent(room.id)}`}
-            style={{
-              fontFamily: tokens.font.sans,
-              fontSize: tokens.font.sm,
-              color: "#fff",
-              background: tokens.color.accent,
-              border: "none",
-              borderRadius: tokens.radius.sm,
-              padding: "4px 12px",
-              cursor: "pointer",
-              textDecoration: "none",
-              fontWeight: 600,
-              display: "inline-block",
-            }}
-          >
-            Open
-          </a>
-        )}
-
-        {!room.archived && (
           <button
             type="button"
             onClick={handleArchive}
@@ -411,20 +404,22 @@ export function RoomCard({
         {!room.archived && (
           <button
             type="button"
-            onClick={() => { setRenameOpen((v) => !v); setDuplicateOpen(false); setRenameValue(""); }}
+            onClick={startRename}
             style={actionBtnStyle}
           >
             Rename
           </button>
         )}
 
-        <button
-          type="button"
-          onClick={() => { setDuplicateOpen((v) => !v); setRenameOpen(false); setDuplicateValue(""); }}
-          style={actionBtnStyle}
-        >
-          Duplicate
-        </button>
+        {!room.archived && (
+          <button
+            type="button"
+            onClick={() => void handleDuplicate()}
+            style={actionBtnStyle}
+          >
+            Duplicate
+          </button>
+        )}
 
         {room.archived && (
           <button
@@ -440,26 +435,67 @@ export function RoomCard({
           </button>
         )}
       </div>
-
-      {renameOpen && (
-        <InlineRoomForm
-          placeholder="new-room-id"
-          value={renameValue}
-          onChange={setRenameValue}
-          onSubmit={() => void handleRenameSubmit()}
-          onCancel={() => setRenameOpen(false)}
-        />
-      )}
-
-      {duplicateOpen && (
-        <InlineRoomForm
-          placeholder="copy-of-room"
-          value={duplicateValue}
-          onChange={setDuplicateValue}
-          onSubmit={() => void handleDuplicateSubmit()}
-          onCancel={() => setDuplicateOpen(false)}
-        />
-      )}
     </div>
+  );
+}
+
+function ThumbnailArea({
+  src,
+  elementCount,
+  roomId,
+  onClick,
+}: {
+  src: string;
+  elementCount: number;
+  roomId: string;
+  onClick?: () => void;
+}) {
+  const [failed, setFailed] = useState(false);
+
+  const fallback = (
+    <div
+      style={{
+        background: "rgba(0,0,0,0.04)",
+        borderRadius: tokens.radius.sm,
+        padding: "12px 8px",
+        textAlign: "center",
+        fontFamily: tokens.font.mono,
+        fontSize: tokens.font.sm,
+        color: tokens.color.textMuted,
+        minHeight: 48,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: onClick ? "pointer" : "default",
+        width: "100%",
+      }}
+      onClick={onClick}
+      // biome-ignore lint/a11y/useKeyWithClickEvents: decorative fallback area
+      role={onClick ? "button" : undefined}
+    >
+      📐 {elementCount} element{elementCount !== 1 ? "s" : ""}
+    </div>
+  );
+
+  if (failed) return fallback;
+
+  return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: thumbnail image is a visual shortcut
+    <img
+      src={src}
+      loading="lazy"
+      alt={`preview of ${roomId}`}
+      onError={() => setFailed(true)}
+      onClick={onClick}
+      style={{
+        width: "100%",
+        height: 160,
+        objectFit: "contain",
+        background: "#f5f5f5",
+        borderRadius: tokens.radius.sm,
+        display: "block",
+        cursor: onClick ? "pointer" : "default",
+      }}
+    />
   );
 }

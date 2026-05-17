@@ -1025,3 +1025,52 @@ describe("POST /api/rooms/:id/duplicate", () => {
     expect(existsSync(join(dir, "arch-dup-active.json"))).toBe(true);
   });
 });
+
+describe("POST /api/rooms/:id/duplicate-auto", () => {
+  test("happy path — creates <id>-copy, resets opLog/version/linkedSession", async () => {
+    seedRoom("auto-src", (s) => {
+      seedShape(s, "shape:n1", "n1");
+      s.version = 5;
+      s.linkedSession = "some-session";
+      s.opLog.push({ type: "patch", ops: [] } as unknown as (typeof s.opLog)[0]);
+    });
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/auto-src/duplicate-auto", { method: "POST" }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; id: string };
+    expect(body.ok).toBe(true);
+    expect(body.id).toBe("auto-src-copy");
+
+    const { existsSync, readFileSync } = await import("node:fs");
+    expect(existsSync(join(dir, "auto-src-copy.json"))).toBe(true);
+    const dst = JSON.parse(readFileSync(join(dir, "auto-src-copy.json"), "utf8"));
+    expect(dst.roomId).toBe("auto-src-copy");
+    expect(dst.opLog).toEqual([]);
+    expect(dst.version).toBe(1);
+    expect(dst.linkedSession).toBeUndefined();
+  });
+
+  test("collision avoidance — <id>-copy exists → picks <id>-copy2", async () => {
+    seedRoom("col-src", () => {});
+    seedRoom("col-src-copy", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/col-src/duplicate-auto", { method: "POST" }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; id: string };
+    expect(body.id).toBe("col-src-copy2");
+  });
+
+  test("source not found → 404", async () => {
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/nonexistent/duplicate-auto", { method: "POST" }),
+    );
+    expect(res.status).toBe(404);
+  });
+});

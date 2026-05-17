@@ -121,6 +121,15 @@ export async function duplicateRoom(
   return r.json();
 }
 
+export async function duplicateRoomAuto(
+  id: string,
+): Promise<{ ok: boolean; id?: string; error?: string }> {
+  const r = await fetch(`/api/rooms/${encodeURIComponent(id)}/duplicate-auto`, {
+    method: "POST",
+  });
+  return r.json();
+}
+
 export async function purgeArchive(): Promise<{ removed: number }> {
   const r = await fetch("/api/rooms/purge-archive", {
     method: "POST",

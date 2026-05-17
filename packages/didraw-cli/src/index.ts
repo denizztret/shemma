@@ -6,6 +6,7 @@ import { applyStdin, connectCmd, context, define, deleteCmd, group, layoutCmd, n
 import {
   archiveRoom,
   duplicateRoom,
+  duplicateRoomAuto,
   exportRoom,
   importRoom,
   list,
@@ -223,10 +224,12 @@ async function main() {
       for (let i = 3; i < argv.length; i++) {
         if (argv[i] === "--as") asVal = argv[++i];
       }
-      if (!id || !asVal) {
-        console.error(JSON.stringify({ ok: false, error: "expected <id> --as <newId>" }));
+      if (!id) {
+        console.error(JSON.stringify({ ok: false, error: "expected <id> [--as <newId>]" }));
         process.exit(1);
       }
+      // If --as omitted, use auto-suffix endpoint
+      if (!asVal) return duplicateRoomAuto(id, profile);
       return duplicateRoom(id, asVal, profile);
     }
     if (sub === "purge-archive") {
@@ -350,7 +353,7 @@ Lifecycle:
   rooms export        <id> --to <path>
   rooms import        <path> [--as <id>] [--force]
   rooms rename        <old> <new> [--force]
-  rooms duplicate     <id> --as <newId>
+  rooms duplicate     <id> [--as <newId>]
   rooms rm            <id> [--archive] [--hard] [--force] --confirm
   rooms purge-archive --confirm
 

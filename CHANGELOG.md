@@ -1,3 +1,40 @@
+## 0.7.0 — 2026-05-17 — Gallery UX polish: inline rename + click-to-open + auto-suffix duplicate + SVG thumbnails
+
+User-driven UX improvements после первого реального использования Gallery.
+
+### Added
+
+- **SVG thumbnail preview** в RoomCard (DRW-051, supersedes deferred DRW-030). Новый `apps/backend/src/thumbnail.ts:renderThumbnail(snapshot, w, h)` — pure SVG string из TLStoreSnapshot (no `@tldraw/*` import). Поддерживает geo (rect/ellipse/diamond), note (yellow rect), text/frame (placeholder rects), arrow (line), draw/line/highlight (polyline approximation). Bounding box auto-fit + padding. Empty store → "Empty" centered.
+- **`GET /api/rooms/:id/thumbnail?w=240&h=160&archived=true`** возвращает `image/svg+xml`. Lazy load в RoomCard через `<img loading="lazy">`; onError fallback на "📐 N elements" текст.
+- **`POST /api/rooms/:id/duplicate-auto`** — server-side picks first available `<id>-copy`, `<id>-copy2`, ..., атомарно проверяя active + archived. Single roundtrip.
+- **`@didraw/client.duplicateAuto(id)`** + **CLI `didraw rooms duplicate <id>`** (без `--as`) теперь auto-suffix. С `--as` остаётся явный override.
+- **`/api/session` response field `home`** (от `os.homedir()`) — frontend использует для `~/` prefix path display.
+
+### Changed
+
+- **Gallery card UX** (DRW-048):
+  - Title теперь interactive button → click → open room (заменяет старую Open кнопку).
+  - Click на thumbnail preview → open room.
+  - Open button удалена из action row (action row: Archive / Export / Rename / Duplicate для active; Restore / Delete permanently для archived).
+  - Rename теперь inline editing в самом заголовке: click Rename → title заменяется на `<input>` с current name pre-filled (autoFocus). Enter → submit; Esc/Blur → cancel.
+- **Gallery header** (DRW-050): workspace path с `~/` prefix если matches `home`. Truncation удалена (`word-break: break-all` вместо ellipsis). `title` attribute хранит full absolute path.
+- **Archived cards** (DRW-049): Duplicate button удалена (дубликат archived → confusing UX).
+
+### Removed
+
+- `apps/frontend/src/gallery/InlineRoomForm.tsx` — стал obsolete (Rename → inline title editing; Duplicate → auto-suffix one-click).
+
+### Tests
+
+363 pass (+9 vs 0.6.2 baseline 354). Added: thumbnail snapshot tests (5 cases — empty, known geo+arrow+note, ellipse, diamond, frame); duplicate-auto routes (3 cases — happy path, collision → -copy2, 404 missing source).
+
+### Notes
+
+- Tests не покрывают UI interactions (нет Playwright suite — DRW-023 deferred).
+- `RoomCard` поведение verified manually в chrome-devtools: thumbnail render, click-open, rename inline, duplicate auto, `~/` prefix.
+
+---
+
 ## 0.6.2 — 2026-05-17 — Hotfix: arrow.props.kind for tldraw 5.x schema drift
 
 Found via 0.6.1 re-smoke: existing rooms с AI-created arrows не загружались (ValidationError "props.kind: Expected arc or elbow, got undefined"). tldraw 5.x runtime требует `kind` на arrow shapes; наш backend этого не писал.
