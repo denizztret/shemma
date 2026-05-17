@@ -9,7 +9,7 @@ import {
   isValidName,
   isValidRole,
   type Role,
-} from "@didraw/domain";
+} from "@shemma/domain";
 import type { TLStoreSnapshot } from "../store-types";
 import type { ActionError, DeleteAction, DomainAction, ElementId } from "./types";
 

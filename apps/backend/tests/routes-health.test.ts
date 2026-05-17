@@ -7,7 +7,7 @@ import { startServer } from "../src/index";
 /**
  * `/api/health` — DRW-052 extended health endpoint. Returns profile,
  * resolved storage path (honoring startServer({ storageDir }) override),
- * and version. Used by `didraw open` для daemon-conflict detection.
+ * and version. Used by `shemma open` для daemon-conflict detection.
  *
  * `/healthz` — legacy boolean probe used by CanvasClient.health() и
  * Playwright wait-on. Must stay backward-compatible.
@@ -17,7 +17,7 @@ let srv: { port: number; close: () => Promise<void> };
 let dir: string;
 
 beforeAll(async () => {
-  dir = mkdtempSync(join(tmpdir(), "didraw-health-"));
+  dir = mkdtempSync(join(tmpdir(), "shemma-health-"));
   srv = await startServer({ port: 0, storageDir: dir });
 });
 

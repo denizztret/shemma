@@ -1,5 +1,5 @@
 {
-  "name": "@didraw/frontend",
+  "name": "@shemma/frontend",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "@didraw/domain": "workspace:*",
+    "@shemma/domain": "workspace:*",
     "@tldraw/mermaid": "^5.0.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",

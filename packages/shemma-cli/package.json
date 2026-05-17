@@ -1,0 +1,12 @@
+{
+  "name": "shemma",
+  "version": "0.10.0",
+  "private": true,
+  "type": "module",
+  "bin": { "shemma": "src/index.ts" },
+  "scripts": { "test": "bun test" },
+  "dependencies": {
+    "@shemma/client": "workspace:*",
+    "@shemma/backend": "workspace:*"
+  }
+}

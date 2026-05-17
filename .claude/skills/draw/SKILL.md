@@ -1,25 +1,25 @@
 ---
 name: draw
-description: Use when user mentions canvas, drawing, schemas, architecture diagrams, or says "нарисуй", "доска", "схема", "обнови canvas", or invokes /draw. Injects current canvas state and pending user prompts; AI uses didraw CLI through Bash to update the board.
+description: Use when user mentions canvas, drawing, schemas, architecture diagrams, or says "нарисуй", "доска", "схема", "обнови canvas", or invokes /draw. Injects current canvas state and pending user prompts; AI uses shemma CLI through Bash to update the board.
 ---
 
 # draw
 
-You have a live canvas board for this Claude Code session. Domain-level commands below; do NOT use raw `didraw patch` — use `didraw define / connect / group / note / layout / delete / apply / context` instead.
+You have a live canvas board for this Claude Code session. Domain-level commands below; do NOT use raw `shemma patch` — use `shemma define / connect / group / note / layout / delete / apply / context` instead.
 
 ## Current canvas context
 
-!`didraw context 2>/dev/null || echo '{"summary":{"total":0,"byRole":{}},"inView":[],"connections":[],"recentOps":[]}'`
+!`shemma context 2>/dev/null || echo '{"summary":{"total":0,"byRole":{}},"inView":[],"connections":[],"recentOps":[]}'`
 
 ## Rooms in this workspace
 
-!`didraw rooms list 2>/dev/null || echo '{"rooms":[]}'`
+!`shemma rooms list 2>/dev/null || echo '{"rooms":[]}'`
 
 If `rooms` lists non-empty schemas relevant to the current dialogue, ask the user whether to continue an existing schema or start a new one.
 
 ## Pending user prompts
 
-!`didraw prompts list --status pending 2>/dev/null || echo '{"prompts":[]}'`
+!`shemma prompts list --status pending 2>/dev/null || echo '{"prompts":[]}'`
 
 ## Roles
 
@@ -46,13 +46,13 @@ If `rooms` lists non-empty schemas relevant to the current dialogue, ask the use
 ## Commands
 
 ```
-didraw define <role> <name> [--label "..."] [--in <container>]
-didraw connect <from> <to> [--kind sync|async|data|dep] [--label "..."]
-didraw group <id1,id2,...> --as network|boundary --name <name>
-didraw note --text "..." [--about <name>]
-didraw layout [--mode layered-lr|layered-tb|tree|pack|force]
-didraw delete <id1,id2,...> [--cascade]
-didraw apply --stdin              # JSON batch with {actions: [...]}
+shemma define <role> <name> [--label "..."] [--in <container>]
+shemma connect <from> <to> [--kind sync|async|data|dep] [--label "..."]
+shemma group <id1,id2,...> --as network|boundary --name <name>
+shemma note --text "..." [--about <name>]
+shemma layout [--mode layered-lr|layered-tb|tree|pack|force]
+shemma delete <id1,id2,...> [--cascade]
+shemma apply --stdin              # JSON batch with {actions: [...]}
 ```
 
 ## Pattern: batch via apply
@@ -67,7 +67,7 @@ echo '{
     {"kind":"connect","from":"auth","to":"users-db","connectionKind":"data"}
   ],
   "layoutHint": {"mode": "layered-lr"}
-}' | didraw apply --stdin
+}' | shemma apply --stdin
 ```
 
 ## Pattern: preview before commit
@@ -75,7 +75,7 @@ echo '{
 Use `dryRun:true` to see compiled ops without writing:
 
 ```bash
-echo '{"actions":[…],"dryRun":true}' | didraw apply --stdin
+echo '{"actions":[…],"dryRun":true}' | shemma apply --stdin
 ```
 
 ## User overrides — respect them

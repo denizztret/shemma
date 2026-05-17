@@ -148,7 +148,7 @@ export async function startServer(opts: AppOpts = {}) {
   });
 
   const shutdown = async (signal: string) => {
-    console.log(`[didraw] ${signal} received, flushing…`);
+    console.log(`[shemma] ${signal} received, flushing…`);
     server.stop();
     if (persistence) await persistence.flushAll();
     process.exit(0);
@@ -169,6 +169,6 @@ export async function startServer(opts: AppOpts = {}) {
 
 if (import.meta.main) {
   void startServer().then((s) =>
-    console.log(`[didraw] listening on :${s.port} (profile=${config.profile})`),
+    console.log(`[shemma] listening on :${s.port} (profile=${config.profile})`),
   );
 }

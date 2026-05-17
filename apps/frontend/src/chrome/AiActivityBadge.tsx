@@ -27,7 +27,7 @@ export function AiActivityBadge({
         fontSize: tokens.font.sm,
         color: tokens.color.text,
         boxShadow: "0 2px 6px rgba(0,0,0,0.08)",
-        animation: "didraw-ai-pulse 1.4s ease-in-out infinite",
+        animation: "shemma-ai-pulse 1.4s ease-in-out infinite",
       }}
     >
       <span
@@ -43,7 +43,7 @@ export function AiActivityBadge({
       <span style={{ color: tokens.color.textMuted }}>·</span>
       <span>{activity.task}</span>
       <style>{`
-        @keyframes didraw-ai-pulse {
+        @keyframes shemma-ai-pulse {
           0%, 100% { box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
           50%      { box-shadow: 0 2px 14px ${tokens.color.badgeDev}; }
         }

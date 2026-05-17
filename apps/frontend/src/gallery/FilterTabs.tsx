@@ -12,7 +12,7 @@ export function FilterTabs({
   const tabs: Array<{ id: FilterTab; label: string }> = [
     { id: "current", label: "Current workspace" },
     { id: "archived", label: "Archived" },
-    // "All workspaces" tab shown when DRW-032 lands (DIDRAW_CROSS_WORKSPACE=1)
+    // "All workspaces" tab shown when DRW-032 lands (SHEMMA_CROSS_WORKSPACE=1)
   ];
 
   return (

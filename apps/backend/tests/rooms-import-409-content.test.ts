@@ -14,7 +14,7 @@ import type { RoomState } from "../src/types";
 let dir: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "didraw-imp409-"));
+  dir = mkdtempSync(join(tmpdir(), "shemma-imp409-"));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 

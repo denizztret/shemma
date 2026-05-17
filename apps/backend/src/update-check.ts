@@ -1,10 +1,10 @@
 import { VERSION } from "./version";
 
-// Lazy to allow tests to override DIDRAW_MANIFEST_URL after module load.
+// Lazy to allow tests to override SHEMMA_MANIFEST_URL after module load.
 function getManifestUrl(): string {
   return (
-    process.env.DIDRAW_MANIFEST_URL ??
-    "https://github.com/example/di.draw/releases/download/latest/release-manifest.json"
+    process.env.SHEMMA_MANIFEST_URL ??
+    "https://github.com/example/shemma/releases/download/latest/release-manifest.json"
   );
 }
 

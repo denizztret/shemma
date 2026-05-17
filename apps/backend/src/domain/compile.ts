@@ -5,7 +5,7 @@
 // action, чтобы action N мог ссылаться на shapes/groups, созданные в action N-1.
 // `layout` — no-op на этом уровне (ELK orchestrate'ится routes/domain.ts).
 
-import { connectionPreset, rolePreset, type Role } from "@didraw/domain";
+import { connectionPreset, rolePreset, type Role } from "@shemma/domain";
 import { applyStoreChanges, cascadeDeleteShape, rebuildDidrawIndex } from "../store-ops";
 import type { StoreChangeBatch, TLRecord, TLStoreSnapshot } from "../store-types";
 import type { DomainAction, ElementId } from "./types";

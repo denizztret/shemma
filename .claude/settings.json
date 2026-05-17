@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun run --cwd ${CLAUDE_PROJECT_DIR:-.}/packages/didraw-cli src/index.ts daemon ensure"
+            "command": "bun run --cwd ${CLAUDE_PROJECT_DIR:-.}/packages/shemma-cli src/index.ts daemon ensure"
           }
         ]
       }

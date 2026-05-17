@@ -17,7 +17,7 @@ export default defineConfig({
   // Run two web servers: backend on :8788, frontend vite on :5173.
   webServer: [
     {
-      command: `DIDRAW_PROFILE=dev bun ${BACKEND}/src/index.ts`,
+      command: `SHEMMA_PROFILE=dev bun ${BACKEND}/src/index.ts`,
       url: "http://localhost:8788/healthz",
       reuseExistingServer: !process.env.CI,
       timeout: 30_000,

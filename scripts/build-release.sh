@@ -29,19 +29,19 @@ build_target() {
   local target="$1"
   local out="$2"
   echo "Building $out..."
-  bun build packages/didraw-cli/src/index.ts \
+  bun build packages/shemma-cli/src/index.ts \
     --compile \
     --target="$target" \
     --outfile="release/$out" \
-    --define "process.env.DIDRAW_VERSION='$VERSION'" \
-    --define "process.env.DIDRAW_CHANNEL='$CHANNEL'" \
-    --define "process.env.DIDRAW_GIT_SHA='$GIT_SHA'" \
-    --define "process.env.DIDRAW_BUILD_DATE='$BUILD_DATE'"
+    --define "process.env.SHEMMA_VERSION='$VERSION'" \
+    --define "process.env.SHEMMA_CHANNEL='$CHANNEL'" \
+    --define "process.env.SHEMMA_GIT_SHA='$GIT_SHA'" \
+    --define "process.env.SHEMMA_BUILD_DATE='$BUILD_DATE'"
 }
 
-build_target "bun-darwin-arm64" "didraw-darwin-arm64"
-build_target "bun-darwin-x64" "didraw-darwin-x64"
-build_target "bun-linux-x64" "didraw-linux-x64"
+build_target "bun-darwin-arm64" "shemma-darwin-arm64"
+build_target "bun-darwin-x64" "shemma-darwin-x64"
+build_target "bun-linux-x64" "shemma-linux-x64"
 
 echo "Release builds ready in release/"
 ls -lh release/

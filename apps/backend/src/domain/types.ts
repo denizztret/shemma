@@ -1,4 +1,4 @@
-import type { ConnectionKind, LayoutMode, Role, Spacing } from "@didraw/domain";
+import type { ConnectionKind, LayoutMode, Role, Spacing } from "@shemma/domain";
 import type { StoreChangeBatch } from "../store-types";
 
 export type ElementId = string;

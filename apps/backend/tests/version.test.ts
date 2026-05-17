@@ -5,11 +5,11 @@ import { __resetCache } from "../src/update-check";
 // Point manifest URL at an address that refuses connections instantly so
 // tests are fast, offline-safe, and checkLatest() returns {updateAvailable:false}.
 beforeAll(() => {
-  process.env.DIDRAW_MANIFEST_URL = "http://127.0.0.1:1/nope";
+  process.env.SHEMMA_MANIFEST_URL = "http://127.0.0.1:1/nope";
 });
 
 afterAll(() => {
-  process.env.DIDRAW_MANIFEST_URL = undefined;
+  process.env.SHEMMA_MANIFEST_URL = undefined;
   __resetCache();
 });
 

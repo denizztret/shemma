@@ -1,3 +1,44 @@
+## 0.10.0 — 2026-05-18 — Renamed to Shemma
+
+### Changed (breaking — mechanical rename)
+
+- **Project rename:** `didraw` → `shemma` на всех уровнях, кроме internal persistence keys (`meta.didrawName`, `meta.didrawIsGroup`, backend `didrawIndex`) — они остаются для backward compatibility existing room JSON envelopes.
+- **CLI binary:** `didraw` → `shemma`. Создан wrapper `~/.local/bin/shemma`. Старый `~/.local/bin/didraw` оставлен как пользовательский machine state — можно удалить вручную (`rm ~/.local/bin/didraw`) после re-source shell.
+- **Packages:** `@didraw/backend` → `@shemma/backend`, `@didraw/frontend` → `@shemma/frontend`, `@didraw/client` → `@shemma/client`, `@didraw/domain` → `@shemma/domain`. CLI package: `didraw` → `shemma`. Root: `didraw-root` → `shemma-root`.
+- **Directories:** `packages/didraw-cli/` → `packages/shemma-cli/`, `packages/didraw-client/` → `packages/shemma-client/`, `packages/didraw-domain/` → `packages/shemma-domain/`. Renamed через `git mv` для preservation истории.
+- **Storage folder convention:** project-local `.didraw/` → `.shemma/` (cwd auto-discovery). Existing `.didraw/` directories продолжат работать только если user задаёт `--storage <path>` явно. Recommended migration: `mv .didraw .shemma` в проектах где используется.
+- **Daemon log/pid files:** `~/.claude/.didraw-<profile>.pid|log` → `~/.claude/.shemma-<profile>.pid|log`. Запущенный 0.9.x daemon следует остановить через `didraw daemon stop` ДО update, иначе orphan pid file.
+- **Log prefix:** `[didraw]` → `[shemma]` во всех stdout/stderr lines.
+- **Env vars:** `DIDRAW_STORAGE_DIR` → `SHEMMA_STORAGE_DIR`, `DIDRAW_PROFILE` → `SHEMMA_PROFILE`, `DIDRAW_PORT`, `DIDRAW_LOG_LEVEL`, `DIDRAW_LOG_MAX_MB`, `DIDRAW_MANIFEST_URL`, `DIDRAW_VERSION`, `DIDRAW_CHANNEL`, `DIDRAW_GIT_SHA`, `DIDRAW_BUILD_DATE`, `DIDRAW_GRACEFUL_SHUTDOWN_MS`, `DIDRAW_BIN`, `DIDRAW_CROSS_WORKSPACE` — все получили префикс `SHEMMA_`.
+- **Browser-side helper:** `window.didrawImportMermaid()` → `window.shemmaImportMermaid()` (DEV-console).
+- **Envelope schema field:** JSON envelope `shemma: { shemmaVersion, createdAt }` (раньше `didraw: { didrawVersion, createdAt }`). `parseFull()` принимает оба варианта (forward-compat для existing files), serialize пишет новый формат.
+
+### Legacy compatibility layer (single-version backfill)
+
+- Backend `apps/backend/src/config.ts` читает `SHEMMA_*` → fallback на `DIDRAW_*` с deprecation warning `[shemma] DIDRAW_FOO is deprecated; use SHEMMA_FOO instead`. Это **single legacy compat layer** — user может не успеть переписать свои скрипты.
+- CLI `packages/shemma-cli/src/profile.ts` — same fallback для `SHEMMA_PROFILE` / `SHEMMA_PORT`.
+- CLI `packages/shemma-cli/src/lifecycle.ts:open()` — `SHEMMA_STORAGE_DIR` → `DIDRAW_STORAGE_DIR` fallback.
+- CLI `packages/shemma-cli/src/doctor.ts` — `SHEMMA_VERSION` → `DIDRAW_VERSION` fallback в version check.
+- **Removed в 1.0.0.** До этого момента старые env vars работают, но warn'ятся.
+
+### Preserved (no rename, by design)
+
+- **`meta.didrawName`** на shapes — internal persistence key. Rename без backfill сломает existing rooms. Marked TODO в `apps/frontend/src/canvas/id-prefix.ts:getDidrawName`.
+- **`meta.didrawIsGroup`** — same reason.
+- **Backend `RoomState.didrawIndex` + `rebuildDidrawIndex` / `findShapeByDidrawName`** — internal identifiers связанные с `didrawName` key.
+- **Historical files:** `docs/superpowers/specs/*.md`, `docs/superpowers/plans/*.md`, `backlog/tasks/drw-*.md` — не тронуты как historical record.
+- **Backlog task prefix `DRW-`** — hardcoded в Backlog.md v1.45.1 tooling.
+- **Git history** — commit messages не переписаны.
+
+### Migration (user-facing)
+
+1. `rm ~/.local/bin/didraw` (старый wrapper), убедиться что `which shemma` указывает на `~/.local/bin/shemma`.
+2. Если используешь env vars в shell rc / CI: заменить `DIDRAW_*` → `SHEMMA_*` (старые работают до 1.0.0 с warning).
+3. Если используешь project-local `.didraw/` storage: `mv .didraw .shemma` в каждом проекте.
+4. Перезапустить daemon если был запущен (`didraw daemon stop` потом `shemma`).
+
+---
+
 ## 0.9.0 — 2026-05-17 — Project-local `.didraw/` storage + zero-arg launch + Mermaid import UI
 
 ### Added

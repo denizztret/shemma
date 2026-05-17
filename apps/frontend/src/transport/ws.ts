@@ -110,7 +110,7 @@ export type StoreSyncDeps = {
  * `originClientId` matches our `clientOpId` are dropped (echo-guard).
  *
  * Non-store frames (prompt-*, ai-activity) are forwarded to chrome layers via
- * a `didraw:ws-message` window event so transport stays decoupled.
+ * a `shemma:ws-message` window event so transport stays decoupled.
  *
  * DRW-018 — pause gate:
  *   `setPaused(true)` causes inbound `replay` / `store-change` frames to be
@@ -208,7 +208,7 @@ export function startStoreSync(
           // advance currentVersion either: the caller will tear this syncer
           // down and restart with fresh /api/state version anyway.
           console.debug(
-            "[didraw] dropping inbound 'replay' while paused (recovery)",
+            "[shemma] dropping inbound 'replay' while paused (recovery)",
           );
           break;
         }
@@ -239,7 +239,7 @@ export function startStoreSync(
           // this change (it's already in the server's authoritative state),
           // applying it now against the stale store would just flicker.
           console.debug(
-            "[didraw] dropping inbound 'store-change' while paused (recovery)",
+            "[shemma] dropping inbound 'store-change' while paused (recovery)",
           );
           break;
         }
@@ -257,7 +257,7 @@ export function startStoreSync(
       case "ai-activity":
         if (typeof window !== "undefined") {
           window.dispatchEvent(
-            new CustomEvent("didraw:ws-message", { detail: msg }),
+            new CustomEvent("shemma:ws-message", { detail: msg }),
           );
         }
         break;

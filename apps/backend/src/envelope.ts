@@ -6,7 +6,7 @@ import type { Prompt, RoomState } from "./types";
 export const ENVELOPE_SCHEMA_VERSION = 3;
 export const SUPPORTED_SCHEMA_VERSIONS = [2, 3] as const; // 2 для migrator; runtime читает 3.
 
-const DIDRAW_VERSION = "0.4.0";
+const SHEMMA_VERSION = "0.10.0";
 
 export type EnvelopeHeader = {
   schemaVersion: 2 | 3;
@@ -18,7 +18,7 @@ export type EnvelopeHeader = {
 
 export type EnvelopeV3 = EnvelopeHeader & {
   schemaVersion: 3;
-  didraw: { didrawVersion: string; createdAt: string };
+  shemma: { shemmaVersion: string; createdAt: string };
   store: TLStoreSnapshot;
   prompts: Prompt[];
   opLog: StoreOpLogEntry[];
@@ -42,7 +42,7 @@ function buildV3(roomId: string, s: RoomState): EnvelopeV3 {
     version: s.version,
     lastTouched: new Date(s.lastTouched).toISOString(),
     elementCount: countShapes(s.store.store),
-    didraw: { didrawVersion: DIDRAW_VERSION, createdAt: new Date().toISOString() },
+    shemma: { shemmaVersion: SHEMMA_VERSION, createdAt: new Date().toISOString() },
     store: s.store,
     prompts: s.prompts,
     opLog: s.opLog.slice(-config.opLogMaxSize),
@@ -84,6 +84,25 @@ export function parseHeader(raw: string): EnvelopeHeader | null {
 
 // v3 only. v2 envelope парсится через `parseV2OrThrow(raw)` в migrate-v2.ts.
 // parseFull кидает, если schemaVersion !== 3 — caller (rooms.load) сам решает мигрировать.
+function normalizeShemmaMeta(j: Partial<EnvelopeV3> & {
+  didraw?: { didrawVersion?: string; createdAt?: string };
+}): { shemmaVersion: string; createdAt: string } {
+  if (j.shemma) {
+    const legacyVer = (j.shemma as { didrawVersion?: string }).didrawVersion;
+    return {
+      shemmaVersion: j.shemma.shemmaVersion ?? legacyVer ?? SHEMMA_VERSION,
+      createdAt: j.shemma.createdAt ?? new Date().toISOString(),
+    };
+  }
+  if (j.didraw) {
+    return {
+      shemmaVersion: j.didraw.didrawVersion ?? SHEMMA_VERSION,
+      createdAt: j.didraw.createdAt ?? new Date().toISOString(),
+    };
+  }
+  return { shemmaVersion: SHEMMA_VERSION, createdAt: new Date().toISOString() };
+}
+
 export function parseFull(raw: string): EnvelopeV3 {
   const j = JSON.parse(raw) as Partial<EnvelopeV3>;
   if (j.schemaVersion !== 3) {
@@ -104,7 +123,9 @@ export function parseFull(raw: string): EnvelopeV3 {
     version: j.version,
     lastTouched: typeof j.lastTouched === "string" ? j.lastTouched : new Date().toISOString(),
     elementCount: typeof j.elementCount === "number" ? j.elementCount : countShapes(j.store.store as Record<string, { typeName?: string }>),
-    didraw: j.didraw ?? { didrawVersion: DIDRAW_VERSION, createdAt: new Date().toISOString() },
+    // Legacy compat: pre-0.10.0 envelopes used `didraw` key with `didrawVersion`.
+    // Accept both keys; normalize to the new `shemma` key with `shemmaVersion`.
+    shemma: normalizeShemmaMeta(j),
     store: j.store as TLStoreSnapshot,
     prompts: j.prompts,
     opLog: Array.isArray(j.opLog) ? j.opLog : [],

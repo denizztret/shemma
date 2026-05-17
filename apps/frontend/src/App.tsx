@@ -91,7 +91,7 @@ export function App({ room }: { room: string }) {
   }, [room]);
 
   // Chrome (prompt drawer + AI badge) listens to ws-bus dispatched events
-  // from transport/ws.ts (`didraw:ws-message`). Transport itself stays
+  // from transport/ws.ts (`shemma:ws-message`). Transport itself stays
   // decoupled — it does not import App/Drawer/Badge components.
   useEffect(() => {
     // biome-ignore lint/suspicious/noExplicitAny: window CustomEvent payload is opaque
@@ -109,8 +109,8 @@ export function App({ room }: { room: string }) {
           break;
       }
     };
-    window.addEventListener("didraw:ws-message", handler);
-    return () => window.removeEventListener("didraw:ws-message", handler);
+    window.addEventListener("shemma:ws-message", handler);
+    return () => window.removeEventListener("shemma:ws-message", handler);
   }, []);
 
   // Viewport reporter (camera → backend, debounced 500ms).
@@ -193,20 +193,20 @@ export function App({ room }: { room: string }) {
                 initialVersion: fresh.version,
                 onTruncated: () => {
                   // Pathological loop — log and stop trying.
-                  console.warn("[didraw] truncated recovery looped, giving up");
+                  console.warn("[shemma] truncated recovery looped, giving up");
                 },
               });
             } catch (e) {
-              console.warn("[didraw] truncated recovery failed:", e);
+              console.warn("[shemma] truncated recovery failed:", e);
             }
           })();
         },
       });
 
-      // Dev-console helper: window.didrawImportMermaid(source). Mutates store;
+      // Dev-console helper: window.shemmaImportMermaid(source). Mutates store;
       // startStoreSync auto-forwards the batch to backend over WS.
       // biome-ignore lint/suspicious/noExplicitAny: attaching helper to window
-      (window as any).didrawImportMermaid = async (source: string) => {
+      (window as any).shemmaImportMermaid = async (source: string) => {
         try {
           return await importMermaid(editor, source);
         } catch (e) {
@@ -253,7 +253,7 @@ export function App({ room }: { room: string }) {
       }
       // biome-ignore lint/suspicious/noExplicitAny: cleaning up window helper
       // biome-ignore lint/performance/noDelete: intentional property removal
-      delete (window as any).didrawImportMermaid;
+      delete (window as any).shemmaImportMermaid;
     };
   }, [editor, room]);
 

@@ -3,7 +3,7 @@ import { config } from "../config";
 import { VERSION } from "../version";
 
 // `config` is referenced lazily inside the route handler — getProfile() reads
-// DIDRAW_PROFILE at request time, which keeps in-process test daemons (which
+// SHEMMA_PROFILE at request time, which keeps in-process test daemons (which
 // don't touch process.env) honest about their own profile.
 
 
@@ -13,7 +13,7 @@ import { VERSION } from "../version";
  * `/healthz` — legacy `{ ok: true }` (preserved for compatibility with
  *   `CanvasClient.health()` boolean probe и Playwright wait-on).
  *
- * `/api/health` — extended status used by `didraw open` to detect daemon
+ * `/api/health` — extended status used by `shemma open` to detect daemon
  *   storage conflicts (DRW-052). Returns `profile`, resolved `storage` path
  *   (включая profile subdir) и `version`, чтобы CLI мог сравнить cwd-target
  *   с активным daemon'ом и предупредить о mismatched storage.
