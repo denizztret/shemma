@@ -74,6 +74,12 @@ export function Gallery() {
     setRooms((prev) => prev.filter((r) => r.id !== id));
   }
 
+  function handleRefresh() {
+    listRooms({ includeArchived: filterTab === "archived" })
+      .then((res) => setRooms(res.rooms))
+      .catch((e) => pushError(`Failed to reload rooms: ${(e as Error).message}`));
+  }
+
   function toggleSort(groupTitle: string) {
     setSortModes((prev) => ({
       ...prev,
@@ -310,6 +316,7 @@ export function Gallery() {
                         onArchived={handleArchived}
                         onRestored={handleRestored}
                         onDeleted={handleDeleted}
+                        onRefresh={handleRefresh}
                       />
                     ))}
                   </div>

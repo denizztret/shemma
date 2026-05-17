@@ -3,7 +3,9 @@ import { tokens } from "../design-tokens";
 import {
   archiveRoom,
   deleteRoom,
+  duplicateRoom,
   exportRoom,
+  renameRoom,
   restoreRoom,
 } from "../transport/api";
 import { pushError } from "../state/error-bus";
@@ -31,19 +33,59 @@ export function RoomCard({
   onArchived,
   onRestored,
   onDeleted,
+  onRefresh,
 }: {
   room: RoomCardData;
   sessionId: string | null;
   onArchived: (id: string) => void;
   onRestored: (id: string) => void;
   onDeleted: (id: string) => void;
+  onRefresh?: () => void;
 }) {
   const [undoState, setUndoState] = useState<UndoState | null>(null);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
+  const [duplicateValue, setDuplicateValue] = useState("");
 
   const isLinked =
     room.linkedSession !== undefined &&
     sessionId !== null &&
     room.linkedSession === sessionId;
+
+  async function handleRenameSubmit() {
+    const to = renameValue.trim();
+    if (!to) return;
+    const res = await renameRoom(room.id, to);
+    if (!res.ok) {
+      pushError(
+        res.error === "room-exists"
+          ? `Cannot rename: room "${res.existingId}" already exists`
+          : `Rename failed: ${res.error ?? "unknown error"}`,
+      );
+      return;
+    }
+    setRenameOpen(false);
+    setRenameValue("");
+    onRefresh?.();
+  }
+
+  async function handleDuplicateSubmit() {
+    const as = duplicateValue.trim();
+    if (!as) return;
+    const res = await duplicateRoom(room.id, as);
+    if (!res.ok) {
+      pushError(
+        res.error === "room-exists"
+          ? `Cannot duplicate: room "${res.existingId}" already exists`
+          : `Duplicate failed: ${res.error ?? "unknown error"}`,
+      );
+      return;
+    }
+    setDuplicateOpen(false);
+    setDuplicateValue("");
+    onRefresh?.();
+  }
 
   async function handleArchive() {
     // Optimistic: notify parent to remove from active list immediately
@@ -307,6 +349,24 @@ export function RoomCard({
           </button>
         )}
 
+        {!room.archived && (
+          <button
+            type="button"
+            onClick={() => { setRenameOpen((v) => !v); setDuplicateOpen(false); setRenameValue(""); }}
+            style={actionBtnStyle}
+          >
+            Rename
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={() => { setDuplicateOpen((v) => !v); setRenameOpen(false); setDuplicateValue(""); }}
+          style={actionBtnStyle}
+        >
+          Duplicate
+        </button>
+
         {room.archived && (
           <button
             type="button"
@@ -321,9 +381,64 @@ export function RoomCard({
           </button>
         )}
       </div>
+
+      {/* Rename inline form */}
+      {renameOpen && (
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input
+            type="text"
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void handleRenameSubmit(); if (e.key === "Escape") setRenameOpen(false); }}
+            placeholder="new-room-id"
+            autoFocus
+            style={inlineInputStyle}
+          />
+          <button type="button" onClick={() => void handleRenameSubmit()} style={actionBtnStyle}>
+            OK
+          </button>
+          <button type="button" onClick={() => setRenameOpen(false)} style={actionBtnStyle}>
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Duplicate inline form */}
+      {duplicateOpen && (
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input
+            type="text"
+            value={duplicateValue}
+            onChange={(e) => setDuplicateValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void handleDuplicateSubmit(); if (e.key === "Escape") setDuplicateOpen(false); }}
+            placeholder="copy-of-room"
+            autoFocus
+            style={inlineInputStyle}
+          />
+          <button type="button" onClick={() => void handleDuplicateSubmit()} style={actionBtnStyle}>
+            OK
+          </button>
+          <button type="button" onClick={() => setDuplicateOpen(false)} style={actionBtnStyle}>
+            ✕
+          </button>
+        </div>
+      )}
     </div>
   );
 }
+
+const inlineInputStyle: React.CSSProperties = {
+  fontFamily: tokens.font.mono,
+  fontSize: tokens.font.sm,
+  color: tokens.color.text,
+  background: tokens.color.bgOverlay,
+  border: `1px solid ${tokens.color.border}`,
+  borderRadius: tokens.radius.sm,
+  padding: "4px 8px",
+  flex: 1,
+  minWidth: 0,
+  outline: "none",
+};
 
 const actionBtnStyle: React.CSSProperties = {
   fontFamily: tokens.font.sans,

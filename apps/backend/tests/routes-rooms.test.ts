@@ -801,3 +801,227 @@ describe("DELETE /api/rooms/:id", () => {
     expect(body.removed).toBe(0);
   });
 });
+
+describe("POST /api/rooms/:id/rename", () => {
+  test("happy path — file moved, list reflects new id, envelope roomId updated", async () => {
+    seedRoom("old-room", (s) => {
+      seedShape(s, "shape:n1", "n1");
+      s.version = 5;
+    });
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/old-room/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to: "new-room" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; id: string };
+    expect(body.ok).toBe(true);
+    expect(body.id).toBe("new-room");
+
+    const { existsSync, readFileSync } = await import("node:fs");
+    expect(existsSync(join(dir, "old-room.json"))).toBe(false);
+    expect(existsSync(join(dir, "new-room.json"))).toBe(true);
+
+    const env = JSON.parse(readFileSync(join(dir, "new-room.json"), "utf8"));
+    expect(env.roomId).toBe("new-room");
+    expect(env.version).toBe(5);
+
+    // list must show new-room, not old-room
+    const listRes = await app.fetch(new Request("http://localhost/api/rooms"));
+    const listBody = (await listRes.json()) as { rooms: Array<{ id: string }> };
+    const ids = listBody.rooms.map((r) => r.id);
+    expect(ids).toContain("new-room");
+    expect(ids).not.toContain("old-room");
+  });
+
+  test("rename to existing id without force → 409", async () => {
+    seedRoom("src-room", () => {});
+    seedRoom("existing-room", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/src-room/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to: "existing-room" }),
+      }),
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { ok: boolean; error: string; existingId: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("room-exists");
+    expect(body.existingId).toBe("existing-room");
+  });
+
+  test("rename to existing id with force → 200, overwrites target", async () => {
+    seedRoom("force-src", (s) => { s.version = 7; });
+    seedRoom("force-dst", (s) => { s.version = 1; });
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/force-src/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to: "force-dst", force: true }),
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const { existsSync, readFileSync } = await import("node:fs");
+    expect(existsSync(join(dir, "force-src.json"))).toBe(false);
+    expect(existsSync(join(dir, "force-dst.json"))).toBe(true);
+    const env = JSON.parse(readFileSync(join(dir, "force-dst.json"), "utf8"));
+    expect(env.roomId).toBe("force-dst");
+    expect(env.version).toBe(7);
+  });
+
+  test("rename of archived room → 422 rename-archived-not-supported", async () => {
+    seedRoom("archived-rename", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    // Archive the room first
+    await app.fetch(
+      new Request("http://localhost/api/rooms/archived-rename/archive", { method: "POST" }),
+    );
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/archived-rename/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to: "any-name" }),
+      }),
+    );
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(body.error).toBe("rename-archived-not-supported");
+  });
+
+  test("rename validates validateRoomId — invalid to → 422", async () => {
+    seedRoom("valid-src", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/valid-src/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to: "invalid name!" }),
+      }),
+    );
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(body.error).toBe("invalid-room-id");
+  });
+
+  test("rename of non-existent room → 404", async () => {
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/no-such-room/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to: "new-name" }),
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("POST /api/rooms/:id/duplicate", () => {
+  test("happy path — new file created, opLog reset, linkedSession cleared, original unchanged", async () => {
+    seedRoom("dup-src", (s) => {
+      seedShape(s, "shape:n1", "n1");
+      s.version = 10;
+      s.linkedSession = "some-session";
+      s.opLog.push({ type: "patch", ops: [] } as unknown as (typeof s.opLog)[0]);
+    });
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/dup-src/duplicate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ as: "dup-dst" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; id: string };
+    expect(body.ok).toBe(true);
+    expect(body.id).toBe("dup-dst");
+
+    const { existsSync, readFileSync } = await import("node:fs");
+    expect(existsSync(join(dir, "dup-src.json"))).toBe(true);
+    expect(existsSync(join(dir, "dup-dst.json"))).toBe(true);
+
+    const dst = JSON.parse(readFileSync(join(dir, "dup-dst.json"), "utf8"));
+    expect(dst.roomId).toBe("dup-dst");
+    expect(dst.opLog).toEqual([]);
+    expect(dst.version).toBe(1);
+    expect(dst.linkedSession).toBeUndefined();
+    // shape preserved
+    expect(dst.store.store["shape:n1"]).toBeDefined();
+  });
+
+  test("duplicate to existing id → 409", async () => {
+    seedRoom("dup-conflict-src", () => {});
+    seedRoom("dup-conflict-dst", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/dup-conflict-src/duplicate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ as: "dup-conflict-dst" }),
+      }),
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { ok: boolean; error: string; existingId: string };
+    expect(body.error).toBe("room-exists");
+    expect(body.existingId).toBe("dup-conflict-dst");
+  });
+
+  test("duplicate validates validateRoomId — invalid as → 422", async () => {
+    seedRoom("dup-valid-src", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/dup-valid-src/duplicate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ as: "bad id!" }),
+      }),
+    );
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(body.error).toBe("invalid-room-id");
+  });
+
+  test("duplicate archived room → creates active copy, archive untouched", async () => {
+    seedRoom("arch-dup-src", (s) => {
+      seedShape(s, "shape:preserved", "preserved");
+      s.version = 3;
+    });
+    const { app } = makeApp({ storageDir: dir });
+
+    // Archive the source
+    await app.fetch(
+      new Request("http://localhost/api/rooms/arch-dup-src/archive", { method: "POST" }),
+    );
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/arch-dup-src/duplicate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ as: "arch-dup-active" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dir, ".archive", "arch-dup-src.json"))).toBe(true);
+    expect(existsSync(join(dir, "arch-dup-active.json"))).toBe(true);
+  });
+});

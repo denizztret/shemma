@@ -213,4 +213,50 @@ describe("didraw rooms via subprocess CLI", () => {
       __resetConfigForTests();
     }
   });
+
+  test("rooms rename <old> <new> happy path", async () => {
+    // Seed source room
+    const body = JSON.stringify({
+      actions: [{ kind: "define", role: "service", name: "rename-node" }],
+    });
+    await cli(["apply", "--stdin"], {
+      env: { ...envBase(), CLAUDE_SESSION_ID: "rename-src" },
+      input: body,
+    });
+
+    const r = await cli(["rooms", "rename", "rename-src", "rename-dst"]);
+    expect(r.status).toBe(0);
+    const j = JSON.parse(r.stdout);
+    expect(j.ok).toBe(true);
+    expect(j.id).toBe("rename-dst");
+
+    // Verify list reflects new name
+    const list = await cli(["rooms", "list"]);
+    const ids = JSON.parse(list.stdout).rooms.map((rm: { id: string }) => rm.id);
+    expect(ids).toContain("rename-dst");
+    expect(ids).not.toContain("rename-src");
+  });
+
+  test("rooms duplicate <id> --as <newId> happy path", async () => {
+    // Seed source room
+    const body = JSON.stringify({
+      actions: [{ kind: "define", role: "service", name: "dup-node" }],
+    });
+    await cli(["apply", "--stdin"], {
+      env: { ...envBase(), CLAUDE_SESSION_ID: "cli-dup-src" },
+      input: body,
+    });
+
+    const r = await cli(["rooms", "duplicate", "cli-dup-src", "--as", "cli-dup-dst"]);
+    expect(r.status).toBe(0);
+    const j = JSON.parse(r.stdout);
+    expect(j.ok).toBe(true);
+    expect(j.id).toBe("cli-dup-dst");
+
+    // Both rooms should exist
+    const list = await cli(["rooms", "list"]);
+    const ids = JSON.parse(list.stdout).rooms.map((rm: { id: string }) => rm.id);
+    expect(ids).toContain("cli-dup-src");
+    expect(ids).toContain("cli-dup-dst");
+  });
 });

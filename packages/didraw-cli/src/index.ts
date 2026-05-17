@@ -5,11 +5,13 @@ import { cmdClear, cmdPatch, cmdState } from "./data";
 import { applyStdin, connectCmd, context, define, deleteCmd, group, layoutCmd, note } from "./domain";
 import {
   archiveRoom,
+  duplicateRoom,
   exportRoom,
   importRoom,
   list,
   open,
   purgeArchive,
+  renameRoom,
   restoreRoom,
   rmRoom,
 } from "./lifecycle";
@@ -158,6 +160,28 @@ async function main() {
       }
       return rmRoom(id, { confirm, archive, force }, profile);
     }
+    if (sub === "rename") {
+      const oldId = argv[2];
+      const newId = argv[3];
+      const force = argv.includes("--force");
+      if (!oldId || !newId) {
+        console.error(JSON.stringify({ ok: false, error: "expected <old> <new> [--force]" }));
+        process.exit(1);
+      }
+      return renameRoom(oldId, newId, { force }, profile);
+    }
+    if (sub === "duplicate") {
+      const id = argv[2];
+      let asVal: string | undefined;
+      for (let i = 3; i < argv.length; i++) {
+        if (argv[i] === "--as") asVal = argv[++i];
+      }
+      if (!id || !asVal) {
+        console.error(JSON.stringify({ ok: false, error: "expected <id> --as <newId>" }));
+        process.exit(1);
+      }
+      return duplicateRoom(id, asVal, profile);
+    }
     if (sub === "purge-archive") {
       const confirm = argv.includes("--confirm");
       return purgeArchive({ confirm }, profile);
@@ -277,6 +301,8 @@ Lifecycle:
   rooms restore       <id>
   rooms export        <id> --to <path>
   rooms import        <path> [--as <id>] [--force]
+  rooms rename        <old> <new> [--force]
+  rooms duplicate     <id> --as <newId>
   rooms rm            <id> [--archive] [--hard] [--force] --confirm
   rooms purge-archive --confirm
 

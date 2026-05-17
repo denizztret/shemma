@@ -261,6 +261,127 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
     return c.json({ ok: true, roomId: targetId, version: env.version });
   });
 
+  app.post("/api/rooms/:id/rename", async (c) => {
+    const idParam = roomParam(c);
+    if (!idParam.ok) return idParam.response;
+    const id = idParam.id;
+
+    const body = (await c.req.json().catch(() => null)) as { to?: string; force?: boolean } | null;
+    const to = body?.to;
+    const force = !!body?.force;
+
+    if (!to || !validateRoomId(to)) {
+      return c.json({ ok: false, error: "invalid-room-id" }, 422);
+    }
+
+    // CRITICAL ORDER: flush BEFORE stat — a freshly-mutated dirty room may not
+    // have a file on disk yet (autosave debounce not fired).
+    await rooms.flushIfDirty(id);
+
+    // Reject rename of archived rooms
+    const archivedSrcPath = join(storageDir, ".archive", `${id}.json`);
+    try {
+      await stat(archivedSrcPath);
+      return c.json({ ok: false, error: "rename-archived-not-supported" }, 422);
+    } catch {
+      // not archived — continue
+    }
+
+    const srcPath = join(storageDir, `${id}.json`);
+    try {
+      await stat(srcPath);
+    } catch {
+      return c.json({ ok: false, error: "room not found" }, 404);
+    }
+
+    // Conflict check: active OR archived target already exists
+    const dstPath = join(storageDir, `${to}.json`);
+    const dstArchivedPath = join(storageDir, ".archive", `${to}.json`);
+    let conflict = false;
+    try { await stat(dstPath); conflict = true; } catch { /* ok */ }
+    if (!conflict) {
+      try { await stat(dstArchivedPath); conflict = true; } catch { /* ok */ }
+    }
+    if (conflict && !force) {
+      return c.json({ ok: false, error: "room-exists", existingId: to }, 409);
+    }
+
+    // Evict after flush — room flushed above, now clear from memory
+    await rooms.evict(id);
+
+    const raw = await readFile(srcPath, "utf8");
+    let envelope: Record<string, unknown>;
+    try {
+      envelope = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return c.json({ ok: false, error: "malformed envelope" }, 422);
+    }
+    envelope.roomId = to;
+
+    const tmp = `${dstPath}.tmp`;
+    await writeFile(tmp, JSON.stringify(envelope, null, 2), "utf8");
+    await rename(tmp, dstPath);
+    await unlink(srcPath);
+    await rooms.evict(to); // force fresh load on next access
+
+    return c.json({ ok: true, id: to });
+  });
+
+  app.post("/api/rooms/:id/duplicate", async (c) => {
+    const idParam = roomParam(c);
+    if (!idParam.ok) return idParam.response;
+    const id = idParam.id;
+
+    const body = (await c.req.json().catch(() => null)) as { as?: string } | null;
+    const as = body?.as;
+
+    if (!as || !validateRoomId(as)) {
+      return c.json({ ok: false, error: "invalid-room-id" }, 422);
+    }
+
+    // CRITICAL ORDER: flush BEFORE stat — debounced save may not have written yet.
+    await rooms.flushIfDirty(id);
+
+    // Find source: active first, then archived
+    const srcActive = join(storageDir, `${id}.json`);
+    const srcArchived = join(storageDir, ".archive", `${id}.json`);
+    let srcPath: string | null = null;
+    try { await stat(srcActive); srcPath = srcActive; } catch { /* not active */ }
+    if (!srcPath) {
+      try { await stat(srcArchived); srcPath = srcArchived; } catch { /* not archived either */ }
+    }
+    if (!srcPath) {
+      return c.json({ ok: false, error: "room not found" }, 404);
+    }
+
+    // Duplicate to existing target → conflict (no force option)
+    const dstPath = join(storageDir, `${as}.json`);
+    try {
+      await stat(dstPath);
+      return c.json({ ok: false, error: "room-exists", existingId: as }, 409);
+    } catch { /* ok — target doesn't exist */ }
+
+    const raw = await readFile(srcPath, "utf8");
+    let envelope: Record<string, unknown>;
+    try {
+      envelope = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return c.json({ ok: false, error: "malformed envelope" }, 422);
+    }
+
+    // Reset per AC: new identity, empty opLog, version reset, no linkedSession
+    envelope.roomId = as;
+    envelope.opLog = [];
+    envelope.version = 1;
+    delete envelope.linkedSession;
+
+    const tmp = `${dstPath}.tmp`;
+    await writeFile(tmp, JSON.stringify(envelope, null, 2), "utf8");
+    await rename(tmp, dstPath);
+
+    return c.json({ ok: true, id: as });
+  });
+
   app.delete("/api/rooms/:id", async (c) => {
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;

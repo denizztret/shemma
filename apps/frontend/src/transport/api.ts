@@ -96,6 +96,31 @@ export async function exportRoom(id: string, to: string): Promise<void> {
   if (!r.ok) throw new Error(`exportRoom ${r.status}`);
 }
 
+export async function renameRoom(
+  id: string,
+  to: string,
+  opts: { force?: boolean } = {},
+): Promise<{ ok: boolean; id?: string; error?: string; existingId?: string }> {
+  const r = await fetch(`/api/rooms/${encodeURIComponent(id)}/rename`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ to, force: opts.force }),
+  });
+  return r.json();
+}
+
+export async function duplicateRoom(
+  id: string,
+  as: string,
+): Promise<{ ok: boolean; id?: string; error?: string; existingId?: string }> {
+  const r = await fetch(`/api/rooms/${encodeURIComponent(id)}/duplicate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ as }),
+  });
+  return r.json();
+}
+
 export async function purgeArchive(): Promise<{ removed: number }> {
   const r = await fetch("/api/rooms/purge-archive", {
     method: "POST",

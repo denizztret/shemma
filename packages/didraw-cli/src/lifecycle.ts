@@ -86,6 +86,29 @@ export async function rmRoom(
   if ((res as { ok?: boolean }).ok === false) process.exit(1);
 }
 
+export async function renameRoom(
+  oldId: string,
+  newId: string,
+  opts: { force?: boolean } = {},
+  profile: Profile,
+) {
+  await ensureSilent(profile);
+  const res = await clientFor(profile).renameRoom(oldId, newId, opts);
+  console.log(JSON.stringify(res));
+  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+}
+
+export async function duplicateRoom(
+  id: string,
+  as: string,
+  profile: Profile,
+) {
+  await ensureSilent(profile);
+  const res = await clientFor(profile).duplicateRoom(id, as);
+  console.log(JSON.stringify(res));
+  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+}
+
 export async function purgeArchive(
   opts: { confirm?: boolean } = {},
   profile: Profile,
