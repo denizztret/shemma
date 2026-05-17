@@ -1,4 +1,4 @@
-## 0.9.0 (Unreleased) — Project-local `.didraw/` storage + zero-arg launch + Mermaid import UI
+## 0.9.0 — 2026-05-17 — Project-local `.didraw/` storage + zero-arg launch + Mermaid import UI
 
 ### Added
 
