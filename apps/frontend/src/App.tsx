@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { type Editor, Tldraw } from "tldraw";
 import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
@@ -10,6 +10,7 @@ import { AppChrome } from "./chrome/AppChrome";
 import { ErrorBanner } from "./chrome/ErrorBanner";
 import { buildTldrawComponents } from "./chrome/TldrawComponents";
 import { UpdateBanner } from "./chrome/UpdateBanner";
+import { MermaidImportModal } from "./mermaid/MermaidImportModal";
 import { PromptDrawer } from "./prompts/PromptDrawer";
 import { PromptInput } from "./prompts/PromptInput";
 import { getState, seedSchema } from "./transport/api";
@@ -24,16 +25,34 @@ export function App({ room }: { room: string }) {
   // PromptInput is toggled by ⌘K (Ctrl+K on non-Mac) — opens for the current
   // selection and stays open until Send/Esc/selection cleared.
   const [promptOpen, setPromptOpen] = useState(false);
+  // Mermaid import modal toggled by ⌘M (Ctrl+M on non-Mac). Closed by
+  // Render/Cancel/Esc — управление внутри MermaidImportModal.
+  const [mermaidOpen, setMermaidOpen] = useState(false);
   const [aiActivity, setAiActivity] = useState<AiActivity | null>(null);
 
-  // ⌘K / Esc keyboard handler for PromptInput visibility.
+  // tldraw requires `components` prop to be memoized (or defined outside the
+  // component) to avoid re-mounting the editor on every render.
+  const tldrawComponents = useMemo(
+    () => buildTldrawComponents(room, { onMermaidImport: () => setMermaidOpen(true) }),
+    [room],
+  );
+
+  // ⌘K / ⌘M / Esc keyboard handler.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPromptOpen((v) => !v);
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "m") {
+        // ⌘M — open Mermaid import modal. preventDefault — на случай если
+        // браузер/OS попытается забрать (на macOS Chrome native ⌘M = minimize
+        // window, но user сообщил что освободил его в системе).
+        e.preventDefault();
+        setMermaidOpen(true);
       } else if (e.key === "Escape") {
         setPromptOpen(false);
+        // Mermaid modal closes itself via internal Esc handler; не трогаем
+        // здесь чтобы не перехватить race-condition'но.
       }
     };
     window.addEventListener("keydown", handler);
@@ -252,6 +271,20 @@ export function App({ room }: { room: string }) {
               onClose={() => setPromptOpen(false)}
             />
           )}
+          {editor && (
+            <MermaidImportModal
+              visible={mermaidOpen}
+              onClose={() => setMermaidOpen(false)}
+              onSubmit={async (source) => {
+                try {
+                  await importMermaid(editor, source);
+                  return { ok: true };
+                } catch (e) {
+                  return { ok: false, error: String(e) };
+                }
+              }}
+            />
+          )}
           <PromptDrawer tick={promptsTick} />
           <AiActivityBadge activity={aiActivity} />
           <ErrorBanner />
@@ -269,7 +302,7 @@ export function App({ room }: { room: string }) {
             (window as any).__editor = ed;
           }
         }}
-        components={buildTldrawComponents(room)}
+        components={tldrawComponents}
       />
     </AppChrome>
   );
