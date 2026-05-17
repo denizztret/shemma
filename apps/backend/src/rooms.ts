@@ -1,6 +1,6 @@
 import { defaultDocument, defaultPage, defaultSchema } from "./migrate-v2";
 import type { FilePersistence } from "./persistence";
-import type { TLStoreSnapshot } from "./store-types";
+import type { StoreOpLogEntry, TLStoreSnapshot } from "./store-types";
 import type { RoomId, RoomState } from "./types";
 import { DEFAULT_ROOM } from "./types";
 
@@ -42,6 +42,17 @@ export function emptyTLStore(): TLStoreSnapshot {
       "page:page": defaultPage(),
     },
   };
+}
+
+export function pushOpLog(
+  room: RoomState,
+  entry: StoreOpLogEntry,
+  max: number,
+): void {
+  room.opLog.push(entry);
+  if (room.opLog.length > max) {
+    room.opLog.splice(0, room.opLog.length - max);
+  }
 }
 
 export function makeRoomState(): RoomState {

@@ -6,7 +6,7 @@ type Listener = (errors: ErrItem[]) => void;
 
 const items: ErrItem[] = [];
 const listeners = new Set<Listener>();
-const MAX_VISIBLE = 5;
+const MAX_VISIBLE = 3;
 const TTL_MS = 5000;
 
 export function pushError(text: string): void {

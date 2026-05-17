@@ -10,7 +10,7 @@ import type {
   ElementId,
 } from "../domain/types";
 import { validateBatch } from "../domain/validate";
-import { resolveRoomId } from "../rooms";
+import { pushOpLog, resolveRoomId } from "../rooms";
 import type { Rooms } from "../rooms";
 import { applyStoreChanges, rebuildDidrawIndex } from "../store-ops";
 import type { StoreChangeBatch } from "../store-types";
@@ -154,16 +154,17 @@ export function domainRoutes(
       room.store = applyStoreChanges(room.store, compiled.batch);
       room.didrawIndex = rebuildDidrawIndex(room.store);
       room.version += 1;
-      room.opLog.push({
-        ops: compiled.batch,
-        source: "ai",
-        version: room.version,
-        at: Date.now(),
-        clientOpId: body.clientOpId,
-      });
-      if (room.opLog.length > config.opLogMaxSize) {
-        room.opLog.splice(0, room.opLog.length - config.opLogMaxSize);
-      }
+      pushOpLog(
+        room,
+        {
+          ops: compiled.batch,
+          source: "ai",
+          version: room.version,
+          at: Date.now(),
+          clientOpId: body.clientOpId,
+        },
+        config.opLogMaxSize,
+      );
       room.dirty = true;
       opts.onDirty?.(id, room);
       bus.publish(id, {
@@ -239,15 +240,16 @@ export function domainRoutes(
           room.store = applyStoreChanges(room.store, lr.batch);
           room.didrawIndex = rebuildDidrawIndex(room.store);
           room.version += 1;
-          room.opLog.push({
-            ops: lr.batch,
-            source: "ai",
-            version: room.version,
-            at: Date.now(),
-          });
-          if (room.opLog.length > config.opLogMaxSize) {
-            room.opLog.splice(0, room.opLog.length - config.opLogMaxSize);
-          }
+          pushOpLog(
+            room,
+            {
+              ops: lr.batch,
+              source: "ai",
+              version: room.version,
+              at: Date.now(),
+            },
+            config.opLogMaxSize,
+          );
           room.dirty = true;
           opts.onDirty?.(id, room);
           // Intentional second publish: clients receive a two-phase render —

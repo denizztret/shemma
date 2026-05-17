@@ -62,7 +62,7 @@ Backend `from-canvas-state.ts:edgeToShape` уже создаёт arrow + binding
 ```ts
 type PersistedEnvelopeV2 = PersistedEnvelopeV1 & {
   schemaVersion: 2;
-  opLog: OpLogEntry[];  // capped at config.opLogMaxSize (current default 200)
+  opLog: OpLogEntry[];  // capped at config.opLogMaxSize (current default 50)
 };
 ```
 
@@ -80,7 +80,7 @@ type PersistedEnvelopeV2 = PersistedEnvelopeV1 & {
 
 ### 3.4 Implications
 
-- Сохранённый opLog cap'нут на `opLogMaxSize` (default 200). Длинный disconnect (>200 ops пропущено) → клиент получает `truncated` (§4.3) и refetch full state.
+- Сохранённый opLog cap'нут на `opLogMaxSize` (default 50). Длинный disconnect (>50 ops пропущено) → клиент получает `truncated` (§4.3) и refetch full state.
 - Backwards-compat: v1 envelope читается, opLog start пустой (новые ops пишутся в журнал через `room.opLog.push` как раньше). После первой write/persist цикла файл апгрейдится до v2.
 
 ## 4. Version-aware WS sync (ack/replay)
