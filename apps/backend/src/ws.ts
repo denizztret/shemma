@@ -1,9 +1,10 @@
-import type { AiActivity, PatchBus, PatchOp, Prompt, WsMessage } from "./types";
+import type { StoreChangeBatch } from "./store-types";
+import type { AiActivity, Prompt, StoreChangeBus, WsMessage } from "./types";
 
 export type Sock = { send: (data: string) => void; readyState: number };
 const OPEN = 1;
 
-export class WsHub implements PatchBus {
+export class WsHub implements StoreChangeBus {
   private rooms = new Map<string, Set<Sock>>();
 
   attach(room: string, sock: Sock) {
@@ -21,13 +22,13 @@ export class WsHub implements PatchBus {
   publish(
     room: string,
     msg: {
-      ops: PatchOp[];
+      changes: StoreChangeBatch;
       source: "ai" | "user";
       version: number;
       originClientId?: string;
     },
   ) {
-    this.broadcast(room, { kind: "patch", ...msg });
+    this.broadcast(room, { kind: "store-change", ...msg });
   }
   publishPrompt(room: string, prompt: Prompt) {
     this.broadcast(room, { kind: "prompt-created", prompt });

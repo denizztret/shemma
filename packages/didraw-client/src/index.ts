@@ -1,5 +1,46 @@
 export type ClientOpts = { baseUrl?: string; room?: string };
 
+// Phase 3.0 response shapes (mirror backend payloads).
+// Backend is source of truth (apps/backend/src/routes/state.ts,
+// apps/backend/src/domain/context.ts). Updated whenever the backend response
+// shape changes.
+
+/** Element entry in `/api/agent/context` view. */
+export type DomainElement = {
+  id: string;
+  type: "shape" | "connection" | "group" | "note";
+  label?: string;
+  role?: string;
+  connectionKind?: string;
+  from?: string;
+  to?: string;
+  children?: string[];
+  pinned?: boolean;
+  bounds?: { x: number; y: number; w: number; h: number };
+};
+
+/** `/api/agent/context` response. */
+export type DomainView = {
+  ok: true;
+  version: number;
+  diffSince?: number;
+  elements: DomainElement[];
+  pendingPrompts?: unknown[];
+};
+
+/** `/api/state` (full) response. `store` is an opaque TLStoreSnapshot. */
+export type StateResponse = {
+  version: number;
+  store: { schema?: unknown; store?: Record<string, unknown> };
+  prompts: unknown[];
+  aiActivity: unknown | null;
+};
+
+/** `/api/state?since=N` response — incremental diff or truncation signal. */
+export type StateDiffResponse =
+  | { since: number; version: number; diff: unknown[] }
+  | { since: number; version: number; truncated: true };
+
 export class CanvasClient {
   readonly room: string;
   private base: string;
@@ -86,29 +127,19 @@ export class CanvasClient {
     return r.json();
   }
 
+  /**
+   * @deprecated Phase 3.0: `/api/patch` was removed. This helper relied on the
+   * legacy `{ canvas: { nodes, edges, groups } }` state shape which no longer
+   * exists. Kept only so `didraw clear` keeps importing (CLI back-compat per
+   * spec §10). Callers should use the domain API (`POST /api/domain` with
+   * `{ kind: "delete", ids: [...] }`) instead.
+   */
   async clear() {
-    const s = await this.getState({ fmt: "full" });
-    const ops = [
-      // biome-ignore lint/suspicious/noExplicitAny: state shape not fully typed yet
-      ...s.canvas.edges.map((e: any) => ({
-        op: "delete",
-        target: "edge",
-        id: e.id,
-      })),
-      // biome-ignore lint/suspicious/noExplicitAny: state shape not fully typed yet
-      ...s.canvas.nodes.map((n: any) => ({
-        op: "delete",
-        target: "node",
-        id: n.id,
-      })),
-      // biome-ignore lint/suspicious/noExplicitAny: state shape not fully typed yet
-      ...s.canvas.groups.map((g: any) => ({
-        op: "delete",
-        target: "group",
-        id: g.id,
-      })),
-    ];
-    return this.applyPatch(ops);
+    return {
+      ok: false,
+      error:
+        "clear() is no longer supported (/api/patch removed in Phase 3.0); use domain delete actions",
+    };
   }
 
   async health(): Promise<boolean> {

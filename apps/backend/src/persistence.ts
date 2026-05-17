@@ -1,9 +1,31 @@
 import { promises as fs, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { config } from "./config";
-import { parseFull, serialize } from "./envelope";
+import { parseFull, parseHeader, parseV2OrThrow, serialize } from "./envelope";
+import { migrateV2ToV3 } from "./migrate-v2";
 import type { RoomStore } from "./rooms";
+import { rebuildDidrawIndex } from "./store-ops";
 import type { RoomId, RoomState } from "./types";
+
+/**
+ * Atomic file write: пишем в `<file>.tmp` и переименовываем в `<file>`.
+ * `rename` атомарен на POSIX — частично записанный файл не виден консьюмерам.
+ * При ошибке записи попытаемся удалить tmp, чтобы не оставлять мусор.
+ */
+async function writeAtomic(file: string, content: string): Promise<void> {
+  const tmp = `${file}.tmp`;
+  try {
+    await fs.writeFile(tmp, content, "utf8");
+    await fs.rename(tmp, file);
+  } catch (e) {
+    try {
+      await fs.unlink(tmp);
+    } catch {
+      // ignore: tmp может не существовать
+    }
+    throw e;
+  }
+}
 
 export class FilePersistence implements RoomStore {
   // pending хранит и timer, и сами данные — без этого flushAll не сможет записать debounce'нутые состояния
@@ -20,27 +42,69 @@ export class FilePersistence implements RoomStore {
   }
 
   async load(id: RoomId): Promise<RoomState | null> {
+    const file = this.pathFor(id);
+    let raw: string;
     try {
-      const raw = await fs.readFile(this.pathFor(id), "utf8");
-      const env = parseFull(raw);
-      return {
-        canvas: env.canvas,
-        prompts: env.prompts,
-        version: env.version,
-        // T11: opLog is now durable. v1 envelopes load with [] (graceful
-        // migration); v2 envelopes restore the capped slice persisted at save.
-        opLog: env.opLog ?? [],
-        dirty: false,
-        lastTouched: Date.now(),
-      };
+      raw = await fs.readFile(file, "utf8");
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw e;
     }
+    const header = parseHeader(raw);
+    const schemaVersion =
+      header?.schemaVersion ??
+      ((): number | undefined => {
+        try {
+          return (JSON.parse(raw) as { schemaVersion?: number }).schemaVersion;
+        } catch {
+          return undefined;
+        }
+      })();
+    // v2/v1 envelope → migrate to v3, backup original as .v2.bak, atomic rewrite v3.
+    if (schemaVersion === 2 || schemaVersion === 1) {
+      const v2 = parseV2OrThrow(raw);
+      const v3 = migrateV2ToV3(v2 as Parameters<typeof migrateV2ToV3>[0]);
+      const backupPath = `${file}.v2.bak`;
+      // Backup ДО переименования: если backup уже есть (повторный load после crash),
+      // не перезатираем его. rename(file → backup) удаляет file атомарно.
+      if (!existsSync(backupPath)) {
+        try {
+          await fs.rename(file, backupPath);
+        } catch {
+          // best-effort: concurrent rename / FS error — пропускаем
+        }
+      }
+      const state: RoomState = {
+        store: v3.store,
+        opLog: [],
+        prompts: v3.prompts,
+        version: v3.version,
+        dirty: true,
+        lastTouched: Date.now(),
+        didrawIndex: rebuildDidrawIndex(v3.store),
+      };
+      try {
+        await writeAtomic(file, serialize(id, state));
+        state.dirty = false;
+      } catch {
+        // оставляем dirty=true; следующий flush допишет v3 на диск
+      }
+      return state;
+    }
+    const env = parseFull(raw);
+    return {
+      store: env.store,
+      prompts: env.prompts,
+      version: env.version,
+      opLog: env.opLog ?? [],
+      dirty: false,
+      lastTouched: Date.now(),
+      didrawIndex: rebuildDidrawIndex(env.store),
+    };
   }
 
   async save(id: RoomId, s: RoomState): Promise<void> {
-    await fs.writeFile(this.pathFor(id), serialize(id, s), "utf8");
+    await writeAtomic(this.pathFor(id), serialize(id, s));
   }
 
   /**

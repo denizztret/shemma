@@ -1,3 +1,8 @@
+// apps/backend/src/domain/validate.ts
+//
+// Phase 3.0: validate DomainAction[] поверх TLStoreSnapshot + didrawIndex.
+// Известные элементы (name → { role, isContainer }) собираются по shape-records
+// через meta.didrawName + meta.role / type === "frame".
 import {
   isContainerRole,
   isValidConnectionKind,
@@ -5,7 +10,7 @@ import {
   isValidRole,
   type Role,
 } from "@didraw/domain";
-import type { CanvasState } from "../types";
+import type { TLStoreSnapshot } from "../store-types";
 import type { ActionError, DeleteAction, DomainAction, ElementId } from "./types";
 
 function isDeleteWithIds(
@@ -16,31 +21,32 @@ function isDeleteWithIds(
 
 type KnownElement = { role: Role; isContainer: boolean };
 
-function seedKnown(canvas: CanvasState): Map<string, KnownElement> {
+function seedKnown(
+  store: TLStoreSnapshot,
+  index: Map<string, string>,
+): Map<string, KnownElement> {
   const m = new Map<string, KnownElement>();
-  for (const n of canvas.nodes) {
-    const nm = n.meta?.name as string | undefined;
-    const role = n.meta?.role as Role | undefined;
-    if (nm && role) m.set(nm, { role, isContainer: false });
-  }
-  for (const g of canvas.groups) {
-    const meta = (g as { meta?: { name?: string; role?: Role } }).meta;
-    const nm = meta?.name ?? g.label;
-    const role = meta?.role ?? "network";
-    if (nm) m.set(nm, { role, isContainer: true });
+  for (const [name, id] of index) {
+    const rec = store.store[id];
+    if (!rec || rec.typeName !== "shape") continue;
+    const isFrame = (rec as { type?: string }).type === "frame";
+    const metaRole = (rec.meta as { role?: unknown } | undefined)?.role;
+    const role: Role = typeof metaRole === "string" ? (metaRole as Role) : (isFrame ? "network" : "service");
+    m.set(name, { role, isContainer: isFrame });
   }
   return m;
 }
 
 export function validateBatch(
   actions: DomainAction[],
-  canvas: CanvasState,
+  store: TLStoreSnapshot,
+  index: Map<string, string>,
 ): { ok: true } | { ok: false; errors: ActionError[] } {
   const errors: ActionError[] = [];
   // Sequential working state — mutates as actions are processed so a later
   // action sees the result of an earlier add/remove. This makes `delete a`
   // followed by `connect a b` correctly fail at validation time.
-  const known = seedKnown(canvas);
+  const known = seedKnown(store, index);
 
   for (const [i, a] of actions.entries()) {
     switch (a.kind) {

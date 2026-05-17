@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { makeApp } from "../src/index";
 import { serialize } from "../src/envelope";
 import { makeRoomState } from "../src/rooms";
+import type { RoomState } from "../src/types";
 
 // I3 + I5 (Phase 2.0 follow-ups): on 409 the import handler must not touch the
 // existing target file and must return its id so callers can decide how to
@@ -16,6 +17,24 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "didraw-imp409-"));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+function seedShape(s: RoomState, id: string, name: string) {
+  s.store.store[id] = {
+    id,
+    typeName: "shape",
+    type: "geo",
+    x: 0,
+    y: 0,
+    parentId: "page:page",
+    index: "a1",
+    isLocked: false,
+    opacity: 1,
+    rotation: 0,
+    props: { w: 100, h: 60, geo: "rectangle" },
+    meta: { didrawName: name },
+  };
+  s.didrawIndex.set(name, id);
+}
 
 function seedRoom(
   id: string,
@@ -41,24 +60,12 @@ describe("POST /api/rooms/import — 409 semantics", () => {
   test("returns existingId and leaves target file untouched", async () => {
     // Seed a target room with distinguishable content.
     seedRoom("existing", (s) => {
-      s.canvas.nodes.push({
-        id: "shape:e_a",
-        kind: "rect",
-        x: 1,
-        y: 2,
-        label: "a",
-      });
+      seedShape(s, "shape:e_a", "a");
       s.version = 13;
     });
     // Seed and export a source room (the would-be import payload).
     seedRoom("source", (s) => {
-      s.canvas.nodes.push({
-        id: "shape:e_b",
-        kind: "rect",
-        x: 3,
-        y: 4,
-        label: "b",
-      });
+      seedShape(s, "shape:e_b", "b");
       s.version = 99;
     });
     const exported = join(dir, "..", "imp-409-existingid.json");

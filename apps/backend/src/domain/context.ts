@@ -1,187 +1,182 @@
+// apps/backend/src/domain/context.ts
+// Phase 3.0: token-cheap view-builder поверх TLStoreSnapshot. AI-friendly
+// snapshot БЕЗ геометрии по умолчанию (≤8KB на 100 элементов). Backend
+// читает opaque TLRecord-структуры, никаких @tldraw/* импортов.
+
 import type { ConnectionKind, Role } from "@didraw/domain";
-import type { CanvasState, Node, OpLogEntry, RoomState } from "../types";
+import type { TLRecord, TLStoreSnapshot } from "../store-types";
+import type { Prompt } from "../types";
 
-export type Viewport = { x: number; y: number; w: number; h: number } | null;
+export type DomainElementType = "shape" | "connection" | "group" | "note";
 
-export type ElementCompact = {
+export type DomainElement = {
   id: string;
+  type: DomainElementType;
+  label?: string;
   role?: Role;
-  label?: string;
-  parent?: string;
-  pinned?: true;
+  connectionKind?: ConnectionKind;
+  from?: string;
+  to?: string;
+  children?: string[];
+  pinned?: boolean;
+  bounds?: { x: number; y: number; w: number; h: number };
 };
 
-export type ConnectionCompact = {
-  from: string;
-  to: string;
-  kind: ConnectionKind;
-  label?: string;
-};
-
-export type OpSummary = {
+export type DomainView = {
   version: number;
-  source: "ai" | "user";
-  summary: string;
+  diffSince?: number;
+  elements: DomainElement[];
+  pendingPrompts?: Prompt[];
 };
 
-export type ContextResponse = {
-  version: number;
-  viewport: Viewport;
-  summary: {
-    total: number;
-    byRole: Partial<Record<Role, number>>;
-    topLevelGroups: Array<{ id: string; role: Role; label?: string }>;
-  };
-  inView: ElementCompact[];
-  selection: ElementCompact[];
-  connections: ConnectionCompact[];
-  recentOps: OpSummary[];
-  offscreenSummary: { byRole: Partial<Record<Role, number>> } | null;
-  truncated?: true;
-};
-
-function inViewport(n: Node, vp: Exclude<Viewport, null>): boolean {
-  const nx = n.x;
-  const ny = n.y;
-  const nw = n.w ?? 100;
-  const nh = n.h ?? 50;
-  return nx + nw >= vp.x && nx <= vp.x + vp.w && ny + nh >= vp.y && ny <= vp.y + vp.h;
-}
-
-function parentOf(canvas: CanvasState, nodeId: string): string | undefined {
-  for (const g of canvas.groups) {
-    if (g.children.includes(nodeId)) {
-      const meta = (g as { meta?: { name?: string } }).meta;
-      return meta?.name ?? g.label;
+// ProseMirror doc → plain text. Walks doc.content[].content[].text and joins.
+// Tolerant к null/undefined и неправильной структуре — НЕ кидает.
+export function richTextToString(rt: unknown): string {
+  if (!rt || typeof rt !== "object") return "";
+  const root = rt as { content?: unknown };
+  const blocks = Array.isArray(root.content) ? root.content : [];
+  const parts: string[] = [];
+  for (const block of blocks) {
+    if (!block || typeof block !== "object") continue;
+    const inner = (block as { content?: unknown }).content;
+    if (!Array.isArray(inner)) continue;
+    for (const node of inner) {
+      if (!node || typeof node !== "object") continue;
+      const text = (node as { text?: unknown }).text;
+      if (typeof text === "string") parts.push(text);
     }
   }
-  return undefined;
+  return parts.join("");
 }
 
-function nodeToCompact(canvas: CanvasState, n: Node): ElementCompact {
-  const out: ElementCompact = { id: (n.meta?.name as string) ?? n.id };
-  const role = n.meta?.role as Role | undefined;
-  if (role) out.role = role;
-  if (n.label && n.label !== out.id) out.label = n.label;
-  const p = parentOf(canvas, n.id);
-  if (p) out.parent = p;
-  if (n.meta?.pinned === true) out.pinned = true;
-  return out;
+function deriveType(shape: TLRecord): DomainElementType {
+  const t = shape.type;
+  if (t === "frame") return "group";
+  if (t === "arrow") return "connection";
+  if (t === "note") return "note";
+  return "shape";
 }
 
-const DEFAULT_IN_VIEW_LIMIT = 30;
-const RECENT_OPS_LIMIT = 20;
-
-function summarizeOp(e: OpLogEntry): string {
-  const counts = { add: 0, update: 0, delete: 0 } as Record<string, number>;
-  for (const op of e.ops) counts[op.op] = (counts[op.op] ?? 0) + 1;
-  const parts: string[] = [];
-  if (counts.add) parts.push(`+${counts.add}`);
-  if (counts.update) parts.push(`~${counts.update}`);
-  if (counts.delete) parts.push(`-${counts.delete}`);
-  return parts.join(" ");
+function elementIdOf(shape: TLRecord): string {
+  const name = shape.meta?.didrawName;
+  return typeof name === "string" && name.length > 0 ? name : shape.id;
 }
+
+export type BuildContextOpts = {
+  since?: number;
+  includeGeometry?: boolean;
+};
 
 export function buildContext(
-  room: RoomState,
-  opts: { viewport: Viewport; selection?: string[]; limit?: number; since?: number } = { viewport: null },
-): ContextResponse {
-  const canvas = room.canvas;
-  const limit = opts.limit ?? DEFAULT_IN_VIEW_LIMIT;
-  const vp = opts.viewport;
-  const since = opts.since;
+  snapshot: TLStoreSnapshot,
+  opts: BuildContextOpts = {},
+  version = 0,
+): DomainView {
+  const records = snapshot.store ?? {};
+  const shapes: TLRecord[] = [];
+  const bindings: TLRecord[] = [];
 
-  // Build byRole counts from nodes and groups. Nodes/groups without meta.role
-  // contribute to summary.total but are intentionally skipped here — see
-  // [[phase-2-1-followups]] m2.
-  const byRole: Partial<Record<Role, number>> = {};
-  for (const n of canvas.nodes) {
-    const r = n.meta?.role as Role | undefined;
+  for (const id in records) {
+    const r = records[id];
     if (!r) continue;
-    byRole[r] = (byRole[r] ?? 0) + 1;
-  }
-  for (const g of canvas.groups) {
-    const r = (g as { meta?: { role?: Role } }).meta?.role;
-    if (!r) continue;
-    byRole[r] = (byRole[r] ?? 0) + 1;
+    if (r.typeName === "shape") shapes.push(r);
+    else if (r.typeName === "binding") bindings.push(r);
   }
 
-  const topLevelGroups = canvas.groups.map((g) => ({
-    id: ((g as { meta?: { name?: string } }).meta?.name) ?? g.label ?? g.id,
-    role: ((g as { meta?: { role?: Role } }).meta?.role) ?? "network",
-    label: g.label,
-  }));
+  // Индекс shape.id → element.id (didrawName or fallback shape.id).
+  // Нужен для arrow from/to и frame children.
+  const idToElementId = new Map<string, string>();
+  for (const s of shapes) idToElementId.set(s.id, elementIdOf(s));
 
-  // Filter nodes by viewport
-  const visible: Node[] = vp ? canvas.nodes.filter((n) => inViewport(n, vp)) : canvas.nodes;
-  const inViewSliced = visible.slice(0, limit);
+  // children index: frameId → [elementId, ...]
+  const childrenByFrame = new Map<string, string[]>();
+  for (const s of shapes) {
+    const pid = s.parentId;
+    if (typeof pid !== "string") continue;
+    const parent = records[pid];
+    if (!parent || parent.type !== "frame") continue;
+    const child = idToElementId.get(s.id);
+    if (!child) continue;
+    const arr = childrenByFrame.get(pid);
+    if (arr) arr.push(child);
+    else childrenByFrame.set(pid, [child]);
+  }
 
-  // Selection can come in as either raw shape id or meta.name; match on both.
-  const selectionSet = new Set(opts.selection ?? []);
-  const isSelected = (n: Node): boolean =>
-    selectionSet.has(n.id) ||
-    (typeof n.meta?.name === "string" && selectionSet.has(n.meta.name));
-  const selectedNodes = canvas.nodes.filter(isSelected);
-  const selection = selectedNodes.map((n) => nodeToCompact(canvas, n));
+  // bindings index: arrowId → { start?: shapeId, end?: shapeId }
+  const arrowTerminals = new Map<string, { start?: string; end?: string }>();
+  for (const b of bindings) {
+    const fromId = (b as { fromId?: unknown }).fromId;
+    const toId = (b as { toId?: unknown }).toId;
+    if (typeof fromId !== "string" || typeof toId !== "string") continue;
+    const terminal = (b.props as { terminal?: unknown } | undefined)?.terminal;
+    if (terminal !== "start" && terminal !== "end") continue;
+    const entry = arrowTerminals.get(fromId) ?? {};
+    entry[terminal] = toId;
+    arrowTerminals.set(fromId, entry);
+  }
 
-  // Build connections — only for edges touching inView or selection nodes.
-  const inViewShapeIds = new Set<string>(inViewSliced.map((n) => n.id));
-  const relevantShapeIds = new Set([
-    ...inViewShapeIds,
-    ...selectedNodes.map((n) => n.id),
-  ]);
+  const elements: DomainElement[] = [];
 
-  const connections: ConnectionCompact[] = canvas.edges
-    .filter((e) => e.from.kind === "node" && e.to.kind === "node")
-    .filter((e) => {
-      const fid = (e.from as { id: string }).id;
-      const tid = (e.to as { id: string }).id;
-      return relevantShapeIds.has(fid) || relevantShapeIds.has(tid);
-    })
-    .map((e) => {
-      const fid = (e.from as { id: string }).id;
-      const tid = (e.to as { id: string }).id;
-      const fname = canvas.nodes.find((n) => n.id === fid)?.meta?.name as string | undefined;
-      const tname = canvas.nodes.find((n) => n.id === tid)?.meta?.name as string | undefined;
-      const k = (e.meta?.kind as ConnectionKind | undefined) ?? "sync";
-      const out: ConnectionCompact = { from: fname ?? fid, to: tname ?? tid, kind: k };
-      if (e.label) out.label = e.label;
-      return out;
-    });
+  for (const shape of shapes) {
+    const type = deriveType(shape);
+    const id = elementIdOf(shape);
+    const el: DomainElement = { id, type };
 
-  // Recent ops — filtered by since if provided
-  const filteredOps = since !== undefined ? room.opLog.filter((e) => e.version > since) : room.opLog;
-  const recentOps: OpSummary[] = filteredOps
-    .slice(-RECENT_OPS_LIMIT)
-    .map((e) => ({ version: e.version, source: e.source, summary: summarizeOp(e) }));
+    // label из richText
+    const richText = (shape.props as { richText?: unknown } | undefined)?.richText;
+    if (richText) {
+      const text = richTextToString(richText);
+      if (text.length > 0) el.label = text;
+    }
 
-  // Offscreen summary — only when viewport is set and some nodes are outside
-  const offscreenSummary: ContextResponse["offscreenSummary"] = vp && visible.length < canvas.nodes.length
-    ? (() => {
-        const byR: Partial<Record<Role, number>> = {};
-        for (const n of canvas.nodes) {
-          if (inViewport(n, vp)) continue;
-          const r = n.meta?.role as Role | undefined;
-          if (!r) continue;
-          byR[r] = (byR[r] ?? 0) + 1;
+    // role
+    const role = shape.meta?.role;
+    if (typeof role === "string") el.role = role as Role;
+
+    // connectionKind (для arrows и иных, у кого meta.connectionKind задан)
+    if (type === "connection") {
+      const kind = shape.meta?.connectionKind;
+      if (typeof kind === "string") el.connectionKind = kind as ConnectionKind;
+
+      const terminals = arrowTerminals.get(shape.id);
+      if (terminals) {
+        if (terminals.start) {
+          const from = idToElementId.get(terminals.start);
+          if (from) el.from = from;
         }
-        return { byRole: byR };
-      })()
-    : null;
+        if (terminals.end) {
+          const to = idToElementId.get(terminals.end);
+          if (to) el.to = to;
+        }
+      }
+    }
 
-  return {
-    version: room.version,
-    viewport: vp,
-    summary: {
-      total: canvas.nodes.length + canvas.groups.length,
-      byRole,
-      topLevelGroups,
-    },
-    inView: inViewSliced.map((n) => nodeToCompact(canvas, n)),
-    selection,
-    connections,
-    recentOps,
-    offscreenSummary,
-    ...(visible.length > limit ? { truncated: true as const } : {}),
-  };
+    // children для groups (frame)
+    if (type === "group") {
+      const kids = childrenByFrame.get(shape.id);
+      if (kids && kids.length > 0) {
+        el.children = [...kids].sort();
+      }
+    }
+
+    // pinned (только если truthy)
+    if (shape.meta?.pinned === true) el.pinned = true;
+
+    // bounds — только при includeGeometry
+    if (opts.includeGeometry === true) {
+      const x = typeof shape.x === "number" ? shape.x : 0;
+      const y = typeof shape.y === "number" ? shape.y : 0;
+      const props = (shape.props ?? {}) as { w?: unknown; h?: unknown };
+      const w = typeof props.w === "number" ? props.w : 0;
+      const h = typeof props.h === "number" ? props.h : 0;
+      el.bounds = { x, y, w, h };
+    }
+
+    elements.push(el);
+  }
+
+  const view: DomainView = { version, elements };
+  // diffSince — MVP: проброс через opts.since без diff-фильтрации (Phase 3.x).
+  if (opts.since !== undefined) view.diffSince = opts.since;
+  return view;
 }

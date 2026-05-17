@@ -5,6 +5,24 @@ import { join } from "node:path";
 import { FilePersistence } from "../src/persistence";
 import { Rooms, makeRoomState } from "../src/rooms";
 
+function seedShape(state: ReturnType<typeof makeRoomState>, id: string, name: string) {
+  state.store.store[id] = {
+    id,
+    typeName: "shape",
+    type: "geo",
+    x: 0,
+    y: 0,
+    parentId: "page:page",
+    index: "a1",
+    isLocked: false,
+    opacity: 1,
+    rotation: 0,
+    props: { w: 100, h: 60, geo: "rectangle" },
+    meta: { didrawName: name },
+  };
+  state.didrawIndex.set(name, id);
+}
+
 describe("Rooms", () => {
   let rooms: Rooms;
   beforeEach(() => {
@@ -13,15 +31,17 @@ describe("Rooms", () => {
 
   test("get returns fresh empty room", async () => {
     const r = await rooms.get("a");
-    expect(r.canvas.nodes).toEqual([]);
+    expect(r.store.store["document:document"]).toBeDefined();
+    expect(r.store.store["page:page"]).toBeDefined();
     expect(r.version).toBe(0);
   });
 
   test("different ids isolated", async () => {
     const a = await rooms.get("a");
     const b = await rooms.get("b");
-    a.canvas.nodes.push({ id: "x", kind: "rect", x: 0, y: 0 });
-    expect(b.canvas.nodes).toEqual([]);
+    seedShape(a, "shape:x", "x");
+    const bShapes = Object.values(b.store.store).filter((r) => r.typeName === "shape");
+    expect(bShapes.length).toBe(0);
   });
 
   test("same id returns same instance", async () => {
@@ -32,18 +52,20 @@ describe("Rooms", () => {
 
   test("loads from store if available", async () => {
     const preset = makeRoomState();
-    preset.canvas.nodes.push({ id: "pre", kind: "rect", x: 0, y: 0 });
-    const rooms = new Rooms({
+    seedShape(preset, "shape:pre", "pre");
+    const r2 = new Rooms({
       load: async (id) => (id === "x" ? preset : null),
       save: async () => {},
     });
-    const r = await rooms.get("x");
-    expect(r.canvas.nodes[0].id).toBe("pre");
+    const r = await r2.get("x");
+    const shapes = Object.values(r.store.store).filter((rec) => rec.typeName === "shape");
+    expect(shapes.length).toBe(1);
+    expect(r.didrawIndex.get("pre")).toBe("shape:pre");
   });
 
   test("get retries after store.load throws (no permanent loading lock)", async () => {
     let attempts = 0;
-    const rooms = new Rooms({
+    const r2 = new Rooms({
       load: async () => {
         attempts++;
         if (attempts === 1) throw new Error("simulated IO failure");
@@ -51,33 +73,33 @@ describe("Rooms", () => {
       },
       save: async () => {},
     });
-    await expect(rooms.get("a")).rejects.toThrow("simulated IO failure");
+    await expect(r2.get("a")).rejects.toThrow("simulated IO failure");
     // First load failed; second attempt must NOT see the cached rejection.
-    const r = await rooms.get("a");
+    const r = await r2.get("a");
     expect(attempts).toBe(2);
-    expect(r.canvas.nodes).toEqual([]);
+    expect(r.store.store["document:document"]).toBeDefined();
   });
 
   test("evictIdle flushes pending debounce and removes", async () => {
     const dir = mkdtempSync(join(tmpdir(), "didraw-evict-"));
     try {
       const persistence = new FilePersistence(dir);
-      const rooms = new Rooms({
+      const r2 = new Rooms({
         load: (id) => persistence.load(id),
         save: (id, s) => persistence.save(id, s),
       });
-      rooms.setPersistence(persistence);
+      r2.setPersistence(persistence);
 
-      const r = await rooms.get("a");
-      r.canvas.nodes.push({ id: "n1", kind: "rect", x: 0, y: 0 });
+      const r = await r2.get("a");
+      seedShape(r, "shape:n1", "n1");
       r.version = 1;
       r.dirty = true;
       r.lastTouched = Date.now() - 10_000;
       persistence.scheduleSave("a", r);
 
-      const n = await rooms.evictIdle(5_000);
+      const n = await r2.evictIdle(5_000);
       expect(n).toBe(1);
-      expect(rooms.has("a")).toBe(false);
+      expect(r2.has("a")).toBe(false);
 
       const { existsSync, readFileSync } = await import("node:fs");
       expect(existsSync(join(dir, "a.json"))).toBe(true);
@@ -93,20 +115,20 @@ describe("Rooms", () => {
     const dir = mkdtempSync(join(tmpdir(), "didraw-evict-cancel-"));
     try {
       const persistence = new FilePersistence(dir);
-      const rooms = new Rooms({
+      const r2 = new Rooms({
         load: (id) => persistence.load(id),
         save: (id, s) => persistence.save(id, s),
       });
-      rooms.setPersistence(persistence);
+      r2.setPersistence(persistence);
 
-      const r = await rooms.get("a");
-      r.canvas.nodes.push({ id: "n1", kind: "rect", x: 0, y: 0 });
+      const r = await r2.get("a");
+      seedShape(r, "shape:n1", "n1");
       r.version = 1;
       r.dirty = true;
       r.lastTouched = Date.now() - 10_000;
       persistence.scheduleSave("a", r);
 
-      await rooms.evictIdle(5_000);
+      await r2.evictIdle(5_000);
 
       // Capture mtime, then flushAll — second write would bump mtime.
       const { statSync } = await import("node:fs");

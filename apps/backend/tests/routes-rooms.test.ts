@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { makeApp } from "../src/index";
 import { serialize } from "../src/envelope";
 import { makeRoomState } from "../src/rooms";
+import type { RoomState } from "../src/types";
 
 let dir: string;
 
@@ -13,10 +14,32 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
+function seedShape(s: RoomState, id: string, name: string) {
+  s.store.store[id] = {
+    id,
+    typeName: "shape",
+    type: "geo",
+    x: 0,
+    y: 0,
+    parentId: "page:page",
+    index: "a1",
+    isLocked: false,
+    opacity: 1,
+    rotation: 0,
+    props: { w: 100, h: 60, geo: "rectangle" },
+    meta: { didrawName: name },
+  };
+  s.didrawIndex.set(name, id);
+}
+
 function seedRoom(id: string, mutate: (s: ReturnType<typeof makeRoomState>) => void) {
   const s = makeRoomState();
   mutate(s);
   writeFileSync(join(dir, `${id}.json`), serialize(id, s), "utf8");
+}
+
+function shapesOf(state: { store: { store: Record<string, { typeName: string }> } }) {
+  return Object.values(state.store.store).filter((r) => r.typeName === "shape");
 }
 
 describe("GET /api/rooms", () => {
@@ -31,10 +54,10 @@ describe("GET /api/rooms", () => {
 
   test("lists existing files with envelope metadata", async () => {
     seedRoom("design-v1", (s) => {
-      s.canvas.nodes.push({ id: "n1", kind: "rect", x: 0, y: 0 });
+      seedShape(s, "shape:n1", "n1");
       s.version = 7;
     });
-    seedRoom("default", (s) => {
+    seedRoom("def", (s) => {
       s.version = 0;
     });
 
@@ -56,7 +79,7 @@ describe("GET /api/rooms", () => {
     expect(v1?.version).toBe(7);
     expect(v1?.elementCount).toBe(1);
 
-    const def = body.rooms.find((r) => r.id === "default");
+    const def = body.rooms.find((r) => r.id === "def");
     expect(def?.elementCount).toBe(0);
   });
 
@@ -98,7 +121,7 @@ describe("GET /api/rooms", () => {
 describe("POST /api/rooms/:id/archive", () => {
   test("moves file to .archive/ and evicts from memory", async () => {
     seedRoom("to-archive", (s) => {
-      s.canvas.nodes.push({ id: "n1", kind: "rect", x: 0, y: 0 });
+      seedShape(s, "shape:n1", "n1");
       s.version = 3;
     });
     const { app } = makeApp({ storageDir: dir });
@@ -144,7 +167,7 @@ describe("POST /api/rooms/:id/archive", () => {
   test("flushes dirty state before archiving", async () => {
     const { app, rooms, persistence } = makeApp({ storageDir: dir });
     const r = await rooms.get("dirty-room");
-    r.canvas.nodes.push({ id: "n1", kind: "rect", x: 0, y: 0 });
+    seedShape(r, "shape:n1", "n1");
     r.version = 5;
     r.dirty = true;
     persistence!.scheduleSave("dirty-room", r);
@@ -218,7 +241,7 @@ describe("POST /api/rooms/:id/restore", () => {
 
   test("restore evicts stale in-memory state from prior GETs", async () => {
     seedRoom("loaded", (s) => {
-      s.canvas.nodes.push({ id: "preserved", kind: "rect", x: 0, y: 0 });
+      seedShape(s, "shape:preserved", "preserved");
       s.version = 9;
     });
     const { app } = makeApp({ storageDir: dir });
@@ -232,8 +255,8 @@ describe("POST /api/rooms/:id/restore", () => {
     const statePreRestore = await app.fetch(
       new Request("http://localhost/api/state?room=loaded"),
     );
-    const body1 = (await statePreRestore.json()) as { canvas: { nodes: unknown[] } };
-    expect(body1.canvas.nodes).toEqual([]);
+    const body1 = (await statePreRestore.json()) as { store: { store: Record<string, unknown> } };
+    expect(shapesOf(body1 as { store: { store: Record<string, { typeName: string }> } }).length).toBe(0);
 
     // Restore — file comes back to disk.
     const restRes = await app.fetch(
@@ -249,10 +272,13 @@ describe("POST /api/rooms/:id/restore", () => {
       new Request("http://localhost/api/state?room=loaded"),
     );
     const body2 = (await statePostRestore.json()) as {
-      canvas: { nodes: Array<{ id: string }> };
+      store: { store: Record<string, { typeName: string; meta?: { didrawName?: string } }> };
       version: number;
     };
-    expect(body2.canvas.nodes[0]?.id).toBe("preserved");
+    const preserved = Object.values(body2.store.store).find(
+      (r) => r.typeName === "shape" && r.meta?.didrawName === "preserved",
+    );
+    expect(preserved).toBeDefined();
     expect(body2.version).toBe(9);
   });
 });
@@ -260,7 +286,7 @@ describe("POST /api/rooms/:id/restore", () => {
 describe("POST /api/rooms/:id/export", () => {
   test("writes envelope with exportedAt to target path", async () => {
     seedRoom("design", (s) => {
-      s.canvas.nodes.push({ id: "n1", kind: "rect", x: 1, y: 2 });
+      seedShape(s, "shape:n1", "n1");
       s.version = 4;
     });
     const { app } = makeApp({ storageDir: dir });
@@ -277,12 +303,12 @@ describe("POST /api/rooms/:id/export", () => {
 
     const { readFileSync } = await import("node:fs");
     const env = JSON.parse(readFileSync(target, "utf8"));
-    expect(env.schemaVersion).toBe(2);
+    expect(env.schemaVersion).toBe(3);
     expect(env.roomId).toBe("design");
     expect(env.version).toBe(4);
     expect(env.elementCount).toBe(1);
     expect(typeof env.exportedAt).toBe("string");
-    expect(env.canvas.nodes[0].id).toBe("n1");
+    expect(env.store.store["shape:n1"]).toBeDefined();
 
     rmSync(target, { force: true });
   });
@@ -290,7 +316,7 @@ describe("POST /api/rooms/:id/export", () => {
   test("flushes dirty room before export", async () => {
     const { app, rooms, persistence } = makeApp({ storageDir: dir });
     const r = await rooms.get("dirty");
-    r.canvas.nodes.push({ id: "n1", kind: "rect", x: 0, y: 0 });
+    seedShape(r, "shape:n1", "n1");
     r.version = 99;
     r.dirty = true;
     persistence!.scheduleSave("dirty", r);
@@ -352,7 +378,7 @@ describe("POST /api/rooms/import", () => {
 
   test("imports to specified id with byte-equivalent canvas", async () => {
     seedRoom("source", (s) => {
-      s.canvas.nodes.push({ id: "n1", kind: "rect", x: 1, y: 2 });
+      seedShape(s, "shape:n1", "n1");
       s.version = 7;
     });
     const exported = join(dir, "..", "imp-source.json");
@@ -374,10 +400,10 @@ describe("POST /api/rooms/import", () => {
       new Request("http://localhost/api/state?room=imported"),
     );
     const stateBody = (await stateRes.json()) as {
-      canvas: { nodes: Array<{ id: string }> };
+      store: { store: Record<string, { typeName: string }> };
       version: number;
     };
-    expect(stateBody.canvas.nodes[0].id).toBe("n1");
+    expect(stateBody.store.store["shape:n1"]).toBeDefined();
     expect(stateBody.version).toBe(7);
 
     rmSync(exported, { force: true });
@@ -406,10 +432,10 @@ describe("POST /api/rooms/import", () => {
 
   test("overwrites with force=true (flushes evicts target)", async () => {
     seedRoom("target", (s) => {
-      s.canvas.nodes.push({ id: "old", kind: "rect", x: 0, y: 0 });
+      seedShape(s, "shape:old", "old");
     });
     seedRoom("source", (s) => {
-      s.canvas.nodes.push({ id: "new", kind: "rect", x: 0, y: 0 });
+      seedShape(s, "shape:new1", "newone");
       s.version = 42;
     });
     const exported = join(dir, "..", "imp-force.json");
@@ -431,9 +457,12 @@ describe("POST /api/rooms/import", () => {
       new Request("http://localhost/api/state?room=target"),
     );
     const stateBody = (await stateRes.json()) as {
-      canvas: { nodes: Array<{ id: string }> };
+      store: { store: Record<string, { typeName: string; meta?: { didrawName?: string } }> };
     };
-    expect(stateBody.canvas.nodes[0].id).toBe("new");
+    const found = Object.values(stateBody.store.store).find(
+      (r) => r.typeName === "shape" && r.meta?.didrawName === "newone",
+    );
+    expect(found).toBeDefined();
 
     rmSync(exported, { force: true });
   });
@@ -448,7 +477,7 @@ describe("POST /api/rooms/import", () => {
         version: 0,
         lastTouched: "2026-01-01T00:00:00Z",
         elementCount: 0,
-        canvas: { version: 1, nodes: [], edges: [], groups: [] },
+        store: { schema: {}, store: {} },
         prompts: [],
       }),
       "utf8",
@@ -500,7 +529,7 @@ describe("DELETE /api/rooms/:id", () => {
   test("no autosave overwrite after delete", async () => {
     const { app, rooms, persistence } = makeApp({ storageDir: dir });
     const r = await rooms.get("ghost");
-    r.canvas.nodes.push({ id: "n1", kind: "rect", x: 0, y: 0 });
+    seedShape(r, "shape:n1", "n1");
     r.dirty = true;
     r.version = 1;
     persistence!.scheduleSave("ghost", r);

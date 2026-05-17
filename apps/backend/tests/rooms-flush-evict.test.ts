@@ -3,7 +3,26 @@ import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FilePersistence } from "../src/persistence";
-import { Rooms, makeRoomState } from "../src/rooms";
+import { Rooms } from "../src/rooms";
+import type { RoomState } from "../src/types";
+
+function seedShape(s: RoomState, id: string, name: string) {
+  s.store.store[id] = {
+    id,
+    typeName: "shape",
+    type: "geo",
+    x: 0,
+    y: 0,
+    parentId: "page:page",
+    index: "a1",
+    isLocked: false,
+    opacity: 1,
+    rotation: 0,
+    props: { w: 100, h: 60, geo: "rectangle" },
+    meta: { didrawName: name },
+  };
+  s.didrawIndex.set(name, id);
+}
 
 let dir: string;
 let persistence: FilePersistence;
@@ -23,7 +42,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 describe("Rooms.flushIfDirty", () => {
   test("flushes pending autosave synchronously", async () => {
     const r = await rooms.get("a");
-    r.canvas.nodes.push({ id: "n1", kind: "rect", x: 0, y: 0 });
+    seedShape(r, "shape:n1", "n1");
     r.dirty = true;
     r.version = 1;
     persistence.scheduleSave("a", r);
@@ -54,7 +73,7 @@ describe("Rooms.evict", () => {
 
   test("evict flushes pending first (no data loss)", async () => {
     const r = await rooms.get("d");
-    r.canvas.nodes.push({ id: "n1", kind: "rect", x: 0, y: 0 });
+    seedShape(r, "shape:n1", "n1");
     r.dirty = true;
     r.version = 5;
     persistence.scheduleSave("d", r);

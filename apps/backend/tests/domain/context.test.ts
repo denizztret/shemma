@@ -1,103 +1,147 @@
-import { describe, expect, test } from "bun:test";
-import { emptyCanvasState, makeRoomState } from "../../src/rooms";
-import { buildContext } from "../../src/domain/context";
+import { describe, expect, it } from "bun:test";
+import { buildContext, richTextToString } from "../../src/domain/context";
+import type { TLStoreSnapshot } from "../../src/store-types";
 
-function seedState() {
-  const s = makeRoomState();
-  s.canvas.nodes.push({ id: "shape:e_auth", kind: "rect", x: 100, y: 100, w: 120, h: 60, label: "auth", meta: { name: "auth", role: "service" } });
-  s.canvas.nodes.push({ id: "shape:e_db", kind: "rect", x: 300, y: 100, w: 120, h: 60, label: "users-db", meta: { name: "users-db", role: "datastore" } });
-  s.canvas.edges.push({ id: "shape:c_0", from: { kind: "node", id: "shape:e_auth" }, to: { kind: "node", id: "shape:e_db" }, label: "reads", meta: { kind: "data" } });
-  s.canvas.groups.push({ id: "shape:e_vpc", kind: "frame", children: ["shape:e_auth", "shape:e_db"], label: "vpc-prod" });
-  (s.canvas.groups[0] as { meta?: Record<string, unknown> }).meta = { name: "vpc-prod", role: "network" };
-  s.version = 7;
-  return s;
-}
+const richText = (t: string) => ({
+  type: "doc",
+  content: [{ type: "paragraph", content: [{ type: "text", text: t }] }],
+});
 
-describe("buildContext", () => {
-  test("summary.byRole counts roles correctly", () => {
-    const ctx = buildContext(seedState(), { viewport: null });
-    expect(ctx.summary.byRole.service).toBe(1);
-    expect(ctx.summary.byRole.datastore).toBe(1);
-    expect(ctx.summary.byRole.network).toBe(1);
+const baseStore = (): TLStoreSnapshot => ({
+  schema: { schemaVersion: 1, storeVersion: 4, recordVersions: {} },
+  store: {
+    "document:document": { id: "document:document", typeName: "document" } as any,
+    "page:page": { id: "page:page", typeName: "page" } as any,
+  },
+});
+
+describe("context view-builder", () => {
+  it("emits shape element with role from meta", () => {
+    const s = baseStore();
+    s.store["shape:x"] = {
+      id: "shape:x",
+      typeName: "shape",
+      type: "geo",
+      x: 1,
+      y: 2,
+      props: { w: 100, h: 60, geo: "rectangle", richText: richText("Backend") },
+      meta: { didrawName: "backend", role: "service" },
+    } as any;
+    const v = buildContext(s, {});
+    const e = v.elements.find((el) => el.id === "backend")!;
+    expect(e.type).toBe("shape");
+    expect(e.role).toBe("service");
+    expect(e.label).toBe("Backend");
+    expect((e as any).bounds).toBeUndefined();
   });
 
-  test("nodes without meta.role contribute to total but not to byRole", () => {
-    const s = seedState();
-    // Add a node with no role in meta.
-    s.canvas.nodes.push({
-      id: "shape:e_unknown",
-      kind: "rect",
-      x: 500,
-      y: 100,
-      w: 120,
-      h: 60,
-      label: "unknown",
-      meta: { name: "unknown" },
-    });
-    const ctx = buildContext(s, { viewport: null });
-    // total counts every node + group.
-    expect(ctx.summary.total).toBe(s.canvas.nodes.length + s.canvas.groups.length);
-    // byRole entries unchanged — the unknown-role node is not counted.
-    expect(ctx.summary.byRole.service).toBe(1);
-    expect(ctx.summary.byRole.datastore).toBe(1);
-    expect(ctx.summary.byRole.network).toBe(1);
-    // ElementCompact omits role field when meta.role is absent.
-    const unknown = ctx.inView.find((e) => e.id === "unknown");
-    expect(unknown).toBeDefined();
-    expect(unknown?.role).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(unknown!, "role")).toBe(false);
+  it("includeGeometry adds bounds", () => {
+    const s = baseStore();
+    s.store["shape:x"] = {
+      id: "shape:x",
+      typeName: "shape",
+      type: "geo",
+      x: 1,
+      y: 2,
+      props: { w: 100, h: 60 },
+      meta: { didrawName: "a" },
+    } as any;
+    const v = buildContext(s, { includeGeometry: true });
+    expect(v.elements[0]!.bounds).toEqual({ x: 1, y: 2, w: 100, h: 60 });
   });
 
-  test("no geometry leaks — inView/selection/connections never carry x/y/w/h/fill", () => {
-    // Use a non-null viewport so that the bug (geometry leaking into an element)
-    // would actually be distinguishable from the legitimate ctx.viewport block.
-    const ctx = buildContext(seedState(), { viewport: { x: 0, y: 0, w: 1000, h: 1000 } });
-    // Serialize ONLY the element-bearing sections, NOT ctx.viewport (which legitimately carries x/y/w/h).
-    const elementsJson = JSON.stringify({
-      inView: ctx.inView,
-      selection: ctx.selection,
-      connections: ctx.connections,
-    });
-    expect(elementsJson).not.toMatch(/"x":/);
-    expect(elementsJson).not.toMatch(/"y":/);
-    expect(elementsJson).not.toMatch(/"w":/);
-    expect(elementsJson).not.toMatch(/"h":/);
-    expect(elementsJson).not.toMatch(/"fill":/);
-    expect(elementsJson).not.toMatch(/"stroke":/);
+  it("arrow → connection with from/to didrawName + connectionKind", () => {
+    const s = baseStore();
+    s.store["shape:f"] = {
+      id: "shape:f",
+      typeName: "shape",
+      type: "geo",
+      meta: { didrawName: "front" },
+    } as any;
+    s.store["shape:b"] = {
+      id: "shape:b",
+      typeName: "shape",
+      type: "geo",
+      meta: { didrawName: "back" },
+    } as any;
+    s.store["shape:arr"] = {
+      id: "shape:arr",
+      typeName: "shape",
+      type: "arrow",
+      meta: { connectionKind: "data" },
+    } as any;
+    s.store["binding:1"] = {
+      id: "binding:1",
+      typeName: "binding",
+      fromId: "shape:arr",
+      toId: "shape:f",
+      props: { terminal: "start" },
+    } as any;
+    s.store["binding:2"] = {
+      id: "binding:2",
+      typeName: "binding",
+      fromId: "shape:arr",
+      toId: "shape:b",
+      props: { terminal: "end" },
+    } as any;
+    const v = buildContext(s, {});
+    const conn = v.elements.find((e) => e.type === "connection")!;
+    expect(conn.from).toBe("front");
+    expect(conn.to).toBe("back");
+    expect(conn.connectionKind).toBe("data");
   });
 
-  test("inView excludes nodes outside viewport when set", () => {
-    const ctx = buildContext(seedState(), {
-      viewport: { x: 0, y: 0, w: 200, h: 200 },
-    });
-    const ids = ctx.inView.map((e) => e.id);
-    expect(ids).toContain("auth");
-    expect(ids).not.toContain("users-db");
+  it("frame → group with children didrawNames", () => {
+    const s = baseStore();
+    s.store["shape:f"] = {
+      id: "shape:f",
+      typeName: "shape",
+      type: "frame",
+      meta: { didrawName: "core", didrawIsGroup: true, role: "boundary" },
+    } as any;
+    s.store["shape:a"] = {
+      id: "shape:a",
+      typeName: "shape",
+      type: "geo",
+      parentId: "shape:f",
+      meta: { didrawName: "a" },
+    } as any;
+    s.store["shape:b"] = {
+      id: "shape:b",
+      typeName: "shape",
+      type: "geo",
+      parentId: "shape:f",
+      meta: { didrawName: "b" },
+    } as any;
+    const v = buildContext(s, {});
+    const g = v.elements.find((e) => e.id === "core")!;
+    expect(g.type).toBe("group");
+    expect(g.children).toEqual(expect.arrayContaining(["a", "b"]));
   });
 
-  test("derived parent from Group.children", () => {
-    const ctx = buildContext(seedState(), { viewport: null });
-    const auth = ctx.inView.find((e) => e.id === "auth");
-    expect(auth?.parent).toBe("vpc-prod");
-  });
-
-  test("pinned flag — when meta.pinned true, ElementCompact carries pinned:true without coordinates", () => {
-    const s = seedState();
-    s.canvas.nodes[0].meta = { ...s.canvas.nodes[0].meta, pinned: true, position: { x: 100, y: 100 } };
-    const ctx = buildContext(s, { viewport: null });
-    const auth = ctx.inView.find((e) => e.id === "auth");
-    expect(auth?.pinned).toBe(true);
-    expect(JSON.stringify(auth)).not.toMatch(/"x":/);
-  });
-
-  test("token budget — 100 elements stays under 8KB", () => {
-    const s = makeRoomState();
+  it("token budget — 100 shapes ≤ 8KB JSON without geometry", () => {
+    const s = baseStore();
     for (let i = 0; i < 100; i++) {
-      const role = i < 60 ? "service" : i < 80 ? "datastore" : "queue";
-      s.canvas.nodes.push({ id: `shape:e_n${i}`, kind: "rect", x: i * 50, y: 0, w: 100, h: 50, label: `n${i}`, meta: { name: `n${i}`, role } });
+      s.store[`shape:s${i}`] = {
+        id: `shape:s${i}`,
+        typeName: "shape",
+        type: "geo",
+        x: i,
+        y: i,
+        props: { w: 100, h: 60, richText: richText(`label-${i}`) },
+        meta: { didrawName: `n${i}`, role: "service" },
+      } as any;
     }
-    s.version = 100;
-    const ctx = buildContext(s, { viewport: { x: 0, y: 0, w: 800, h: 600 } });
-    expect(JSON.stringify(ctx).length).toBeLessThan(8000);
+    const v = buildContext(s, {});
+    const bytes = Buffer.byteLength(JSON.stringify(v), "utf-8");
+    expect(bytes).toBeLessThanOrEqual(8192);
+  });
+
+  it("richTextToString handles empty/null gracefully", () => {
+    expect(richTextToString(null)).toBe("");
+    expect(richTextToString(undefined)).toBe("");
+    expect(richTextToString({})).toBe("");
+    expect(richTextToString({ content: [] })).toBe("");
+    expect(richTextToString({ content: [{ content: [{ text: "hi" }] }] })).toBe("hi");
   });
 });

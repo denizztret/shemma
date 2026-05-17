@@ -1,42 +1,27 @@
-import { pushError } from "../state/error-bus";
+// Phase 3.0: REST surface сокращён до /api/state (initial hydrate) +
+// /api/prompt[s] (через transport/prompts.ts) + /api/ai/activity (App polls).
+// Все mutations идут через tldraw store → WS (transport/ws.ts). Никакого
+// /api/patch больше нет.
 
 export const room =
   new URLSearchParams(location.search).get("room") ?? "default";
 
-export async function getState(): Promise<{
+// Backend TLStoreSnapshot opaque на frontend side — applySnapshot принимает
+// то что отдал бэк. Структура: { schema, store: Record<id, TLRecord> }.
+// biome-ignore lint/suspicious/noExplicitAny: snapshot validated tldraw-side on loadSnapshot
+type TLStoreSnapshot = any;
+
+export type StateResponse = {
   version: number;
-  // biome-ignore lint/suspicious/noExplicitAny: canvas schema is validated on backend
-  canvas: any;
+  store: TLStoreSnapshot;
   // biome-ignore lint/suspicious/noExplicitAny: prompts are opaque backend schema
   prompts: any[];
-}> {
+  // biome-ignore lint/suspicious/noExplicitAny: aiActivity is opaque backend schema
+  aiActivity: any | null;
+};
+
+export async function getState(): Promise<StateResponse> {
   const r = await fetch(`/api/state?room=${encodeURIComponent(room)}`);
   if (!r.ok) throw new Error(`getState ${r.status}`);
   return r.json();
-}
-
-export type PatchResult =
-  | { ok: true; version: number; idempotent?: boolean }
-  | { ok: false; error: string };
-
-export async function sendPatch(
-  ops: unknown[],
-  clientOpId: string,
-): Promise<PatchResult> {
-  try {
-    const r = await fetch(`/api/patch?room=${encodeURIComponent(room)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ops, source: "user", clientOpId }),
-    });
-    // Backend returns ok:true or ok:false in JSON body for both 200 and 422.
-    // Network failures fall through to the catch.
-    const result = (await r.json()) as PatchResult;
-    if (!result.ok) pushError(`patch rejected: ${result.error}`);
-    return result;
-  } catch (e) {
-    const error = String(e);
-    pushError(`patch rejected: ${error}`);
-    return { ok: false, error };
-  }
 }
