@@ -281,6 +281,7 @@ export async function runLayout(
     mode: (hint.mode ?? "layered-lr") as LayoutMode,
     scope: hint.scope ?? "affected",
     spacing: (hint.spacing ?? "normal") as Spacing,
+    affectedIds: hint.affectedIds ?? new Set(),
   };
 
   const emptyBatch: StoreChangeBatch = { added: {}, updated: {}, removed: {} };
