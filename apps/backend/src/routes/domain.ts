@@ -12,8 +12,7 @@ import type {
 import { validateBatch } from "../domain/validate";
 import { pushOpLog, resolveRoomId } from "../rooms";
 import type { Rooms } from "../rooms";
-import { applyStoreChanges, rebuildDidrawIndex } from "../store-ops";
-import type { StoreChangeBatch } from "../store-types";
+import { applyStoreChanges, isEmptyBatch, rebuildDidrawIndex } from "../store-ops";
 import type { RoomState, StoreChangeBus } from "../types";
 
 type LayoutInfo = { applied: boolean; affected?: ElementId[]; reason?: string };
@@ -41,14 +40,6 @@ function makeLruCache<K, V>(max: number) {
       }
     },
   };
-}
-
-function batchIsEmpty(b: StoreChangeBatch): boolean {
-  return (
-    Object.keys(b.added).length === 0 &&
-    Object.keys(b.updated).length === 0 &&
-    Object.keys(b.removed).length === 0
-  );
 }
 
 export function domainRoutes(
@@ -150,7 +141,7 @@ export function domainRoutes(
     }
 
     // Apply domain mutations atomically (if any).
-    if (!batchIsEmpty(compiled.batch)) {
+    if (!isEmptyBatch(compiled.batch)) {
       room.store = applyStoreChanges(room.store, compiled.batch);
       room.didrawIndex = rebuildDidrawIndex(room.store);
       room.version += 1;
@@ -228,7 +219,7 @@ export function domainRoutes(
         );
         if (lr.reason) {
           layoutInfo = { applied: false, reason: lr.reason };
-        } else if (batchIsEmpty(lr.batch)) {
+        } else if (isEmptyBatch(lr.batch)) {
           layoutInfo = { applied: false, reason: "no-changes" };
         } else {
           room.store = applyStoreChanges(room.store, lr.batch);

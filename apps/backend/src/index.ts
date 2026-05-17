@@ -14,7 +14,7 @@ import { roomsRoutes } from "./routes/rooms";
 import { stateRoutes } from "./routes/state";
 import { versionRoutes } from "./routes/version";
 import { viewportRoutes } from "./routes/viewport";
-import { applyStoreChanges, rebuildDidrawIndex } from "./store-ops";
+import { applyStoreChanges, isEmptyBatch, rebuildDidrawIndex } from "./store-ops";
 import { DEFAULT_ROOM, type RoomState } from "./types";
 import { type Sock, WsHub } from "./ws";
 import { handleHello, parseClientMessage } from "./ws-protocol";
@@ -112,11 +112,7 @@ export async function startServer(opts: AppOpts = {}) {
         if (msg.kind === "user-change") {
           const r = await rooms.get(room);
           // Skip empty batches — keep version monotonic only on real mutations.
-          const empty =
-            Object.keys(msg.changes.added).length === 0 &&
-            Object.keys(msg.changes.updated).length === 0 &&
-            Object.keys(msg.changes.removed).length === 0;
-          if (empty) return;
+          if (isEmptyBatch(msg.changes)) return;
           r.store = applyStoreChanges(r.store, msg.changes);
           r.didrawIndex = rebuildDidrawIndex(r.store);
           r.version += 1;
