@@ -1,5 +1,6 @@
 import { CanvasClient } from "@shemma/client";
 import { fail } from "./util";
+import { error as uiError, getOutput, printResponse } from "./ui";
 
 type Args = {
   room?: string;
@@ -28,7 +29,10 @@ export async function cmdState(argv: string[]) {
       fmt: a.compact ? "compact" : "full",
       since: a.since,
     });
-    console.log(JSON.stringify(r));
+    // state is always raw JSON — human mode can't usefully summarize the full
+    // TLStoreSnapshot. Emit as JSON in both modes for backward compat (existing
+    // tests parse stdout). Use stdout directly to avoid prefix symbols.
+    process.stdout.write(JSON.stringify(r) + "\n");
   } catch (e) {
     fail(e);
   }
@@ -37,7 +41,7 @@ export async function cmdState(argv: string[]) {
 export async function cmdPatch(argv: string[]) {
   const a = parseArgs(argv);
   if (!argv.includes("--stdin")) {
-    console.error(JSON.stringify({ ok: false, error: "expected --stdin" }));
+    uiError("expected --stdin", { code: "expected --stdin" });
     process.exit(1);
   }
   const raw = await readStdin();
@@ -46,9 +50,7 @@ export async function cmdPatch(argv: string[]) {
   try {
     body = JSON.parse(raw);
   } catch {
-    console.error(
-      JSON.stringify({ ok: false, error: "invalid JSON on stdin" }),
-    );
+    uiError("invalid JSON on stdin", { code: "invalid JSON on stdin" });
     process.exit(1);
   }
   const c = new CanvasClient({ room: a.room });
@@ -57,7 +59,12 @@ export async function cmdPatch(argv: string[]) {
       source: body.source ?? "ai",
       clientOpId: body.clientOpId,
     });
-    console.log(JSON.stringify(r));
+    const ui = getOutput();
+    if (ui.mode === "json") {
+      process.stdout.write(JSON.stringify(r) + "\n");
+    } else {
+      printResponse(r, { humanSuccess: "patch applied" });
+    }
     if (r.ok === false) process.exit(1);
   } catch (e) {
     fail(e);
@@ -67,12 +74,18 @@ export async function cmdPatch(argv: string[]) {
 export async function cmdClear(argv: string[]) {
   const a = parseArgs(argv);
   if (!a.confirm) {
-    console.error(JSON.stringify({ ok: false, error: "expected --confirm" }));
+    uiError("expected --confirm", { code: "expected --confirm" });
     process.exit(1);
   }
   const c = new CanvasClient({ room: a.room });
   try {
-    console.log(JSON.stringify(await c.clear()));
+    const r = await c.clear();
+    const ui = getOutput();
+    if (ui.mode === "json") {
+      process.stdout.write(JSON.stringify(r) + "\n");
+    } else {
+      printResponse(r, { humanSuccess: "room cleared" });
+    }
   } catch (e) {
     fail(e);
   }

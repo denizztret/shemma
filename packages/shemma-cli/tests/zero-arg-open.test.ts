@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { startServer } from "../../../apps/backend/src/index";
@@ -35,7 +35,9 @@ async function cli(
   args: string[],
   opts: { env?: Record<string, string>; cwd?: string } = {},
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
-  const proc = Bun.spawn(["bun", CLI, ...args], {
+  // Group A (DRW-056): default output is friendly; tests opt-in to --json
+  // to preserve byte-identical JSON output for parseable assertions.
+  const proc = Bun.spawn(["bun", CLI, "--json", ...args], {
     env: opts.env ?? {},
     cwd: opts.cwd,
     stdin: "ignore",
@@ -53,6 +55,8 @@ async function cli(
 describe("shemma zero-arg / open (DRW-052)", () => {
   test("auto-cwd: creates .shemma/canvas-dev/ in temp cwd + emits info-log", async () => {
     const tmpCwd = mkdtempSync(join(tmpdir(), "shemma-zero-arg-cwd-"));
+    // DRW-058: pre-create .shemma/ so non-TTY fail-fast doesn't kick in.
+    mkdirSync(join(tmpCwd, ".shemma"));
     try {
       // Profile=dev → port 8788 (different from in-process srv unless srv is :8788).
       // We override SHEMMA_PORT to srv.port AND SHEMMA_PROFILE=dev so
@@ -86,6 +90,8 @@ describe("shemma zero-arg / open (DRW-052)", () => {
 
   test("conflict detection includes running + target paths in JSON error", async () => {
     const tmpCwd = mkdtempSync(join(tmpdir(), "shemma-conflict-"));
+    // DRW-058: pre-create .shemma/ so non-TTY fail-fast doesn't kick in.
+    mkdirSync(join(tmpCwd, ".shemma"));
     try {
       const r = await cli(["open", "any-room", "--no-browser"], {
         cwd: tmpCwd,
@@ -220,6 +226,8 @@ describe("shemma zero-arg / open (DRW-052)", () => {
 
   test("`shemma open <room>` is equivalent to zero-arg + room override", async () => {
     const tmpCwd = mkdtempSync(join(tmpdir(), "shemma-room-arg-"));
+    // DRW-058: pre-create .shemma/ so non-TTY fail-fast doesn't kick in.
+    mkdirSync(join(tmpCwd, ".shemma"));
     try {
       const r = await cli(["open", "scratch", "--no-browser"], {
         cwd: tmpCwd,

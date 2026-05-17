@@ -7,7 +7,8 @@ async function cli(
   args: string[],
   env: Record<string, string> = {},
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
-  const proc = Bun.spawn(["bun", CLI, ...args], {
+  // Group A (DRW-056): default output is friendly; tests opt-in to --json.
+  const proc = Bun.spawn(["bun", CLI, "--json", ...args], {
     env: { ...(process.env as Record<string, string>), ...env },
     stdout: "pipe",
     stderr: "pipe",

@@ -2,6 +2,7 @@ import { CanvasClient } from "@shemma/client";
 import { ensureSilent } from "./daemon";
 import type { Profile } from "./profile";
 import { portFor } from "./profile";
+import { getOutput, printResponse } from "./ui";
 
 function clientFor(profile: Profile, room?: string): CanvasClient {
   return new CanvasClient({
@@ -10,10 +11,17 @@ function clientFor(profile: Profile, room?: string): CanvasClient {
   });
 }
 
-// Print response JSON and exit(1) if the backend reported ok:false.
-// All domain commands share this terminal shape — keep it in one place.
-function printAndExitOnFail(res: unknown): void {
-  console.log(JSON.stringify(res));
+// Print response and exit(1) if the backend reported ok:false.
+// --json mode → raw JSON to stdout (byte-identical with pre-Group-A behaviour).
+// Human mode → friendly success/error line. Callers can pass `--json` to get
+// the parseable shape for `jq` / scripting.
+function printAndExitOnFail(res: unknown, humanLabel?: string): void {
+  const ui = getOutput();
+  if (ui.mode === "json") {
+    process.stdout.write(JSON.stringify(res) + "\n");
+  } else {
+    printResponse(res, { humanSuccess: humanLabel ?? "ok" });
+  }
   if ((res as { ok?: boolean }).ok === false) process.exit(1);
 }
 

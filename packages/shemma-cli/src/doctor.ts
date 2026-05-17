@@ -5,6 +5,7 @@ import { basename, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { ALL_PROFILES, type Profile, portFor } from "./profile";
 import { isHealthy, status } from "./daemon";
+import { getOutput } from "./ui";
 
 export type CheckStatus = "ok" | "warn" | "fail";
 
@@ -307,7 +308,10 @@ export async function cmdDoctor(opts: DoctorOptions): Promise<void> {
     Promise.resolve(checkConfigReadable()),
   ]);
 
-  if (opts.json) {
+  // Respect both `--json` global flag and the existing `doctor --json` local
+  // flag (kept for backward compat). Either gates JSON output.
+  const ui = getOutput();
+  if (opts.json || ui.mode === "json") {
     console.log(JSON.stringify(results, null, 2));
   } else {
     for (const r of results) {

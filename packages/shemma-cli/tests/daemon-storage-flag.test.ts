@@ -17,7 +17,8 @@ async function runCli(
     if (v === undefined) delete mergedEnv[k];
     else mergedEnv[k] = v;
   }
-  const proc = Bun.spawn(["bun", CLI, ...args], {
+  // Group A (DRW-056): default output is friendly; tests opt-in to --json.
+  const proc = Bun.spawn(["bun", CLI, "--json", ...args], {
     env: mergedEnv,
     stdin: "ignore",
     stdout: "pipe",

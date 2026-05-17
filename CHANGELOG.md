@@ -1,3 +1,29 @@
+## 0.11.0 (Unreleased) — Group A CLI UX polish
+
+### Added
+
+- **Friendly CLI output** (DRW-056) — default `shemma <cmd>` теперь печатает human-readable формат с ANSI символами (✖ ошибка, ✔ успех, → действие, · info, ⚠ warning). Цвета добавляются только если `process.stdout.isTTY === true`; non-TTY pipes/redirects получают plain Unicode без escapes. Все error paths мигрированы через единый модуль `packages/shemma-cli/src/ui.ts`.
+- **`--json` global flag** (DRW-056) — opt-in к machine-readable JSON output для agent / CI integration. Mode byte-identical с pre-0.11.0 behaviour (включая `{ ok: false, error, ...data }` shape на stderr для errors и raw response JSON на stdout для domain/rooms/data commands).
+- **Startup banner** (DRW-057) — при `shemma` / `shemma open <room>` перед открытием браузера печатается multi-line banner: `shemma v<version> [<profile>] listening on http://localhost:<port>`, `storage: <abs path>`, `room: <id>`, `· daemon started|already running`, опционально `↑ update available: v<X.Y.Z>` (если `update-check` returns positive), `→ opening <URL>` (если не `--no-browser`). Banner suppressed в `--json` mode.
+- **Interactive prompt for missing `.shemma/`** (DRW-058) — при `shemma` zero-arg launch если `.shemma/` отсутствует в `cwd` И не задан `--storage`/`SHEMMA_STORAGE_DIR`, CLI делает: (а) **TTY** (`process.stdin.isTTY && process.stdout.isTTY`) — printout 3-option меню `[1] Create .shemma/ here`, `[2] Specify storage path`, `[3] Cancel`; (б) **non-TTY** (CI / piped / agent invocations) — fail-fast с понятным hint'ом и exit 1. Explicit `--storage` / env path → skip check. Existing `.shemma/` → silent reuse (как было).
+- **`shemma init [<path>]` command** (DRW-058 bonus) — non-interactive bootstrap: создаёт `.shemma/` в `cwd` или указанном path, печатает `✔ initialized .shemma/ in <path>` (human) или structured JSON в `--json` mode. Идемпотентно.
+- **Tests** — `packages/shemma-cli/tests/ui.test.ts` (22 unit tests на formatter helpers, TTY/non-TTY/JSON modes), `tests/storage-interactive.test.ts` (8 tests на non-TTY fail-fast + `shemma init`), `tests/banner.test.ts` (4 tests на banner content / suppression). Existing tests адаптированы — добавлен `--json` flag в subprocess invocations (`zero-arg-open`, `domain`, `data`, `lifecycle.http`, `room-flag`, `ps`, `daemon-storage-flag`, `doctor`). Total CLI tests: 80 → 114.
+
+### Changed
+
+- **CLI output structure (default mode):** все existing `console.log(JSON.stringify(...))` paths в `lifecycle.ts`, `daemon.ts`, `data.ts`, `domain.ts`, `ai.ts`, `prompts.ts`, `ps.ts`, `doctor.ts`, `update.ts`, `version-cmd.ts`, `logs.ts`, `util.ts` мигрированы через `ui.success` / `ui.error` / `ui.info` / `ui.printResponse`. **Breaking для скриптов**, которые парсили stdout без `--json` — нужно добавить `--json` flag или migrate на human-grepable output.
+- **`die()` / `fail()` helpers** — теперь используют `ui.error()` вместо raw `console.error(JSON.stringify(...))`. Connection-refused errors получают дополнительный hint `→ is the daemon running? try 'shemma daemon start'`.
+- **`shemma daemon status`** в human mode печатает `✔ daemon running (pid X, profile Y, port Z)` или `· daemon not running (profile Y, port Z)` вместо raw JSON pretty-print.
+- **Usage block** — добавлены строки `shemma init [<path>]` и `--json` в `shemma --help`.
+
+### Notes
+
+- ANSI escapes реализованы raw (`\x1b[31m...\x1b[0m`) без deps: zero-dep matches madstudio approach.
+- В `--json` mode `info()` сообщения silenced (decorative для human только).
+- Domain command responses (`/api/domain`) в `--json` mode выводят raw JSON на stdout, в human mode — только `✔ ok` / `✖ error`. User может pipe `--json` в `jq` для structured queries.
+
+---
+
 ## 0.10.0 — 2026-05-18 — Renamed to Shemma
 
 ### Changed (breaking — mechanical rename)

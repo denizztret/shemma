@@ -6,8 +6,13 @@ const CLI = join(import.meta.dir, "..", "src", "index.ts");
 async function cli(
   args: string[],
   env: Record<string, string> = {},
+  opts: { human?: boolean } = {},
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
-  const proc = Bun.spawn(["bun", CLI, ...args], {
+  // Group A (DRW-056): default output is friendly; tests opt-in to --json.
+  // The local `doctor --json` flag still works (gated by either flag).
+  // Pass `opts.human=true` for tests that explicitly verify human output.
+  const finalArgs = opts.human ? args : ["--json", ...args];
+  const proc = Bun.spawn(["bun", CLI, ...finalArgs], {
     env: { ...(process.env as Record<string, string>), ...env },
     stdout: "pipe",
     stderr: "pipe",
@@ -91,7 +96,7 @@ describe("shemma doctor --json", () => {
   });
 
   test("human output has summary line", async () => {
-    const r = await cli(["doctor"]);
+    const r = await cli(["doctor"], {}, { human: true });
     // Should contain "X ok, Y warn, Z fail"
     expect(r.stdout).toMatch(/\d+ ok, \d+ warn, \d+ fail/);
   });

@@ -28,7 +28,8 @@ function envNoSession(): Record<string, string> {
 }
 
 async function cli(args: string[], input?: string) {
-  const proc = Bun.spawn(["bun", CLI, ...args], {
+  // Group A (DRW-056): default output is friendly; tests opt-in to --json.
+  const proc = Bun.spawn(["bun", CLI, "--json", ...args], {
     env: envNoSession(),
     stdin: input !== undefined ? Buffer.from(input) : "ignore",
     stdout: "pipe",

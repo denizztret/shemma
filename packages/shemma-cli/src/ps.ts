@@ -1,6 +1,7 @@
 import { CanvasClient } from "@shemma/client";
 import { ALL_PROFILES, type Profile, portFor } from "./profile";
 import { isHealthy, status } from "./daemon";
+import { getOutput, info as uiInfo } from "./ui";
 
 // Static port defaults per profile — used in ps to show correct port for each
 // profile regardless of the current process's SHEMMA_PORT env override.
@@ -72,5 +73,19 @@ export async function cmdPs(): Promise<void> {
       }
     }),
   );
-  console.log(JSON.stringify(results, null, 2));
+  const ui = getOutput();
+  if (ui.mode === "json") {
+    console.log(JSON.stringify(results, null, 2));
+    return;
+  }
+  // Human mode: table-ish output with one line per profile.
+  for (const r of results) {
+    const state = r.running
+      ? r.healthy
+        ? "healthy"
+        : "running (unhealthy)"
+      : "not running";
+    const pid = r.pid !== undefined ? ` pid=${r.pid}` : "";
+    uiInfo(`${r.profile.padEnd(8)} :${r.port}  ${state}${pid}`);
+  }
 }

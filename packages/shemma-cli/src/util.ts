@@ -1,3 +1,5 @@
+import { error as uiError } from "./ui";
+
 export function fail(e: unknown): never {
   const msg = e instanceof Error ? e.message : String(e);
   const code = (e as { code?: string })?.code;
@@ -6,6 +8,9 @@ export function fail(e: unknown): never {
     code === "ConnectionRefused" ||
     msg.includes("Unable to connect");
   const status = isConnRefused ? 3 : 1;
-  console.error(JSON.stringify({ ok: false, error: msg }));
+  uiError(msg, {
+    code: msg,
+    hint: isConnRefused ? "is the daemon running? try 'shemma daemon start'" : undefined,
+  });
   process.exit(status);
 }

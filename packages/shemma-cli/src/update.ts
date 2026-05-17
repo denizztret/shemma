@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { ensure, stop } from "./daemon";
 import { parseProfile } from "./profile";
 import { fail } from "./util";
+import { getOutput, success as uiSuccess } from "./ui";
 
 export const VALID_CHANNELS = ["stable", "nightly", "dev"] as const;
 type Channel = (typeof VALID_CHANNELS)[number];
@@ -73,9 +74,16 @@ export async function cmdUpdateCheck() {
     };
     const latest = m.channels?.[channel]?.version ?? null;
     const available = !!latest && semverCmp(latest, CURRENT_VERSION) > 0;
-    console.log(
-      JSON.stringify({ current: CURRENT_VERSION, latest, available, channel }),
-    );
+    const ui = getOutput();
+    if (ui.mode === "json") {
+      console.log(
+        JSON.stringify({ current: CURRENT_VERSION, latest, available, channel }),
+      );
+    } else if (available) {
+      uiSuccess(`update available: v${latest} (current v${CURRENT_VERSION}, channel ${channel})`);
+    } else {
+      uiSuccess(`already on latest v${CURRENT_VERSION} (channel ${channel})`);
+    }
   } catch (e) {
     fail(e);
   }
@@ -89,7 +97,12 @@ export async function cmdUpdateSetChannel(channel: string) {
   const cfg = readConfig();
   cfg.channel = channel;
   writeConfig(cfg);
-  console.log(JSON.stringify({ ok: true, channel }));
+  const ui = getOutput();
+  if (ui.mode === "json") {
+    console.log(JSON.stringify({ ok: true, channel }));
+  } else {
+    uiSuccess(`channel set to "${channel}"`);
+  }
 }
 
 function platformKey(): string {
@@ -152,14 +165,19 @@ export async function cmdUpdate(argv: string[]) {
   if (!ch) fail(`channel "${channel}" not in manifest`);
 
   if (semverCmp(ch.version, CURRENT_VERSION) <= 0) {
-    console.log(
-      JSON.stringify({
-        ok: true,
-        alreadyLatest: true,
-        version: CURRENT_VERSION,
-        channel,
-      }),
-    );
+    const ui = getOutput();
+    if (ui.mode === "json") {
+      console.log(
+        JSON.stringify({
+          ok: true,
+          alreadyLatest: true,
+          version: CURRENT_VERSION,
+          channel,
+        }),
+      );
+    } else {
+      uiSuccess(`already on latest v${CURRENT_VERSION} (channel ${channel})`);
+    }
     return;
   }
 
@@ -204,16 +222,21 @@ export async function cmdUpdate(argv: string[]) {
   // ensure() calls process.exit(3) directly on health timeout, which would suppress
   // this output if printed after; the caller reads stdout, not exit code, for success.
   const profile = parseProfile(argv);
-  console.log(
-    JSON.stringify({
-      ok: true,
-      from: CURRENT_VERSION,
-      to: ch.version,
-      channel,
-      profile,
-      rollback: `mv '${oldPath}' '${target}'`,
-    }),
-  );
+  const ui = getOutput();
+  if (ui.mode === "json") {
+    console.log(
+      JSON.stringify({
+        ok: true,
+        from: CURRENT_VERSION,
+        to: ch.version,
+        channel,
+        profile,
+        rollback: `mv '${oldPath}' '${target}'`,
+      }),
+    );
+  } else {
+    uiSuccess(`updated v${CURRENT_VERSION} → v${ch.version} (channel ${channel})`);
+  }
 
   // ensure() self-spawns from process.execPath, which now points at the new binary.
   await stop(profile).catch(() => {});
