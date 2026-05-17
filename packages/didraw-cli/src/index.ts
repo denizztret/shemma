@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { cmdAiStart, cmdAiStatus, cmdAiStop } from "./ai";
-import { ensure, start, status, stop } from "./daemon";
+import { ensure, start, status, stop, stopAll } from "./daemon";
 import { cmdClear, cmdPatch, cmdState } from "./data";
 import { applyStdin, connectCmd, context, define, deleteCmd, group, layoutCmd, note } from "./domain";
 import {
@@ -15,13 +15,19 @@ import {
   restoreRoom,
   rmRoom,
 } from "./lifecycle";
-import { applyProfile, parseProfile, portFor } from "./profile";
+import { cmdLogs } from "./logs";
+import { applyProfile, parseProfile, portFor, type Profile } from "./profile";
+import { cmdPs } from "./ps";
 import { cmdPrompts } from "./prompts";
+import { cmdDoctor } from "./doctor";
 import { cmdUpdate, cmdUpdateCheck, cmdUpdateSetChannel } from "./update";
 import { cmdVersion } from "./version-cmd";
 
 const rawArgv = process.argv.slice(2);
 const profile = parseProfile(rawArgv);
+// Track whether --profile was explicitly provided (affects --all logic)
+const explicitProfileProvided =
+  rawArgv.includes("--profile") || rawArgv.includes("--debug");
 applyProfile(profile);
 // Resolve --profile → DIDRAW_PORT so any CanvasClient (data/prompts/layout/version) hits the right daemon.
 // Explicit DIDRAW_PORT is honoured if already set (portFor checks env first).
@@ -34,6 +40,10 @@ function stripProfileFlag(a: string[]): string[] {
   for (let i = 0; i < a.length; i++) {
     if (a[i] === "--profile") {
       i++; // skip value
+      continue;
+    }
+    if (a[i] === "--debug") {
+      // consumed by parseProfile; strip from per-command args
       continue;
     }
     out.push(a[i]);
@@ -86,9 +96,45 @@ async function main() {
     return cmdUpdate(argv.slice(1));
   }
 
+  if (cmd === "ps") return cmdPs();
+
+  if (cmd === "logs") {
+    let tailN = 50;
+    let follow = false;
+    let all = false;
+    for (let i = 1; i < argv.length; i++) {
+      if (argv[i] === "--tail") tailN = Number(argv[++i]);
+      else if (argv[i] === "--follow") follow = true;
+      else if (argv[i] === "--all") all = true;
+    }
+    if (all && explicitProfileProvided) {
+      console.error(JSON.stringify({ ok: false, error: "--all and --profile are mutually exclusive" }));
+      process.exit(1);
+    }
+    return cmdLogs({ profile, tail: tailN, follow, all });
+  }
+
+  if (cmd === "doctor") {
+    let all = false;
+    let json = false;
+    for (let i = 1; i < argv.length; i++) {
+      if (argv[i] === "--all") all = true;
+      else if (argv[i] === "--json") json = true;
+    }
+    if (all && explicitProfileProvided) {
+      console.error(JSON.stringify({ ok: false, error: "--all and --profile are mutually exclusive" }));
+      process.exit(1);
+    }
+    return cmdDoctor({ profile, all, json });
+  }
+
   if (cmd === "daemon") {
     if (sub === "start") return start(profile);
-    if (sub === "stop") return stop(profile);
+    if (sub === "stop") {
+      const all = argv.includes("--all");
+      if (all) return stopAll(explicitProfileProvided ? profile : undefined);
+      return stop(profile);
+    }
     if (sub === "status")
       return console.log(JSON.stringify(await status(profile), null, 2));
     if (sub === "ensure" || sub === "--ensure") return ensure(profile);
@@ -291,11 +337,12 @@ async function main() {
 }
 
 function usage() {
-  console.log(`didraw <command> [--profile dev|release|debug]
+  console.log(`didraw <command> [--profile dev|release|debug] [--debug]
 
 Lifecycle:
-  daemon start|stop|status|ensure
+  daemon start|stop [--all]|status|ensure
   open <room>
+  ps                                          # JSON status for all profiles
   rooms list
   rooms archive       <id>
   rooms restore       <id>
@@ -319,7 +366,6 @@ Domain (preferred AI interface) — каждая команда принимае
 Data:
   state    --room <id> [--compact] [--since <v>]
   patch    --room <id> --stdin
-  import   mermaid --room <id> --stdin | --file <path>
   prompts  list --room <id> [--status pending|resolved|dismissed|all]
   prompts  resolve <id> --room <id> [--response <text>]
   prompts  dismiss <id> --room <id>
@@ -330,13 +376,25 @@ Data:
   ai       stop [--room <id>]
   ai       status [--room <id>]
 
+Diagnostics:
+  logs     [--tail N] [--follow] [--all | --profile p]  # read daemon log
+  doctor   [--all | --profile p] [--json]               # read-only health checks
+
 Versioning:
   version
   update [--check] [--channel stable|nightly|dev]
 
+Flags:
+  --profile dev|release|debug   select runtime profile (default: release)
+  --debug                       shortcut for --profile debug
+
+Note: Mermaid import is browser-only (see ADR-0001): open canvas and run
+  await window.didrawImportMermaid('graph LR\\n  app --> db')
+in DevTools console.
+
 (internal-server: private subcommand used by daemon self-spawn)
 
-Exit codes: 0 ok, 1 usage/error, 2 not-found, 3 daemon-not-healthy
+Exit codes: 0 ok, 1 usage/error, 2 not-found, 3 daemon-not-healthy/doctor-fail
 `);
 }
 
