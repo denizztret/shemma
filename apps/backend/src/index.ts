@@ -8,6 +8,7 @@ import { contextRoutes } from "./routes/context";
 import { domainRoutes } from "./routes/domain";
 import { healthRoutes } from "./routes/health";
 import { layoutRoutes } from "./routes/layout";
+import { sessionRoutes } from "./routes/session";
 import { promptRoutes } from "./routes/prompts";
 import { roomsRoutes } from "./routes/rooms";
 import { stateRoutes } from "./routes/state";
@@ -42,6 +43,7 @@ export function makeApp(opts: AppOpts = {}) {
     : undefined;
   app.route("/", healthRoutes);
   app.route("/", versionRoutes);
+  app.route("/", sessionRoutes);
   app.route("/", stateRoutes(rooms));
   app.route("/", layoutRoutes(rooms, bus, { onDirty }));
   app.route("/", promptRoutes(rooms, bus, { onDirty }));

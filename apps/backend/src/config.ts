@@ -70,6 +70,14 @@ export function resolveProjectSlug(): string {
   );
 }
 
+export function resolveWorkspaceDir(): string {
+  return (
+    process.env.DIDRAW_PROJECT_DIR ??
+    process.env.CLAUDE_PROJECT_DIR ??
+    process.cwd()
+  );
+}
+
 export function getConfig() {
   const profile = getProfile();
   return {
@@ -92,6 +100,9 @@ export function getConfig() {
     roomEvictionMs: 60 * 60 * 1000,
     opLogMaxSize: 50,
     gracefulShutdownMs: 2000,
+    sessionId: process.env.CLAUDE_SESSION_ID ?? null,
+    projectSlug: resolveProjectSlug(),
+    workspaceDir: resolveWorkspaceDir(),
   } as const;
 }
 
