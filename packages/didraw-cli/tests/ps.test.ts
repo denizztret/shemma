@@ -50,6 +50,27 @@ describe("didraw ps", () => {
   });
 });
 
+describe("didraw ps per-profile port", () => {
+  test("release entry shows port 8787 even when running as dev profile", async () => {
+    // Run ps with DIDRAW_PROFILE=dev env — release profile must still show 8787
+    const r = await cli(["ps"], { DIDRAW_PROFILE: "dev" });
+    expect(r.status).toBe(0);
+    const arr = JSON.parse(r.stdout);
+    const releaseEntry = arr.find((e: { profile: string }) => e.profile === "release");
+    expect(releaseEntry).toBeDefined();
+    expect(releaseEntry.port).toBe(8787);
+  });
+
+  test("dev entry shows port 8788 when running as release profile", async () => {
+    const r = await cli(["ps"], { DIDRAW_PROFILE: "release" });
+    expect(r.status).toBe(0);
+    const arr = JSON.parse(r.stdout);
+    const devEntry = arr.find((e: { profile: string }) => e.profile === "dev");
+    expect(devEntry).toBeDefined();
+    expect(devEntry.port).toBe(8788);
+  });
+});
+
 describe("didraw --debug flag", () => {
   test("--debug sets profile to debug", async () => {
     // We test this by checking that daemon status with --debug points to port 8787

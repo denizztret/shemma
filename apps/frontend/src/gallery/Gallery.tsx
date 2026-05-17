@@ -110,9 +110,10 @@ export function Gallery() {
 
   if (filterTab === "archived") {
     const groupTitle = "Archived";
+    const archivedRooms = rooms.filter((r) => r.archived === true);
     groups.push({
       title: groupTitle,
-      rooms: sortRooms(rooms, sortModes[groupTitle] ?? "lastTouched"),
+      rooms: sortRooms(archivedRooms, sortModes[groupTitle] ?? "lastTouched"),
       sortMode: sortModes[groupTitle] ?? "lastTouched",
     });
   } else {
