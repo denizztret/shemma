@@ -50,11 +50,25 @@ bun --cwd packages/didraw-cli src/index.ts open scratch
 Lifecycle:
 
 ```bash
-didraw daemon ensure | start | stop | status [--profile dev|release|debug]
+didraw daemon ensure | start | stop [--all] | status [--profile dev|release|debug]
 didraw open <room>
-didraw list
-didraw export <room> --to <path>
-didraw rm <room> --confirm
+didraw ps                                           # JSON status for all profiles
+didraw rooms list
+didraw rooms export <room> --to <path>
+didraw rooms rm <room> [--archive|--hard] [--force] --confirm
+```
+
+Domain (preferred AI interface):
+
+```bash
+didraw define <role> <name> [--label "..."] [--in <container>] [--room <id>]
+didraw connect <from> <to> [--kind sync|async|data|dep] [--label "..."] [--room <id>]
+didraw group <id1,id2,...> --as network|boundary --name <name> [--room <id>]
+didraw note --text "..." [--about <name>] [--room <id>]
+didraw layout [--mode layered-lr|layered-tb|tree|pack|force] [--scope all|<group>] [--room <id>]
+didraw delete <id1,id2,...> [--cascade] [--room <id>]
+didraw apply --stdin [--room <id>]                  # JSON batch on stdin
+didraw context [--since N] [--viewport x,y,w,h] [--room <id>]
 ```
 
 Data:
@@ -62,7 +76,6 @@ Data:
 ```bash
 didraw state [--compact] [--since N] [--room <id>]
 echo '{"ops":[...],"source":"ai"}' | didraw patch --stdin [--room <id>]
-didraw layout --algorithm elk-layered [--node-ids n1,n2] [--room <id>]
 didraw prompts list [--status pending|resolved|dismissed|all]
 didraw prompts resolve <id> [--response "text"]
 didraw prompts dismiss <id>
@@ -81,6 +94,13 @@ didraw ai status                     # current activity (or null)
 ```
 
 Stale activity auto-clear через 5 минут на server-side, но явный `stop` — правильный шаблон.
+
+Diagnostics:
+
+```bash
+didraw logs [--tail 50] [--follow] [--all | --profile dev|release|debug]
+didraw doctor [--all | --profile dev|release|debug] [--json]
+```
 
 Versioning + update:
 

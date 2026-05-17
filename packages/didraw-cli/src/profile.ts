@@ -3,7 +3,9 @@ import { join } from "node:path";
 
 export type Profile = "dev" | "release" | "debug";
 
-const VALID_PROFILES: readonly Profile[] = ["dev", "release", "debug"];
+export const ALL_PROFILES: readonly Profile[] = ["dev", "release", "debug"];
+
+const VALID_PROFILES: readonly Profile[] = ALL_PROFILES;
 
 function isProfile(v: unknown): v is Profile {
   return (
@@ -12,6 +14,8 @@ function isProfile(v: unknown): v is Profile {
 }
 
 export function parseProfile(argv: string[]): Profile {
+  // --debug shortcut = --profile debug
+  if (argv.includes("--debug")) return "debug";
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--profile") {
       const val = argv[i + 1];
@@ -46,6 +50,10 @@ export function applyProfile(p: Profile) {
 
 export function pidFile(p: Profile): string {
   return join(homedir(), ".claude", `.didraw-${p}.pid`);
+}
+
+export function logFile(p: Profile): string {
+  return join(homedir(), ".claude", `.didraw-${p}.log`);
 }
 
 const PORT_BY_PROFILE: Record<Profile, number> = {

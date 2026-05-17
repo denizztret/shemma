@@ -1,9 +1,41 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { CanvasClient } from "@didraw/client";
 
 const GRACEFUL_SHUTDOWN_MS = 2000; // matches backend default; override via DIDRAW_GRACEFUL_SHUTDOWN_MS
-import { type Profile, pidFile, portFor } from "./profile";
+const DEFAULT_LOG_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+
+import { type Profile, ALL_PROFILES, logFile, pidFile, portFor } from "./profile";
+
+function logMaxBytes(): number {
+  const raw = process.env.DIDRAW_LOG_MAX_MB;
+  if (raw !== undefined) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n * 1024 * 1024;
+  }
+  return DEFAULT_LOG_MAX_BYTES;
+}
+
+function rotateLogIfNeeded(path: string): void {
+  try {
+    const size = statSync(path).size;
+    if (size > logMaxBytes()) {
+      const backup = `${path}.1`;
+      try { unlinkSync(backup); } catch { /* no backup yet */ }
+      renameSync(path, backup);
+    }
+  } catch {
+    // file may not exist yet — that's fine
+  }
+}
 
 function isAlive(pid: number): boolean {
   try {
@@ -14,7 +46,7 @@ function isAlive(pid: number): boolean {
   }
 }
 
-async function isHealthy(port: number): Promise<boolean> {
+export async function isHealthy(port: number): Promise<boolean> {
   try {
     return await new CanvasClient({
       baseUrl: `http://localhost:${port}`,
@@ -40,12 +72,15 @@ export async function start(profile: Profile) {
     return;
   }
   const port = portFor(profile);
+  const lf = logFile(profile);
+  rotateLogIfNeeded(lf);
+  const logFd = openSync(lf, "a");
   const child = spawn(
     process.execPath,
     [process.argv[1], "internal-server", "--profile", profile],
     {
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", logFd, logFd],
       env: {
         ...process.env,
         DIDRAW_PROFILE: profile,
@@ -154,4 +189,41 @@ export async function stop(profile: Profile) {
     /* ignore — file may already be gone */
   }
   console.log(JSON.stringify({ ok: true, stopped: pid, profile }));
+}
+
+/**
+ * Stop daemons across all profiles (or a single one if specified).
+ * Idempotent: profiles that are not running produce {ok:true,already:true}.
+ * Results are collected and printed as a JSON array.
+ */
+export async function stopAll(onlyProfile?: Profile) {
+  const profiles = onlyProfile ? [onlyProfile] : [...ALL_PROFILES];
+  const results: object[] = [];
+  for (const p of profiles) {
+    const file = pidFile(p);
+    if (!existsSync(file)) {
+      results.push({ ok: true, already: true, profile: p });
+      continue;
+    }
+    const pid = Number(readFileSync(file, "utf8"));
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch (_) {}
+    const overrideMs = Number(process.env.DIDRAW_GRACEFUL_SHUTDOWN_MS);
+    const gracefulMs =
+      Number.isFinite(overrideMs) && overrideMs > 0
+        ? overrideMs
+        : GRACEFUL_SHUTDOWN_MS;
+    const deadline = Date.now() + gracefulMs;
+    while (Date.now() < deadline) {
+      if (!isAlive(pid)) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    if (isAlive(pid)) {
+      try { process.kill(pid, "SIGKILL"); } catch (_) {}
+    }
+    try { unlinkSync(file); } catch (_) { /* ignore */ }
+    results.push({ ok: true, stopped: pid, profile: p });
+  }
+  console.log(JSON.stringify(results));
 }
