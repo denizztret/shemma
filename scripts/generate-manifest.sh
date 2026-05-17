@@ -3,7 +3,7 @@ set -euo pipefail
 
 VERSION="${1:?usage: $0 <version> [channel]}"
 CHANNEL="${2:-stable}"
-BASE_URL="${MANIFEST_BASE_URL:-https://github.com/example/shemma/releases/download/v$VERSION}"
+BASE_URL="${MANIFEST_BASE_URL:-https://github.com/denizztret/shemma/releases/download/$VERSION}"
 
 cd release
 
