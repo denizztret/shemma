@@ -164,8 +164,12 @@ export function startStoreSync(deps: StoreSyncDeps): { stop: () => void } {
 
   ws.addEventListener("open", () => {
     if (stopped) return;
+    // Include the editor's current schema so the backend can persist it on
+    // first connect (replacing the V1 placeholder from defaultSchema()).
+    // Serialising is cheap (≤2KB, called only on WS open/reconnect).
+    const schema = deps.editor.store.schema.serialize();
     ws.send(
-      JSON.stringify({ kind: "hello", lastVersion: currentVersion }),
+      JSON.stringify({ kind: "hello", lastVersion: currentVersion, schema }),
     );
   });
 

@@ -99,7 +99,11 @@ export async function startServer(opts: AppOpts = {}) {
         if (!msg) return; // malformed → ignore (must not crash)
         if (msg.kind === "hello") {
           const r = await rooms.get(room);
-          const reply = handleHello(r, msg.lastVersion);
+          const { reply, schemaUpgraded } = handleHello(r, msg.lastVersion, msg.schema);
+          if (schemaUpgraded) {
+            r.dirty = true;
+            if (persistence) persistence.scheduleSave(room, r);
+          }
           ws.send(JSON.stringify(reply));
           return;
         }

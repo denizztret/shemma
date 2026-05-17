@@ -4,6 +4,7 @@ import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
 import { importMermaid } from "./canvas/mermaid-import";
+import { isPlaceholderSchema } from "./canvas/schema-placeholder";
 import { AiActivityBadge } from "./chrome/AiActivityBadge";
 import { AppChrome } from "./chrome/AppChrome";
 import { ErrorBanner } from "./chrome/ErrorBanner";
@@ -115,19 +116,15 @@ export function App({ room }: { room: string }) {
       const s = await getState();
       if (!active) return;
 
-      // Загружаем серверный snapshot — backend = source of truth.
-      //
-      // Schema override: backend хранит `store.schema` который для новых комнат
-      // создаётся `migrate-v2.defaultSchema()` — этот стаб не совпадает с актуальной
-      // схемой tldraw 5.x runtime (sub-type versions, subTypeKey не выставлен).
-      // Если оставить старую схему, `migrateStoreSnapshot` пытается прокатить
-      // десятки migrations с v0 → current и падает на undefined.length внутри.
-      // Решение MVP: подменяем schema на editor.store.schema.serialize() — наши
-      // records (созданные compile.ts/migrate-v2 в текущих props-форматах) сразу
-      // считаются current, миграция skip. Долгосрочно — backend хранит схему,
-      // которую отдал первый подключившийся клиент (Phase 3.1 follow-up).
-      const currentSchema = editor.store.schema.serialize();
-      const snapshot = { ...s.store, schema: currentSchema };
+      // Backend хранит реальную V2 схему, полученную от первого WS-клиента
+      // (DRW-040). Но на самом первом коннекте к свежей комнате schema ещё
+      // placeholder V1 stub — loadSnapshot бы упал на миграциях. Детектим
+      // placeholder и подменяем на текущую editor schema только в этом случае;
+      // на втором же подключении backend уже отдаст реальную V2 — override
+      // выключится сам.
+      const snapshot = isPlaceholderSchema(s.store?.schema)
+        ? { ...s.store, schema: editor.store.schema.serialize() }
+        : s.store;
       editor.store.mergeRemoteChanges(() => {
         editor.loadSnapshot(snapshot);
       });
@@ -159,8 +156,9 @@ export function App({ room }: { room: string }) {
             try {
               const fresh = await getState();
               if (!active) return;
-              const freshSchema = editor.store.schema.serialize();
-              const freshSnapshot = { ...fresh.store, schema: freshSchema };
+              const freshSnapshot = isPlaceholderSchema(fresh.store?.schema)
+                ? { ...fresh.store, schema: editor.store.schema.serialize() }
+                : fresh.store;
               editor.store.mergeRemoteChanges(() => {
                 editor.loadSnapshot(freshSnapshot);
               });

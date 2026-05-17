@@ -1,3 +1,27 @@
+## 0.4.2 — 2026-05-17 — Phase 3.1: persist tldraw schema from first client (DRW-040)
+
+### Changed
+
+- **WS hello protocol** теперь несёт опциональное поле `schema` — клиент посылает `editor.store.schema.serialize()` в первом hello frame. Backend хранит V2 схему первого подключившегося клиента в `RoomState.store.schema` и схватывает её в next `scheduleSave` цикле. Для новых rooms и для существующих 0.4.0 rooms (где persisted schema = V1 stub из `migrate-v2.defaultSchema()`) replacement происходит автоматически при первом 0.4.x connect.
+- **Phase 3.0 workaround `e6ff76c` снят**: `App.tsx` больше не подменяет `s.store.schema` на каждый loadSnapshot. Условный fallback остался ровно на первый коннект к свежей комнате (schema ещё placeholder) через `isPlaceholderSchema()` helper — на втором коннекте backend уже отдаст реальную V2 schema, override автоматически выключится.
+
+### Added
+
+- `apps/backend/src/ws-protocol.ts:isPlaceholderSchema()` — структурный детектор V1 stub vs V2 schema (без импорта `@tldraw/*`).
+- `apps/backend/src/ws-protocol.ts:handleHello()` возвращает `{ reply, schemaUpgraded }` — caller (index.ts) при `schemaUpgraded` вызывает `scheduleSave`, чтобы новая schema персистировалась.
+- `apps/frontend/src/canvas/schema-placeholder.ts` — frontend-side helper, повторяет backend detection 1:1.
+
+### Architectural
+
+- Backend по-прежнему НЕ импортирует `@tldraw/*` (spec Phase 3.0 §12). `clientSchema` принимается как opaque object и хранится как-есть.
+- Race-condition fix: первый клиент к свежей комнате не падает на migrator'е, потому что (а) backend отдал V1 stub, (б) frontend детектит placeholder, (в) подменяет на свою current schema. На WS hello отправляет ту же schema → backend upgrade'ит. Все следующие циклы получают V2 → override skip'ается.
+
+### Tests
+
+296 pass (+8 vs 0.4.1 baseline): backend `ws-protocol.test.ts` +5 (hello+schema parsing, `isPlaceholderSchema` 3 case, schema-upgrade в `handleHello`), `ws-hello-replay.test.ts` +1, frontend `transport/ws.test.ts` +2 (hello frame шлёт schema).
+
+---
+
 ## 0.4.1 — 2026-05-17 — Batch 1 quick wins (post-3.0 cleanup)
 
 ### Fixed

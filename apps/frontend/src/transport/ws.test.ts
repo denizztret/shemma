@@ -89,10 +89,19 @@ type StoreListener = (entry: {
   source: string;
 }) => void;
 
+// Minimal stub for the tldraw schema — startStoreSync serialises it on open.
+const MOCK_SCHEMA = {
+  schemaVersion: 2,
+  sequences: { "com.tldraw.shape.geo": 9 },
+};
+
 class MockStore {
   listeners: StoreListener[] = [];
   applied: StoreChangeBatch[] = [];
   mergeCalls = 0;
+
+  // Minimal schema stub so startStoreSync can call schema.serialize().
+  schema = { serialize: () => MOCK_SCHEMA };
 
   listen(fn: StoreListener, _filter?: unknown) {
     this.listeners.push(fn);
@@ -161,12 +170,15 @@ describe("batchToDiff / diffToBatch", () => {
 });
 
 describe("startStoreSync — handshake", () => {
-  test("sends hello with initialVersion on open", () => {
+  test("sends hello with initialVersion and schema on open", () => {
     const t = makeDeps(7);
     t.sock.open();
     expect(t.sock.sent.length).toBe(1);
     const frame = JSON.parse(t.sock.sent[0]!);
-    expect(frame).toEqual({ kind: "hello", lastVersion: 7 });
+    expect(frame.kind).toBe("hello");
+    expect(frame.lastVersion).toBe(7);
+    // Schema should be included from editor.store.schema.serialize().
+    expect(frame.schema).toEqual(MOCK_SCHEMA);
     t.stop();
   });
 });

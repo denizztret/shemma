@@ -38,7 +38,7 @@ export type RoomState = {
 };
 
 export type WsClientMessage =
-  | { kind: "hello"; lastVersion: number }
+  | { kind: "hello"; lastVersion: number; schema?: unknown }
   | { kind: "user-change"; changes: StoreChangeBatch; clientOpId?: string };
 
 export type WsMessage =
