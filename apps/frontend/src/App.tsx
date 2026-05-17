@@ -4,7 +4,7 @@ import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
 import { importMermaid } from "./canvas/mermaid-import";
-import { backfillStoreRecords, isPlaceholderSchema } from "./canvas/schema-placeholder";
+import { backfillStoreRecords } from "./canvas/schema-placeholder";
 import { AiActivityBadge } from "./chrome/AiActivityBadge";
 import { AppChrome } from "./chrome/AppChrome";
 import { ErrorBanner } from "./chrome/ErrorBanner";
@@ -12,7 +12,7 @@ import { buildTldrawComponents } from "./chrome/TldrawComponents";
 import { UpdateBanner } from "./chrome/UpdateBanner";
 import { PromptDrawer } from "./prompts/PromptDrawer";
 import { PromptInput } from "./prompts/PromptInput";
-import { getState } from "./transport/api";
+import { getState, seedSchema } from "./transport/api";
 import { viewportReporter } from "./transport/viewport";
 import { type AiActivity, startStoreSync } from "./transport/ws";
 
@@ -113,19 +113,18 @@ export function App({ room }: { room: string }) {
     let camSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
     const hydrateAndSync = async () => {
+      // DRW-047: upload our real V2 schema before fetching state so the
+      // backend can replace its V1 placeholder stub. Best-effort — getState
+      // still works on stale rooms, и backend ignore-ит повторный seed.
+      try {
+        await seedSchema(room, editor.store.schema.serialize());
+      } catch {
+        // network blip; getState path handles legacy placeholder rooms too.
+      }
       const s = await getState();
       if (!active) return;
 
-      // Backend хранит реальную V2 схему, полученную от первого WS-клиента
-      // (DRW-040). Но на самом первом коннекте к свежей комнате schema ещё
-      // placeholder V1 stub — loadSnapshot бы упал на миграциях. Детектим
-      // placeholder и подменяем на текущую editor schema только в этом случае;
-      // на втором же подключении backend уже отдаст реальную V2 — override
-      // выключится сам.
-      const backfilledStore = backfillStoreRecords(s.store?.store);
-      const snapshot = isPlaceholderSchema(s.store?.schema)
-        ? { ...s.store, store: backfilledStore, schema: editor.store.schema.serialize() }
-        : { ...s.store, store: backfilledStore };
+      const snapshot = { ...s.store, store: backfillStoreRecords(s.store?.store) };
       editor.store.mergeRemoteChanges(() => {
         editor.loadSnapshot(snapshot);
       });
@@ -155,12 +154,17 @@ export function App({ room }: { room: string }) {
           // Server says we're too far behind to replay → re-fetch full state.
           void (async () => {
             try {
+              try {
+                await seedSchema(room, editor.store.schema.serialize());
+              } catch {
+                // best-effort: getState falls back to existing schema.
+              }
               const fresh = await getState();
               if (!active) return;
-              const freshBackfilled = backfillStoreRecords(fresh.store?.store);
-              const freshSnapshot = isPlaceholderSchema(fresh.store?.schema)
-                ? { ...fresh.store, store: freshBackfilled, schema: editor.store.schema.serialize() }
-                : { ...fresh.store, store: freshBackfilled };
+              const freshSnapshot = {
+                ...fresh.store,
+                store: backfillStoreRecords(fresh.store?.store),
+              };
               editor.store.mergeRemoteChanges(() => {
                 editor.loadSnapshot(freshSnapshot);
               });

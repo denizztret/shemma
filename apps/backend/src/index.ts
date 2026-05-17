@@ -44,7 +44,7 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", healthRoutes);
   app.route("/", versionRoutes);
   app.route("/", sessionRoutes);
-  app.route("/", stateRoutes(rooms));
+  app.route("/", stateRoutes(rooms, { onDirty }));
   app.route("/", layoutRoutes(rooms, bus, { onDirty }));
   app.route("/", promptRoutes(rooms, bus, { onDirty }));
   app.route("/", aiRoutes(rooms, bus));

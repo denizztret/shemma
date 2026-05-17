@@ -26,6 +26,30 @@ export async function getState(): Promise<StateResponse> {
   return r.json();
 }
 
+// DRW-047: upload editor's real V2 schema before getState so the initial
+// snapshot already carries a usable schema. Backend replaces only when the
+// stored schema is still the V1 placeholder (idempotent on already-real rooms).
+// Best-effort: errors are swallowed by callers — getState still works.
+export async function seedSchema(
+  roomId: string,
+  schema: unknown,
+): Promise<{
+  ok: boolean;
+  upgraded?: boolean;
+  version?: number;
+  error?: string;
+}> {
+  const r = await fetch(
+    `/api/state/seed-schema?room=${encodeURIComponent(roomId)}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ schema }),
+    },
+  );
+  return r.json();
+}
+
 // ─── Gallery API (DRW-029) ────────────────────────────────────────────────────
 
 export type RoomListItem = {

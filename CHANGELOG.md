@@ -1,3 +1,30 @@
+## 0.7.2 — 2026-05-17 — Backend seed-schema endpoint + drop App.tsx schema workaround
+
+Закрывает class of bugs типа DRW-046 — arrow.kind drift и прочие миграции tldraw 5.x — за счёт того, что backend получает реальную V2-схему ДО первого `GET /api/state`, а не уже в момент WS hello. Frontend больше не подменяет схему в `loadSnapshot`. DRW-047.
+
+### Added
+
+- **`POST /api/state/seed-schema?room=...`** — клиент аплоадит свою V2 schema до initial `GET /api/state`. Idempotent: если room уже имеет реальную (не placeholder) schema — `{ ok:true, upgraded:false }` без перезаписи. Body validation: `schema` must be non-null object, иначе 400 `schema-required`. Mirrors WS hello upgrade path (`ws-protocol.handleHello`).
+- **`@didraw/frontend.seedSchema(room, schema)`** в `apps/frontend/src/transport/api.ts` — best-effort помощник, вызывается перед `getState()` в обоих местах (`hydrateAndSync` initial + `onTruncated` recovery).
+
+### Removed
+
+- **`apps/frontend/src/canvas/schema-placeholder.ts:isPlaceholderSchema`** — больше не нужен после переноса проверки на backend.
+- **`App.tsx` schema override branch** — `isPlaceholderSchema(s.store?.schema) ? { ...snapshot, schema: editor.store.schema.serialize() } : ...`. Snapshot теперь всегда грузится как есть.
+
+### Notes
+
+- `backfillStoreRecords` (arrow `kind: "arc"` backfill для legacy 0.4.x rooms) сохранён — это независимая защита от data drift и не связана с placeholder schema upgrade.
+- Tests: 369+ pass (255 backend + 58 domain + 52 cli + 4 client) + 6 новых `routes-state-seed-schema.test.ts` (fresh upgrade, idempotent repeat, missing/null/string schema → 400, invalid room → 422).
+
+---
+
+## 0.7.1 — 2026-05-17 — Gallery action row hotfix
+
+- Gallery `RoomCard` action row теперь в одну строку (`flex-wrap: nowrap`) с компактным padding `3px 8px`.
+
+---
+
 ## 0.7.0 — 2026-05-17 — Gallery UX polish: inline rename + click-to-open + auto-suffix duplicate + SVG thumbnails
 
 User-driven UX improvements после первого реального использования Gallery.
