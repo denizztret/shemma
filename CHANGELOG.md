@@ -1,6 +1,6 @@
-## 0.8.0 (Unreleased)
+## 0.8.0 — 2026-05-17 — Backlog cleanup + simplification sweep
 
-Накопительный stabilization-релиз поверх 0.7.2: фиксы из backlog без новых phase'ов.
+Накопительный stabilization-релиз поверх 0.7.2: 4 backlog задачи (DRW-012/018/022/023) + сквозной code-simplifier pass по diff'у `0.3.3..HEAD` (Phase 3.0+). Без новых фаз.
 
 ### Added
 
@@ -15,6 +15,10 @@
 ### Changed
 
 - **Frontend: pause inbound WS during truncated-recovery** (DRW-018) — `apps/frontend/src/transport/ws.ts:setPaused(p)` API на handle'е от `startStoreSync`. `App.tsx onTruncated` вызывает `setPaused(true)` перед `seedSchema`+`getState`+`loadSnapshot`, после успешного apply — `setPaused(false)`. Inbound `replay`/`store-change` фреймы дропаются пока paused; `sync-ack`/`truncated`/`prompt`/`ai-activity` продолжают идти. Outbound user mutations не блокируются — пользователь может рисовать во время recovery. Устраняет flicker от straggler-патчей. 5 новых тестов в `ws.test.ts`.
+
+### Internal
+
+- **Code-simplifier pass по diff `0.3.3..HEAD`** — 9 refactor commits, net `-162 LOC` across 13 файлов без изменения поведения. Извлечены DRY helpers: `makeArrowShape`/`makeArrowBindings` (compile.ts), `fetchAndLoadSnapshot` (App.tsx hydrate/recovery), `findRoomFile` (routes/rooms.ts), `isEmptyBatch` (store-ops.ts), `die`/`printAndExitOnFail`/`dieRequireFlag` (CLI usage errors), `writeLines` (logs command). Удалены unused store-types helpers + dead layout flag + unused envelope re-export. `runLayout`/WS protocol/migrate-v2 — намеренно НЕ трогали (correctness-sensitive). 428 tests pass, tsc clean.
 
 ---
 
