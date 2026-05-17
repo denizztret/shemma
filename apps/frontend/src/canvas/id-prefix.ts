@@ -24,6 +24,9 @@ export function findShapeIdByDidrawName(
 }
 
 /** Прочитать `meta.didrawName` со shape'а — undefined если user-drawn без имени. */
+// TODO: rename to `shemmaName` with backfill after 1.0 — currently kept as
+// `didrawName` because existing room JSON envelopes use this persistence key;
+// renaming without backfill would silently break loaded rooms.
 export function getDidrawName(shape: {
   meta?: { didrawName?: string };
 }): string | undefined {

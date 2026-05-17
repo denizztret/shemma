@@ -1,6 +1,6 @@
 # Known issues
 
-> **Применимо к:** di.draw `0.0.1` (2026-05-15).
+> **Применимо к:** shemma `0.0.1` (2026-05-15).
 > Документ описывает поведение текущей версии. Поведение может измениться — сверяйтесь с [CHANGELOG.md](../../CHANGELOG.md) для следующих версий.
 
 ## ✅ Закрыто в `0.0.1`
@@ -47,7 +47,7 @@
 
 **Possible fix:**
 1. **(Текущая сессия)** — повторный запуск с большим max-iterations.
-2. **(Stand-alone)** — `didraw watch` CLI-команда, дёргающая Anthropic API напрямую (требует `ANTHROPIC_API_KEY`). Backlog.
+2. **(Stand-alone)** — `shemma watch` CLI-команда, дёргающая Anthropic API напрямую (требует `ANTHROPIC_API_KEY`). Backlog.
 
 ---
 
@@ -87,7 +87,7 @@
 
 ### B2 — Push-канал prompts → AI realtime отсутствует (без watcher'а)
 
-**Симптом:** User создаёт prompt → backend сохраняет → frontend `PromptDrawer` обновляется. Но **AI узнаёт о новом prompt только при следующем `/draw` invocation** или явном `didraw prompts list` — если не запущен persistent watcher.
+**Симптом:** User создаёт prompt → backend сохраняет → frontend `PromptDrawer` обновляется. Но **AI узнаёт о новом prompt только при следующем `/draw` invocation** или явном `shemma prompts list` — если не запущен persistent watcher.
 
 **Severity:** Medium для UX.
 
@@ -99,7 +99,7 @@
 
 ## ℹ️ Не баг (поведение by-design)
 
-- **PromptDrawer показывает prompts из прошлой сессии** — persistent в `<storageDir>/<room>.json`. Per spec §3.6 prompts persist между sessions. Очистка — `🗑 N` в drawer (purge non-pending) или `didraw prompts purge`.
+- **PromptDrawer показывает prompts из прошлой сессии** — persistent в `<storageDir>/<room>.json`. Per spec §3.6 prompts persist между sessions. Очистка — `🗑 N` в drawer (purge non-pending) или `shemma prompts purge`.
 - **`Get a license for production` watermark** — tldraw SDK free-tier. Решается покупкой commercial license, вне scope MVP.
 - **`fill: "semi"` выглядит почти прозрачным** — правильное поведение tldraw (semi = полупрозрачная заливка цветом обводки). Для plain-цветной заливки используй `fill: "solid"`.
 - **`window.__editor` доступен только в dev-сборке** — gated `import.meta.env.DEV`. В release-bundle tree-shaken.

@@ -18,7 +18,7 @@
 // Edges для ELK реконструируются по binding'ам (typeName === 'binding').
 // Если у arrow != 2 bindings (висячая) — стрелка пропускается.
 
-import { modeToElkOptions, type LayoutMode, type Spacing } from "@didraw/domain";
+import { modeToElkOptions, type LayoutMode, type Spacing } from "@shemma/domain";
 import elkWorkerPath from "../../node_modules/elkjs/lib/elk-worker.min.js" with { type: "file" };
 import type { StoreChangeBatch, TLRecord, TLStoreSnapshot } from "../store-types";
 import type { ElementId, LayoutHint } from "./types";

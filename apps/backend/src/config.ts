@@ -5,6 +5,31 @@ import { basename, join } from "node:path";
 const VALID_PROFILES = ["dev", "release", "debug"] as const;
 export type Profile = (typeof VALID_PROFILES)[number];
 
+// Legacy env-var compatibility (0.9.x → 0.10.0 rename didraw → shemma).
+// Single backfill layer: if user still has DIDRAW_* in scripts/shell rc, we
+// accept it once and emit a deprecation warning. Removed in 1.0.0.
+const LEGACY_ENV_ALIASES: Record<string, string> = {
+  SHEMMA_PROFILE: "DIDRAW_PROFILE",
+  SHEMMA_PORT: "DIDRAW_PORT",
+  SHEMMA_STORAGE_DIR: "DIDRAW_STORAGE_DIR",
+  SHEMMA_LOG_LEVEL: "DIDRAW_LOG_LEVEL",
+  SHEMMA_PROJECT_DIR: "DIDRAW_PROJECT_DIR",
+};
+const _deprecationWarned = new Set<string>();
+function envWithLegacy(name: keyof typeof LEGACY_ENV_ALIASES): string | undefined {
+  const v = process.env[name];
+  if (v !== undefined) return v;
+  const legacy = LEGACY_ENV_ALIASES[name];
+  const legacyValue = legacy ? process.env[legacy] : undefined;
+  if (legacyValue !== undefined && !_deprecationWarned.has(legacy)) {
+    _deprecationWarned.add(legacy);
+    console.warn(
+      `[shemma] ${legacy} is deprecated; use ${name} instead (legacy alias accepted until 1.0.0)`,
+    );
+  }
+  return legacyValue;
+}
+
 const portByProfile: Record<Profile, number> = {
   dev: 8788,
   release: 8787,
@@ -22,10 +47,10 @@ const logLevelByProfile: Record<Profile, "debug" | "info" | "error"> = {
 };
 
 export function getProfile(): Profile {
-  const raw = process.env.DIDRAW_PROFILE ?? "release";
+  const raw = envWithLegacy("SHEMMA_PROFILE") ?? "release";
   if (!VALID_PROFILES.includes(raw as Profile)) {
     throw new Error(
-      `Invalid DIDRAW_PROFILE: "${raw}". Expected one of: ${VALID_PROFILES.join("|")}`,
+      `Invalid SHEMMA_PROFILE: "${raw}". Expected one of: ${VALID_PROFILES.join("|")}`,
     );
   }
   return raw as Profile;
@@ -36,7 +61,7 @@ function parsePort(raw: string | undefined, fallback: number): number {
   const n = Number(raw);
   if (!Number.isInteger(n) || n <= 0 || n > 65535) {
     throw new Error(
-      `Invalid DIDRAW_PORT: "${raw}". Expected positive integer ≤ 65535`,
+      `Invalid SHEMMA_PORT: "${raw}". Expected positive integer ≤ 65535`,
     );
   }
   return n;
@@ -64,7 +89,7 @@ export function slugifyProject(input: string | undefined): string {
 
 export function resolveProjectSlug(): string {
   return slugifyProject(
-    process.env.DIDRAW_PROJECT_DIR ??
+    envWithLegacy("SHEMMA_PROJECT_DIR") ??
       process.env.CLAUDE_PROJECT_DIR ??
       process.cwd(),
   );
@@ -72,7 +97,7 @@ export function resolveProjectSlug(): string {
 
 export function resolveWorkspaceDir(): string {
   return (
-    process.env.DIDRAW_PROJECT_DIR ??
+    envWithLegacy("SHEMMA_PROJECT_DIR") ??
     process.env.CLAUDE_PROJECT_DIR ??
     process.cwd()
   );
@@ -82,9 +107,9 @@ export function getConfig() {
   const profile = getProfile();
   return {
     profile,
-    port: parsePort(process.env.DIDRAW_PORT, portByProfile[profile]),
+    port: parsePort(envWithLegacy("SHEMMA_PORT"), portByProfile[profile]),
     storageDir:
-      process.env.DIDRAW_STORAGE_DIR ??
+      envWithLegacy("SHEMMA_STORAGE_DIR") ??
       join(
         homedir(),
         ".claude",
@@ -92,7 +117,7 @@ export function getConfig() {
         resolveProjectSlug(),
         storageSubdir[profile],
       ),
-    logLevel: (process.env.DIDRAW_LOG_LEVEL ?? logLevelByProfile[profile]) as
+    logLevel: (envWithLegacy("SHEMMA_LOG_LEVEL") ?? logLevelByProfile[profile]) as
       | "debug"
       | "info"
       | "error",
@@ -120,4 +145,5 @@ export const config = new Proxy({} as ReturnType<typeof getConfig>, {
 // Не вызывать в production-коде.
 export function __resetConfigForTests(): void {
   _cache = null;
+  _deprecationWarned.clear();
 }

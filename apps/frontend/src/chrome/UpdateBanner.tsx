@@ -29,7 +29,7 @@ export function UpdateBanner() {
           borderRadius: tokens.radius.sm,
         }}
       >
-        didraw update
+        shemma update
       </code>{" "}
       to upgrade
     </div>

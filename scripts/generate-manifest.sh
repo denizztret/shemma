@@ -3,15 +3,15 @@ set -euo pipefail
 
 VERSION="${1:?usage: $0 <version> [channel]}"
 CHANNEL="${2:-stable}"
-BASE_URL="${MANIFEST_BASE_URL:-https://github.com/example/di.draw/releases/download/v$VERSION}"
+BASE_URL="${MANIFEST_BASE_URL:-https://github.com/example/shemma/releases/download/v$VERSION}"
 
 cd release
 
 # Pairs are "platform:filename" — bash 3.2-compatible (no associative arrays).
 PAIRS=(
-  "darwin-arm64:didraw-darwin-arm64"
-  "darwin-x64:didraw-darwin-x64"
-  "linux-x64:didraw-linux-x64"
+  "darwin-arm64:shemma-darwin-arm64"
+  "darwin-x64:shemma-darwin-x64"
+  "linux-x64:shemma-linux-x64"
 )
 
 assets="["

@@ -1,4 +1,4 @@
-# di.draw — Backlog
+# shemma — Backlog
 
 > **Что это.** Список независимых задач для будущих спринтов. Каждая задача — самостоятельная: можно делать в одиночку, без других открытых items этого файла. Дополнения приветствуются по мере находки багов.
 >
@@ -27,7 +27,7 @@
 
 - **Severity:** minor (cosmetic; не ломает функциональность, но засоряет console).
 - **Repro:** Открыть frontend, посмотреть Network — `GET /favicon.ico → 404`.
-- **Expected:** Favicon отдаётся (любой — di.draw логотип или нейтральный).
+- **Expected:** Favicon отдаётся (любой — shemma логотип или нейтральный).
 - **Actual:** 404 в console errors каждой загрузки.
 - **Suggested fix:** Положить `apps/frontend/public/favicon.ico` (или `.svg`); Vite автоматически отдаст.
 - **Files:** `apps/frontend/public/` (создать), `apps/frontend/index.html` (опционально `<link rel="icon">`).
@@ -36,10 +36,10 @@
 
 - **Severity:** **CRITICAL** — ломает основной AI workflow для домена.
 - **Repro:**
-  1. `didraw define service api --label "API Gateway"` (зум 335%, узел в (10,10)).
-  2. `didraw define datastore db --label "PostgreSQL"` — узел db ставится в (10,120), api остаётся в (10,10) (ok так далеко).
-  3. `didraw define service worker; define queue queue; connect api queue; connect queue worker; group worker,queue --as boundary --name async-side`.
-  4. `didraw layout --mode layered-lr --spacing loose`.
+  1. `shemma define service api --label "API Gateway"` (зум 335%, узел в (10,10)).
+  2. `shemma define datastore db --label "PostgreSQL"` — узел db ставится в (10,120), api остаётся в (10,10) (ok так далеко).
+  3. `shemma define service worker; define queue queue; connect api queue; connect queue worker; group worker,queue --as boundary --name async-side`.
+  4. `shemma layout --mode layered-lr --spacing loose`.
   5. Curl `GET /api/state` → почти все узлы (api, worker, queue) в координатах **(10,10)**. Только `db` в (10,120). Визуально 3 узла перекрываются в одной точке.
 - **Expected:** Layered-lr раскладка разносит узлы по horizontal lanes; группа async-side обрамляет worker+queue; нет overlap'а.
 - **Actual:** Backend записывает `meta.position: {x:10,y:10}` в КАЖДЫЙ AI-defined node при первом layout pass (`apps/backend/src/routes/domain.ts:250`, "Per spec §3.6.4: meta.position carries last layout-known coords"). Последующий ELK layered ignore'ит `elk.position` → app-level pin post-process читает `meta.position` как pin marker → НЕ двигает узел. Узлы зависают в (10,10).
@@ -86,22 +86,22 @@
 
 - **Severity:** **CRITICAL** для multi-room flows.
 - **Repro:**
-  1. `didraw apply --stdin --room second <<< '{"actions":[{"kind":"define","role":"service","name":"X"}]}'` → response 200 + applied successfully.
-  2. `didraw rooms list` → нет комнаты `second`. Все mutations попали в `default` (виден affected list с старыми шейпами default'а).
+  1. `shemma apply --stdin --room second <<< '{"actions":[{"kind":"define","role":"service","name":"X"}]}'` → response 200 + applied successfully.
+  2. `shemma rooms list` → нет комнаты `second`. Все mutations попали в `default` (виден affected list с старыми шейпами default'а).
   3. Тот же эффект без `--room` (когда `"room"` положили в body JSON).
 - **Expected:** `--room <id>` или body.room меняет target room для apply; rooms list показывает новую комнату.
 - **Actual:** CLI `apply` не парсит `--room`, body.room игнорируется HTTP-route `/api/domain` (или body.room не передаётся в route'-router). Всё пишется в default.
-- **Suggested fix:** Проверить в `packages/didraw-cli/src/index.ts:apply` — передаётся ли `--room` как `?room=<id>` query param. Проверить в `apps/backend/src/routes/domain.ts` — читается ли `query.room` для маршрутизации.
-- **Files:** `packages/didraw-cli/src/index.ts`, `apps/backend/src/routes/domain.ts`.
+- **Suggested fix:** Проверить в `packages/shemma-cli/src/index.ts:apply` — передаётся ли `--room` как `?room=<id>` query param. Проверить в `apps/backend/src/routes/domain.ts` — читается ли `query.room` для маршрутизации.
+- **Files:** `packages/shemma-cli/src/index.ts`, `apps/backend/src/routes/domain.ts`.
 - **Workaround:** Использовать `rooms import` для создания новой комнаты. Define/connect не имеют `--room` опции и привязаны к default.
 
 ### D11 — Все CLI domain команды (`define`, `connect`, `group`, ...) не поддерживают target room
 
 - **Severity:** **CRITICAL** для multi-room AI workflows.
-- **Repro:** `didraw --help` не показывает `--room` для define/connect/group/note/layout/delete. Команда `define service X` всегда пишет в default.
+- **Repro:** `shemma --help` не показывает `--room` для define/connect/group/note/layout/delete. Команда `define service X` всегда пишет в default.
 - **Expected:** Все domain команды должны принимать `--room <id>`, по умолчанию = `default`.
-- **Suggested fix:** Добавить `--room` опцию во все domain dispatcher branches в `packages/didraw-cli/src/index.ts`. Передавать в HTTP request как `?room=<id>`.
-- **Files:** `packages/didraw-cli/src/index.ts`, `packages/didraw-client/src/index.ts` (HTTP wrapper).
+- **Suggested fix:** Добавить `--room` опцию во все domain dispatcher branches в `packages/shemma-cli/src/index.ts`. Передавать в HTTP request как `?room=<id>`.
+- **Files:** `packages/shemma-cli/src/index.ts`, `packages/shemma-client/src/index.ts` (HTTP wrapper).
 - **Related:** D10.
 
 ### D8 — Polling `/api/version` каждые ~5ms
@@ -181,7 +181,7 @@
 - **Priority:** Minor.
 - **Effort:** S.
 - **Why:** Два разных `findGroupByName` (`routes/domain.ts` vs `domain/compile.ts`) с разной семантикой матчинга — граничные случаи рендерятся непредсказуемо.
-- **Scope:** Унифицированный matcher в `apps/backend/src/domain/finders.ts` (или в `@didraw/domain`); оба сайта используют его.
+- **Scope:** Унифицированный matcher в `apps/backend/src/domain/finders.ts` (или в `@shemma/domain`); оба сайта используют его.
 - **Acceptance:** Один источник правды; добавить тест на граничный кейс (`meta.name="A"` + `label="B"`).
 - **Files:** `apps/backend/src/domain/finders.ts` (new), `apps/backend/src/routes/domain.ts`, `apps/backend/src/domain/compile.ts`.
 
@@ -251,7 +251,7 @@
 - **Trigger:** brainstorm.
 - **Effort:** L (1-2 недели).
 - **Why:** Тонкий MCP-adapter поверх `POST /api/domain` (не raw `/api/patch`), чтобы LLM-клиенты (Claude/Codex/corporate) работали с canvas через Model Context Protocol без CLI-обёртки.
-- **Hints:** см. устаревший `docs/handoff/mcp-launch-brief.md` как стартовую точку. Tools surface: define/connect/group/note/layout/delete/context (отражение domain actions). Resource: `didraw://room/<id>/state`. Transport: stdio + HTTP/SSE.
+- **Hints:** см. устаревший `docs/handoff/mcp-launch-brief.md` как стартовую точку. Tools surface: define/connect/group/note/layout/delete/context (отражение domain actions). Resource: `shemma://room/<id>/state`. Transport: stdio + HTTP/SSE.
 - **Dependencies:** none (текущий `/api/domain` уже готов).
 
 ### P-2.4 — Import registry → 0.5.0

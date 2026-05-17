@@ -29,7 +29,7 @@ let persistence: FilePersistence;
 let rooms: Rooms;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "didraw-flush-"));
+  dir = mkdtempSync(join(tmpdir(), "shemma-flush-"));
   persistence = new FilePersistence(dir);
   rooms = new Rooms({
     load: (id) => persistence.load(id),

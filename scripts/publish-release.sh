@@ -9,7 +9,7 @@ CHANNEL="${2:-stable}"
 
 if ! command -v gh &>/dev/null; then
   echo "gh CLI not found — skipping GitHub Release upload"
-  echo "Manual upload: release/didraw-*  release/release-manifest.json"
+  echo "Manual upload: release/shemma-*  release/release-manifest.json"
   exit 0
 fi
 
@@ -19,6 +19,6 @@ git push --tags
 gh release create "v$VERSION" \
   --title "v$VERSION" \
   --notes "Release v$VERSION on channel $CHANNEL" \
-  release/didraw-* release/release-manifest.json
+  release/shemma-* release/release-manifest.json
 
 echo "Published v$VERSION"

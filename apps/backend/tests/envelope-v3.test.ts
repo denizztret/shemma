@@ -35,7 +35,7 @@ describe("envelope v3", () => {
     expect(j.version).toBe(0);
     expect(typeof j.lastTouched).toBe("string");
     expect(typeof j.elementCount).toBe("number");
-    expect(j.didraw.didrawVersion).toBeString();
+    expect(j.shemma.shemmaVersion).toBeString();
     expect(j.store.schema).toBeDefined();
     expect(j.store.store["document:document"]).toBeDefined();
     expect(Array.isArray(j.opLog)).toBe(true);

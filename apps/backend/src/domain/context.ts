@@ -3,7 +3,7 @@
 // snapshot БЕЗ геометрии по умолчанию (≤8KB на 100 элементов). Backend
 // читает opaque TLRecord-структуры, никаких @tldraw/* импортов.
 
-import type { ConnectionKind, Role } from "@didraw/domain";
+import type { ConnectionKind, Role } from "@shemma/domain";
 import type { TLRecord, TLStoreSnapshot } from "../store-types";
 import type { Prompt } from "../types";
 

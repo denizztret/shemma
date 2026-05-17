@@ -81,7 +81,7 @@ describe("Rooms — linkedSession", () => {
   });
 
   test("linkedSession survives persistence roundtrip", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "didraw-linked-"));
+    const dir = mkdtempSync(join(tmpdir(), "shemma-linked-"));
     try {
       process.env.CLAUDE_SESSION_ID = "persist-session";
       __resetConfigForTests();
@@ -173,7 +173,7 @@ describe("Rooms", () => {
   });
 
   test("evictIdle flushes pending debounce and removes", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "didraw-evict-"));
+    const dir = mkdtempSync(join(tmpdir(), "shemma-evict-"));
     try {
       const persistence = new FilePersistence(dir);
       const r2 = new Rooms({
@@ -204,7 +204,7 @@ describe("Rooms", () => {
   });
 
   test("evictIdle cancels pending debounce (no double-write after flushAll)", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "didraw-evict-cancel-"));
+    const dir = mkdtempSync(join(tmpdir(), "shemma-evict-cancel-"));
     try {
       const persistence = new FilePersistence(dir);
       const r2 = new Rooms({

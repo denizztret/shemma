@@ -203,7 +203,7 @@ export function Gallery() {
               color: tokens.color.text,
             }}
           >
-            di.draw
+            shemma
           </span>
           {workspaceDir && (
             <span

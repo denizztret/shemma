@@ -18,7 +18,7 @@ import { Rooms } from "../src/rooms";
 
 let dir: string;
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "didraw-mig-"));
+  dir = mkdtempSync(join(tmpdir(), "shemma-mig-"));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -33,7 +33,7 @@ describe("rooms.load migration", () => {
         version: 0,
         lastTouched: new Date().toISOString(),
         elementCount: 0,
-        didraw: { didrawVersion: "0.4.0", createdAt: new Date().toISOString() },
+        shemma: { didrawVersion: "0.4.0", createdAt: new Date().toISOString() },
         store: {
           schema: { schemaVersion: 1, storeVersion: 4, recordVersions: {} },
           store: {

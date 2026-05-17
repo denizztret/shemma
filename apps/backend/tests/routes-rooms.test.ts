@@ -10,7 +10,7 @@ import type { RoomState } from "../src/types";
 let dir: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "didraw-rt-"));
+  dir = mkdtempSync(join(tmpdir(), "shemma-rt-"));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -171,7 +171,7 @@ describe("GET /api/rooms", () => {
 
   test("rooms have projectDir + projectName populated when env set", async () => {
     const { __resetConfigForTests } = await import("../src/config");
-    process.env.DIDRAW_PROJECT_DIR = "/home/user/my-project";
+    process.env.SHEMMA_PROJECT_DIR = "/home/user/my-project";
     __resetConfigForTests();
     try {
       // Seed a room that already exists on disk without projectDir.
@@ -197,7 +197,7 @@ describe("GET /api/rooms", () => {
       expect(room?.projectDir).toBe("/home/user/my-project");
       expect(room?.projectName).toBe("my-project");
     } finally {
-      delete process.env.DIDRAW_PROJECT_DIR;
+      delete process.env.SHEMMA_PROJECT_DIR;
       __resetConfigForTests();
     }
   });

@@ -13,7 +13,7 @@ Phase 3.0 архитектурный pivot оформил рабочую мод�
 
 1. Через 2 месяца перерисовать complex visual context — это десятки минут работы. Replicability ≠ free.
 2. Если room привязана к активной сессии Claude Code (`CLAUDE_SESSION_ID === roomId`), агент может ссылаться на её содержимое как на анкор. Удаление такой комнаты по ошибке стирает контекст работы агента.
-3. Текущий `DELETE /api/rooms/:id { confirm: true }` делает hard unlink моментально, без warning. CLI `didraw rooms rm <id>` — то же самое.
+3. Текущий `DELETE /api/rooms/:id { confirm: true }` делает hard unlink моментально, без warning. CLI `shemma rooms rm <id>` — то же самое.
 
 Phase E (Rooms Gallery, DRW-029) добавляет web UI для каталога комнат. В UI delete будет лёгким (one click + confirm dialog). Принцип: чем легче триггерить, тем дороже recovery без подстраховки. Нужна явная политика, фиксирующая баланс convenience vs safety.
 
@@ -23,9 +23,9 @@ Phase E (Rooms Gallery, DRW-029) добавляет web UI для каталог
 
 | Layer | UI action | CLI command | Effect | Linked check |
 |-------|-----------|-------------|--------|--------------|
-| Soft (UI default) | Delete | `didraw rooms archive <id>` (existing) | move file to `.archive/` (atomic rename) | warning if linked, no block |
-| Hard (UI explicit) | Delete permanently (only from Archive view) | `didraw rooms rm <id> --hard --confirm` | actual unlink | 409 if linked to active session, bypass with `--force` |
-| Hard bulk | Empty archive (button in Archive view) | `didraw rooms purge-archive --confirm` | unlink all in `.archive/` | none (already archived) |
+| Soft (UI default) | Delete | `shemma rooms archive <id>` (existing) | move file to `.archive/` (atomic rename) | warning if linked, no block |
+| Hard (UI explicit) | Delete permanently (only from Archive view) | `shemma rooms rm <id> --hard --confirm` | actual unlink | 409 if linked to active session, bypass with `--force` |
+| Hard bulk | Empty archive (button in Archive view) | `shemma rooms purge-archive --confirm` | unlink all in `.archive/` | none (already archived) |
 
 ### Linkage detection (implicit, MVP)
 
@@ -41,7 +41,7 @@ CLI undo не реализуется (CLI users знают что делают; 
 
 ### CLI semantics — Variant A (no breaking change)
 
-`didraw rooms rm <id>` **остаётся hard delete** (как сейчас), backward-compat preserved. Soft delete делается через `didraw rooms archive <id>` (тоже как сейчас). UI default == archive, но это не транслируется на CLI семантику. Closes DRW-034 with rationale: CLI users = power users, automation скрипты могут полагаться на текущую семантику; меняем дефолт UI, не CLI.
+`shemma rooms rm <id>` **остаётся hard delete** (как сейчас), backward-compat preserved. Soft delete делается через `shemma rooms archive <id>` (тоже как сейчас). UI default == archive, но это не транслируется на CLI семантику. Closes DRW-034 with rationale: CLI users = power users, automation скрипты могут полагаться на текущую семантику; меняем дефолт UI, не CLI.
 
 ### Hard delete на linked room
 
@@ -75,10 +75,10 @@ Power user может удалить даже linked, но через двойн
 
 ### CLI
 
-- `didraw rooms rm <id>` — **unchanged** (hard delete). Old behavior preserved.
-- `didraw rooms rm <id> --hard --force --confirm` — hard delete linked room, bypass 409.
-- `didraw rooms archive <id>` — unchanged.
-- `didraw rooms purge-archive --confirm` — new command, calls `POST /api/rooms/purge-archive`.
+- `shemma rooms rm <id>` — **unchanged** (hard delete). Old behavior preserved.
+- `shemma rooms rm <id> --hard --force --confirm` — hard delete linked room, bypass 409.
+- `shemma rooms archive <id>` — unchanged.
+- `shemma rooms purge-archive --confirm` — new command, calls `POST /api/rooms/purge-archive`.
 
 ### Test coverage required
 

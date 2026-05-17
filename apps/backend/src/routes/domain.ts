@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { LayoutMode, Spacing } from "@didraw/domain";
+import type { LayoutMode, Spacing } from "@shemma/domain";
 import { config } from "../config";
 import { compile } from "../domain/compile";
 import { runLayout } from "../domain/layout";

@@ -1,6 +1,6 @@
 export type Camera = { x: number; y: number; z: number };
 
-const KEY_PREFIX = "didraw:camera:";
+const KEY_PREFIX = "shemma:camera:";
 
 function key(room: string): string {
   return `${KEY_PREFIX}${room}`;

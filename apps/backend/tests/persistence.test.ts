@@ -26,7 +26,7 @@ function seedShape(s: RoomState, id: string, name: string) {
 
 let dir: string;
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "didraw-"));
+  dir = mkdtempSync(join(tmpdir(), "shemma-"));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 

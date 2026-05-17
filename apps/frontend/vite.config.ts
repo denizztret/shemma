@@ -3,8 +3,8 @@ import { defineConfig, loadEnv } from "vite";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  // Vite dev → ходит на backend profile=dev, default 8788. Можно переопределить env DIDRAW_PORT.
-  const backendPort = Number(env.DIDRAW_PORT ?? 8788);
+  // Vite dev → ходит на backend profile=dev, default 8788. Можно переопределить env SHEMMA_PORT.
+  const backendPort = Number(env.SHEMMA_PORT ?? 8788);
   return {
     plugins: [react()],
     server: {

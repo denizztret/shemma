@@ -43,20 +43,20 @@ describe("slugifyProject", () => {
 
 describe("resolveProjectSlug", () => {
   const ORIG = {
-    DIDRAW: process.env.DIDRAW_PROJECT_DIR,
+    DIDRAW: process.env.SHEMMA_PROJECT_DIR,
     CLAUDE: process.env.CLAUDE_PROJECT_DIR,
   };
   beforeEach(() => {
-    delete process.env.DIDRAW_PROJECT_DIR;
+    delete process.env.SHEMMA_PROJECT_DIR;
     delete process.env.CLAUDE_PROJECT_DIR;
   });
   afterEach(() => {
-    if (ORIG.DIDRAW !== undefined) process.env.DIDRAW_PROJECT_DIR = ORIG.DIDRAW;
+    if (ORIG.DIDRAW !== undefined) process.env.SHEMMA_PROJECT_DIR = ORIG.DIDRAW;
     if (ORIG.CLAUDE !== undefined) process.env.CLAUDE_PROJECT_DIR = ORIG.CLAUDE;
   });
 
-  test("DIDRAW_PROJECT_DIR wins over CLAUDE_PROJECT_DIR", () => {
-    process.env.DIDRAW_PROJECT_DIR = "/explicit/path";
+  test("SHEMMA_PROJECT_DIR wins over CLAUDE_PROJECT_DIR", () => {
+    process.env.SHEMMA_PROJECT_DIR = "/explicit/path";
     process.env.CLAUDE_PROJECT_DIR = "/claude/path";
     expect(resolveProjectSlug()).toBe(slugifyProject("/explicit/path"));
   });

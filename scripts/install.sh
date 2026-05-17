@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# install.sh — create a symlink for the didraw binary in $HOME/.local/bin (or a custom prefix).
+# install.sh — create a symlink for the shemma binary in $HOME/.local/bin (or a custom prefix).
 #
 # Usage:
 #   ./scripts/install.sh [--prefix <dir>] [<binary-path>]
 #
 # Arguments:
-#   <binary-path>   Path to the didraw binary (defaults to release/didraw-<os>-<arch>
-#                   relative to the script's parent directory, or DIDRAW_BIN env var).
+#   <binary-path>   Path to the shemma binary (defaults to release/shemma-<os>-<arch>
+#                   relative to the script's parent directory, or SHEMMA_BIN env var).
 #   --prefix <dir>  Install directory (default: $HOME/.local/bin).
 #
 # Exit codes: 0 success, 1 error.
@@ -48,7 +48,7 @@ done
 
 # Resolve binary path
 if [[ -z "$BINARY" ]]; then
-  BINARY="${DIDRAW_BIN:-}"
+  BINARY="${SHEMMA_BIN:-}"
 fi
 
 if [[ -z "$BINARY" ]]; then
@@ -60,14 +60,14 @@ if [[ -z "$BINARY" ]]; then
     aarch64|arm64) ARCH="arm64" ;;
     *)       ARCH="$ARCH" ;;
   esac
-  BINARY="${REPO_ROOT}/release/didraw-${OS}-${ARCH}"
+  BINARY="${REPO_ROOT}/release/shemma-${OS}-${ARCH}"
 fi
 
 # Validate binary
 if [[ ! -f "$BINARY" ]]; then
   echo "error: binary not found: $BINARY" >&2
   echo "  Build it first with: ./scripts/build-release.sh <version> stable" >&2
-  echo "  Or specify the path: $0 /path/to/didraw" >&2
+  echo "  Or specify the path: $0 /path/to/shemma" >&2
   exit 1
 fi
 
@@ -83,7 +83,7 @@ if [[ ! -d "$PREFIX" ]]; then
   echo "Created directory: $PREFIX"
 fi
 
-LINK="${PREFIX}/didraw"
+LINK="${PREFIX}/shemma"
 
 # Remove existing symlink or file
 if [[ -L "$LINK" ]]; then

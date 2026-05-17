@@ -407,7 +407,7 @@ export function migrateV2ToV3(v2: V2Envelope): EnvelopeV3 {
     version: v2.version,
     lastTouched: v2.lastTouched,
     elementCount: Object.values(store).filter((r) => r.typeName === "shape").length,
-    didraw: {
+    shemma: {
       didrawVersion: "0.4.0",
       createdAt: new Date().toISOString(),
     },

@@ -37,8 +37,8 @@ describe("workspace isolation", () => {
   let dir2: string;
 
   beforeEach(() => {
-    dir1 = mkdtempSync(join(tmpdir(), "didraw-iso-1-"));
-    dir2 = mkdtempSync(join(tmpdir(), "didraw-iso-2-"));
+    dir1 = mkdtempSync(join(tmpdir(), "shemma-iso-1-"));
+    dir2 = mkdtempSync(join(tmpdir(), "shemma-iso-2-"));
   });
 
   afterEach(() => {
