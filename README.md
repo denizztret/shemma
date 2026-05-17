@@ -23,10 +23,13 @@ AI-driven canvas board для Claude Code сессий. tldraw 5.x frontend + Bu
 
 ```bash
 bun install
-bun --cwd packages/didraw-cli src/index.ts open scratch
+didraw                                  # zero-arg: ensure daemon в cwd .didraw/ + open browser
+didraw open scratch                     # то же, но с конкретным room override
 ```
 
-Откроется `http://localhost:8787/?room=scratch` — рисуй вручную.
+`didraw` без аргументов поднимает daemon с **project-local** storage в `<cwd>/.didraw/` (subdir `canvas-dev/` для dev, `canvas/` для release/debug) и открывает браузер на `?room=default`. Если daemon уже запущен на другом storage — `exit 1` с понятным error.
+
+Storage precedence: `--storage <path>` > `DIDRAW_STORAGE_DIR` env > auto-cwd `.didraw/`.
 
 ## В Claude Code сессии
 
@@ -50,8 +53,10 @@ bun --cwd packages/didraw-cli src/index.ts open scratch
 Lifecycle:
 
 ```bash
-didraw daemon ensure | start | stop [--all] | status [--profile dev|release|debug]
-didraw open <room>
+didraw                                              # ensure daemon on cwd .didraw/ + open browser
+didraw open [<room>] [--storage <path>] [--no-browser]
+                                                    # explicit form; optional room override
+didraw daemon ensure | start [--storage <path>] | stop [--all] | status [--profile dev|release|debug]
 didraw ps                                           # JSON status for all profiles
 didraw rooms list
 didraw rooms export <room> --to <path>

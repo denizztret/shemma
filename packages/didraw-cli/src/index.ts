@@ -72,6 +72,12 @@ const cmd = argv[0];
 const sub = argv[1];
 
 async function main() {
+  // Help flag: explicit `--help` или `-h` (любая позиция в argv) → usage + exit 0.
+  if (argv.includes("--help") || argv.includes("-h")) {
+    usage();
+    process.exit(0);
+  }
+
   if (cmd === "internal-server") {
     const { startServer } = await import("@didraw/backend/src/index");
     const { getConfig } = await import("@didraw/backend/src/config");
@@ -163,12 +169,32 @@ async function main() {
     usage();
     process.exit(1);
   }
-  if (cmd === "open") {
-    if (!argv[1]) {
-      usage();
-      process.exit(1);
+  // Zero-arg `didraw` === `didraw open` (no room → "default").
+  // `didraw open <room>` overrides room. Also matches when user passes only
+  // flags (e.g. `didraw --storage /foo`) — first token starts with `--`,
+  // there's no positional command yet.
+  const isOpenCmd =
+    cmd === "open" || cmd === undefined || (cmd !== undefined && cmd.startsWith("--"));
+  if (isOpenCmd) {
+    const subArgs = cmd === "open" ? argv.slice(1) : argv;
+    const { storage, errors } = parseStorageArg(subArgs, process.cwd());
+    if (errors.length > 0) die(errors[0]!);
+    let noBrowser = false;
+    let room: string | undefined;
+    for (let i = 0; i < subArgs.length; i++) {
+      const a = subArgs[i]!;
+      if (a === "--no-browser") {
+        noBrowser = true;
+        continue;
+      }
+      if (a === "--storage") {
+        i++; // already consumed by parseStorageArg, skip the value
+        continue;
+      }
+      if (a.startsWith("--")) continue; // unknown flag — ignore for fwd-compat
+      if (room === undefined) room = a;
     }
-    return open(argv[1], profile);
+    return open(profile, { room, storage, noBrowser });
   }
   if (cmd === "rooms") {
     const sub = argv[1];
@@ -334,9 +360,14 @@ async function main() {
 function usage() {
   console.log(`didraw <command> [--profile dev|release|debug] [--debug]
 
+Default (zero-arg):
+  didraw                                      # ensure daemon on cwd .didraw/ + open browser
+  didraw open [<room>] [--storage <path>] [--no-browser]
+                                              # same with optional room override
+                                              # storage precedence: --storage > DIDRAW_STORAGE_DIR > cwd/.didraw
+
 Lifecycle:
   daemon start [--storage <path>] | stop [--all] | status | ensure
-  open <room>
   ps                                          # JSON status for all profiles
   rooms list
   rooms archive       <id>

@@ -1,3 +1,25 @@
+## 0.9.0 (Unreleased) — Project-local `.didraw/` storage + zero-arg launch
+
+### Added
+
+- **`didraw` zero-arg launch** (DRW-052) — `didraw` без аргументов: ensures daemon на `<cwd>/.didraw/` storage + opens browser на `?room=default`. Multi-project independence теперь visible: user видит "доски этого проекта живут в `.didraw/`" вместо invisible `~/.claude/projects/<slug-hash>/canvas/`. Storage precedence: `--storage <path>` > `DIDRAW_STORAGE_DIR` env > auto-cwd `.didraw/`. Profile-specific subdir сохраняется внутри (`canvas/` для release/debug, `canvas-dev/` для dev).
+- **`didraw open [<room>]`** — explicit form с optional room override. Без аргумента room → `default`. С аргументом — override.
+- **`--no-browser` flag** — для CI/testing/headless flow'ов. Daemon ensures + JSON success-payload без attempt'а spawn'нуть browser.
+- **`GET /api/health`** — extended health endpoint, возвращает `{ ok, profile, storage, version }`. Используется `didraw open` для daemon-conflict detection: если daemon уже запущен на ДРУГОМ storage → exit 1 с structured JSON `{ ok:false, error:"daemon-conflict", running, target, profile }` + human-readable hint `daemon already running on storage "X"; expected "Y". Run 'didraw daemon stop' first.`. Legacy `/healthz` (boolean probe) — preserved для `CanvasClient.health()` + Playwright wait-on.
+- **`CanvasClient.getHealth()`** — typed wrapper над `/api/health`. Returns `null` если daemon unreachable.
+- **CLI helpers** — `packages/didraw-cli/src/browser.ts:openBrowser(url)` (cross-platform launcher: `open`/`start`/`xdg-open`); `packages/didraw-cli/src/storage.ts:resolveStorageForOpen(opts, cwd, env, profile)` (pure precedence resolver); `packages/didraw-cli/src/ps.ts:getRunningDaemonStorage(profile)` (HTTP probe для daemon discovery).
+
+### Changed
+
+- **`apps/backend/src/routes/health.ts`** — exports `makeHealthRoutes(storageDir)` factory вместо singleton-а; `apps/backend/src/index.ts` пробрасывает actual `storageDir` из `makeApp` opts, чтобы in-process test daemons и `--storage` flag репортили правильный path (а не ambient `config.storageDir`).
+
+### Notes
+
+- Legacy rooms в `~/.claude/projects/<slug-hash>/canvas/` остаются доступными через `DIDRAW_STORAGE_DIR=…` или `--storage`. Auto-migration НЕ делаем (per spec out-of-scope).
+- Tests: backend `routes-health.test.ts` (3 new tests); client `getHealth` (2 new tests); CLI `zero-arg-open.test.ts` (6 new subprocess tests) + `storage.test.ts` (6 new `resolveStorageForOpen` unit tests). Total deltas: backend 255 → 258 pass, client 4 → 6 pass, CLI 68 → 80 pass (12 new = 6 unit + 6 integration). Root `bun test`: still green.
+
+---
+
 ## 0.8.0 — 2026-05-17 — Backlog cleanup + simplification sweep
 
 Накопительный stabilization-релиз поверх 0.7.2: 4 backlog задачи (DRW-012/018/022/023) + сквозной code-simplifier pass по diff'у `0.3.3..HEAD` (Phase 3.0+). Без новых фаз.

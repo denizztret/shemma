@@ -6,6 +6,7 @@ import {
   ensureStorageDir,
   parseStorageArg,
   resolveStorageDirForProfile,
+  resolveStorageForOpen,
 } from "../src/storage";
 
 describe("parseStorageArg", () => {
@@ -100,5 +101,65 @@ describe("ensureStorageDir", () => {
     const err = ensureStorageDir("/dev/null/nope/child");
     expect(err).not.toBeNull();
     expect(err).toContain("cannot create storage dir");
+  });
+});
+
+describe("resolveStorageForOpen (DRW-052 precedence)", () => {
+  const cwd = "/tmp/project-a";
+
+  test("explicit --storage wins over env and cwd-default", () => {
+    const r = resolveStorageForOpen(
+      { explicit: "/abs/explicit" },
+      cwd,
+      { DIDRAW_STORAGE_DIR: "/env/path" },
+      "dev",
+    );
+    expect(r.source).toBe("explicit");
+    expect(r.base).toBe("/abs/explicit");
+    expect(r.storageDir).toBe(`/abs/explicit${sep}canvas-dev`);
+  });
+
+  test("explicit relative path resolved against cwd", () => {
+    const r = resolveStorageForOpen(
+      { explicit: "./local" },
+      cwd,
+      {},
+      "release",
+    );
+    expect(r.source).toBe("explicit");
+    expect(r.base).toBe(`${cwd}${sep}local`);
+    expect(r.storageDir).toBe(`${cwd}${sep}local${sep}canvas`);
+  });
+
+  test("env DIDRAW_STORAGE_DIR wins when no explicit", () => {
+    const r = resolveStorageForOpen(
+      {},
+      cwd,
+      { DIDRAW_STORAGE_DIR: "/env/path" },
+      "release",
+    );
+    expect(r.source).toBe("env");
+    expect(r.base).toBe("/env/path");
+    expect(r.storageDir).toBe(`/env/path${sep}canvas`);
+  });
+
+  test("auto-cwd default = <cwd>/.didraw", () => {
+    const r = resolveStorageForOpen({}, cwd, {}, "dev");
+    expect(r.source).toBe("auto-cwd");
+    expect(r.base).toBe(`${cwd}${sep}.didraw`);
+    expect(r.storageDir).toBe(`${cwd}${sep}.didraw${sep}canvas-dev`);
+  });
+
+  test("debug profile shares canvas/ subdir with release", () => {
+    const r = resolveStorageForOpen({}, cwd, {}, "debug");
+    expect(r.storageDir).toBe(`${cwd}${sep}.didraw${sep}canvas`);
+  });
+
+  test("empty-string env is treated as set (string type), not unset", () => {
+    // Defensive: process.env.X === "" is a valid (but odd) state.
+    const r = resolveStorageForOpen({}, cwd, { DIDRAW_STORAGE_DIR: "" }, "dev");
+    // Empty string resolves to cwd (path.resolve(cwd, "") === cwd).
+    expect(r.source).toBe("env");
+    expect(r.base).toBe(cwd);
   });
 });
