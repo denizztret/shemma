@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- **tsc-strict cleanup in `apps/backend/tests/`** (DRW-012) — `bunx tsc --noEmit` теперь чист по тестам: non-null assertion на `body.rooms[0]!.id` после `toHaveLength(1)` в `routes-rooms.test.ts`; `toEqual(V2_SCHEMA as any)` для V2-формы schema в `ws-protocol.test.ts` (TLSchemaDef требует `storeVersion`/`recordVersions`, которых у V2 нет by design). Тесты поведения не меняли, `bun test` 255 pass / 0 fail. Pre-existing src/ error в `src/domain/layout.ts:280` (`Required<LayoutHint>` vs optional `affectedIds`) оставлен — out of scope DRW-012.
 - **Root `bun test` cleanup: isolate Playwright suite** (DRW-023) — `apps/frontend/tests/golden.spec.ts` переименован в `golden.pw.ts`; `apps/frontend/playwright.config.ts` теперь использует `testMatch: /.*\.pw\.ts$/`. Bun test auto-discovery (по дефолту ищет `*.test.ts` / `*.spec.ts`) больше не подхватывает playwright-spec'и и не падает на `Playwright Test did not expect test() to be called here`. Root `bun test`: 428 pass / 0 fail / 0 error (было 1 fail + 1 error из-за этого файла). Playwright runner (`bunx playwright test`) продолжает находить suite по новой маске.
 
 ### Changed

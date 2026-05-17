@@ -70,14 +70,14 @@ describe("handleHello — schema upgrade", () => {
     const r = roomWithLog(0, []);
     const result = handleHello(r, 0, V2_SCHEMA);
     expect(result.schemaUpgraded).toBe(true);
-    expect(r.store.schema).toEqual(V2_SCHEMA);
+    expect(r.store.schema).toEqual(V2_SCHEMA as any);
   });
   it("does NOT replace schema when room already has V2 schema", () => {
     const r = roomWithLog(0, []);
     r.store = { ...r.store, schema: V2_SCHEMA as any };
     const result = handleHello(r, 0, V2_SCHEMA);
     expect(result.schemaUpgraded).toBe(false);
-    expect(r.store.schema).toEqual(V2_SCHEMA);
+    expect(r.store.schema).toEqual(V2_SCHEMA as any);
   });
   it("does NOT replace schema when client sends no schema", () => {
     const r = roomWithLog(0, []);
