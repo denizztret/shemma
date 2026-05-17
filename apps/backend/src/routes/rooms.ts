@@ -12,6 +12,35 @@ import type { Rooms } from "../rooms";
 import { validateRoomId } from "../rooms";
 import { config } from "../config";
 
+type RoomItem = {
+  id: string;
+  version: number;
+  elementCount: number;
+  lastTouched: string;
+  schemaVersion: number;
+  linkedSession?: string;
+  projectDir?: string;
+  projectName?: string;
+  archived?: boolean;
+};
+
+// Writes data atomically: write to <path>.tmp then rename into place.
+async function writeAtomic(path: string, data: string): Promise<void> {
+  const tmp = `${path}.tmp`;
+  await writeFile(tmp, data, "utf8");
+  await rename(tmp, path);
+}
+
+// Returns readdir results, or [] if the directory doesn't exist.
+async function readdirOrEmpty(dir: string): Promise<string[]> {
+  try {
+    return await readdir(dir);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw e;
+  }
+}
+
 // Shared path-param validator. All `:id` routes MUST go through this —
 // raw c.req.param("id") joined with storageDir is a path-traversal vector
 // (e.g. id="../etc/passwd" → escape storageDir).
@@ -36,26 +65,9 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
 
   app.get("/api/rooms", async (c) => {
     const includeArchived = c.req.query("include") === "archived";
-    type RoomItem = {
-      id: string;
-      version: number;
-      elementCount: number;
-      lastTouched: string;
-      schemaVersion: number;
-      linkedSession?: string;
-      projectDir?: string;
-      projectName?: string;
-      archived?: boolean;
-    };
 
     async function readRoomItems(fromDir: string, archived: boolean): Promise<RoomItem[]> {
-      let files: string[];
-      try {
-        files = await readdir(fromDir);
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
-        throw e;
-      }
+      const files = await readdirOrEmpty(fromDir);
       const out: RoomItem[] = [];
       for (const f of files) {
         if (!f.endsWith(".json")) continue;
@@ -92,21 +104,14 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
       return out;
     }
 
-    try {
-      const activeItems = await readRoomItems(storageDir, false);
-      let allItems = activeItems;
-      if (includeArchived) {
-        const archiveDir = join(storageDir, ".archive");
-        const archivedItems = await readRoomItems(archiveDir, true);
-        allItems = [...activeItems, ...archivedItems];
-      }
-      return c.json({ ok: true, rooms: allItems, dir: storageDir });
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-        return c.json({ ok: true, rooms: [], dir: storageDir });
-      }
-      throw e;
+    const activeItems = await readRoomItems(storageDir, false);
+    let allItems = activeItems;
+    if (includeArchived) {
+      const archiveDir = join(storageDir, ".archive");
+      const archivedItems = await readRoomItems(archiveDir, true);
+      allItems = [...activeItems, ...archivedItems];
     }
+    return c.json({ ok: true, rooms: allItems, dir: storageDir });
   });
 
   app.post("/api/rooms/:id/archive", async (c) => {
@@ -318,9 +323,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
     }
     envelope.roomId = to;
 
-    const tmp = `${dstPath}.tmp`;
-    await writeFile(tmp, JSON.stringify(envelope, null, 2), "utf8");
-    await rename(tmp, dstPath);
+    await writeAtomic(dstPath, JSON.stringify(envelope, null, 2));
     await unlink(srcPath);
     await rooms.evict(to); // force fresh load on next access
 
@@ -375,9 +378,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
     envelope.version = 1;
     delete envelope.linkedSession;
 
-    const tmp = `${dstPath}.tmp`;
-    await writeFile(tmp, JSON.stringify(envelope, null, 2), "utf8");
-    await rename(tmp, dstPath);
+    await writeAtomic(dstPath, JSON.stringify(envelope, null, 2));
 
     return c.json({ ok: true, id: as });
   });
@@ -455,15 +456,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
     }
 
     const archiveDir = join(storageDir, ".archive");
-    let files: string[];
-    try {
-      files = await readdir(archiveDir);
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-        return c.json({ ok: true, removed: 0 });
-      }
-      throw e;
-    }
+    const files = await readdirOrEmpty(archiveDir);
 
     let removed = 0;
     for (const f of files) {

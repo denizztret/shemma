@@ -11,6 +11,65 @@ import {
 import { pushError } from "../state/error-bus";
 import { humanize } from "./humanize";
 
+type InlineRoomFormProps = {
+  placeholder: string;
+  value: string;
+  onChange: (v: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+};
+
+function InlineRoomForm({ placeholder, value, onChange, onSubmit, onCancel }: InlineRoomFormProps) {
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter") onSubmit();
+    else if (e.key === "Escape") onCancel();
+  }
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder}
+        // biome-ignore lint/a11y/noAutofocus: intentional UX — user just clicked the action button
+        autoFocus
+        style={inlineInputStyle}
+      />
+      <button type="button" onClick={onSubmit} style={actionBtnStyle}>
+        OK
+      </button>
+      <button type="button" onClick={onCancel} style={actionBtnStyle}>
+        ✕
+      </button>
+    </div>
+  );
+}
+
+const inlineInputStyle: React.CSSProperties = {
+  fontFamily: tokens.font.mono,
+  fontSize: tokens.font.sm,
+  color: tokens.color.text,
+  background: tokens.color.bgOverlay,
+  border: `1px solid ${tokens.color.border}`,
+  borderRadius: tokens.radius.sm,
+  padding: "4px 8px",
+  flex: 1,
+  minWidth: 0,
+  outline: "none",
+};
+
+const actionBtnStyle: React.CSSProperties = {
+  fontFamily: tokens.font.sans,
+  fontSize: tokens.font.sm,
+  color: tokens.color.textMuted,
+  background: tokens.color.bgOverlay,
+  border: `1px solid ${tokens.color.border}`,
+  borderRadius: tokens.radius.sm,
+  padding: "4px 10px",
+  cursor: "pointer",
+};
+
 export type RoomCardData = {
   id: string;
   version: number;
@@ -382,71 +441,25 @@ export function RoomCard({
         )}
       </div>
 
-      {/* Rename inline form */}
       {renameOpen && (
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <input
-            type="text"
-            value={renameValue}
-            onChange={(e) => setRenameValue(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") void handleRenameSubmit(); if (e.key === "Escape") setRenameOpen(false); }}
-            placeholder="new-room-id"
-            autoFocus
-            style={inlineInputStyle}
-          />
-          <button type="button" onClick={() => void handleRenameSubmit()} style={actionBtnStyle}>
-            OK
-          </button>
-          <button type="button" onClick={() => setRenameOpen(false)} style={actionBtnStyle}>
-            ✕
-          </button>
-        </div>
+        <InlineRoomForm
+          placeholder="new-room-id"
+          value={renameValue}
+          onChange={setRenameValue}
+          onSubmit={() => void handleRenameSubmit()}
+          onCancel={() => setRenameOpen(false)}
+        />
       )}
 
-      {/* Duplicate inline form */}
       {duplicateOpen && (
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <input
-            type="text"
-            value={duplicateValue}
-            onChange={(e) => setDuplicateValue(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") void handleDuplicateSubmit(); if (e.key === "Escape") setDuplicateOpen(false); }}
-            placeholder="copy-of-room"
-            autoFocus
-            style={inlineInputStyle}
-          />
-          <button type="button" onClick={() => void handleDuplicateSubmit()} style={actionBtnStyle}>
-            OK
-          </button>
-          <button type="button" onClick={() => setDuplicateOpen(false)} style={actionBtnStyle}>
-            ✕
-          </button>
-        </div>
+        <InlineRoomForm
+          placeholder="copy-of-room"
+          value={duplicateValue}
+          onChange={setDuplicateValue}
+          onSubmit={() => void handleDuplicateSubmit()}
+          onCancel={() => setDuplicateOpen(false)}
+        />
       )}
     </div>
   );
 }
-
-const inlineInputStyle: React.CSSProperties = {
-  fontFamily: tokens.font.mono,
-  fontSize: tokens.font.sm,
-  color: tokens.color.text,
-  background: tokens.color.bgOverlay,
-  border: `1px solid ${tokens.color.border}`,
-  borderRadius: tokens.radius.sm,
-  padding: "4px 8px",
-  flex: 1,
-  minWidth: 0,
-  outline: "none",
-};
-
-const actionBtnStyle: React.CSSProperties = {
-  fontFamily: tokens.font.sans,
-  fontSize: tokens.font.sm,
-  color: tokens.color.textMuted,
-  background: tokens.color.bgOverlay,
-  border: `1px solid ${tokens.color.border}`,
-  borderRadius: tokens.radius.sm,
-  padding: "4px 10px",
-  cursor: "pointer",
-};
