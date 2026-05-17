@@ -1,19 +1,9 @@
-// Mirrors apps/backend/src/ws-protocol.ts:isPlaceholderSchema. Backend stores
-// `migrate-v2.defaultSchema()` (V1 stub: `{ schemaVersion: 1, ... }`) for fresh
-// rooms until the first connected client uploads its real V2 schema through
-// WS hello (DRW-040). Frontend uses this check to decide whether the incoming
-// /api/state snapshot can be loaded directly or needs a one-shot schema swap
-// to avoid tldraw's migrator crashing on the legacy stub.
-export function isPlaceholderSchema(schema: unknown): boolean {
-  if (!schema || typeof schema !== "object") return true;
-  const s = schema as Record<string, unknown>;
-  return s["schemaVersion"] !== 2 || s["sequences"] === undefined;
-}
-
 // Backfill required props on records persisted before they became mandatory.
 // `arrow.props.kind` ("arc" | "elbow") was added by tldraw 5.x after we shipped
 // 0.4.x rooms; loadSnapshot fails validation on legacy arrows missing it.
 // Adds a default "arc" when absent; idempotent for already-fixed records.
+// This is independent legacy data backfill — the placeholder schema upgrade
+// itself happens server-side via POST /api/state/seed-schema (DRW-047).
 export function backfillStoreRecords(
   store: Record<string, unknown> | undefined,
 ): Record<string, unknown> {
