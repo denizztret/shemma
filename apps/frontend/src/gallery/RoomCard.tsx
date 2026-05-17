@@ -34,8 +34,10 @@ const actionBtnStyle: React.CSSProperties = {
   background: tokens.color.bgOverlay,
   border: `1px solid ${tokens.color.border}`,
   borderRadius: tokens.radius.sm,
-  padding: "4px 10px",
+  padding: "3px 8px",
   cursor: "pointer",
+  whiteSpace: "nowrap",
+  flexShrink: 0,
 };
 
 export type RoomCardData = {
@@ -370,7 +372,7 @@ export function RoomCard({
       )}
 
       {/* Action row */}
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "nowrap", overflowX: "auto" }}>
         {!room.archived && (
           <button
             type="button"
