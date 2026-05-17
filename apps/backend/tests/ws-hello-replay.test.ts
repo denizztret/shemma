@@ -66,13 +66,13 @@ describe("ws-protocol.handleHello", () => {
     const r = makeRoomState();
     r.version = 5;
     r.opLog = [makeOpLogEntry(4), makeOpLogEntry(5)];
-    expect(handleHello(r, 5)).toEqual({ kind: "sync-ack", version: 5 });
+    expect(handleHello(r, 5).reply).toEqual({ kind: "sync-ack", version: 5 });
   });
 
   test("sync-ack when client is ahead (defensive)", () => {
     const r = makeRoomState();
     r.version = 5;
-    expect(handleHello(r, 99)).toEqual({ kind: "sync-ack", version: 5 });
+    expect(handleHello(r, 99).reply).toEqual({ kind: "sync-ack", version: 5 });
   });
 
   test("replay returns batches since lastVersion", () => {
@@ -84,7 +84,7 @@ describe("ws-protocol.handleHello", () => {
       makeOpLogEntry(4),
       makeOpLogEntry(5),
     ];
-    const reply = handleHello(r, 3);
+    const { reply } = handleHello(r, 3);
     expect(reply.kind).toBe("replay");
     if (reply.kind !== "replay") throw new Error("kind mismatch");
     expect(reply.version).toBe(5);
@@ -101,7 +101,7 @@ describe("ws-protocol.handleHello", () => {
       makeOpLogEntry(6),
       makeOpLogEntry(7),
     ];
-    const reply = handleHello(r, 3);
+    const { reply } = handleHello(r, 3);
     expect(reply.kind).toBe("replay");
     if (reply.kind !== "replay") throw new Error("kind mismatch");
     expect(reply.changes.length).toBe(4);
@@ -112,19 +112,19 @@ describe("ws-protocol.handleHello", () => {
     r.version = 10;
     // Oldest retained = 5, client at 2 → 5 > 2+1 → cannot replay.
     r.opLog = [makeOpLogEntry(5), makeOpLogEntry(6), makeOpLogEntry(7)];
-    expect(handleHello(r, 2)).toEqual({ kind: "truncated", version: 10 });
+    expect(handleHello(r, 2).reply).toEqual({ kind: "truncated", version: 10 });
   });
 
   test("truncated when opLog is empty and client is behind (post-restart)", () => {
     const r = makeRoomState();
     r.version = 4;
     r.opLog = [];
-    expect(handleHello(r, 1)).toEqual({ kind: "truncated", version: 4 });
+    expect(handleHello(r, 1).reply).toEqual({ kind: "truncated", version: 4 });
   });
 
   test("sync-ack on fresh room when client also at 0", () => {
     const r = makeRoomState();
-    expect(handleHello(r, 0)).toEqual({ kind: "sync-ack", version: 0 });
+    expect(handleHello(r, 0).reply).toEqual({ kind: "sync-ack", version: 0 });
   });
 });
 

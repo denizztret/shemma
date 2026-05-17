@@ -52,13 +52,21 @@ export function parseClientMessage(
     lastVersion?: unknown;
     changes?: unknown;
     clientOpId?: unknown;
+    schema?: unknown;
   };
   if (
     obj.kind === "hello" &&
     typeof obj.lastVersion === "number" &&
     Number.isFinite(obj.lastVersion)
   ) {
-    return { kind: "hello", lastVersion: obj.lastVersion };
+    // schema is optional; carry it opaquely — backend never imports @tldraw/*.
+    const schema =
+      obj.schema !== null &&
+      obj.schema !== undefined &&
+      typeof obj.schema === "object"
+        ? obj.schema
+        : undefined;
+    return { kind: "hello", lastVersion: obj.lastVersion, schema };
   }
   if (obj.kind === "user-change") {
     const changes = parseStoreChangeBatch(obj.changes);
@@ -70,22 +78,63 @@ export function parseClientMessage(
   return null;
 }
 
-// Decide response to a client `hello`. Pure: no I/O, no side effects.
+// Returns true if the stored schema is the V1 placeholder produced by
+// defaultSchema() — meaning no real client schema has been persisted yet.
+// Detection rule: if schemaVersion !== 2 or sequences field is absent, it is
+// a placeholder. Backend never imports @tldraw; this check is purely structural.
+export function isPlaceholderSchema(schema: unknown): boolean {
+  if (!schema || typeof schema !== "object") return true;
+  const s = schema as Record<string, unknown>;
+  return s["schemaVersion"] !== 2 || s["sequences"] === undefined;
+}
+
+export type HandleHelloResult = {
+  reply: WsMessage;
+  /** true when the room's schema was replaced with the client's V2 schema. */
+  schemaUpgraded: boolean;
+};
+
+// Decide response to a client `hello`. Mutates `room.store.schema` if the
+// room holds a V1 placeholder and the client supplies a V2 schema. No I/O —
+// callers must schedule persistence themselves when schemaUpgraded is true.
 //   last >= r.version          → up-to-date → sync-ack
 //   opLog covers [last+1..]    → replay delta
 //   gap exceeds opLog window   → truncated (client must full-fetch)
-export function handleHello(room: RoomState, lastVersion: number): WsMessage {
+export function handleHello(
+  room: RoomState,
+  lastVersion: number,
+  clientSchema?: unknown,
+): HandleHelloResult {
+  // Schema upgrade: replace placeholder V1 stub with client's V2 schema.
+  let schemaUpgraded = false;
+  if (
+    clientSchema !== undefined &&
+    clientSchema !== null &&
+    isPlaceholderSchema(room.store.schema) &&
+    !isPlaceholderSchema(clientSchema)
+  ) {
+    room.store = { ...room.store, schema: clientSchema as any };
+    schemaUpgraded = true;
+  }
+
   const last = Number.isFinite(lastVersion) ? lastVersion : 0;
+  let reply: WsMessage;
   if (last >= room.version) {
-    return { kind: "sync-ack", version: room.version };
+    reply = { kind: "sync-ack", version: room.version };
+  } else {
+    // Oldest version still retained in the rolling window. When opLog is empty
+    // the only safe `minLogVer` is `version + 1` (nothing replayable), which
+    // forces `truncated` for any client that is behind.
+    const minLogVer = room.opLog[0]?.version ?? room.version + 1;
+    if (last + 1 >= minLogVer) {
+      const changes = room.opLog
+        .filter((e) => e.version > last)
+        .map((e) => e.ops);
+      reply = { kind: "replay", changes, version: room.version };
+    } else {
+      reply = { kind: "truncated", version: room.version };
+    }
   }
-  // Oldest version still retained in the rolling window. When opLog is empty
-  // the only safe `minLogVer` is `version + 1` (nothing replayable), which
-  // forces `truncated` for any client that is behind.
-  const minLogVer = room.opLog[0]?.version ?? room.version + 1;
-  if (last + 1 >= minLogVer) {
-    const changes = room.opLog.filter((e) => e.version > last).map((e) => e.ops);
-    return { kind: "replay", changes, version: room.version };
-  }
-  return { kind: "truncated", version: room.version };
+
+  return { reply, schemaUpgraded };
 }

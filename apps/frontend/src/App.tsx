@@ -116,20 +116,11 @@ export function App({ room }: { room: string }) {
       if (!active) return;
 
       // Загружаем серверный snapshot — backend = source of truth.
-      //
-      // Schema override: backend хранит `store.schema` который для новых комнат
-      // создаётся `migrate-v2.defaultSchema()` — этот стаб не совпадает с актуальной
-      // схемой tldraw 5.x runtime (sub-type versions, subTypeKey не выставлен).
-      // Если оставить старую схему, `migrateStoreSnapshot` пытается прокатить
-      // десятки migrations с v0 → current и падает на undefined.length внутри.
-      // Решение MVP: подменяем schema на editor.store.schema.serialize() — наши
-      // records (созданные compile.ts/migrate-v2 в текущих props-форматах) сразу
-      // считаются current, миграция skip. Долгосрочно — backend хранит схему,
-      // которую отдал первый подключившийся клиент (Phase 3.1 follow-up).
-      const currentSchema = editor.store.schema.serialize();
-      const snapshot = { ...s.store, schema: currentSchema };
+      // Backend теперь хранит реальную V2 схему tldraw, полученную от первого
+      // подключившегося клиента через WS hello (Phase 3.1, DRW-040).
+      // Стаб-схема из defaultSchema() заменяется до того, как loadSnapshot вызван.
       editor.store.mergeRemoteChanges(() => {
-        editor.loadSnapshot(snapshot);
+        editor.loadSnapshot(s.store);
       });
 
       // Initial AI-activity snapshot.
@@ -159,10 +150,8 @@ export function App({ room }: { room: string }) {
             try {
               const fresh = await getState();
               if (!active) return;
-              const freshSchema = editor.store.schema.serialize();
-              const freshSnapshot = { ...fresh.store, schema: freshSchema };
               editor.store.mergeRemoteChanges(() => {
-                editor.loadSnapshot(freshSnapshot);
+                editor.loadSnapshot(fresh.store);
               });
               // Re-arm sync with the fresh version.
               stopSync?.();
