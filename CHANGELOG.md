@@ -1,3 +1,24 @@
+## 0.6.2 — 2026-05-17 — Hotfix: arrow.props.kind for tldraw 5.x schema drift
+
+Found via 0.6.1 re-smoke: existing rooms с AI-created arrows не загружались (ValidationError "props.kind: Expected arc or elbow, got undefined"). tldraw 5.x runtime требует `kind` на arrow shapes; наш backend этого не писал.
+
+### Fixed (partial — new arrows only)
+
+- **Backend**: `kind: "arc"` (tldraw 5.x default) добавлен во все три места создания arrow records: `apps/backend/src/migrate-v2.ts:edgeToArrow` + `apps/backend/src/domain/compile.ts` (connect + note-about branches). Все NEW arrows (через CLI/AI/migration) теперь содержат корректный prop.
+- **Frontend**: `apps/frontend/src/canvas/schema-placeholder.ts` экспортирует `backfillStoreRecords(store)` который добавляет `kind: "arc"` к arrow records если field отсутствует. Используется в `App.tsx` обоих местах loadSnapshot (hydrateAndSync + onTruncated recovery). Idempotent для already-fixed records.
+
+### Known limitation
+
+**Existing 0.4.x-0.6.1 rooms с AI arrows всё ещё broken** — iterative discovery нашёл что tldraw 5.x также требует `elbowMidPoint`, удаление legacy `text`, `binding.props.snap` и потенциально других missing props. Полная migration не вошла в этот PATCH — отдельная задача **DRW-046** (recommended approach: one-shot migration script для existing envelopes).
+
+**Workaround:** создавать FRESH rooms через Gallery → они работают end-to-end. Legacy rooms (cloned, test-phase3, default и т.д.) — нужны до DRW-046 fix либо ручной archive/recreate.
+
+### Tests
+
+354 pass (без изменений — backend и frontend unit-тесты на existing формат не падают; legacy room loading требует integration test что не входит в этот hotfix scope).
+
+---
+
 ## 0.6.1 — 2026-05-17 — 0.6.0 smoke bugfix (DRW-041..045)
 
 5 bugs закрыты одним sub-agent commit'ом после manual smoke test 0.6.0.

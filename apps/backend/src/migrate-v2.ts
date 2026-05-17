@@ -303,6 +303,7 @@ function edgeToArrow(e: V2Edge, id: string): TLRecord {
     opacity: 1,
     rotation: 0,
     props: {
+      kind: "arc",
       color: "black",
       labelColor: "black",
       fill: "none",
