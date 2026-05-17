@@ -105,8 +105,8 @@ describe("didraw doctor --json", () => {
 });
 
 describe("didraw doctor forced failure", () => {
-  test("exits 3 when DIDRAW_STORAGE_DIR is unwritable", async () => {
-    // Pass a storage dir that doesn't exist (write will fail) — forces storage-writable fail
+  test("exits 3 when DIDRAW_STORAGE_DIR is unwritable (EACCES)", async () => {
+    // Pass a storage dir under a root-level path that cannot be created (EACCES on macOS/Linux)
     const r = await cli(["doctor", "--json"], {
       DIDRAW_STORAGE_DIR: "/nonexistent-path-that-cannot-be-written/abc",
     });
@@ -117,5 +117,28 @@ describe("didraw doctor forced failure", () => {
       c.check.startsWith("storage-writable"),
     );
     expect(storageCheck?.status).toBe("fail");
+  });
+});
+
+describe("didraw doctor storage mkdir", () => {
+  test("storage-writable succeeds for a non-existent but creatable dir", async () => {
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { rmSync } = await import("node:fs");
+    // Use a fresh subdirectory under tmpdir — should not exist yet
+    const testDir = join(tmpdir(), `didraw-doctor-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    try {
+      const r = await cli(["doctor", "--json"], {
+        DIDRAW_STORAGE_DIR: testDir,
+      });
+      const arr = JSON.parse(r.stdout);
+      const storageCheck = arr.find((c: { check: string }) =>
+        c.check.startsWith("storage-writable"),
+      );
+      expect(storageCheck).toBeDefined();
+      expect(storageCheck.status).toBe("ok");
+    } finally {
+      try { rmSync(testDir, { recursive: true, force: true }); } catch { /* cleanup */ }
+    }
   });
 });

@@ -1,3 +1,24 @@
+## 0.6.1 — 2026-05-17 — 0.6.0 smoke bugfix (DRW-041..045)
+
+5 bugs закрыты одним sub-agent commit'ом после manual smoke test 0.6.0.
+
+### Fixed
+
+- **DRW-041 (HIGH)** — Gallery Archived tab filter broken. `apps/frontend/src/gallery/Gallery.tsx`: archived grouping теперь применяет `rooms.filter(r => r.archived === true)` перед `sortRooms`. Counter `(N)` derives from filtered length и автоматически корректен. Current tab уже скипал archived через `continue` — без изменений.
+- **DRW-042 (MEDIUM)** — `didraw ps` показывал port текущего профиля для всех 3. `packages/didraw-cli/src/ps.ts`: добавлен local `PORT_BY_PROFILE` map + `portForPs(p)` helper. Для non-current profile — static map (env override unknowable cross-process); для current — delegates `portFor(p)` чтобы honour `DIDRAW_PORT`.
+- **DRW-043 (LOW)** — `packages/didraw-cli/package.json:version` залип на `0.0.1` с MVP. Bumped → `0.6.1` синхронно с root.
+- **DRW-044 (LOW)** — `didraw doctor` false-negatives на ad-hoc dev daemon. Три sub-fix'а в `doctor.ts`:
+  - `checkDaemonStatus`: после pidfile check ставит HTTP probe (`isHealthy(port)`); если 200 OK → `ok "running (ad-hoc, no pidfile) on :PORT"`.
+  - `checkPortOwner`: probes health сначала; если port healthy (ad-hoc case) → `ok "port not checked (daemon ok)"`. Только если pid-tracked daemon unhealthy — fall through to lsof.
+  - `checkStorageWritable`: `mkdirSync(storageDir, { recursive: true })` перед `writeFileSync`. ENOENT больше не false-fail.
+- **DRW-045 (MEDIUM)** — "← Gallery" link не кликался (overlapped). Root cause: tldraw `.tlui-layout` has `pointer-events: none` на root container; children must restore it. `chrome/TldrawComponents.tsx`: wrapper получил `className="tlui-share-zone"` (mirror tldraw's `DefaultSharePanel` class) + inline `pointerEvents: "all", zIndex: 300`. §3.8 (no fixed overlays) сохранён — компонент остаётся в SharePanel slot.
+
+### Tests
+
+354 pass (+3 vs 0.6.0 baseline 351). New: `ps per-profile port` (2 cases), `doctor storage mkdir` (1).
+
+---
+
 ## 0.6.0 — 2026-05-17 — D phase: CLI DX (ps, logs, doctor, --debug, install)
 
 ### Added

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -60,6 +60,16 @@ async function checkDaemonStatus(p: Profile): Promise<CheckResult> {
     const s = await status(p);
     const port = portFor(p);
     if (!s.running) {
+      // No pidfile or pidfile stale — but an ad-hoc daemon may still be running.
+      // Probe the port with a short timeout before declaring "not running".
+      const adHocHealthy = await isHealthy(port);
+      if (adHocHealthy) {
+        return {
+          check: `daemon-status[${p}]`,
+          status: "ok",
+          detail: `running (ad-hoc, no pidfile) on :${port}`,
+        };
+      }
       return {
         check: `daemon-status[${p}]`,
         status: "ok",
@@ -95,16 +105,27 @@ async function checkPortOwner(p: Profile): Promise<CheckResult> {
   const port = portFor(p);
   try {
     const s = await status(p);
-    const healthy = s.running ? await isHealthy(port) : false;
-    if (!s.running || healthy) {
-      // either not running or running+healthy — nothing suspicious
+    // Check port health — covers both pid-managed and ad-hoc daemons
+    const healthy = await isHealthy(port);
+    if (healthy) {
+      const pid = (s as { pid?: number }).pid;
       return {
         check: `port-owner[${p}]`,
         status: "ok",
-        detail: s.running ? `port ${port} owned by didraw pid=${(s as { pid?: number }).pid}` : `port ${port} free`,
+        detail: pid
+          ? `port ${port} owned by didraw pid=${pid}`
+          : `port ${port} not checked (daemon ok)`,
       };
     }
-    // Running but not healthy: check who owns the port via lsof
+    if (!s.running) {
+      // No pidfile and port not responding — port is free
+      return {
+        check: `port-owner[${p}]`,
+        status: "ok",
+        detail: `port ${port} free`,
+      };
+    }
+    // Running (pid alive) but not healthy: check who owns the port via lsof
     try {
       const out = execFileSync("lsof", ["-i", `:${port}`, "-P", "-n", "-F", "pcn"], {
         encoding: "utf8",
@@ -191,7 +212,7 @@ function checkStorageWritable(p: Profile): CheckResult {
 
   const testFile = join(storageDir, `.didraw-doctor-probe-${Date.now()}`);
   try {
-    // mkdirSync is not needed — if dir doesn't exist, write will fail with ENOENT, which is informative
+    mkdirSync(storageDir, { recursive: true });
     writeFileSync(testFile, "probe");
     rmSync(testFile);
     return {
