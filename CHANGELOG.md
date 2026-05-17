@@ -1,3 +1,37 @@
+## 0.6.0 — 2026-05-17 — D phase: CLI DX (ps, logs, doctor, --debug, install)
+
+### Added
+
+- **`didraw ps`** — single command shows daemon status across all profiles (dev/release/debug). Returns JSON array `[{profile, port, pid?, running, healthy}]`. Exit 0 always (даже если ничего не работает — пустой массив).
+- **`daemon stop --all`** — kills daemon across all 3 profiles, idempotent (`already-stopped` ok). Если `--profile <p>` тоже передан — stops только этот.
+- **`didraw logs [--profile|--all] [--tail N] [--follow]`** — читает daemon log из `~/.claude/.didraw-<profile>.log`. `--follow` через 200ms poll loop (cross-platform reliable). `--all` префиксует каждую line `[<profile>] `. Exit codes 0/1/2 (ok/usage/file-not-found).
+- **`didraw doctor [--profile|--all] [--json]`** — read-only self-diagnostic. 7 checks: bun-version, didraw-version, daemon-status, port-owner (через lsof, graceful skip если не установлен), storage-writable, manifest-reachable (timeout 3s), config-readable. Human output с per-check `[ok|warn|fail]` + summary; `--json` для machine consumption. Exit 0 если no fails (ok/warn allowed), 3 если any fail. Каждый fail имеет `hint` что делать.
+- **`--debug` top-level flag** — shortcut для `--profile debug`. Не меняет порт (debug использует release-port 8787, отличается verbose log level).
+- **`scripts/install.sh`** — bash symlink installer. Default `$HOME/.local/bin/didraw`, override через `--prefix=<dir>`. Auto-detects binary для текущего OS/arch. Напоминает добавить prefix в PATH если ещё нет.
+
+### Changed
+
+- **`daemon.ts:start()`** теперь захватывает stdout/stderr через `stdio: ['ignore', fd, fd]` где `fd = openSync(logPath, 'a')`. Раньше было `stdio: 'ignore'` — весь output терялся. Rotation single-level через `DIDRAW_LOG_MAX_MB` (default 10) → `.log.1`.
+- **`usage()` cleanup:** удалён phantom `import mermaid` command (Mermaid живёт в frontend per ADR-0001); stale `didraw list/export/rm` заменены на `rooms list/export/rm`; `layout --algorithm` → `layout --mode`. README CLI Reference синхронизирован.
+
+### Tests
+
+351 pass (+19 от 0.5.0 baseline 332): CLI `ps.test.ts` (3), `logs.test.ts` (5), `doctor.test.ts` (8), плюс integration assertions.
+
+### Refactor
+
+Post sub-agent simplifier pass (commit `2be1d8b`):
+- `logs.ts`: removed dead `if (all && opts.profile !== "release") {}` placeholder; collapsed two identical exit-2 branches.
+- `doctor.ts`: replaced inline `require("node:crypto")`/`require("node:path")` IIFE с proper top-level ESM imports.
+- `index.ts`: extracted `assertNotAllWithProfile()` helper (был copy-pasted для logs + doctor).
+
+### Concerns
+
+- `lsof` based `port-owner` check может silently `warn` если lsof не установлен. Workaround: macOS pre-installs; Linux usually too; corp Linux может потребовать `apt install lsof`.
+- `manifest-reachable`: `DIDRAW_MANIFEST_URL` unset → `warn` (not fail). Offline / corp proxy → также `warn`. Никогда не блокирует exit 0.
+
+---
+
 ## 0.5.0 — 2026-05-17 — E phase: Rooms Gallery + delete policy + rename/duplicate
 
 Multi-task initiative shipping a full web UI каталог комнат с группировкой, фильтрами, lifecycle actions, и опт-ин linked-session safety. 8 tasks closed (DRW-029, 031, 033, 034, 035, 036, 037, 039) + 2 deferred (DRW-030 thumbnails, DRW-038 auto-archive — оба с notes для возобновления).
