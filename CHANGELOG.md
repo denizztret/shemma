@@ -7,6 +7,10 @@
 - **`didraw daemon start --storage <path>`** (DRW-022) — CLI флаг для project-local storage без `export DIDRAW_STORAGE_DIR=…` + manual restart. Path может быть абсолютным или относительным к cwd; резолвится перед spawn'ом child process'а. Под user-provided path сохраняется profile-specific subdir convention: `<path>/canvas/` для `release`/`debug`, `<path>/canvas-dev/` для `dev` — параллельные daemons на одном `--storage` пути не конфликтуют по rooms. Path auto-`mkdir -p`; non-creatable path → JSON error в stderr + exit 1. Explicit `--storage` overrides ambient `DIDRAW_STORAGE_DIR`. Daemon startup log теперь печатает финальный `[didraw] storage: <path>`. CLI success-output дополнен полем `storage` когда флаг задан.
 - **CLI helper module `packages/didraw-cli/src/storage.ts`** — pure-functions `parseStorageArg(argv, cwd)`, `resolveStorageDirForProfile(base, profile)`, `ensureStorageDir(path)`. 11 новых unit-тестов + 4 integration через subprocess CLI.
 
+### Fixed
+
+- **Root `bun test` cleanup: isolate Playwright suite** (DRW-023) — `apps/frontend/tests/golden.spec.ts` переименован в `golden.pw.ts`; `apps/frontend/playwright.config.ts` теперь использует `testMatch: /.*\.pw\.ts$/`. Bun test auto-discovery (по дефолту ищет `*.test.ts` / `*.spec.ts`) больше не подхватывает playwright-spec'и и не падает на `Playwright Test did not expect test() to be called here`. Root `bun test`: 428 pass / 0 fail / 0 error (было 1 fail + 1 error из-за этого файла). Playwright runner (`bunx playwright test`) продолжает находить suite по новой маске.
+
 ### Changed
 
 - **Frontend: pause inbound WS during truncated-recovery** (DRW-018) — `apps/frontend/src/transport/ws.ts:setPaused(p)` API на handle'е от `startStoreSync`. `App.tsx onTruncated` вызывает `setPaused(true)` перед `seedSchema`+`getState`+`loadSnapshot`, после успешного apply — `setPaused(false)`. Inbound `replay`/`store-change` фреймы дропаются пока paused; `sync-ack`/`truncated`/`prompt`/`ai-activity` продолжают идти. Outbound user mutations не блокируются — пользователь может рисовать во время recovery. Устраняет flicker от straggler-патчей. 5 новых тестов в `ws.test.ts`.

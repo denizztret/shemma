@@ -9,6 +9,10 @@ const FRONTEND = path.resolve(ROOT, "apps/frontend");
 
 export default defineConfig({
   testDir: "./tests",
+  // Use `.pw.ts` suffix so root `bun test` auto-discovery (which scans for
+  // `*.spec.ts` / `*.test.ts`) does not pick up Playwright specs and crash
+  // when it encounters playwright's `test()` API in bun runtime (DRW-023).
+  testMatch: /.*\.pw\.ts$/,
   use: { baseURL: "http://localhost:5173" },
   // Run two web servers: backend on :8788, frontend vite on :5173.
   webServer: [
