@@ -1,3 +1,27 @@
+## 0.8.0 — 2026-05-17 — Backlog cleanup + simplification sweep
+
+Накопительный stabilization-релиз поверх 0.7.2: 4 backlog задачи (DRW-012/018/022/023) + сквозной code-simplifier pass по diff'у `0.3.3..HEAD` (Phase 3.0+). Без новых фаз.
+
+### Added
+
+- **`didraw daemon start --storage <path>`** (DRW-022) — CLI флаг для project-local storage без `export DIDRAW_STORAGE_DIR=…` + manual restart. Path может быть абсолютным или относительным к cwd; резолвится перед spawn'ом child process'а. Под user-provided path сохраняется profile-specific subdir convention: `<path>/canvas/` для `release`/`debug`, `<path>/canvas-dev/` для `dev` — параллельные daemons на одном `--storage` пути не конфликтуют по rooms. Path auto-`mkdir -p`; non-creatable path → JSON error в stderr + exit 1. Explicit `--storage` overrides ambient `DIDRAW_STORAGE_DIR`. Daemon startup log теперь печатает финальный `[didraw] storage: <path>`. CLI success-output дополнен полем `storage` когда флаг задан.
+- **CLI helper module `packages/didraw-cli/src/storage.ts`** — pure-functions `parseStorageArg(argv, cwd)`, `resolveStorageDirForProfile(base, profile)`, `ensureStorageDir(path)`. 11 новых unit-тестов + 4 integration через subprocess CLI.
+
+### Fixed
+
+- **tsc-strict cleanup in `apps/backend/tests/`** (DRW-012) — `bunx tsc --noEmit` теперь чист по тестам: non-null assertion на `body.rooms[0]!.id` после `toHaveLength(1)` в `routes-rooms.test.ts`; `toEqual(V2_SCHEMA as any)` для V2-формы schema в `ws-protocol.test.ts` (TLSchemaDef требует `storeVersion`/`recordVersions`, которых у V2 нет by design). Тесты поведения не меняли, `bun test` 255 pass / 0 fail. Pre-existing src/ error в `src/domain/layout.ts:280` (`Required<LayoutHint>` vs optional `affectedIds`) оставлен — out of scope DRW-012.
+- **Root `bun test` cleanup: isolate Playwright suite** (DRW-023) — `apps/frontend/tests/golden.spec.ts` переименован в `golden.pw.ts`; `apps/frontend/playwright.config.ts` теперь использует `testMatch: /.*\.pw\.ts$/`. Bun test auto-discovery (по дефолту ищет `*.test.ts` / `*.spec.ts`) больше не подхватывает playwright-spec'и и не падает на `Playwright Test did not expect test() to be called here`. Root `bun test`: 428 pass / 0 fail / 0 error (было 1 fail + 1 error из-за этого файла). Playwright runner (`bunx playwright test`) продолжает находить suite по новой маске.
+
+### Changed
+
+- **Frontend: pause inbound WS during truncated-recovery** (DRW-018) — `apps/frontend/src/transport/ws.ts:setPaused(p)` API на handle'е от `startStoreSync`. `App.tsx onTruncated` вызывает `setPaused(true)` перед `seedSchema`+`getState`+`loadSnapshot`, после успешного apply — `setPaused(false)`. Inbound `replay`/`store-change` фреймы дропаются пока paused; `sync-ack`/`truncated`/`prompt`/`ai-activity` продолжают идти. Outbound user mutations не блокируются — пользователь может рисовать во время recovery. Устраняет flicker от straggler-патчей. 5 новых тестов в `ws.test.ts`.
+
+### Internal
+
+- **Code-simplifier pass по diff `0.3.3..HEAD`** — 9 refactor commits, net `-162 LOC` across 13 файлов без изменения поведения. Извлечены DRY helpers: `makeArrowShape`/`makeArrowBindings` (compile.ts), `fetchAndLoadSnapshot` (App.tsx hydrate/recovery), `findRoomFile` (routes/rooms.ts), `isEmptyBatch` (store-ops.ts), `die`/`printAndExitOnFail`/`dieRequireFlag` (CLI usage errors), `writeLines` (logs command). Удалены unused store-types helpers + dead layout flag + unused envelope re-export. `runLayout`/WS protocol/migrate-v2 — намеренно НЕ трогали (correctness-sensitive). 428 tests pass, tsc clean.
+
+---
+
 ## 0.7.2 — 2026-05-17 — Backend seed-schema endpoint + drop App.tsx schema workaround
 
 Закрывает class of bugs типа DRW-046 — arrow.kind drift и прочие миграции tldraw 5.x — за счёт того, что backend получает реальную V2-схему ДО первого `GET /api/state`, а не уже в момент WS hello. Frontend больше не подменяет схему в `loadSnapshot`. DRW-047.

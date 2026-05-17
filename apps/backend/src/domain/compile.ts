@@ -34,6 +34,71 @@ function mergeBatch(a: StoreChangeBatch, b: StoreChangeBatch): StoreChangeBatch 
   };
 }
 
+// Common arrow shape — only `dash`, `richText` (label), and `meta` vary across
+// callers (connect / note.about). Kept private to compile.ts; defaults match
+// the inline literals from Phase 3.0.
+function makeArrowShape(opts: {
+  id: string;
+  dash: "draw" | "dashed";
+  label: string;
+  meta: Record<string, unknown>;
+}): TLRecord {
+  return {
+    id: opts.id,
+    typeName: "shape",
+    type: "arrow",
+    x: 0,
+    y: 0,
+    parentId: "page:page",
+    index: "a1",
+    isLocked: false,
+    opacity: 1,
+    rotation: 0,
+    props: {
+      kind: "arc",
+      color: "black",
+      labelColor: "black",
+      fill: "none",
+      dash: opts.dash,
+      size: "m",
+      arrowheadStart: "none",
+      arrowheadEnd: "arrow",
+      font: "draw",
+      start: { x: 0, y: 0 },
+      end: { x: 0, y: 0 },
+      bend: 0,
+      text: "",
+      labelPosition: 0.5,
+      scale: 1,
+      richText: richText(opts.label),
+    },
+    meta: opts.meta,
+  } as TLRecord;
+}
+
+// Arrow start/end binding pair. Endpoint shapes must already exist.
+function makeArrowBindings(arrowId: string, fromShapeId: string, toShapeId: string): {
+  start: TLRecord;
+  end: TLRecord;
+} {
+  const mk = (terminal: "start" | "end", toId: string): TLRecord =>
+    ({
+      id: bindingId(),
+      typeName: "binding",
+      type: "arrow",
+      fromId: arrowId,
+      toId,
+      props: {
+        terminal,
+        normalizedAnchor: { x: 0.5, y: 0.5 },
+        isExact: false,
+        isPrecise: false,
+      },
+      meta: {},
+    }) as TLRecord;
+  return { start: mk("start", fromShapeId), end: mk("end", toShapeId) };
+}
+
 export function compile(
   actions: DomainAction[],
   store: TLStoreSnapshot,
@@ -129,67 +194,15 @@ export function compile(
         const aid = shapeId();
         const ck = a.connectionKind ?? "sync";
         const preset = connectionPreset(ck);
-        const arrow: TLRecord = {
+        const arrow = makeArrowShape({
           id: aid,
-          typeName: "shape",
-          type: "arrow",
-          x: 0,
-          y: 0,
-          parentId: "page:page",
-          index: "a1",
-          isLocked: false,
-          opacity: 1,
-          rotation: 0,
-          props: {
-            kind: "arc",
-            color: "black",
-            labelColor: "black",
-            fill: "none",
-            dash: preset.dashed ? "dashed" : "draw",
-            size: "m",
-            arrowheadStart: "none",
-            arrowheadEnd: "arrow",
-            font: "draw",
-            start: { x: 0, y: 0 },
-            end: { x: 0, y: 0 },
-            bend: 0,
-            text: "",
-            labelPosition: 0.5,
-            scale: 1,
-            richText: richText(a.label ?? preset.defaultLabel ?? ""),
-          },
+          dash: preset.dashed ? "dashed" : "draw",
+          label: a.label ?? preset.defaultLabel ?? "",
           meta: { connectionKind: ck, ...(a.meta ?? {}) },
-        } as TLRecord;
-        const b1: TLRecord = {
-          id: bindingId(),
-          typeName: "binding",
-          type: "arrow",
-          fromId: aid,
-          toId: fromId,
-          props: {
-            terminal: "start",
-            normalizedAnchor: { x: 0.5, y: 0.5 },
-            isExact: false,
-            isPrecise: false,
-          },
-          meta: {},
-        } as TLRecord;
-        const b2: TLRecord = {
-          id: bindingId(),
-          typeName: "binding",
-          type: "arrow",
-          fromId: aid,
-          toId: toId,
-          props: {
-            terminal: "end",
-            normalizedAnchor: { x: 0.5, y: 0.5 },
-            isExact: false,
-            isPrecise: false,
-          },
-          meta: {},
-        } as TLRecord;
+        });
+        const { start, end } = makeArrowBindings(aid, fromId, toId);
         stage({
-          added: { [aid]: arrow, [b1.id]: b1, [b2.id]: b2 },
+          added: { [aid]: arrow, [start.id]: start, [end.id]: end },
           updated: {},
           removed: {},
         });
@@ -257,68 +270,16 @@ export function compile(
           const targetId = stagingIndex.get(a.about);
           if (targetId) {
             const aid = shapeId();
-            const arrow: TLRecord = {
+            const arrow = makeArrowShape({
               id: aid,
-              typeName: "shape",
-              type: "arrow",
-              x: 0,
-              y: 0,
-              parentId: "page:page",
-              index: "a1",
-              isLocked: false,
-              opacity: 1,
-              rotation: 0,
-              props: {
-                kind: "arc",
-                color: "black",
-                labelColor: "black",
-                fill: "none",
-                dash: "dashed",
-                size: "m",
-                arrowheadStart: "none",
-                arrowheadEnd: "arrow",
-                font: "draw",
-                start: { x: 0, y: 0 },
-                end: { x: 0, y: 0 },
-                bend: 0,
-                text: "",
-                labelPosition: 0.5,
-                scale: 1,
-                richText: richText(""),
-              },
+              dash: "dashed",
+              label: "",
               meta: { connectionKind: "dep", noteBinding: true },
-            } as TLRecord;
-            const b1: TLRecord = {
-              id: bindingId(),
-              typeName: "binding",
-              type: "arrow",
-              fromId: aid,
-              toId: id,
-              props: {
-                terminal: "start",
-                normalizedAnchor: { x: 0.5, y: 0.5 },
-                isExact: false,
-                isPrecise: false,
-              },
-              meta: {},
-            } as TLRecord;
-            const b2: TLRecord = {
-              id: bindingId(),
-              typeName: "binding",
-              type: "arrow",
-              fromId: aid,
-              toId: targetId,
-              props: {
-                terminal: "end",
-                normalizedAnchor: { x: 0.5, y: 0.5 },
-                isExact: false,
-                isPrecise: false,
-              },
-              meta: {},
-            } as TLRecord;
+            });
+            const { start, end } = makeArrowBindings(aid, id, targetId);
             sub.added[aid] = arrow;
-            sub.added[b1.id] = b1;
-            sub.added[b2.id] = b2;
+            sub.added[start.id] = start;
+            sub.added[end.id] = end;
           }
         }
         stage(sub);

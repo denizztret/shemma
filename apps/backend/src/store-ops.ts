@@ -11,6 +11,14 @@
 
 import type { StoreChangeBatch, TLRecord, TLStoreSnapshot } from "./store-types";
 
+export function isEmptyBatch(b: StoreChangeBatch): boolean {
+  return (
+    Object.keys(b.added).length === 0 &&
+    Object.keys(b.updated).length === 0 &&
+    Object.keys(b.removed).length === 0
+  );
+}
+
 export function applyStoreChanges(s: TLStoreSnapshot, batch: StoreChangeBatch): TLStoreSnapshot {
   // Sanity: id не может быть одновременно added и removed в одном батче.
   for (const id in batch.added) {

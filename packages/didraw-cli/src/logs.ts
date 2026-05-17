@@ -11,15 +11,18 @@ function lastNLines(content: string, n: number): string[] {
   return lines.slice(-n);
 }
 
+// Emit lines to stdout, optionally with a `[prefix] ` decoration for multi-profile follow.
+function writeLines(lines: string[], prefix?: string): void {
+  const head = prefix ? `[${prefix}] ` : "";
+  for (const line of lines) process.stdout.write(head + line + "\n");
+}
+
 async function printTail(path: string, n: number, prefix?: string): Promise<number> {
   if (!existsSync(path)) {
     return 0;
   }
-  const content = readFileSync(path, "utf8");
-  const lines = lastNLines(content, n);
-  for (const line of lines) {
-    process.stdout.write((prefix ? `[${prefix}] ` : "") + line + "\n");
-  }
+  const lines = lastNLines(readFileSync(path, "utf8"), n);
+  writeLines(lines, prefix);
   return lines.length;
 }
 
@@ -33,11 +36,7 @@ async function followLog(path: string, prefix?: string): Promise<void> {
   let offset = statSync(path).size;
 
   // Print existing content first (last DEFAULT_TAIL_LINES lines)
-  const content = readFileSync(path, "utf8");
-  const lines = lastNLines(content, DEFAULT_TAIL_LINES);
-  for (const line of lines) {
-    process.stdout.write((prefix ? `[${prefix}] ` : "") + line + "\n");
-  }
+  writeLines(lastNLines(readFileSync(path, "utf8"), DEFAULT_TAIL_LINES), prefix);
 
   // Poll for new content
   const interval = setInterval(() => {
@@ -52,9 +51,7 @@ async function followLog(path: string, prefix?: string): Promise<void> {
           const newLines = text.split("\n");
           // don't print trailing empty
           if (newLines[newLines.length - 1] === "") newLines.pop();
-          for (const line of newLines) {
-            process.stdout.write((prefix ? `[${prefix}] ` : "") + line + "\n");
-          }
+          writeLines(newLines, prefix);
           offset = size;
         });
       }

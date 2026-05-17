@@ -12,8 +12,7 @@ import type {
 import { validateBatch } from "../domain/validate";
 import { pushOpLog, resolveRoomId } from "../rooms";
 import type { Rooms } from "../rooms";
-import { applyStoreChanges, rebuildDidrawIndex } from "../store-ops";
-import type { StoreChangeBatch } from "../store-types";
+import { applyStoreChanges, isEmptyBatch, rebuildDidrawIndex } from "../store-ops";
 import type { RoomState, StoreChangeBus } from "../types";
 
 type LayoutInfo = { applied: boolean; affected?: ElementId[]; reason?: string };
@@ -41,14 +40,6 @@ function makeLruCache<K, V>(max: number) {
       }
     },
   };
-}
-
-function batchIsEmpty(b: StoreChangeBatch): boolean {
-  return (
-    Object.keys(b.added).length === 0 &&
-    Object.keys(b.updated).length === 0 &&
-    Object.keys(b.removed).length === 0
-  );
 }
 
 export function domainRoutes(
@@ -150,7 +141,7 @@ export function domainRoutes(
     }
 
     // Apply domain mutations atomically (if any).
-    if (!batchIsEmpty(compiled.batch)) {
+    if (!isEmptyBatch(compiled.batch)) {
       room.store = applyStoreChanges(room.store, compiled.batch);
       room.didrawIndex = rebuildDidrawIndex(room.store);
       room.version += 1;
@@ -194,21 +185,15 @@ export function domainRoutes(
         scope: body.layoutHint?.scope ?? "affected",
         spacing: (body.layoutHint?.spacing ?? "normal") as EffectiveHint["spacing"],
       };
-      let sawLayoutAction = false;
+      // Phase 2.x preserved: any AI batch runs layout by default. An explicit
+      // `layout` action lets the batch override mode/scope/spacing (last wins).
       for (const a of body.actions) {
         if (a.kind !== "layout") continue;
-        sawLayoutAction = true;
         if (a.mode) base.mode = a.mode as EffectiveHint["mode"];
         if (a.scope !== undefined) base.scope = a.scope;
         if (a.spacing) base.spacing = a.spacing as EffectiveHint["spacing"];
       }
-      // If batch contains no layout action AND no explicit layoutHint — leave default;
-      // batchIsEmpty check below decides whether to actually run ELK. Note: legacy
-      // Phase 2.x always ran layout on any AI batch; preserve that to keep tests
-      // passing.
       effectiveHint = base;
-      // Если в батче не было ни одной мутации (только layout no-op нет) — пропускаем.
-      void sawLayoutAction;
     }
 
     // Build affected-id set: shape records added or updated by THIS batch.
@@ -234,7 +219,7 @@ export function domainRoutes(
         );
         if (lr.reason) {
           layoutInfo = { applied: false, reason: lr.reason };
-        } else if (Object.keys(lr.batch.updated).length === 0 && Object.keys(lr.batch.added).length === 0 && Object.keys(lr.batch.removed).length === 0) {
+        } else if (isEmptyBatch(lr.batch)) {
           layoutInfo = { applied: false, reason: "no-changes" };
         } else {
           room.store = applyStoreChanges(room.store, lr.batch);

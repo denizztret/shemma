@@ -10,6 +10,17 @@ function clientFor(profile: Profile): CanvasClient {
   });
 }
 
+// Print response JSON; exit(1) if the backend reported ok:false.
+function printAndExitOnFail(res: unknown): void {
+  console.log(JSON.stringify(res));
+  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+}
+
+function dieRequireFlag(error: string): never {
+  console.error(JSON.stringify({ ok: false, error }));
+  process.exit(1);
+}
+
 export async function open(room: string, profile: Profile) {
   await ensureSilent(profile);
   const url = `http://localhost:${portFor(profile)}/?room=${encodeURIComponent(room)}`;
@@ -29,15 +40,9 @@ export async function list(profile: Profile) {
   console.log(JSON.stringify(res));
 }
 
-export async function exportRoom(
-  room: string,
-  to: string,
-  profile: Profile,
-) {
+export async function exportRoom(room: string, to: string, profile: Profile) {
   await ensureSilent(profile);
-  const res = await clientFor(profile).exportRoom(room, to);
-  console.log(JSON.stringify(res));
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  printAndExitOnFail(await clientFor(profile).exportRoom(room, to));
 }
 
 export async function importRoom(
@@ -46,23 +51,17 @@ export async function importRoom(
   profile: Profile,
 ) {
   await ensureSilent(profile);
-  const res = await clientFor(profile).importRoom(from, opts);
-  console.log(JSON.stringify(res));
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  printAndExitOnFail(await clientFor(profile).importRoom(from, opts));
 }
 
 export async function archiveRoom(room: string, profile: Profile) {
   await ensureSilent(profile);
-  const res = await clientFor(profile).archiveRoom(room);
-  console.log(JSON.stringify(res));
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  printAndExitOnFail(await clientFor(profile).archiveRoom(room));
 }
 
 export async function restoreRoom(room: string, profile: Profile) {
   await ensureSilent(profile);
-  const res = await clientFor(profile).restoreRoom(room);
-  console.log(JSON.stringify(res));
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  printAndExitOnFail(await clientFor(profile).restoreRoom(room));
 }
 
 export async function rmRoom(
@@ -71,19 +70,14 @@ export async function rmRoom(
   profile: Profile,
 ) {
   await ensureSilent(profile);
-  if (!opts.confirm) {
-    console.error(
-      JSON.stringify({ ok: false, error: "expected --confirm flag" }),
-    );
-    process.exit(1);
-  }
+  if (!opts.confirm) dieRequireFlag("expected --confirm flag");
   const mode = opts.archive ? "archive" : "hard";
-  const res = await clientFor(profile).deleteRoom(room, true, {
-    mode,
-    force: opts.force,
-  });
-  console.log(JSON.stringify(res));
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  printAndExitOnFail(
+    await clientFor(profile).deleteRoom(room, true, {
+      mode,
+      force: opts.force,
+    }),
+  );
 }
 
 export async function renameRoom(
@@ -93,27 +87,17 @@ export async function renameRoom(
   profile: Profile,
 ) {
   await ensureSilent(profile);
-  const res = await clientFor(profile).renameRoom(oldId, newId, opts);
-  console.log(JSON.stringify(res));
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  printAndExitOnFail(await clientFor(profile).renameRoom(oldId, newId, opts));
 }
 
-export async function duplicateRoom(
-  id: string,
-  as: string,
-  profile: Profile,
-) {
+export async function duplicateRoom(id: string, as: string, profile: Profile) {
   await ensureSilent(profile);
-  const res = await clientFor(profile).duplicateRoom(id, as);
-  console.log(JSON.stringify(res));
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  printAndExitOnFail(await clientFor(profile).duplicateRoom(id, as));
 }
 
 export async function duplicateRoomAuto(id: string, profile: Profile) {
   await ensureSilent(profile);
-  const res = await clientFor(profile).duplicateAuto(id);
-  console.log(JSON.stringify(res));
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  printAndExitOnFail(await clientFor(profile).duplicateAuto(id));
 }
 
 export async function purgeArchive(
@@ -121,21 +105,14 @@ export async function purgeArchive(
   profile: Profile,
 ) {
   await ensureSilent(profile);
-  if (!opts.confirm) {
-    console.error(
-      JSON.stringify({
-        ok: false,
-        error: "this is destructive, pass --confirm",
-      }),
-    );
-    process.exit(1);
-  }
+  if (!opts.confirm) dieRequireFlag("this is destructive, pass --confirm");
   const res = await clientFor(profile).purgeArchive();
+  const removed = (res as { removed?: number }).removed ?? 0;
   console.log(
     JSON.stringify({
       ok: true,
-      message: `Purged ${(res as { removed?: number }).removed ?? 0} archived rooms.`,
-      removed: (res as { removed?: number }).removed ?? 0,
+      message: `Purged ${removed} archived rooms.`,
+      removed,
     }),
   );
 }

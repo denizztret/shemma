@@ -65,7 +65,15 @@ export async function status(profile: Profile) {
   return { running: await isHealthy(port), pid, profile, port };
 }
 
-export async function start(profile: Profile) {
+export type StartOpts = {
+  /**
+   * Final resolved storage path для daemon child (включая profile subdir, если применимо).
+   * Если задан — exported в child env как DIDRAW_STORAGE_DIR, overriding ambient env.
+   */
+  storageDir?: string;
+};
+
+export async function start(profile: Profile, opts: StartOpts = {}) {
   const s = await status(profile);
   if (s.running) {
     console.log(JSON.stringify({ ok: true, already: true, ...s }));
@@ -75,17 +83,22 @@ export async function start(profile: Profile) {
   const lf = logFile(profile);
   rotateLogIfNeeded(lf);
   const logFd = openSync(lf, "a");
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    DIDRAW_PROFILE: profile,
+    DIDRAW_PORT: String(port),
+  };
+  // Explicit --storage wins over ambient DIDRAW_STORAGE_DIR.
+  if (opts.storageDir !== undefined) {
+    env.DIDRAW_STORAGE_DIR = opts.storageDir;
+  }
   const child = spawn(
     process.execPath,
     [process.argv[1], "internal-server", "--profile", profile],
     {
       detached: true,
       stdio: ["ignore", logFd, logFd],
-      env: {
-        ...process.env,
-        DIDRAW_PROFILE: profile,
-        DIDRAW_PORT: String(port),
-      },
+      env,
     },
   );
   child.unref();
@@ -96,7 +109,9 @@ export async function start(profile: Profile) {
     process.exit(1);
   }
   writeFileSync(pidFile(profile), String(child.pid));
-  console.log(JSON.stringify({ ok: true, pid: child.pid, profile, port }));
+  const out: Record<string, unknown> = { ok: true, pid: child.pid, profile, port };
+  if (opts.storageDir !== undefined) out.storage = opts.storageDir;
+  console.log(JSON.stringify(out));
 }
 
 /**

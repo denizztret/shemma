@@ -153,7 +153,7 @@ describe("GET /api/rooms", () => {
     );
     const body = (await res.json()) as { rooms: Array<{ id: string }> };
     expect(body.rooms).toHaveLength(1);
-    expect(body.rooms[0].id).toBe("only-active");
+    expect(body.rooms[0]!.id).toBe("only-active");
   });
 
   test("without ?include=archived, archived rooms are not returned", async () => {

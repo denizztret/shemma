@@ -42,6 +42,29 @@ async function readdirOrEmpty(dir: string): Promise<string[]> {
   }
 }
 
+// Resolve the on-disk path for `id`: active dir first, then `.archive/`.
+// Returns null when neither exists. Callers do their own 404 response.
+async function findRoomFile(
+  storageDir: string,
+  id: string,
+): Promise<string | null> {
+  const active = join(storageDir, `${id}.json`);
+  try {
+    await stat(active);
+    return active;
+  } catch {
+    /* not active */
+  }
+  const archived = join(storageDir, ".archive", `${id}.json`);
+  try {
+    await stat(archived);
+    return archived;
+  } catch {
+    /* not archived */
+  }
+  return null;
+}
+
 // Shared path-param validator. All `:id` routes MUST go through this —
 // raw c.req.param("id") joined with storageDir is a path-traversal vector
 // (e.g. id="../etc/passwd" → escape storageDir).
@@ -346,14 +369,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
     // CRITICAL ORDER: flush BEFORE stat — debounced save may not have written yet.
     await rooms.flushIfDirty(id);
 
-    // Find source: active first, then archived
-    const srcActive = join(storageDir, `${id}.json`);
-    const srcArchived = join(storageDir, ".archive", `${id}.json`);
-    let srcPath: string | null = null;
-    try { await stat(srcActive); srcPath = srcActive; } catch { /* not active */ }
-    if (!srcPath) {
-      try { await stat(srcArchived); srcPath = srcArchived; } catch { /* not archived either */ }
-    }
+    const srcPath = await findRoomFile(storageDir, id);
     if (!srcPath) {
       return c.json({ ok: false, error: "room not found" }, 404);
     }
@@ -455,25 +471,14 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
     // Flush BEFORE stat — debounced save may not have written yet.
     await rooms.flushIfDirty(id);
 
-    // Find source: active first, then archived
-    const srcActive = join(storageDir, `${id}.json`);
-    const srcArchived = join(storageDir, ".archive", `${id}.json`);
-    let srcPath: string | null = null;
-    try { await stat(srcActive); srcPath = srcActive; } catch { /* not active */ }
-    if (!srcPath) {
-      try { await stat(srcArchived); srcPath = srcArchived; } catch { /* not archived either */ }
-    }
+    const srcPath = await findRoomFile(storageDir, id);
     if (!srcPath) {
       return c.json({ ok: false, error: "room not found" }, 404);
     }
 
     // Find first available auto-suffix name: <id>-copy, <id>-copy2, <id>-copy3, ...
-    const archiveDir = join(storageDir, ".archive");
-    async function nameExists(candidate: string): Promise<boolean> {
-      try { await stat(join(storageDir, `${candidate}.json`)); return true; } catch { /* ok */ }
-      try { await stat(join(archiveDir, `${candidate}.json`)); return true; } catch { /* ok */ }
-      return false;
-    }
+    const nameExists = async (candidate: string): Promise<boolean> =>
+      (await findRoomFile(storageDir, candidate)) !== null;
 
     let newId = `${id}-copy`;
     if (await nameExists(newId)) {

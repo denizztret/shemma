@@ -10,6 +10,13 @@ function clientFor(profile: Profile, room?: string): CanvasClient {
   });
 }
 
+// Print response JSON and exit(1) if the backend reported ok:false.
+// All domain commands share this terminal shape — keep it in one place.
+function printAndExitOnFail(res: unknown): void {
+  console.log(JSON.stringify(res));
+  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+}
+
 async function postBatch(
   profile: Profile,
   actions: unknown[],
@@ -18,8 +25,7 @@ async function postBatch(
 ) {
   await ensureSilent(profile);
   const res = await clientFor(profile, room).applyDomain({ actions, ...extra });
-  console.log(JSON.stringify(res));
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  printAndExitOnFail(res);
 }
 
 export async function define(args: { role: string; name: string; label?: string; in?: string; profile: Profile; room?: string }) {
@@ -56,13 +62,11 @@ export async function applyStdin(args: { profile: Profile; room?: string }) {
   const raw = await new Response(Bun.stdin.stream()).text();
   const body = JSON.parse(raw);
   const res = await clientFor(args.profile, args.room).applyDomain(body);
-  console.log(JSON.stringify(res));
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  printAndExitOnFail(res);
 }
 
 export async function context(args: { since?: number; viewport?: string; profile: Profile; room?: string }) {
   await ensureSilent(args.profile);
   const res = await clientFor(args.profile, args.room).getContext({ since: args.since, viewport: args.viewport });
-  console.log(JSON.stringify(res));
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  printAndExitOnFail(res);
 }

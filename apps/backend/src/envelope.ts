@@ -1,10 +1,6 @@
 // apps/backend/src/envelope.ts
 import { config } from "./config";
-import type {
-  StoreChangeBatch,
-  StoreOpLogEntry,
-  TLStoreSnapshot,
-} from "./store-types";
+import type { StoreOpLogEntry, TLStoreSnapshot } from "./store-types";
 import type { Prompt, RoomState } from "./types";
 
 export const ENVELOPE_SCHEMA_VERSION = 3;
@@ -133,6 +129,3 @@ export function parseV2OrThrow(raw: string): { schemaVersion: 2; roomId: string;
     opLog: Array.isArray(j.opLog) ? j.opLog : [],
   };
 }
-
-// expose for legacy compat в delete unused symbol паттернах
-export type { StoreChangeBatch };

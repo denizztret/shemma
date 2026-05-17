@@ -304,21 +304,13 @@ export function RoomCard({
       </div>
 
       {/* Thumbnail — clickable to open (non-archived) */}
-      {room.archived ? (
-        <ThumbnailArea
-          src={thumbnailSrc}
-          elementCount={room.elementCount}
-          roomId={room.id}
-          onClick={undefined}
-        />
-      ) : (
-        <ThumbnailArea
-          src={thumbnailSrc}
-          elementCount={room.elementCount}
-          roomId={room.id}
-          onClick={openRoom}
-        />
-      )}
+      <ThumbnailArea
+        src={thumbnailSrc}
+        elementCount={room.elementCount}
+        roomId={room.id}
+        onClick={room.archived ? undefined : openRoom}
+      />
+
 
       {/* Metadata */}
       <div
@@ -373,68 +365,42 @@ export function RoomCard({
 
       {/* Action row */}
       <div style={{ display: "flex", gap: 6, flexWrap: "nowrap", overflowX: "auto" }}>
-        {!room.archived && (
-          <button
-            type="button"
-            onClick={handleArchive}
-            style={actionBtnStyle}
-          >
-            Archive
-          </button>
-        )}
-
-        {room.archived && (
-          <button
-            type="button"
-            onClick={handleRestore}
-            style={actionBtnStyle}
-          >
-            Restore
-          </button>
-        )}
-
-        {!room.archived && (
-          <button
-            type="button"
-            onClick={handleExport}
-            style={actionBtnStyle}
-          >
-            Export
-          </button>
-        )}
-
-        {!room.archived && (
-          <button
-            type="button"
-            onClick={startRename}
-            style={actionBtnStyle}
-          >
-            Rename
-          </button>
-        )}
-
-        {!room.archived && (
-          <button
-            type="button"
-            onClick={() => void handleDuplicate()}
-            style={actionBtnStyle}
-          >
-            Duplicate
-          </button>
-        )}
-
-        {room.archived && (
-          <button
-            type="button"
-            onClick={handleDeletePermanently}
-            style={{
-              ...actionBtnStyle,
-              color: tokens.color.errorBg,
-              borderColor: tokens.color.errorBg,
-            }}
-          >
-            Delete permanently
-          </button>
+        {room.archived ? (
+          <>
+            <button type="button" onClick={handleRestore} style={actionBtnStyle}>
+              Restore
+            </button>
+            <button
+              type="button"
+              onClick={handleDeletePermanently}
+              style={{
+                ...actionBtnStyle,
+                color: tokens.color.errorBg,
+                borderColor: tokens.color.errorBg,
+              }}
+            >
+              Delete permanently
+            </button>
+          </>
+        ) : (
+          <>
+            <button type="button" onClick={handleArchive} style={actionBtnStyle}>
+              Archive
+            </button>
+            <button type="button" onClick={handleExport} style={actionBtnStyle}>
+              Export
+            </button>
+            <button type="button" onClick={startRename} style={actionBtnStyle}>
+              Rename
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleDuplicate()}
+              style={actionBtnStyle}
+            >
+              Duplicate
+            </button>
+          </>
         )}
       </div>
     </div>
