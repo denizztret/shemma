@@ -15,6 +15,13 @@ type RoomGroup = {
   sortMode: SortMode;
 };
 
+function prettyPath(absolute: string, home: string): string {
+  if (home && absolute.startsWith(home)) {
+    return `~${absolute.slice(home.length)}`;
+  }
+  return absolute;
+}
+
 function sortRooms(rooms: RoomListItem[], mode: SortMode): RoomListItem[] {
   return [...rooms].sort((a, b) => {
     if (mode === "name") {
@@ -33,6 +40,7 @@ export function Gallery() {
   const [loading, setLoading] = useState(true);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [workspaceDir, setWorkspaceDir] = useState<string>("");
+  const [home, setHome] = useState<string>("");
   // Per-group sort state; keyed by group title
   const [sortModes, setSortModes] = useState<Record<string, SortMode>>({});
 
@@ -41,6 +49,7 @@ export function Gallery() {
       .then((s) => {
         setSessionId(s.sessionId);
         setWorkspaceDir(s.workspaceDir ?? "");
+        setHome(s.home ?? "");
       })
       .catch(() => {});
   }, []);
@@ -205,14 +214,11 @@ export function Gallery() {
                 background: "rgba(0,0,0,0.05)",
                 borderRadius: tokens.radius.sm,
                 padding: "2px 8px",
-                maxWidth: 320,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
+                wordBreak: "break-all",
               }}
               title={workspaceDir}
             >
-              {workspaceDir}
+              {prettyPath(workspaceDir, home)}
             </span>
           )}
         </div>

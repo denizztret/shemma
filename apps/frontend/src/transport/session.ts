@@ -2,6 +2,7 @@ export type SessionInfo = {
   sessionId: string | null;
   projectSlug: string;
   workspaceDir: string;
+  home?: string;
 };
 
 let cached: Promise<SessionInfo> | null = null;

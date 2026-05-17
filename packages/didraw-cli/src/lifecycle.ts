@@ -109,6 +109,13 @@ export async function duplicateRoom(
   if ((res as { ok?: boolean }).ok === false) process.exit(1);
 }
 
+export async function duplicateRoomAuto(id: string, profile: Profile) {
+  await ensureSilent(profile);
+  const res = await clientFor(profile).duplicateAuto(id);
+  console.log(JSON.stringify(res));
+  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+}
+
 export async function purgeArchive(
   opts: { confirm?: boolean } = {},
   profile: Profile,
