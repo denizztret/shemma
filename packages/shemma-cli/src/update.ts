@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { promises as fs } from "node:fs";
 import { arch, homedir, platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { authHeaders, readToken } from "./auth";
 import { ensure, stop } from "./daemon";
 import { parseProfile } from "./profile";
 import { fail } from "./util";
@@ -15,15 +16,59 @@ function isChannel(s: string): s is Channel {
   return (VALID_CHANNELS as readonly string[]).includes(s);
 }
 
-const CURRENT_VERSION = process.env.SHEMMA_VERSION ?? "0.0.0";
+// Resolve current version: prefer SHEMMA_VERSION injected by build-release.sh
+// (compiled binary); in dev fall back to package.json with a `-dev` suffix so
+// the channel comparison still parses, and the user sees something useful.
+function resolveCurrentVersion(): string {
+  const env = process.env.SHEMMA_VERSION;
+  if (env && env.length > 0) return env;
+  try {
+    // packages/shemma-cli/src/update.ts → ../package.json
+    const pkgPath = join(import.meta.dir, "..", "package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string };
+    if (pkg.version) return `${pkg.version}-dev`;
+  } catch {
+    // ignore — caller treats "0.0.0" as "pre-release"
+  }
+  return "0.0.0";
+}
+
+const CURRENT_VERSION = resolveCurrentVersion();
 
 const CONFIG_FILE = join(homedir(), ".claude", ".shemma-config.json");
 
-function manifestUrl(): string {
-  return (
-    process.env.SHEMMA_MANIFEST_URL ??
-    "https://github.com/example/shemma/releases/download/latest/release-manifest.json"
-  );
+// GitHub repo for distribution. Override via SHEMMA_GITHUB_REPO for forks/tests.
+const DEFAULT_REPO = "denizztret/shemma";
+
+function githubRepo(): string {
+  return process.env.SHEMMA_GITHUB_REPO ?? DEFAULT_REPO;
+}
+
+/**
+ * GitHub API endpoint for the latest release. We resolve the asset list from
+ * here at fetch time — this dodges the missing-tag-`latest` issue with raw
+ * `releases/download/latest/...` URLs and works seamlessly for both public
+ * and private repos (PAT decides access).
+ *
+ * `SHEMMA_MANIFEST_URL` env override is still honoured (legacy + tests):
+ *   - If it contains "api.github.com/repos/.../releases/latest" → use as-is.
+ *   - If it points at a static manifest JSON (raw URL) → fetch directly.
+ */
+function latestReleaseUrl(): string {
+  if (process.env.SHEMMA_MANIFEST_URL) return process.env.SHEMMA_MANIFEST_URL;
+  return `https://api.github.com/repos/${githubRepo()}/releases/latest`;
+}
+
+interface GitHubAsset {
+  id: number;
+  name: string;
+  url: string; // API URL for octet-stream download
+  browser_download_url: string;
+}
+
+interface GitHubRelease {
+  tag_name: string;
+  assets: GitHubAsset[];
 }
 
 type Config = { channel?: Channel };
@@ -64,15 +109,73 @@ function resolveChannel(): Channel {
   return "stable";
 }
 
+type ManifestChannel = {
+  version: string;
+  assets: Array<{ platform: string; url: string; sha256: string }>;
+};
+type Manifest = { channels?: Record<string, ManifestChannel> };
+
+/**
+ * Detect whether `SHEMMA_MANIFEST_URL` points at a static manifest JSON
+ * (legacy / test) vs a GitHub API release endpoint. Static URLs are fetched
+ * directly without the assets-id round trip.
+ */
+function isStaticManifestUrl(url: string): boolean {
+  // GitHub API releases endpoint pattern:
+  //   https://api.github.com/repos/<owner>/<repo>/releases/(latest|<id>)
+  if (/^https?:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/releases\//.test(url)) {
+    return false;
+  }
+  return true;
+}
+
+async function fetchJson<T>(url: string, token: string | null, accept: string): Promise<T> {
+  const r = await fetch(url, {
+    headers: {
+      Accept: accept,
+      "User-Agent": "shemma-cli",
+      ...authHeaders(token),
+    },
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${url}`);
+  return (await r.json()) as T;
+}
+
+/**
+ * Fetch the release manifest. Two paths:
+ *   A) static URL (SHEMMA_MANIFEST_URL → manifest.json) — direct fetch, parse
+ *   B) GitHub API → resolve `release-manifest.json` asset → fetch via
+ *      `assets/<id>` with `Accept: application/octet-stream`
+ *
+ * Token (PAT) injected on both paths when available.
+ */
+async function fetchManifest(): Promise<{ manifest: Manifest; release?: GitHubRelease }> {
+  const url = latestReleaseUrl();
+  const token = readToken({ skipGhCli: false });
+
+  if (isStaticManifestUrl(url)) {
+    const manifest = await fetchJson<Manifest>(url, token, "application/json");
+    return { manifest };
+  }
+
+  const release = await fetchJson<GitHubRelease>(url, token, "application/vnd.github+json");
+  const manifestAsset = release.assets.find((a) => a.name === "release-manifest.json");
+  if (!manifestAsset) {
+    throw new Error(`release ${release.tag_name} has no release-manifest.json asset`);
+  }
+  const manifest = await fetchJson<Manifest>(
+    manifestAsset.url,
+    token,
+    "application/octet-stream",
+  );
+  return { manifest, release };
+}
+
 export async function cmdUpdateCheck() {
   const channel = resolveChannel();
   try {
-    const r = await fetch(manifestUrl());
-    if (!r.ok) throw new Error(`manifest ${r.status}`);
-    const m = (await r.json()) as {
-      channels?: Record<string, { version?: string }>;
-    };
-    const latest = m.channels?.[channel]?.version ?? null;
+    const { manifest } = await fetchManifest();
+    const latest = manifest.channels?.[channel]?.version ?? null;
     const available = !!latest && semverCmp(latest, CURRENT_VERSION) > 0;
     const ui = getOutput();
     if (ui.mode === "json") {
@@ -114,12 +217,46 @@ function platformKey(): string {
   throw new Error(`unsupported platform ${p}-${a}`);
 }
 
+/**
+ * Resolve the actual download URL for a binary asset.
+ *
+ * Manifest URLs (set by generate-manifest.sh) point at browser-download
+ * URLs — those work for public repos but 404 for private. When we have a
+ * GitHub API release object we prefer asset.url (`/releases/assets/<id>`)
+ * with `Accept: application/octet-stream`, which honours the PAT.
+ *
+ * Falls back to the manifest URL when API metadata is unavailable (static
+ * manifest path).
+ */
+function resolveAssetDownloadUrl(
+  manifestUrl: string,
+  platformKey: string,
+  release?: GitHubRelease,
+): { url: string; accept: string } {
+  if (release) {
+    const apiAsset = release.assets.find((a) => a.name === `shemma-${platformKey}`);
+    if (apiAsset) {
+      return { url: apiAsset.url, accept: "application/octet-stream" };
+    }
+  }
+  return { url: manifestUrl, accept: "application/octet-stream" };
+}
+
 async function downloadAndVerify(
   url: string,
+  accept: string,
   sha256Expected: string,
 ): Promise<string> {
   const tmp = join(tmpdir(), `shemma-${Date.now()}.bin`);
-  const r = await fetch(url);
+  const token = readToken({ skipGhCli: false });
+  const r = await fetch(url, {
+    headers: {
+      Accept: accept,
+      "User-Agent": "shemma-cli",
+      ...authHeaders(token),
+    },
+    redirect: "follow",
+  });
   if (!r.ok) throw new Error(`download HTTP ${r.status}`);
   const buf = new Uint8Array(await r.arrayBuffer());
   await fs.writeFile(tmp, buf);
@@ -130,18 +267,6 @@ async function downloadAndVerify(
   }
   await fs.chmod(tmp, 0o755);
   return tmp;
-}
-
-type ManifestChannel = {
-  version: string;
-  assets: Array<{ platform: string; url: string; sha256: string }>;
-};
-type Manifest = { channels?: Record<string, ManifestChannel> };
-
-async function fetchManifest(): Promise<Manifest> {
-  const r = await fetch(manifestUrl());
-  if (!r.ok) throw new Error(`manifest HTTP ${r.status}`);
-  return r.json() as Promise<Manifest>;
 }
 
 export async function cmdUpdate(argv: string[]) {
@@ -155,8 +280,11 @@ export async function cmdUpdate(argv: string[]) {
   const channel = resolveChannel();
 
   let manifest: Manifest;
+  let release: GitHubRelease | undefined;
   try {
-    manifest = await fetchManifest();
+    const r = await fetchManifest();
+    manifest = r.manifest;
+    release = r.release;
   } catch (e) {
     fail(e);
   }
@@ -185,12 +313,14 @@ export async function cmdUpdate(argv: string[]) {
   const asset = ch.assets.find((a) => a.platform === key);
   if (!asset) fail(`no asset for ${key} in channel ${channel}`);
 
+  const { url: downloadUrl, accept } = resolveAssetDownloadUrl(asset.url, key, release);
+
   const target = process.execPath;
   const dir = dirname(target);
 
   let tmpfile: string;
   try {
-    tmpfile = await downloadAndVerify(asset.url, asset.sha256);
+    tmpfile = await downloadAndVerify(downloadUrl, accept, asset.sha256);
   } catch (e) {
     fail(e);
   }

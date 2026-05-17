@@ -1,3 +1,37 @@
+## 0.12.0 (Unreleased) — Group B distribution
+
+### Fixed
+
+- **Placeholder distribution URLs** (DRW-059 B1) — `packages/shemma-cli/src/update.ts` и `apps/backend/src/update-check.ts` больше не указывают на `github.com/example/shemma`. По умолчанию fetch идёт через GitHub Releases API (`api.github.com/repos/denizztret/shemma/releases/latest`) — двухшаговый flow: `/releases/latest` → найти asset `release-manifest.json` → fetch его по `assets/<id>` с `Accept: application/octet-stream`. Это работает для private repo (через PAT) и public repo (anonymous).
+- **`v$VERSION` tag convention** (DRW-059 B1) — `scripts/publish-release.sh` теперь ставит numeric tag `0.12.0` вместо `v0.12.0`, согласно `CLAUDE.md` (см. memory `feedback-gitflow-semver-tags`).
+- **CHANGELOG → release notes** (DRW-059 B1) — `scripts/publish-release.sh` извлекает section `## <VERSION>` из `CHANGELOG.md` и передаёт через `gh release create --notes-file` вместо placeholder string. Если entry не найден — graceful fallback на `"Release X on channel Y"`.
+- **`generate-manifest.sh` base URL** (DRW-059 B1) — default `MANIFEST_BASE_URL` теперь `github.com/denizztret/shemma/releases/download/<version>` (без `v` prefix). URLs в manifest informational — реальный download идёт через GitHub API.
+
+### Added
+
+- **PAT auth chain for private repo** (DRW-059 B2) — новый модуль `packages/shemma-cli/src/auth.ts` с функциями `readToken()` / `saveToken()` / `authHeaders()`. Precedence:
+  1. `process.env.SHEMMA_GITHUB_TOKEN`
+  2. `~/.config/shemma/auth.json` → `{ "github_token": "ghp_..." }`
+  3. `gh auth token` (1.5s timeout, best-effort)
+  4. null → anonymous fetch (works для public repo)
+  Token persists с `chmod 600`. `Authorization: Bearer <token>` + `User-Agent: shemma-cli|shemma-backend` headers injected при fetch манифеста и binary asset.
+- **`scripts/install.sh` — dual flow** (DRW-059 B2) — backwards-compatible new flag `--version <X>` запускает remote install из GitHub Release. Path A: `gh release download --repo denizztret/shemma` (если `gh` авторизован). Path B fallback: `curl + jq + PAT` (env `SHEMMA_GITHUB_TOKEN` или interactive prompt из `/dev/tty`). После successful Path B install token сохраняется в `~/.config/shemma/auth.json` (chmod 600) — последующие `shemma update` подхватят его автоматически. Дополнительные flags: `--repo <owner/name>` (override default `denizztret/shemma`). Default mode без `--version` остаётся как раньше (symlink на local pre-built binary).
+- **Backend auth-aware `update-check`** (DRW-059 B2) — `apps/backend/src/update-check.ts` использует ту же auth chain (skipGhCli=true чтобы не блокировать request loop на 1.5s). Failure всё ещё silent (cache `latest=null`, `updateAvailable=false`).
+- **Dev-mode version fallback** (DRW-059 B3) — `packages/shemma-cli/src/version-cmd.ts` теперь читает `packages/shemma-cli/package.json:version` когда `SHEMMA_VERSION` env не задан (или empty), добавляя суффикс `-dev` чтобы отличать source-run от compiled binary. `shemma version` показывает `shemma v0.12.0-dev [dev]` вместо legacy `shemma v[unknown]`. Banner (lifecycle.ts) уже использовал этот fallback с 0.11.0; consistency восстановлена.
+- **Tests** — `packages/shemma-cli/tests/auth.test.ts` (11 unit-тестов на token precedence + chmod 600 + roundtrip), `tests/update-fetch.test.ts` (4 subprocess test'а на static-URL + auth header + 404), `tests/version-cmd.test.ts` (2 теста на dev fallback), `tests/install-script.test.ts` (4 bash smoke-теста на flags + remote-mode error paths). Backend: `tests/update-check.test.ts` (4 теста на static URL + auth + 404 + malformed JSON). Итого: CLI 114 → 135 (+21), backend 258 → 262 (+4).
+
+### Changed
+
+- **`packages/shemma-cli/src/update.ts`** — `fetchManifest()` теперь раздаёт два пути: static URL (`SHEMMA_MANIFEST_URL` указывает на JSON напрямую, для legacy / тестов) vs GitHub API URL (две hop'а). `downloadAndVerify(url, accept, sha256)` принимает Accept explicit для API path (`application/octet-stream`). Both inject PAT auth header когда token есть.
+- **Default repo override** — обе точки (`update.ts` + `update-check.ts`) поддерживают `SHEMMA_GITHUB_REPO=<owner/name>` env override для форков и интеграционных тестов.
+
+### Notes
+
+- B4 (first publish) делает координатор отдельным шагом после merge этой ветки.
+- Existing `SHEMMA_MANIFEST_URL` env override продолжает работать (треатается как static URL автоматически если не matches `api.github.com/repos/.../releases/`). Backward-compat: tests которые ставили manifest URL на in-process Bun.serve и раньше работают.
+
+---
+
 ## 0.11.0 (Unreleased) — Group A CLI UX polish
 
 ### Added
