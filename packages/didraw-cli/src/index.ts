@@ -57,10 +57,14 @@ function stripProfileFlag(a: string[]): string[] {
   return out;
 }
 
+function die(error: string): never {
+  console.error(JSON.stringify({ ok: false, error }));
+  process.exit(1);
+}
+
 function assertNotAllWithProfile(all: boolean): void {
   if (all && explicitProfileProvided) {
-    console.error(JSON.stringify({ ok: false, error: "--all and --profile are mutually exclusive" }));
-    process.exit(1);
+    die("--all and --profile are mutually exclusive");
   }
 }
 
@@ -139,17 +143,11 @@ async function main() {
   if (cmd === "daemon") {
     if (sub === "start") {
       const { storage, errors } = parseStorageArg(argv.slice(2), process.cwd());
-      if (errors.length > 0) {
-        console.error(JSON.stringify({ ok: false, error: errors[0] }));
-        process.exit(1);
-      }
+      if (errors.length > 0) die(errors[0]!);
       if (storage !== undefined) {
         const finalDir = resolveStorageDirForProfile(storage, profile);
         const mkdirErr = ensureStorageDir(finalDir);
-        if (mkdirErr) {
-          console.error(JSON.stringify({ ok: false, error: mkdirErr }));
-          process.exit(1);
-        }
+        if (mkdirErr) die(mkdirErr);
         return start(profile, { storageDir: finalDir });
       }
       return start(profile);
@@ -177,18 +175,12 @@ async function main() {
     if (sub === "list") return list(profile);
     if (sub === "archive") {
       const id = argv[2];
-      if (!id) {
-        console.error(JSON.stringify({ ok: false, error: "expected <id>" }));
-        process.exit(1);
-      }
+      if (!id) die("expected <id>");
       return archiveRoom(id, profile);
     }
     if (sub === "restore") {
       const id = argv[2];
-      if (!id) {
-        console.error(JSON.stringify({ ok: false, error: "expected <id>" }));
-        process.exit(1);
-      }
+      if (!id) die("expected <id>");
       return restoreRoom(id, profile);
     }
     if (sub === "export") {
@@ -197,12 +189,7 @@ async function main() {
       for (let i = 3; i < argv.length; i++) {
         if (argv[i] === "--to") to = argv[++i];
       }
-      if (!id || !to) {
-        console.error(
-          JSON.stringify({ ok: false, error: "expected <id> --to <path>" }),
-        );
-        process.exit(1);
-      }
+      if (!id || !to) die("expected <id> --to <path>");
       return exportRoom(id, to, profile);
     }
     if (sub === "import") {
@@ -213,10 +200,7 @@ async function main() {
         if (argv[i] === "--as") asVal = argv[++i];
         else if (argv[i] === "--force") force = true;
       }
-      if (!from) {
-        console.error(JSON.stringify({ ok: false, error: "expected <path>" }));
-        process.exit(1);
-      }
+      if (!from) die("expected <path>");
       return importRoom(from, { as: asVal, force }, profile);
     }
     if (sub === "rm") {
@@ -224,20 +208,14 @@ async function main() {
       const confirm = argv.includes("--confirm");
       const archive = argv.includes("--archive");
       const force = argv.includes("--force");
-      if (!id) {
-        console.error(JSON.stringify({ ok: false, error: "expected <id>" }));
-        process.exit(1);
-      }
+      if (!id) die("expected <id>");
       return rmRoom(id, { confirm, archive, force }, profile);
     }
     if (sub === "rename") {
       const oldId = argv[2];
       const newId = argv[3];
       const force = argv.includes("--force");
-      if (!oldId || !newId) {
-        console.error(JSON.stringify({ ok: false, error: "expected <old> <new> [--force]" }));
-        process.exit(1);
-      }
+      if (!oldId || !newId) die("expected <old> <new> [--force]");
       return renameRoom(oldId, newId, { force }, profile);
     }
     if (sub === "duplicate") {
@@ -246,10 +224,7 @@ async function main() {
       for (let i = 3; i < argv.length; i++) {
         if (argv[i] === "--as") asVal = argv[++i];
       }
-      if (!id) {
-        console.error(JSON.stringify({ ok: false, error: "expected <id> [--as <newId>]" }));
-        process.exit(1);
-      }
+      if (!id) die("expected <id> [--as <newId>]");
       // If --as omitted, use auto-suffix endpoint
       if (!asVal) return duplicateRoomAuto(id, profile);
       return duplicateRoom(id, asVal, profile);
@@ -258,19 +233,13 @@ async function main() {
       const confirm = argv.includes("--confirm");
       return purgeArchive({ confirm }, profile);
     }
-    console.error(
-      JSON.stringify({
-        ok: false,
-        error: `unknown rooms subcommand: ${sub ?? "(none)"}`,
-      }),
-    );
-    process.exit(1);
+    die(`unknown rooms subcommand: ${sub ?? "(none)"}`);
   }
 
   if (cmd === "define") {
     const role = argv[1];
     const name = argv[2];
-    if (!role || !name) { console.error(JSON.stringify({ ok: false, error: "expected <role> <name>" })); process.exit(1); }
+    if (!role || !name) die("expected <role> <name>");
     let label: string | undefined;
     let inContainer: string | undefined;
     let room: string | undefined;
@@ -285,7 +254,7 @@ async function main() {
   if (cmd === "connect") {
     const from = argv[1];
     const to = argv[2];
-    if (!from || !to) { console.error(JSON.stringify({ ok: false, error: "expected <from> <to>" })); process.exit(1); }
+    if (!from || !to) die("expected <from> <to>");
     let kind: string | undefined;
     let label: string | undefined;
     let room: string | undefined;
@@ -309,7 +278,7 @@ async function main() {
       else if (argv[i] === "--label") label = argv[++i];
       else if (argv[i] === "--room") room = argv[++i];
     }
-    if (!asKind || !name) { console.error(JSON.stringify({ ok: false, error: "expected --as <kind> --name <name>" })); process.exit(1); }
+    if (!asKind || !name) die("expected --as <kind> --name <name>");
     return group({ ids, as: asKind, name, label, profile, room });
   }
 
@@ -322,7 +291,7 @@ async function main() {
       else if (argv[i] === "--about") about = argv[++i];
       else if (argv[i] === "--room") room = argv[++i];
     }
-    if (!text) { console.error(JSON.stringify({ ok: false, error: "expected --text \"...\"" })); process.exit(1); }
+    if (!text) die('expected --text "..."');
     return note({ text, about, profile, room });
   }
 
@@ -333,12 +302,12 @@ async function main() {
     for (let i = 2; i < argv.length; i++) {
       if (argv[i] === "--room") room = argv[++i];
     }
-    if (ids.length === 0) { console.error(JSON.stringify({ ok: false, error: "expected <id1,id2,...>" })); process.exit(1); }
+    if (ids.length === 0) die("expected <id1,id2,...>");
     return deleteCmd({ ids, cascade, profile, room });
   }
 
   if (cmd === "apply") {
-    if (!argv.includes("--stdin")) { console.error(JSON.stringify({ ok: false, error: "expected --stdin" })); process.exit(1); }
+    if (!argv.includes("--stdin")) die("expected --stdin");
     let room: string | undefined;
     for (let i = 1; i < argv.length; i++) {
       if (argv[i] === "--room") room = argv[++i];
