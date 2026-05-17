@@ -20,6 +20,7 @@ import {
   renameRoom,
   restoreRoom,
   rmRoom,
+  cmdInit,
 } from "./lifecycle";
 import { cmdLogs } from "./logs";
 import { applyProfile, parseProfile, portFor, type Profile } from "./profile";
@@ -28,6 +29,7 @@ import { cmdPrompts } from "./prompts";
 import { cmdDoctor } from "./doctor";
 import { cmdUpdate, cmdUpdateCheck, cmdUpdateSetChannel } from "./update";
 import { cmdVersion } from "./version-cmd";
+import { error as uiError, initOutput, parseOutputMode } from "./ui";
 
 const rawArgv = process.argv.slice(2);
 const profile = parseProfile(rawArgv);
@@ -38,8 +40,16 @@ applyProfile(profile);
 // Resolve --profile → SHEMMA_PORT so any CanvasClient (data/prompts/layout/version) hits the right daemon.
 // Explicit SHEMMA_PORT is honoured if already set (portFor checks env first).
 process.env.SHEMMA_PORT ??= String(portFor(profile));
+// Parse --json global flag (DRW-056) BEFORE stripping --profile so per-command
+// parsers don't see either flag.
+const { mode: outputMode, rest: argvAfterJson } = parseOutputMode(rawArgv);
+initOutput({
+  mode: outputMode,
+  isTTY: !!process.stdout.isTTY,
+  isStderrTTY: !!process.stderr.isTTY,
+});
 // Strip --profile <value> here so per-command parsers don't need to know about it.
-const argv = stripProfileFlag(rawArgv);
+const argv = stripProfileFlag(argvAfterJson);
 
 function stripProfileFlag(a: string[]): string[] {
   const out: string[] = [];
@@ -58,7 +68,7 @@ function stripProfileFlag(a: string[]): string[] {
 }
 
 function die(error: string): never {
-  console.error(JSON.stringify({ ok: false, error }));
+  uiError(error, { code: error });
   process.exit(1);
 }
 
@@ -120,6 +130,14 @@ async function main() {
     return cmdUpdate(argv.slice(1));
   }
 
+  if (cmd === "init") {
+    // shemma init [<path>] — create .shemma/ in cwd (or given path) for
+    // non-interactive bootstrap (DRW-058 bonus). Sibling of `shemma open`
+    // interactive prompt.
+    const target = argv[1];
+    return cmdInit(target);
+  }
+
   if (cmd === "ps") return cmdPs();
 
   if (cmd === "logs") {
@@ -163,8 +181,23 @@ async function main() {
       if (all) return stopAll(explicitProfileProvided ? profile : undefined);
       return stop(profile);
     }
-    if (sub === "status")
-      return console.log(JSON.stringify(await status(profile), null, 2));
+    if (sub === "status") {
+      const s = await status(profile);
+      const { getOutput, success: uiSuccess, info: uiInfo } = await import("./ui");
+      const ui = getOutput();
+      if (ui.mode === "json") {
+        console.log(JSON.stringify(s, null, 2));
+      } else {
+        // biome-ignore lint/suspicious/noExplicitAny: union narrowing for diff shapes
+        const sa: any = s;
+        if (sa.running) {
+          uiSuccess(`daemon running (pid ${sa.pid}, profile ${sa.profile}, port ${sa.port})`);
+        } else {
+          uiInfo(`daemon not running (profile ${sa.profile}, port ${sa.port})`);
+        }
+      }
+      return;
+    }
     if (sub === "ensure" || sub === "--ensure") return ensure(profile);
     usage();
     process.exit(1);
@@ -365,6 +398,7 @@ Default (zero-arg):
   shemma open [<room>] [--storage <path>] [--no-browser]
                                               # same with optional room override
                                               # storage precedence: --storage > SHEMMA_STORAGE_DIR > cwd/.shemma
+  shemma init [<path>]                        # create .shemma/ (default cwd) for non-interactive bootstrap
 
 Lifecycle:
   daemon start [--storage <path>] | stop [--all] | status | ensure
@@ -413,6 +447,7 @@ Versioning:
 Flags:
   --profile dev|release|debug   select runtime profile (default: release)
   --debug                       shortcut for --profile debug
+  --json                        emit machine-readable JSON instead of friendly text (for agent/CI)
 
 Note: Mermaid import is browser-only (see ADR-0001): open canvas and run
   await window.shemmaImportMermaid('graph LR\\n  app --> db')
@@ -425,6 +460,6 @@ Exit codes: 0 ok, 1 usage/error, 2 not-found, 3 daemon-not-healthy/doctor-fail
 }
 
 main().catch((e) => {
-  console.error(JSON.stringify({ ok: false, error: String(e) }));
+  uiError(String(e), { code: String(e) });
   process.exit(1);
 });

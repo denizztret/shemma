@@ -20,6 +20,8 @@ export function parseProfile(argv: string[]): Profile {
     if (argv[i] === "--profile") {
       const val = argv[i + 1];
       if (!isProfile(val)) {
+        // ui module not yet initialized at parseProfile time — emit raw JSON
+        // to stderr for backward compat. This runs before `initOutput()`.
         console.error(
           JSON.stringify({
             ok: false,

@@ -19,7 +19,9 @@ const envFor = (room: string): Record<string, string> => ({
 });
 
 async function cli(args: string[], env: Record<string, string>, input?: string) {
-  const proc = Bun.spawn(["bun", CLI, ...args], {
+  // Add --json to preserve machine-readable output for JSON.parse assertions.
+  // Group A (DRW-056) made human-readable the default; tests opt-in to JSON.
+  const proc = Bun.spawn(["bun", CLI, "--json", ...args], {
     env,
     stdin: input !== undefined ? Buffer.from(input) : "ignore",
     stdout: "pipe",

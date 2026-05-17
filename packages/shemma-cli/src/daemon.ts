@@ -14,6 +14,7 @@ const GRACEFUL_SHUTDOWN_MS = 2000; // matches backend default; override via SHEM
 const DEFAULT_LOG_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
 
 import { type Profile, ALL_PROFILES, logFile, pidFile, portFor } from "./profile";
+import { error as uiError, getOutput, success as uiSuccess } from "./ui";
 
 function logMaxBytes(): number {
   const raw = process.env.SHEMMA_LOG_MAX_MB;
@@ -76,7 +77,14 @@ export type StartOpts = {
 export async function start(profile: Profile, opts: StartOpts = {}) {
   const s = await status(profile);
   if (s.running) {
-    console.log(JSON.stringify({ ok: true, already: true, ...s }));
+    const ui = getOutput();
+    if (ui.mode === "json") {
+      console.log(JSON.stringify({ ok: true, already: true, ...s }));
+    } else {
+      uiSuccess(
+        `daemon already running (pid ${(s as { pid?: number }).pid}, profile ${profile}, port ${(s as { port?: number }).port})`,
+      );
+    }
     return;
   }
   const port = portFor(profile);
@@ -103,15 +111,18 @@ export async function start(profile: Profile, opts: StartOpts = {}) {
   );
   child.unref();
   if (!child.pid) {
-    console.error(
-      JSON.stringify({ ok: false, error: "failed to spawn daemon: no PID" }),
-    );
+    uiError("failed to spawn daemon: no PID");
     process.exit(1);
   }
   writeFileSync(pidFile(profile), String(child.pid));
-  const out: Record<string, unknown> = { ok: true, pid: child.pid, profile, port };
-  if (opts.storageDir !== undefined) out.storage = opts.storageDir;
-  console.log(JSON.stringify(out));
+  const ui = getOutput();
+  if (ui.mode === "json") {
+    const out: Record<string, unknown> = { ok: true, pid: child.pid, profile, port };
+    if (opts.storageDir !== undefined) out.storage = opts.storageDir;
+    console.log(JSON.stringify(out));
+  } else {
+    uiSuccess(`daemon started (pid ${child.pid}, profile ${profile}, port ${port})`);
+  }
 }
 
 /**
@@ -139,22 +150,29 @@ async function ensureDaemon(profile: Profile, verbose: boolean) {
     const port = portFor(profile);
     if (await isHealthy(port)) {
       if (verbose) {
-        console.log(JSON.stringify({ ok: true, already: true, profile, port }));
+        const ui = getOutput();
+        if (ui.mode === "json") {
+          console.log(JSON.stringify({ ok: true, already: true, profile, port }));
+        } else {
+          uiSuccess(`daemon already running (profile ${profile}, port ${port})`);
+        }
       }
       return;
     }
-    console.error(
-      JSON.stringify({
-        ok: false,
-        error: `shemma: SHEMMA_PORT is set but server not healthy on :${port}`,
-      }),
-    );
+    uiError(`shemma: SHEMMA_PORT is set but server not healthy on :${port}`);
     process.exit(3);
   }
   const s = await status(profile);
   if (s.running) {
     if (verbose) {
-      console.log(JSON.stringify({ ok: true, already: true, ...s }));
+      const ui = getOutput();
+      if (ui.mode === "json") {
+        console.log(JSON.stringify({ ok: true, already: true, ...s }));
+      } else {
+        uiSuccess(
+          `daemon already running (pid ${(s as { pid?: number }).pid}, profile ${profile}, port ${(s as { port?: number }).port})`,
+        );
+      }
     }
     return;
   }
@@ -164,19 +182,19 @@ async function ensureDaemon(profile: Profile, verbose: boolean) {
     await new Promise((r) => setTimeout(r, 100));
     if (await isHealthy(port)) return;
   }
-  console.error(
-    JSON.stringify({
-      ok: false,
-      error: `shemma: not healthy within 5s on :${port}`,
-    }),
-  );
+  uiError(`shemma: not healthy within 5s on :${port}`);
   process.exit(3);
 }
 
 export async function stop(profile: Profile) {
+  const ui = getOutput();
   const file = pidFile(profile);
   if (!existsSync(file)) {
-    console.log(JSON.stringify({ ok: true, already: true, profile }));
+    if (ui.mode === "json") {
+      console.log(JSON.stringify({ ok: true, already: true, profile }));
+    } else {
+      uiSuccess(`daemon not running (profile ${profile})`);
+    }
     return;
   }
   const pid = Number(readFileSync(file, "utf8"));
@@ -203,7 +221,11 @@ export async function stop(profile: Profile) {
   } catch (_) {
     /* ignore — file may already be gone */
   }
-  console.log(JSON.stringify({ ok: true, stopped: pid, profile }));
+  if (ui.mode === "json") {
+    console.log(JSON.stringify({ ok: true, stopped: pid, profile }));
+  } else {
+    uiSuccess(`daemon stopped (pid ${pid}, profile ${profile})`);
+  }
 }
 
 /**
@@ -240,5 +262,17 @@ export async function stopAll(onlyProfile?: Profile) {
     try { unlinkSync(file); } catch (_) { /* ignore */ }
     results.push({ ok: true, stopped: pid, profile: p });
   }
-  console.log(JSON.stringify(results));
+  const ui = getOutput();
+  if (ui.mode === "json") {
+    console.log(JSON.stringify(results));
+  } else {
+    for (const r of results) {
+      const e = r as { already?: boolean; stopped?: number; profile: Profile };
+      if (e.already) {
+        uiSuccess(`daemon not running (profile ${e.profile})`);
+      } else {
+        uiSuccess(`daemon stopped (pid ${e.stopped}, profile ${e.profile})`);
+      }
+    }
+  }
 }

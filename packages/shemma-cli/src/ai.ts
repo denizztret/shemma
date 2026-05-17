@@ -1,5 +1,6 @@
 import { CanvasClient } from "@shemma/client";
 import { fail } from "./util";
+import { error as uiError, getOutput, printResponse } from "./ui";
 
 type Args = {
   room?: string;
@@ -18,17 +19,24 @@ function parseArgs(argv: string[]): Args {
   return a;
 }
 
+function emit(res: unknown, humanSuccess: string): void {
+  const ui = getOutput();
+  if (ui.mode === "json") {
+    process.stdout.write(JSON.stringify(res) + "\n");
+  } else {
+    printResponse(res, { humanSuccess });
+  }
+}
+
 export async function cmdAiStart(argv: string[]) {
   const a = parseArgs(argv);
   if (!a.actor || !a.task) {
-    console.error(
-      JSON.stringify({ ok: false, error: "expected --actor X --task Y" }),
-    );
+    uiError("expected --actor X --task Y", { code: "expected --actor X --task Y" });
     process.exit(1);
   }
   const c = new CanvasClient({ room: a.room });
   try {
-    console.log(JSON.stringify(await c.aiStart(a.actor, a.task)));
+    emit(await c.aiStart(a.actor, a.task), `ai started (actor=${a.actor})`);
   } catch (e) {
     fail(e);
   }
@@ -38,7 +46,7 @@ export async function cmdAiStop(argv: string[]) {
   const a = parseArgs(argv);
   const c = new CanvasClient({ room: a.room });
   try {
-    console.log(JSON.stringify(await c.aiStop()));
+    emit(await c.aiStop(), "ai stopped");
   } catch (e) {
     fail(e);
   }
@@ -48,7 +56,7 @@ export async function cmdAiStatus(argv: string[]) {
   const a = parseArgs(argv);
   const c = new CanvasClient({ room: a.room });
   try {
-    console.log(JSON.stringify(await c.aiActivity()));
+    emit(await c.aiActivity(), "ai status fetched");
   } catch (e) {
     fail(e);
   }

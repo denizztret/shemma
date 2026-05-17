@@ -1,5 +1,6 @@
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { ALL_PROFILES, type Profile, logFile } from "./profile";
+import { error as uiError } from "./ui";
 
 const DEFAULT_TAIL_LINES = 50;
 const POLL_INTERVAL_MS = 200;
@@ -28,9 +29,9 @@ async function printTail(path: string, n: number, prefix?: string): Promise<numb
 
 async function followLog(path: string, prefix?: string): Promise<void> {
   if (!existsSync(path)) {
-    process.stderr.write(
-      JSON.stringify({ ok: false, error: `log file not found: ${path}` }) + "\n",
-    );
+    uiError(`log file not found: ${path}`, {
+      code: `log file not found: ${path}`,
+    });
     process.exit(2);
   }
   let offset = statSync(path).size;
@@ -103,9 +104,9 @@ export async function cmdLogs(opts: LogsOptions): Promise<void> {
 
   const path = logFile(profile);
   if (!existsSync(path)) {
-    process.stderr.write(
-      JSON.stringify({ ok: false, error: `log file not found: ${path}` }) + "\n",
-    );
+    uiError(`log file not found: ${path}`, {
+      code: `log file not found: ${path}`,
+    });
     process.exit(2);
   }
 
