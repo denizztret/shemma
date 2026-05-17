@@ -24,10 +24,10 @@ describe("fetchSession", () => {
       projectSlug: "my-proj-abc12345",
       workspaceDir: "/home/user/project",
     };
-    globalThis.fetch = async () =>
+    globalThis.fetch = (async () =>
       ({
         json: async () => mockPayload,
-      }) as unknown as Response;
+      }) as unknown as Response) as unknown as typeof fetch;
 
     const info = await fetchSession();
     expect(typeof info.sessionId === "string" || info.sessionId === null).toBe(
