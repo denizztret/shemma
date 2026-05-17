@@ -112,22 +112,26 @@ export function App({ room }: { room: string }) {
     let unsubSel: (() => void) | undefined;
     let camSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
-    const hydrateAndSync = async () => {
-      // DRW-047: upload our real V2 schema before fetching state so the
-      // backend can replace its V1 placeholder stub. Best-effort — getState
-      // still works on stale rooms, и backend ignore-ит повторный seed.
+    // DRW-047 + DRW-018: upload our V2 schema (best-effort), then fetch /api/state
+    // and apply via mergeRemoteChanges. Shared by initial hydrate and truncated-recovery.
+    const fetchAndLoadSnapshot = async (): Promise<{ version: number } | null> => {
       try {
         await seedSchema(room, editor.store.schema.serialize());
       } catch {
         // network blip; getState path handles legacy placeholder rooms too.
       }
       const s = await getState();
-      if (!active) return;
-
+      if (!active) return null;
       const snapshot = { ...s.store, store: backfillStoreRecords(s.store?.store) };
       editor.store.mergeRemoteChanges(() => {
         editor.loadSnapshot(snapshot);
       });
+      return { version: s.version };
+    };
+
+    const hydrateAndSync = async () => {
+      const loaded = await fetchAndLoadSnapshot();
+      if (!loaded) return;
 
       // Initial AI-activity snapshot.
       fetch(`/api/ai/activity?room=${encodeURIComponent(room)}`)
@@ -146,10 +150,10 @@ export function App({ room }: { room: string }) {
 
       // Start WS store sync.
       const wsUrl = `ws://${location.host}/ws?room=${encodeURIComponent(room)}`;
-      const sync = startStoreSync({
+      syncHandle = startStoreSync({
         editor,
         wsUrl,
-        initialVersion: s.version,
+        initialVersion: loaded.version,
         onTruncated: () => {
           // DRW-018: pause the (now zombie) syncer immediately so any frames
           // that arrive between this callback and ws.close() — or any straggler
@@ -161,21 +165,8 @@ export function App({ room }: { room: string }) {
           // Server says we're too far behind to replay → re-fetch full state.
           void (async () => {
             try {
-              try {
-                await seedSchema(room, editor.store.schema.serialize());
-              } catch {
-                // best-effort: getState falls back to existing schema.
-              }
-              const fresh = await getState();
-              if (!active) return;
-              const freshSnapshot = {
-                ...fresh.store,
-                store: backfillStoreRecords(fresh.store?.store),
-              };
-              editor.store.mergeRemoteChanges(() => {
-                editor.loadSnapshot(freshSnapshot);
-              });
-              // Re-arm sync with the fresh version.
+              const fresh = await fetchAndLoadSnapshot();
+              if (!fresh) return;
               syncHandle?.stop();
               syncHandle = startStoreSync({
                 editor,
@@ -192,7 +183,6 @@ export function App({ room }: { room: string }) {
           })();
         },
       });
-      syncHandle = sync;
 
       // Dev-console helper: window.didrawImportMermaid(source). Mutates store;
       // startStoreSync auto-forwards the batch to backend over WS.
