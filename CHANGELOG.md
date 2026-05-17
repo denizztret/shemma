@@ -1,3 +1,30 @@
+## 0.4.1 — 2026-05-17 — Batch 1 quick wins (post-3.0 cleanup)
+
+### Fixed
+
+- **DRW-001** — `RoomBadge` показывал `v0.4.0` с префиксом `v`. Now: `0.4.0` (синхронно с numeric-tag policy).
+- **DRW-002** — `GET /favicon.ico → 404`. Добавлен `apps/frontend/public/favicon.svg` + `<link rel="icon" type="image/svg+xml">` в `index.html`.
+- **DRW-016** — `MAX_VISIBLE = 5 → 3` в `apps/frontend/src/state/error-bus.ts` (sync со spec Phase 2.2 §5.1).
+
+### Refactor
+
+- **DRW-013** — `pushOpLog(room, entry, max)` helper в `apps/backend/src/rooms.ts`; 4 call sites (`index.ts`, `routes/domain.ts` ×2, `routes/layout.ts`) теперь используют helper вместо дублированного cap-splice.
+- **DRW-014** — удалён legacy `ws.send({kind:"hello", version:0})` initial frame в `apps/backend/src/index.ts:websocket.open`; client сам инициирует hello с `lastVersion`, сервер отвечает sync-ack/replay/truncated.
+
+### Docs
+
+- **DRW-019** — spec Phase 2.2 §3.1 и §3.4 синхронизированы с config: `opLogMaxSize` default 200 → 50.
+
+### Cancelled (obsolete after Phase 3.0)
+
+- DRW-006 (retry-422 loop), DRW-007 (markHistoryStoppingPoint), DRW-008 (version polling), DRW-011 (to-patch tests), DRW-015 (findGroupByName unification), DRW-017 (OpLog schema validation), DRW-020 (style.dashed:false), DRW-021 (cross-client endpoint-move) — устранены архитектурно при переходе на tldraw-as-primary.
+
+### Tests
+
+288 pass (58 domain + 203 backend + 4 client + 23 cli). No new tests — все правки либо тривиальные UI / config refactors, либо удаления, покрытие сохраняется существующими integration-тестами.
+
+---
+
 ## 0.4.0 — 2026-05-17 — Phase 3.0: tldraw-as-primary, domain-as-view
 
 **Архитектурный pivot.** Tldraw store стал primary persistence; наш domain layer — read-only view + write-compiler поверх него. Двусторонняя визуальная синхронизация AI ↔ user работает для **всех** tldraw shape types (закрывает DRW-024 fundamental).

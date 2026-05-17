@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { config } from "../config";
 import { runLayout } from "../domain/layout";
-import { resolveRoomId } from "../rooms";
+import { pushOpLog, resolveRoomId } from "../rooms";
 import type { Rooms } from "../rooms";
 import { applyStoreChanges, rebuildDidrawIndex } from "../store-ops";
 import type { RoomState, StoreChangeBus } from "../types";
@@ -46,10 +46,11 @@ export function layoutRoutes(
     r.store = applyStoreChanges(r.store, lr.batch);
     r.didrawIndex = rebuildDidrawIndex(r.store);
     r.version += 1;
-    r.opLog.push({ ops: lr.batch, source: "ai", version: r.version, at: Date.now() });
-    if (r.opLog.length > config.opLogMaxSize) {
-      r.opLog.splice(0, r.opLog.length - config.opLogMaxSize);
-    }
+    pushOpLog(
+      r,
+      { ops: lr.batch, source: "ai", version: r.version, at: Date.now() },
+      config.opLogMaxSize,
+    );
     r.dirty = true;
     opts.onDirty?.(id, r);
     bus.publish(id, { changes: lr.batch, source: "ai", version: r.version });

@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { config } from "./config";
 import { EMBEDDED_ASSETS } from "./embedded-assets";
 import { FilePersistence } from "./persistence";
-import { type RoomStore, Rooms, validateRoomId } from "./rooms";
+import { type RoomStore, Rooms, pushOpLog, validateRoomId } from "./rooms";
 import { aiRoutes } from "./routes/ai";
 import { contextRoutes } from "./routes/context";
 import { domainRoutes } from "./routes/domain";
@@ -92,7 +92,6 @@ export async function startServer(opts: AppOpts = {}) {
       open(ws) {
         const { room } = ws.data as unknown as { room: string };
         bus.attach(room, ws as Sock);
-        ws.send(JSON.stringify({ kind: "hello", version: 0 }));
       },
       async message(ws, raw) {
         const { room } = ws.data as unknown as { room: string };
@@ -115,16 +114,17 @@ export async function startServer(opts: AppOpts = {}) {
           r.store = applyStoreChanges(r.store, msg.changes);
           r.didrawIndex = rebuildDidrawIndex(r.store);
           r.version += 1;
-          r.opLog.push({
-            ops: msg.changes,
-            source: "user",
-            version: r.version,
-            at: Date.now(),
-            clientOpId: msg.clientOpId,
-          });
-          if (r.opLog.length > config.opLogMaxSize) {
-            r.opLog.splice(0, r.opLog.length - config.opLogMaxSize);
-          }
+          pushOpLog(
+            r,
+            {
+              ops: msg.changes,
+              source: "user",
+              version: r.version,
+              at: Date.now(),
+              clientOpId: msg.clientOpId,
+            },
+            config.opLogMaxSize,
+          );
           r.dirty = true;
           if (persistence) persistence.scheduleSave(room, r);
           // Re-broadcast to other connected clients. The sender will see this

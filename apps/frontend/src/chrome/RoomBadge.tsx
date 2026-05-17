@@ -37,7 +37,7 @@ export function RoomBadge({ room }: { room: string }) {
             borderRadius: tokens.radius.sm,
           }}
         >
-          v{v.version}
+          {v.version}
         </div>
       )}
       <div
