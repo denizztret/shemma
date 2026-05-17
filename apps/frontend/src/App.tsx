@@ -4,6 +4,7 @@ import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
 import { importMermaid } from "./canvas/mermaid-import";
+import { isPlaceholderSchema } from "./canvas/schema-placeholder";
 import { AiActivityBadge } from "./chrome/AiActivityBadge";
 import { AppChrome } from "./chrome/AppChrome";
 import { ErrorBanner } from "./chrome/ErrorBanner";
@@ -115,12 +116,17 @@ export function App({ room }: { room: string }) {
       const s = await getState();
       if (!active) return;
 
-      // Загружаем серверный snapshot — backend = source of truth.
-      // Backend теперь хранит реальную V2 схему tldraw, полученную от первого
-      // подключившегося клиента через WS hello (Phase 3.1, DRW-040).
-      // Стаб-схема из defaultSchema() заменяется до того, как loadSnapshot вызван.
+      // Backend хранит реальную V2 схему, полученную от первого WS-клиента
+      // (DRW-040). Но на самом первом коннекте к свежей комнате schema ещё
+      // placeholder V1 stub — loadSnapshot бы упал на миграциях. Детектим
+      // placeholder и подменяем на текущую editor schema только в этом случае;
+      // на втором же подключении backend уже отдаст реальную V2 — override
+      // выключится сам.
+      const snapshot = isPlaceholderSchema(s.store?.schema)
+        ? { ...s.store, schema: editor.store.schema.serialize() }
+        : s.store;
       editor.store.mergeRemoteChanges(() => {
-        editor.loadSnapshot(s.store);
+        editor.loadSnapshot(snapshot);
       });
 
       // Initial AI-activity snapshot.
@@ -150,8 +156,11 @@ export function App({ room }: { room: string }) {
             try {
               const fresh = await getState();
               if (!active) return;
+              const freshSnapshot = isPlaceholderSchema(fresh.store?.schema)
+                ? { ...fresh.store, schema: editor.store.schema.serialize() }
+                : fresh.store;
               editor.store.mergeRemoteChanges(() => {
-                editor.loadSnapshot(fresh.store);
+                editor.loadSnapshot(freshSnapshot);
               });
               // Re-arm sync with the fresh version.
               stopSync?.();
