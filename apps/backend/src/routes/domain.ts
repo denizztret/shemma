@@ -210,10 +210,27 @@ export function domainRoutes(
       void sawLayoutAction;
     }
 
+    // Build affected-id set: shape records added or updated by THIS batch.
+    // При scope=affected layout не должен двигать user-drawn shapes (freehand,
+    // images, user rectangles) — даём runLayout этот set, и он pin'ит non-affected.
+    const affectedIds = new Set<string>();
+    for (const id of Object.keys(compiled.batch.added)) {
+      const r = room.store.store[id];
+      if (r?.typeName === "shape") affectedIds.add(id);
+    }
+    for (const id of Object.keys(compiled.batch.updated)) {
+      const r = room.store.store[id];
+      if (r?.typeName === "shape") affectedIds.add(id);
+    }
+
     let layoutInfo: LayoutInfo = { applied: false };
     if (effectiveHint !== null) {
       try {
-        const lr = await runLayout(room.store, effectiveHint, room.didrawIndex);
+        const lr = await runLayout(
+          room.store,
+          { ...effectiveHint, affectedIds },
+          room.didrawIndex,
+        );
         if (lr.reason) {
           layoutInfo = { applied: false, reason: lr.reason };
         } else if (Object.keys(lr.batch.updated).length === 0 && Object.keys(lr.batch.added).length === 0 && Object.keys(lr.batch.removed).length === 0) {

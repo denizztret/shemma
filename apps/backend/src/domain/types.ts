@@ -5,10 +5,16 @@ export type ElementId = string;
 
 // LayoutHint.scope ("all" | "affected" | ElementId) is wider than LayoutAction.scope ("all" | ElementId):
 // "affected" is the orchestrator default (layout only what changed in this batch), never emitted by AI.
+//
+// affectedIds: orchestrator-provided set of shape record IDs that are «in scope»
+// for the current layout pass. When scope === "affected", any user shape OUTSIDE
+// affectedIds is pinned as-is — keeps user-drawn freehand/images from being
+// reshuffled when AI adds a new node via /api/domain. См. layout.ts.
 export type LayoutHint = {
   mode?: LayoutMode;
   scope?: "all" | "affected" | ElementId;
   spacing?: Spacing;
+  affectedIds?: Set<string>;
 };
 
 export type DefineAction = {

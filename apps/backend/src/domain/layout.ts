@@ -290,12 +290,19 @@ export async function runLayout(
     return { batch: emptyBatch, affected: [] };
   }
 
-  // Pin set: только meta.pinned === true. Scope=affected pinning теперь
-  // ответственность orchestrator'а (routes/domain.ts может пометить узлы
-  // как pinned через staging-патчи перед вызовом runLayout).
+  // Pin set: meta.pinned === true ИЛИ (scope='affected' AND shape ∉ affectedIds).
+  // Второе условие — DRW-003 equivalent для Phase 3.0: при scope=affected мы
+  // фиксируем все non-affected user shapes, чтобы AI define/connect/group не
+  // перекладывал freehand draws / images / user-drawn rectangles.
   const pinnedSet = new Set<string>();
+  const affectedIds = hint.affectedIds;
+  const scopedToAffected = fullHint.scope === "affected" && affectedIds && affectedIds.size > 0;
   for (const s of shapes) {
-    if (isPinned(s)) pinnedSet.add(s.id);
+    if (isPinned(s)) {
+      pinnedSet.add(s.id);
+    } else if (scopedToAffected && !affectedIds.has(s.id)) {
+      pinnedSet.add(s.id);
+    }
   }
 
   const graph = buildElkGraph(store, shapes, fullHint);
