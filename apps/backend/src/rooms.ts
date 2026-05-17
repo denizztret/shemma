@@ -3,6 +3,7 @@ import type { FilePersistence } from "./persistence";
 import type { StoreOpLogEntry, TLStoreSnapshot } from "./store-types";
 import type { RoomId, RoomState } from "./types";
 import { DEFAULT_ROOM } from "./types";
+import { config } from "./config";
 
 const ROOM_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 // Stored viewport hints expire after this window of inactivity so a stale
@@ -116,6 +117,12 @@ export class Rooms {
       try {
         const loaded = await this.store.load(id);
         const s = loaded ?? makeRoomState();
+        // Auto-populate linkedSession on first creation/load if not already set
+        // and the env session matches this room id.
+        if (s.linkedSession === undefined && config.sessionId !== null && config.sessionId === id) {
+          s.linkedSession = id;
+          s.dirty = true;
+        }
         this.map.set(id, s);
         return s;
       } finally {

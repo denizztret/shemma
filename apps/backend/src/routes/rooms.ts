@@ -10,6 +10,7 @@ import {
 } from "../envelope";
 import type { Rooms } from "../rooms";
 import { validateRoomId } from "../rooms";
+import { config } from "../config";
 
 // Shared path-param validator. All `:id` routes MUST go through this —
 // raw c.req.param("id") joined with storageDir is a path-traversal vector
@@ -42,6 +43,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
         elementCount: number;
         lastTouched: string;
         schemaVersion: number;
+        linkedSession?: string;
       }> = [];
       for (const f of files) {
         if (!f.endsWith(".json")) continue;
@@ -51,13 +53,21 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
           const raw = await readFile(join(storageDir, f), "utf8");
           const hdr = parseHeader(raw);
           if (!hdr) continue;
-          out.push({
+          const item: (typeof out)[0] = {
             id,
             version: hdr.version,
             elementCount: hdr.elementCount,
             lastTouched: hdr.lastTouched,
             schemaVersion: hdr.schemaVersion,
-          });
+          };
+          // Best-effort: parse full envelope to read linkedSession.
+          try {
+            const full = parseFull(raw);
+            if (full.linkedSession !== undefined) item.linkedSession = full.linkedSession;
+          } catch {
+            // non-v3 or malformed — no linkedSession
+          }
+          out.push(item);
         } catch (e) {
           console.error("[rooms] skip", id, (e as Error).message);
         }
@@ -227,13 +237,20 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
-    const body = (await c.req.json().catch(() => ({}))) as { confirm?: boolean };
+    const body = (await c.req.json().catch(() => ({}))) as {
+      confirm?: boolean;
+      mode?: "archive" | "hard";
+      force?: boolean;
+    };
     if (!body.confirm) {
       return c.json(
         { ok: false, error: "expected {confirm:true} in body" },
         400,
       );
     }
+
+    const mode = body.mode ?? "archive";
+    const force = body.force ?? false;
 
     // Flush before stat: pending writes for this room must materialize so we
     // either find the file (and delete it) or honestly 404.
@@ -246,9 +263,70 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
       return c.json({ ok: false, error: "room not found" }, 404);
     }
 
+    if (mode === "archive") {
+      // Reuse existing archive logic: move file to .archive/.
+      await rooms.evict(id);
+      const archiveDir = join(storageDir, ".archive");
+      await mkdir(archiveDir, { recursive: true });
+      const dstPath = join(archiveDir, `${id}.json`);
+      await rename(path, dstPath);
+      return c.json({ ok: true, archivedTo: dstPath });
+    }
+
+    // mode === "hard"
+    // Pre-flight: load room to check linkedSession (populates it if applicable).
+    const room = await rooms.get(id);
+    if (
+      room.linkedSession !== undefined &&
+      room.linkedSession === config.sessionId &&
+      !force
+    ) {
+      return c.json(
+        {
+          ok: false,
+          error: "linked-to-active-session",
+          linkedSession: room.linkedSession,
+        },
+        409,
+      );
+    }
+
     await rooms.evict(id);
     await unlink(path);
     return c.json({ ok: true });
+  });
+
+  app.post("/api/rooms/purge-archive", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { confirm?: boolean };
+    if (!body.confirm) {
+      return c.json(
+        { ok: false, error: "expected {confirm:true} in body" },
+        422,
+      );
+    }
+
+    const archiveDir = join(storageDir, ".archive");
+    let files: string[];
+    try {
+      files = await readdir(archiveDir);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+        return c.json({ ok: true, removed: 0 });
+      }
+      throw e;
+    }
+
+    let removed = 0;
+    for (const f of files) {
+      if (!f.endsWith(".json")) continue;
+      try {
+        await unlink(join(archiveDir, f));
+        removed++;
+      } catch (e) {
+        console.error("[rooms] purge-archive skip", f, (e as Error).message);
+      }
+    }
+    return c.json({ ok: true, removed });
   });
 
   return app;

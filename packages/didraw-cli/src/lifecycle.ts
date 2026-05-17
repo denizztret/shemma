@@ -67,7 +67,7 @@ export async function restoreRoom(room: string, profile: Profile) {
 
 export async function rmRoom(
   room: string,
-  opts: { confirm?: boolean } = {},
+  opts: { confirm?: boolean; archive?: boolean; force?: boolean } = {},
   profile: Profile,
 ) {
   await ensureSilent(profile);
@@ -77,7 +77,35 @@ export async function rmRoom(
     );
     process.exit(1);
   }
-  const res = await clientFor(profile).deleteRoom(room, true);
+  const mode = opts.archive ? "archive" : "hard";
+  const res = await clientFor(profile).deleteRoom(room, true, {
+    mode,
+    force: opts.force,
+  });
   console.log(JSON.stringify(res));
   if ((res as { ok?: boolean }).ok === false) process.exit(1);
+}
+
+export async function purgeArchive(
+  opts: { confirm?: boolean } = {},
+  profile: Profile,
+) {
+  await ensureSilent(profile);
+  if (!opts.confirm) {
+    console.error(
+      JSON.stringify({
+        ok: false,
+        error: "this is destructive, pass --confirm",
+      }),
+    );
+    process.exit(1);
+  }
+  const res = await clientFor(profile).purgeArchive();
+  console.log(
+    JSON.stringify({
+      ok: true,
+      message: `Purged ${(res as { removed?: number }).removed ?? 0} archived rooms.`,
+      removed: (res as { removed?: number }).removed ?? 0,
+    }),
+  );
 }

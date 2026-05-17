@@ -92,7 +92,7 @@ export class FilePersistence implements RoomStore {
       return state;
     }
     const env = parseFull(raw);
-    return {
+    const state: RoomState = {
       store: env.store,
       prompts: env.prompts,
       version: env.version,
@@ -101,6 +101,8 @@ export class FilePersistence implements RoomStore {
       lastTouched: Date.now(),
       didrawIndex: rebuildDidrawIndex(env.store),
     };
+    if (env.linkedSession !== undefined) state.linkedSession = env.linkedSession;
+    return state;
   }
 
   async save(id: RoomId, s: RoomState): Promise<void> {

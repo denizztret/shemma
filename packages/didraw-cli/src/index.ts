@@ -9,6 +9,7 @@ import {
   importRoom,
   list,
   open,
+  purgeArchive,
   restoreRoom,
   rmRoom,
 } from "./lifecycle";
@@ -149,11 +150,17 @@ async function main() {
     if (sub === "rm") {
       const id = argv[2];
       const confirm = argv.includes("--confirm");
+      const archive = argv.includes("--archive");
+      const force = argv.includes("--force");
       if (!id) {
         console.error(JSON.stringify({ ok: false, error: "expected <id>" }));
         process.exit(1);
       }
-      return rmRoom(id, { confirm }, profile);
+      return rmRoom(id, { confirm, archive, force }, profile);
+    }
+    if (sub === "purge-archive") {
+      const confirm = argv.includes("--confirm");
+      return purgeArchive({ confirm }, profile);
     }
     console.error(
       JSON.stringify({
@@ -266,11 +273,12 @@ Lifecycle:
   daemon start|stop|status|ensure
   open <room>
   rooms list
-  rooms archive  <id>
-  rooms restore  <id>
-  rooms export   <id> --to <path>
-  rooms import   <path> [--as <id>] [--force]
-  rooms rm       <id> --confirm
+  rooms archive       <id>
+  rooms restore       <id>
+  rooms export        <id> --to <path>
+  rooms import        <path> [--as <id>] [--force]
+  rooms rm            <id> [--archive] [--hard] [--force] --confirm
+  rooms purge-archive --confirm
 
 Domain (preferred AI interface) — каждая команда принимает [--room <id>] (default = "default"):
   define <role> <name> [--label "..."] [--in <container>] [--room <id>]

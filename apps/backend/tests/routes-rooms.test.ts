@@ -511,7 +511,7 @@ describe("DELETE /api/rooms/:id", () => {
     expect(res.status).toBe(400);
   });
 
-  test("removes file with confirm:true", async () => {
+  test("default mode (no mode field) archives the file", async () => {
     seedRoom("doomed", () => {});
     const { app } = makeApp({ storageDir: dir });
     const res = await app.fetch(
@@ -523,10 +523,43 @@ describe("DELETE /api/rooms/:id", () => {
     );
     expect(res.status).toBe(200);
     const { existsSync } = await import("node:fs");
+    // File moved to archive, not unlinked
     expect(existsSync(join(dir, "doomed.json"))).toBe(false);
+    expect(existsSync(join(dir, ".archive", "doomed.json"))).toBe(true);
   });
 
-  test("no autosave overwrite after delete", async () => {
+  test("mode=archive moves file to .archive/", async () => {
+    seedRoom("arch-explicit", () => {});
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/arch-explicit", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: true, mode: "archive" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dir, "arch-explicit.json"))).toBe(false);
+    expect(existsSync(join(dir, ".archive", "arch-explicit.json"))).toBe(true);
+  });
+
+  test("mode=hard removes file without linked check (no session)", async () => {
+    seedRoom("hard-room", () => {});
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/hard-room", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: true, mode: "hard" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dir, "hard-room.json"))).toBe(false);
+  });
+
+  test("no autosave overwrite after hard delete", async () => {
     const { app, rooms, persistence } = makeApp({ storageDir: dir });
     const r = await rooms.get("ghost");
     seedShape(r, "shape:n1", "n1");
@@ -538,7 +571,7 @@ describe("DELETE /api/rooms/:id", () => {
       new Request("http://localhost/api/rooms/ghost", {
         method: "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ confirm: true }),
+        body: JSON.stringify({ confirm: true, mode: "hard" }),
       }),
     );
 
@@ -546,5 +579,140 @@ describe("DELETE /api/rooms/:id", () => {
 
     const { existsSync } = await import("node:fs");
     expect(existsSync(join(dir, "ghost.json"))).toBe(false);
+  });
+
+  test("mode=hard on linked room without force → 409", async () => {
+    const sessionId = "linked-test-session";
+    process.env.CLAUDE_SESSION_ID = sessionId;
+    const { __resetConfigForTests } = await import("../src/config");
+    __resetConfigForTests();
+    try {
+      seedRoom(sessionId, (s) => {
+        s.linkedSession = sessionId;
+      });
+      const { app } = makeApp({ storageDir: dir });
+      const res = await app.fetch(
+        new Request(`http://localhost/api/rooms/${sessionId}`, {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ confirm: true, mode: "hard" }),
+        }),
+      );
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { ok: boolean; error: string };
+      expect(body.ok).toBe(false);
+      expect(body.error).toBe("linked-to-active-session");
+    } finally {
+      delete process.env.CLAUDE_SESSION_ID;
+      __resetConfigForTests();
+    }
+  });
+
+  test("mode=hard on linked room with force=true → 200, file unlinked", async () => {
+    const sessionId = "linked-force-session";
+    process.env.CLAUDE_SESSION_ID = sessionId;
+    const { __resetConfigForTests } = await import("../src/config");
+    __resetConfigForTests();
+    try {
+      seedRoom(sessionId, (s) => {
+        s.linkedSession = sessionId;
+      });
+      const { app } = makeApp({ storageDir: dir });
+      const res = await app.fetch(
+        new Request(`http://localhost/api/rooms/${sessionId}`, {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ confirm: true, mode: "hard", force: true }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      const { existsSync } = await import("node:fs");
+      expect(existsSync(join(dir, `${sessionId}.json`))).toBe(false);
+    } finally {
+      delete process.env.CLAUDE_SESSION_ID;
+      __resetConfigForTests();
+    }
+  });
+
+  test("mode=hard on linked room with DIFFERENT session → 200 (not blocked)", async () => {
+    const linkedSess = "other-session-id";
+    const activeSess = "active-session-id";
+    process.env.CLAUDE_SESSION_ID = activeSess;
+    const { __resetConfigForTests } = await import("../src/config");
+    __resetConfigForTests();
+    try {
+      seedRoom("cross-session-room", (s) => {
+        s.linkedSession = linkedSess;
+      });
+      const { app } = makeApp({ storageDir: dir });
+      const res = await app.fetch(
+        new Request("http://localhost/api/rooms/cross-session-room", {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ confirm: true, mode: "hard" }),
+        }),
+      );
+      expect(res.status).toBe(200);
+    } finally {
+      delete process.env.CLAUDE_SESSION_ID;
+      __resetConfigForTests();
+    }
+  });
+
+  test("POST /api/rooms/purge-archive without confirm → 422", async () => {
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/purge-archive", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(422);
+  });
+
+  test("POST /api/rooms/purge-archive with confirm → removes archived files", async () => {
+    seedRoom("purge-a", () => {});
+    seedRoom("purge-b", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    // Archive both rooms
+    await app.fetch(
+      new Request("http://localhost/api/rooms/purge-a/archive", { method: "POST" }),
+    );
+    await app.fetch(
+      new Request("http://localhost/api/rooms/purge-b/archive", { method: "POST" }),
+    );
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/purge-archive", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; removed: number };
+    expect(body.ok).toBe(true);
+    expect(body.removed).toBe(2);
+
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dir, ".archive", "purge-a.json"))).toBe(false);
+    expect(existsSync(join(dir, ".archive", "purge-b.json"))).toBe(false);
+  });
+
+  test("POST /api/rooms/purge-archive with no archived files → removed:0", async () => {
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/purge-archive", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; removed: number };
+    expect(body.ok).toBe(true);
+    expect(body.removed).toBe(0);
   });
 });

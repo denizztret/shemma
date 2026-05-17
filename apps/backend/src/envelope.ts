@@ -26,6 +26,7 @@ export type EnvelopeV3 = EnvelopeHeader & {
   store: TLStoreSnapshot;
   prompts: Prompt[];
   opLog: StoreOpLogEntry[];
+  linkedSession?: string;
 };
 
 export type ExportEnvelope = EnvelopeV3 & { exportedAt: string };
@@ -37,7 +38,7 @@ function countShapes(store: Record<string, { typeName?: string }>): number {
 }
 
 function buildV3(roomId: string, s: RoomState): EnvelopeV3 {
-  return {
+  const env: EnvelopeV3 = {
     schemaVersion: 3,
     roomId,
     version: s.version,
@@ -48,6 +49,8 @@ function buildV3(roomId: string, s: RoomState): EnvelopeV3 {
     prompts: s.prompts,
     opLog: s.opLog.slice(-config.opLogMaxSize),
   };
+  if (s.linkedSession !== undefined) env.linkedSession = s.linkedSession;
+  return env;
 }
 
 export function serialize(roomId: string, s: RoomState): string {
@@ -96,7 +99,7 @@ export function parseFull(raw: string): EnvelopeV3 {
   ) {
     throw new Error("malformed envelope");
   }
-  return {
+  const parsed: EnvelopeV3 = {
     schemaVersion: 3,
     roomId: j.roomId,
     version: j.version,
@@ -107,6 +110,8 @@ export function parseFull(raw: string): EnvelopeV3 {
     prompts: j.prompts,
     opLog: Array.isArray(j.opLog) ? j.opLog : [],
   };
+  if (typeof j.linkedSession === "string") parsed.linkedSession = j.linkedSession;
+  return parsed;
 }
 
 // Используется migrate-v2.ts. Принимает schemaVersion 2 или 1 (treat v1 as v2 для migrator).
