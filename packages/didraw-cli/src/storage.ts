@@ -77,3 +77,54 @@ export function ensureStorageDir(path: string): string | null {
     return `cannot create storage dir "${path}": ${(e as Error).message}`;
   }
 }
+
+export type OpenStorageSource = "explicit" | "env" | "auto-cwd";
+
+export type OpenStorageResolution = {
+  /** User-facing base path (без profile subdir). Absolute. */
+  base: string;
+  /** Final storage path used by daemon (включая profile subdir). Absolute. */
+  storageDir: string;
+  /** Where this storage came from — для info-log и tests. */
+  source: OpenStorageSource;
+};
+
+/**
+ * Pure helper: вычисляет storage base для `didraw open` / zero-arg launch.
+ *
+ * Precedence (per DRW-052):
+ *   1. explicit `--storage <path>` (already parsed → opts.explicit)
+ *   2. `DIDRAW_STORAGE_DIR` env (если задано)
+ *   3. auto: `<cwd>/.didraw`
+ *
+ * Не делает I/O. Caller вызывает `ensureStorageDir(result.storageDir)` отдельно
+ * + сравнивает с running-daemon storage через `getRunningDaemonStorage`.
+ */
+export function resolveStorageForOpen(
+  opts: { explicit?: string },
+  cwd: string,
+  env: { DIDRAW_STORAGE_DIR?: string | undefined },
+  profile: Profile,
+): OpenStorageResolution {
+  let base: string;
+  let source: OpenStorageSource;
+  if (opts.explicit !== undefined) {
+    base = isAbsolute(opts.explicit)
+      ? opts.explicit
+      : resolve(cwd, opts.explicit);
+    source = "explicit";
+  } else if (env.DIDRAW_STORAGE_DIR !== undefined) {
+    const v = env.DIDRAW_STORAGE_DIR;
+    // Env values are typically already absolute; resolve to be safe.
+    base = isAbsolute(v) ? v : resolve(cwd, v);
+    source = "env";
+  } else {
+    base = join(cwd, ".didraw");
+    source = "auto-cwd";
+  }
+  return {
+    base,
+    storageDir: resolveStorageDirForProfile(base, profile),
+    source,
+  };
+}

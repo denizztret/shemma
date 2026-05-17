@@ -6,7 +6,7 @@ import { type RoomStore, Rooms, pushOpLog, validateRoomId } from "./rooms";
 import { aiRoutes } from "./routes/ai";
 import { contextRoutes } from "./routes/context";
 import { domainRoutes } from "./routes/domain";
-import { healthRoutes } from "./routes/health";
+import { makeHealthRoutes } from "./routes/health";
 import { layoutRoutes } from "./routes/layout";
 import { sessionRoutes } from "./routes/session";
 import { promptRoutes } from "./routes/prompts";
@@ -41,7 +41,7 @@ export function makeApp(opts: AppOpts = {}) {
   const onDirty = persistence
     ? (id: string, room: RoomState) => persistence.scheduleSave(id, room)
     : undefined;
-  app.route("/", healthRoutes);
+  app.route("/", makeHealthRoutes(storageDir));
   app.route("/", versionRoutes);
   app.route("/", sessionRoutes);
   app.route("/", stateRoutes(rooms, { onDirty }));

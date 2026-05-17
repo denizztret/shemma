@@ -41,6 +41,8 @@ function slugify(s: string): string {
 export type MermaidImportResult = {
   ok: true;
   shapeIds: TLShapeId[];
+  /** Subset of shapeIds где сохранён meta.mermaidSource (root frame'ы импорта). */
+  sourceTargetIds: TLShapeId[];
 };
 
 /**
@@ -49,7 +51,9 @@ export type MermaidImportResult = {
  *   1) запоминаем set'ы до/после, чтобы знать какие записи добавлены;
  *   2) проставляем meta.didrawName на новых shapes (через updateShapes) —
  *      backend rebuild'ит didrawIndex из этих имён;
- *   3) даём caller'у список новых shape id (для zoom-to / debug).
+ *   3) сохраняем meta.mermaidSource на root frame'ах (или, если frame'а нет,
+ *      на всех новых root shapes) — foundation для future edit UI (DRW-053);
+ *   4) даём caller'у список новых shape id (для zoom-to / debug).
  *
  * Сами WS-фреймы шлёт startStoreSync — ничего вручную здесь не нужно.
  *
@@ -78,8 +82,27 @@ export async function importMermaid(
     throw new Error("mermaid produced no shapes");
   }
 
+  // Определяем root shape'ы среди новых: те, чей parentId — page (а не другой
+  // shape). Это либо single frame/group-обёртка (типичный случай), либо набор
+  // top-level фигур (на flat-диаграммах без group). meta.mermaidSource ставим
+  // на root'ы — для edit UI важно знать "от какого узла этот импорт".
+  const pageId = editor.getCurrentPageId() as unknown as string;
+  // biome-ignore lint/suspicious/noExplicitAny: tldraw shape parentId not typed publicly
+  const isRoot = (s: TLShape) => (s as any).parentId === pageId;
+  // Если есть frame'ы среди roots — предпочитаем их (контейнер импорта).
+  // Иначе — все root shape'ы.
+  const rootFrames = newShapes.filter((s) => isRoot(s) && s.type === "frame");
+  const sourceTargets = rootFrames.length > 0 ? rootFrames : newShapes.filter(isRoot);
+  const sourceTargetIds = new Set<string>(
+    sourceTargets.map((s) => s.id as unknown as string),
+  );
+  // Безопасно: даже если нет ни одного root (createMermaidDiagram странно
+  // переподцепил всё к чему-то pre-existing), не запишем mermaidSource нигде —
+  // и это лучше, чем дублировать его на все 50 child-нод.
+
   // Назначим meta.didrawName для добавленных shapes. Берём label / shape.type,
-  // дедуплицируем суффиксами -2, -3, … per-import.
+  // дедуплицируем суффиксами -2, -3, … per-import. Параллельно — meta.mermaidSource
+  // на root frame'ах.
   const usedNames = new Set<string>();
   // biome-ignore lint/suspicious/noExplicitAny: tldraw partial update types verbose; safe by id+type
   const updates: any[] = [];
@@ -94,15 +117,27 @@ export async function importMermaid(
       candidate = `${base}-${n++}`;
     }
     usedNames.add(candidate);
+    const meta: Record<string, unknown> = {
+      ...s.meta,
+      didrawName: candidate,
+    };
+    if (sourceTargetIds.has(s.id as unknown as string)) {
+      meta.mermaidSource = source;
+    }
     updates.push({
       id: s.id,
       type: s.type,
-      meta: { ...s.meta, didrawName: candidate },
+      meta,
     });
   }
   if (updates.length > 0) {
     editor.updateShapes(updates);
   }
 
-  return { ok: true, shapeIds: newShapes.map((s) => s.id) };
+  return {
+    ok: true,
+    shapeIds: newShapes.map((s) => s.id),
+    sourceTargetIds: Array.from(sourceTargetIds) as unknown as TLShapeId[],
+  };
 }
+

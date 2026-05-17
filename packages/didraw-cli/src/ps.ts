@@ -1,3 +1,4 @@
+import { CanvasClient } from "@didraw/client";
 import { ALL_PROFILES, type Profile, portFor } from "./profile";
 import { isHealthy, status } from "./daemon";
 
@@ -27,6 +28,24 @@ export interface ProfileStatus {
   pid?: number;
   running: boolean;
   healthy: boolean;
+}
+
+/**
+ * Returns resolved storage path of a currently running daemon for `profile`,
+ * or `null` if no daemon is running (connection refused / unhealthy /
+ * /api/health отсутствует на pre-DRW-052 версии).
+ *
+ * Used by `didraw open` (DRW-052) to detect storage conflict: если daemon
+ * запущен на другом storage, нельзя просто открыть browser — он попадёт
+ * не туда, куда user ожидает.
+ */
+export async function getRunningDaemonStorage(
+  profile: Profile,
+): Promise<string | null> {
+  const port = portForPs(profile);
+  const client = new CanvasClient({ baseUrl: `http://localhost:${port}` });
+  const health = await client.getHealth();
+  return health?.storage ?? null;
 }
 
 export async function cmdPs(): Promise<void> {

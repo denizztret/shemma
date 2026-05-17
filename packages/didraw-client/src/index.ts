@@ -150,6 +150,46 @@ export class CanvasClient {
     }
   }
 
+  /**
+   * Extended health probe (`GET /api/health`).
+   * Returns daemon profile, resolved storage path, and version on success;
+   * `null` if the daemon is unreachable or the response is malformed.
+   * Used by `didraw open` (DRW-052) for storage-conflict detection.
+   */
+  async getHealth(): Promise<{
+    ok: true;
+    profile: string;
+    storage: string;
+    version: string;
+  } | null> {
+    try {
+      const r = await fetch(`${this.base}/api/health`);
+      if (!r.ok) return null;
+      const j = (await r.json()) as {
+        ok?: unknown;
+        profile?: unknown;
+        storage?: unknown;
+        version?: unknown;
+      };
+      if (
+        j.ok !== true ||
+        typeof j.profile !== "string" ||
+        typeof j.storage !== "string" ||
+        typeof j.version !== "string"
+      ) {
+        return null;
+      }
+      return {
+        ok: true,
+        profile: j.profile,
+        storage: j.storage,
+        version: j.version,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async getVersion() {
     const r = await fetch(`${this.base}/api/version`);
     return r.json();

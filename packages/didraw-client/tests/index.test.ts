@@ -57,6 +57,23 @@ describe("CanvasClient", () => {
     expect(view.elements.some((e) => e.id === "n1" && e.role === "service")).toBe(true);
   });
 
+  test("getHealth returns profile + storage + version (DRW-052)", async () => {
+    const c = new CanvasClient({ baseUrl: `http://localhost:${srv.port}` });
+    const h = await c.getHealth();
+    expect(h).not.toBeNull();
+    expect(h!.ok).toBe(true);
+    expect(typeof h!.profile).toBe("string");
+    expect(typeof h!.storage).toBe("string");
+    expect(typeof h!.version).toBe("string");
+  });
+
+  test("getHealth returns null when daemon unreachable", async () => {
+    // Pick a port we expect to be free.
+    const c = new CanvasClient({ baseUrl: "http://localhost:1" });
+    const h = await c.getHealth();
+    expect(h).toBeNull();
+  });
+
   test("deletePrompt + purgePrompts", async () => {
     const c = new CanvasClient({
       baseUrl: `http://localhost:${srv.port}`,
