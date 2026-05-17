@@ -194,21 +194,15 @@ export function domainRoutes(
         scope: body.layoutHint?.scope ?? "affected",
         spacing: (body.layoutHint?.spacing ?? "normal") as EffectiveHint["spacing"],
       };
-      let sawLayoutAction = false;
+      // Phase 2.x preserved: any AI batch runs layout by default. An explicit
+      // `layout` action lets the batch override mode/scope/spacing (last wins).
       for (const a of body.actions) {
         if (a.kind !== "layout") continue;
-        sawLayoutAction = true;
         if (a.mode) base.mode = a.mode as EffectiveHint["mode"];
         if (a.scope !== undefined) base.scope = a.scope;
         if (a.spacing) base.spacing = a.spacing as EffectiveHint["spacing"];
       }
-      // If batch contains no layout action AND no explicit layoutHint — leave default;
-      // batchIsEmpty check below decides whether to actually run ELK. Note: legacy
-      // Phase 2.x always ran layout on any AI batch; preserve that to keep tests
-      // passing.
       effectiveHint = base;
-      // Если в батче не было ни одной мутации (только layout no-op нет) — пропускаем.
-      void sawLayoutAction;
     }
 
     // Build affected-id set: shape records added or updated by THIS batch.
@@ -234,7 +228,7 @@ export function domainRoutes(
         );
         if (lr.reason) {
           layoutInfo = { applied: false, reason: lr.reason };
-        } else if (Object.keys(lr.batch.updated).length === 0 && Object.keys(lr.batch.added).length === 0 && Object.keys(lr.batch.removed).length === 0) {
+        } else if (batchIsEmpty(lr.batch)) {
           layoutInfo = { applied: false, reason: "no-changes" };
         } else {
           room.store = applyStoreChanges(room.store, lr.batch);

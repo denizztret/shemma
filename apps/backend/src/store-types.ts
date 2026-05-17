@@ -47,16 +47,3 @@ export type StoreOpLogEntry = {
   at: number;
   clientOpId?: string;
 };
-
-// Helpers (type-only, no runtime) для часто используемых проверок.
-export function isShapeRecord(r: TLRecord): boolean {
-  return r.typeName === "shape";
-}
-
-export function isBindingRecord(r: TLRecord): boolean {
-  return r.typeName === "binding";
-}
-
-export function emptyStoreChangeBatch(): StoreChangeBatch {
-  return { added: {}, updated: {}, removed: {} };
-}
