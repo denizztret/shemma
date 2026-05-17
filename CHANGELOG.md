@@ -1,3 +1,78 @@
+## 0.5.0 — 2026-05-17 — E phase: Rooms Gallery + delete policy + rename/duplicate
+
+Multi-task initiative shipping a full web UI каталог комнат с группировкой, фильтрами, lifecycle actions, и опт-ин linked-session safety. 8 tasks closed (DRW-029, 031, 033, 034, 035, 036, 037, 039) + 2 deferred (DRW-030 thumbnails, DRW-038 auto-archive — оба с notes для возобновления).
+
+### Added — Rooms Gallery UI (DRW-029)
+
+- **`/` (no `?room=`) и `?view=gallery` рендерят Gallery** вместо fallback на `room=default`. Существующий `?room=<id>` flow preserved.
+- **Группировка:** "Current workspace" (rooms где `linkedSession` совпадает с current OR пуст) и "Past sessions" (linked to другой сессии). Внутри каждой группы — sort toggle "recent first" / "name A→Z".
+- **Tabs:** Current workspace / Archived. "All workspaces" tab скрыт (DRW-032 deferred).
+- **Per-card actions:** Open / Archive / Restore / Export / Delete / Rename / Duplicate. На archived cards Delete заменяется на "Delete permanently" (mode='hard' с confirm), Rename hidden.
+- **5s undo toast** после archive (через `pushError`/local toast state — pure timer + abort flag, без timer libs).
+- **"New room" form** — inline input + `validateRoomId` (regex mirror) → redirect на `/?room=<id>`.
+- **"← Gallery" button** в editor chrome (рядом с RoomBadge), компонент `chrome/GalleryLink.tsx`.
+- **Linked badge** на card если `linkedSession === current sessionId` (через `/api/session`).
+- **Placeholder preview** ("📐 N elements") — actual thumbnails defer to DRW-030.
+
+### Added — Backend endpoints (DRW-031, DRW-037, DRW-039)
+
+- **`GET /api/session`** → `{ sessionId, projectSlug, workspaceDir }` — env capture at config load.
+- **`GET /api/rooms?include=archived`** — joins `.archive/` items с `archived: true` flag.
+- **`GET /api/rooms` items** теперь несут `linkedSession?`, `projectDir?`, `projectName?` (basename of `projectDir`).
+- **`DELETE /api/rooms/:id`** принимает `{ confirm, mode?: 'archive' | 'hard', force? }`. Default `mode: 'archive'`. `mode: 'hard'` + linked-to-active-session без `force` → 409 `linked-to-active-session`.
+- **`POST /api/rooms/purge-archive { confirm: true }`** — bulk hard unlink всех файлов в `.archive/`.
+- **`POST /api/rooms/:id/rename { to, force? }`** — atomic flush → evict → fs rename → envelope `roomId` mutation. 409 на конфликт без force, 422 на archived/invalid.
+- **`POST /api/rooms/:id/duplicate { as }`** — copy file + reset `opLog` + `version: 1` + clear `linkedSession`. 409 на конфликт.
+
+### Added — CLI commands
+
+- **`didraw rooms rename <old> <new> [--force]`**
+- **`didraw rooms duplicate <id> --as <newId>`**
+- **`didraw rooms purge-archive --confirm`**
+- **`didraw rooms rm <id> --hard --force --confirm`** — bypass linked-check 409 (для linked rooms). `rooms rm` без флагов остаётся hard delete (ADR-0003 Variant A, no breaking change).
+
+### Added — `@didraw/client`
+
+- `getSession()`, `renameRoom(id, to, opts?)`, `duplicateRoom(id, as)`, `purgeArchive()`. `deleteRoom(id)` расширен опциональным вторым аргументом `{ mode?, force? }`.
+
+### Added — Frontend transport
+
+- `apps/frontend/src/transport/session.ts` — `fetchSession()` с tab-scoped cache.
+- `apps/frontend/src/transport/api.ts` — `listRooms({includeArchived})`, `archiveRoom`, `restoreRoom`, `exportRoom`, `deleteRoom(id, opts?)`, `renameRoom`, `duplicateRoom`, `purgeArchive`.
+
+### Decisions (closed via this release)
+
+- **ADR-0003** (`docs/decisions/0003-rooms-delete-policy.md`) — layered delete: archive default in UI/API, hard delete explicit; implicit linkage detection через `roomId === CLAUDE_SESSION_ID`; CLI `rooms rm` остаётся hard (Variant A).
+- **DRW-032 (cross-workspace):** Variant A — opt-in только через env `DIDRAW_CROSS_WORKSPACE=1`. Implementation deferred to 0.5.x.
+- **DRW-033 (project name):** В Claude Code projects нет manifest файла; храним `Room.meta.projectDir` сами, `projectName = basename(projectDir)`.
+- **DRW-034 (CLI rm):** stays hard, no breaking change (within ADR-0003 §"CLI semantics").
+- **DRW-035 (linkage):** implicit only для MVP; explicit `rooms link` — future.
+
+### Deferred from 0.5.0
+
+- **DRW-030** thumbnails — placeholder shipped; real thumbnails (client-side hidden-editor render → base64 → backend cache) deferred. 2-3 hour follow-up task.
+- **DRW-038** auto-archive stale rooms — deferred until user pressure ("Gallery захламлена"). ADR-0003 уже отметил retention policy как future ADR.
+
+### Tests
+
+332 pass (+12 от 0.4.2 baseline 296 + 24 за E phase: backend session, rooms-delete-policy, rooms-rename-duplicate, gallery archived-list, projectDir; CLI rename/duplicate subprocess integration; humanize/validate unit utilities в frontend через `bun --cwd apps/frontend test` — не в root suite, frontend test infra ещё TODO).
+
+### Refactor
+
+Post sub-agent simplifier pass (commit `ee20a8a`):
+- Extracted `writeAtomic(path, data)` helper в `routes/rooms.ts` (был duplicated в rename/duplicate handlers).
+- Extracted `readdirOrEmpty(dir)` helper (был duplicated в `purge-archive` и `readRoomItems`).
+- Hoisted `RoomItem` type на module level.
+- Frontend `RoomCard.tsx`: extracted `InlineRoomForm` component (rename + duplicate forms были структурно идентичны — общий wrapper с input/OK/cancel/Enter/Escape).
+
+### Backwards compatibility
+
+- Existing v3 room envelopes без `linkedSession` / `projectDir` загружаются normally (поля optional, additive).
+- CLI `rooms rm`, `rooms archive`, `rooms restore`, `rooms export`, `rooms import` — без изменений semantics.
+- HTTP `DELETE /api/rooms/:id` без `mode` field теперь archives (raw `{confirm: true}` — old hard behavior changed to archive). Callers, ожидавшие hard, должны явно передать `mode: 'hard'`. CLI `rooms rm` это уже делает.
+
+---
+
 ## 0.4.2 — 2026-05-17 — Phase 3.1: persist tldraw schema from first client (DRW-040)
 
 ### Changed

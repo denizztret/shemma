@@ -216,15 +216,52 @@ export class CanvasClient {
     return r.json();
   }
 
-  async deleteRoom(id: string, confirm = false) {
+  async deleteRoom(
+    id: string,
+    confirm = false,
+    opts: { mode?: "archive" | "hard"; force?: boolean } = {},
+  ) {
     const r = await fetch(
       `${this.base}/api/rooms/${encodeURIComponent(id)}`,
       {
         method: "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ confirm }),
+        body: JSON.stringify({ confirm, ...opts }),
       },
     );
+    return r.json();
+  }
+
+  async renameRoom(id: string, to: string, opts: { force?: boolean } = {}) {
+    const r = await fetch(
+      `${this.base}/api/rooms/${encodeURIComponent(id)}/rename`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to, force: opts.force }),
+      },
+    );
+    return r.json();
+  }
+
+  async duplicateRoom(id: string, as: string) {
+    const r = await fetch(
+      `${this.base}/api/rooms/${encodeURIComponent(id)}/duplicate`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ as }),
+      },
+    );
+    return r.json();
+  }
+
+  async purgeArchive(): Promise<{ ok: true; removed: number }> {
+    const r = await fetch(`${this.base}/api/rooms/purge-archive`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirm: true }),
+    });
     return r.json();
   }
 

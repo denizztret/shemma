@@ -116,6 +116,91 @@ describe("GET /api/rooms", () => {
     const body = (await res.json()) as { rooms: Array<{ id: string }> };
     expect(body.rooms.map((r) => r.id)).toEqual(["ok"]);
   });
+
+  test("?include=archived joins active + archived items, archived have archived:true", async () => {
+    seedRoom("active-one", () => {});
+    seedRoom("will-archive", () => {});
+    mkdirSync(join(dir, ".archive"), { recursive: true });
+    const { renameSync } = await import("node:fs");
+    renameSync(join(dir, "will-archive.json"), join(dir, ".archive", "will-archive.json"));
+
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms?include=archived"),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      rooms: Array<{ id: string; archived?: boolean }>;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.rooms).toHaveLength(2);
+
+    const active = body.rooms.find((r) => r.id === "active-one");
+    expect(active).toBeDefined();
+    expect(active?.archived).toBeUndefined();
+
+    const archived = body.rooms.find((r) => r.id === "will-archive");
+    expect(archived).toBeDefined();
+    expect(archived?.archived).toBe(true);
+  });
+
+  test("?include=archived with empty archive returns only active rooms", async () => {
+    seedRoom("only-active", () => {});
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms?include=archived"),
+    );
+    const body = (await res.json()) as { rooms: Array<{ id: string }> };
+    expect(body.rooms).toHaveLength(1);
+    expect(body.rooms[0].id).toBe("only-active");
+  });
+
+  test("without ?include=archived, archived rooms are not returned", async () => {
+    seedRoom("active", () => {});
+    mkdirSync(join(dir, ".archive"), { recursive: true });
+    seedRoom("archived-hidden", () => {});
+    const { renameSync } = await import("node:fs");
+    renameSync(join(dir, "archived-hidden.json"), join(dir, ".archive", "archived-hidden.json"));
+
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(new Request("http://localhost/api/rooms"));
+    const body = (await res.json()) as { rooms: Array<{ id: string }> };
+    expect(body.rooms.map((r) => r.id)).toEqual(["active"]);
+  });
+
+  test("rooms have projectDir + projectName populated when env set", async () => {
+    const { __resetConfigForTests } = await import("../src/config");
+    process.env.DIDRAW_PROJECT_DIR = "/home/user/my-project";
+    __resetConfigForTests();
+    try {
+      // Seed a room that already exists on disk without projectDir.
+      seedRoom("proj-test", (s) => {
+        s.version = 1;
+      });
+
+      const { app, rooms, persistence } = makeApp({ storageDir: dir });
+      // GET state loads the room (existing file → isNew=false) → auto-populates projectDir.
+      await app.fetch(new Request("http://localhost/api/state?room=proj-test"));
+
+      // Flush the pending auto-backfill save.
+      await persistence!.flushIfDirty("proj-test");
+
+      // Drop in-memory cache to force re-read from disk.
+      await rooms.evict("proj-test");
+
+      const res = await app.fetch(new Request("http://localhost/api/rooms"));
+      const body = (await res.json()) as {
+        rooms: Array<{ id: string; projectDir?: string; projectName?: string }>;
+      };
+      const room = body.rooms.find((r) => r.id === "proj-test");
+      expect(room?.projectDir).toBe("/home/user/my-project");
+      expect(room?.projectName).toBe("my-project");
+    } finally {
+      delete process.env.DIDRAW_PROJECT_DIR;
+      __resetConfigForTests();
+    }
+  });
 });
 
 describe("POST /api/rooms/:id/archive", () => {
@@ -511,7 +596,7 @@ describe("DELETE /api/rooms/:id", () => {
     expect(res.status).toBe(400);
   });
 
-  test("removes file with confirm:true", async () => {
+  test("default mode (no mode field) archives the file", async () => {
     seedRoom("doomed", () => {});
     const { app } = makeApp({ storageDir: dir });
     const res = await app.fetch(
@@ -523,10 +608,43 @@ describe("DELETE /api/rooms/:id", () => {
     );
     expect(res.status).toBe(200);
     const { existsSync } = await import("node:fs");
+    // File moved to archive, not unlinked
     expect(existsSync(join(dir, "doomed.json"))).toBe(false);
+    expect(existsSync(join(dir, ".archive", "doomed.json"))).toBe(true);
   });
 
-  test("no autosave overwrite after delete", async () => {
+  test("mode=archive moves file to .archive/", async () => {
+    seedRoom("arch-explicit", () => {});
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/arch-explicit", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: true, mode: "archive" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dir, "arch-explicit.json"))).toBe(false);
+    expect(existsSync(join(dir, ".archive", "arch-explicit.json"))).toBe(true);
+  });
+
+  test("mode=hard removes file without linked check (no session)", async () => {
+    seedRoom("hard-room", () => {});
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/hard-room", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: true, mode: "hard" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dir, "hard-room.json"))).toBe(false);
+  });
+
+  test("no autosave overwrite after hard delete", async () => {
     const { app, rooms, persistence } = makeApp({ storageDir: dir });
     const r = await rooms.get("ghost");
     seedShape(r, "shape:n1", "n1");
@@ -538,7 +656,7 @@ describe("DELETE /api/rooms/:id", () => {
       new Request("http://localhost/api/rooms/ghost", {
         method: "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ confirm: true }),
+        body: JSON.stringify({ confirm: true, mode: "hard" }),
       }),
     );
 
@@ -546,5 +664,364 @@ describe("DELETE /api/rooms/:id", () => {
 
     const { existsSync } = await import("node:fs");
     expect(existsSync(join(dir, "ghost.json"))).toBe(false);
+  });
+
+  test("mode=hard on linked room without force → 409", async () => {
+    const sessionId = "linked-test-session";
+    process.env.CLAUDE_SESSION_ID = sessionId;
+    const { __resetConfigForTests } = await import("../src/config");
+    __resetConfigForTests();
+    try {
+      seedRoom(sessionId, (s) => {
+        s.linkedSession = sessionId;
+      });
+      const { app } = makeApp({ storageDir: dir });
+      const res = await app.fetch(
+        new Request(`http://localhost/api/rooms/${sessionId}`, {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ confirm: true, mode: "hard" }),
+        }),
+      );
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { ok: boolean; error: string };
+      expect(body.ok).toBe(false);
+      expect(body.error).toBe("linked-to-active-session");
+    } finally {
+      delete process.env.CLAUDE_SESSION_ID;
+      __resetConfigForTests();
+    }
+  });
+
+  test("mode=hard on linked room with force=true → 200, file unlinked", async () => {
+    const sessionId = "linked-force-session";
+    process.env.CLAUDE_SESSION_ID = sessionId;
+    const { __resetConfigForTests } = await import("../src/config");
+    __resetConfigForTests();
+    try {
+      seedRoom(sessionId, (s) => {
+        s.linkedSession = sessionId;
+      });
+      const { app } = makeApp({ storageDir: dir });
+      const res = await app.fetch(
+        new Request(`http://localhost/api/rooms/${sessionId}`, {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ confirm: true, mode: "hard", force: true }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      const { existsSync } = await import("node:fs");
+      expect(existsSync(join(dir, `${sessionId}.json`))).toBe(false);
+    } finally {
+      delete process.env.CLAUDE_SESSION_ID;
+      __resetConfigForTests();
+    }
+  });
+
+  test("mode=hard on linked room with DIFFERENT session → 200 (not blocked)", async () => {
+    const linkedSess = "other-session-id";
+    const activeSess = "active-session-id";
+    process.env.CLAUDE_SESSION_ID = activeSess;
+    const { __resetConfigForTests } = await import("../src/config");
+    __resetConfigForTests();
+    try {
+      seedRoom("cross-session-room", (s) => {
+        s.linkedSession = linkedSess;
+      });
+      const { app } = makeApp({ storageDir: dir });
+      const res = await app.fetch(
+        new Request("http://localhost/api/rooms/cross-session-room", {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ confirm: true, mode: "hard" }),
+        }),
+      );
+      expect(res.status).toBe(200);
+    } finally {
+      delete process.env.CLAUDE_SESSION_ID;
+      __resetConfigForTests();
+    }
+  });
+
+  test("POST /api/rooms/purge-archive without confirm → 422", async () => {
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/purge-archive", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(422);
+  });
+
+  test("POST /api/rooms/purge-archive with confirm → removes archived files", async () => {
+    seedRoom("purge-a", () => {});
+    seedRoom("purge-b", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    // Archive both rooms
+    await app.fetch(
+      new Request("http://localhost/api/rooms/purge-a/archive", { method: "POST" }),
+    );
+    await app.fetch(
+      new Request("http://localhost/api/rooms/purge-b/archive", { method: "POST" }),
+    );
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/purge-archive", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; removed: number };
+    expect(body.ok).toBe(true);
+    expect(body.removed).toBe(2);
+
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dir, ".archive", "purge-a.json"))).toBe(false);
+    expect(existsSync(join(dir, ".archive", "purge-b.json"))).toBe(false);
+  });
+
+  test("POST /api/rooms/purge-archive with no archived files → removed:0", async () => {
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/purge-archive", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; removed: number };
+    expect(body.ok).toBe(true);
+    expect(body.removed).toBe(0);
+  });
+});
+
+describe("POST /api/rooms/:id/rename", () => {
+  test("happy path — file moved, list reflects new id, envelope roomId updated", async () => {
+    seedRoom("old-room", (s) => {
+      seedShape(s, "shape:n1", "n1");
+      s.version = 5;
+    });
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/old-room/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to: "new-room" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; id: string };
+    expect(body.ok).toBe(true);
+    expect(body.id).toBe("new-room");
+
+    const { existsSync, readFileSync } = await import("node:fs");
+    expect(existsSync(join(dir, "old-room.json"))).toBe(false);
+    expect(existsSync(join(dir, "new-room.json"))).toBe(true);
+
+    const env = JSON.parse(readFileSync(join(dir, "new-room.json"), "utf8"));
+    expect(env.roomId).toBe("new-room");
+    expect(env.version).toBe(5);
+
+    // list must show new-room, not old-room
+    const listRes = await app.fetch(new Request("http://localhost/api/rooms"));
+    const listBody = (await listRes.json()) as { rooms: Array<{ id: string }> };
+    const ids = listBody.rooms.map((r) => r.id);
+    expect(ids).toContain("new-room");
+    expect(ids).not.toContain("old-room");
+  });
+
+  test("rename to existing id without force → 409", async () => {
+    seedRoom("src-room", () => {});
+    seedRoom("existing-room", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/src-room/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to: "existing-room" }),
+      }),
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { ok: boolean; error: string; existingId: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("room-exists");
+    expect(body.existingId).toBe("existing-room");
+  });
+
+  test("rename to existing id with force → 200, overwrites target", async () => {
+    seedRoom("force-src", (s) => { s.version = 7; });
+    seedRoom("force-dst", (s) => { s.version = 1; });
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/force-src/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to: "force-dst", force: true }),
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const { existsSync, readFileSync } = await import("node:fs");
+    expect(existsSync(join(dir, "force-src.json"))).toBe(false);
+    expect(existsSync(join(dir, "force-dst.json"))).toBe(true);
+    const env = JSON.parse(readFileSync(join(dir, "force-dst.json"), "utf8"));
+    expect(env.roomId).toBe("force-dst");
+    expect(env.version).toBe(7);
+  });
+
+  test("rename of archived room → 422 rename-archived-not-supported", async () => {
+    seedRoom("archived-rename", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    // Archive the room first
+    await app.fetch(
+      new Request("http://localhost/api/rooms/archived-rename/archive", { method: "POST" }),
+    );
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/archived-rename/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to: "any-name" }),
+      }),
+    );
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(body.error).toBe("rename-archived-not-supported");
+  });
+
+  test("rename validates validateRoomId — invalid to → 422", async () => {
+    seedRoom("valid-src", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/valid-src/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to: "invalid name!" }),
+      }),
+    );
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(body.error).toBe("invalid-room-id");
+  });
+
+  test("rename of non-existent room → 404", async () => {
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/no-such-room/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to: "new-name" }),
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("POST /api/rooms/:id/duplicate", () => {
+  test("happy path — new file created, opLog reset, linkedSession cleared, original unchanged", async () => {
+    seedRoom("dup-src", (s) => {
+      seedShape(s, "shape:n1", "n1");
+      s.version = 10;
+      s.linkedSession = "some-session";
+      s.opLog.push({ type: "patch", ops: [] } as unknown as (typeof s.opLog)[0]);
+    });
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/dup-src/duplicate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ as: "dup-dst" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; id: string };
+    expect(body.ok).toBe(true);
+    expect(body.id).toBe("dup-dst");
+
+    const { existsSync, readFileSync } = await import("node:fs");
+    expect(existsSync(join(dir, "dup-src.json"))).toBe(true);
+    expect(existsSync(join(dir, "dup-dst.json"))).toBe(true);
+
+    const dst = JSON.parse(readFileSync(join(dir, "dup-dst.json"), "utf8"));
+    expect(dst.roomId).toBe("dup-dst");
+    expect(dst.opLog).toEqual([]);
+    expect(dst.version).toBe(1);
+    expect(dst.linkedSession).toBeUndefined();
+    // shape preserved
+    expect(dst.store.store["shape:n1"]).toBeDefined();
+  });
+
+  test("duplicate to existing id → 409", async () => {
+    seedRoom("dup-conflict-src", () => {});
+    seedRoom("dup-conflict-dst", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/dup-conflict-src/duplicate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ as: "dup-conflict-dst" }),
+      }),
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { ok: boolean; error: string; existingId: string };
+    expect(body.error).toBe("room-exists");
+    expect(body.existingId).toBe("dup-conflict-dst");
+  });
+
+  test("duplicate validates validateRoomId — invalid as → 422", async () => {
+    seedRoom("dup-valid-src", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/dup-valid-src/duplicate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ as: "bad id!" }),
+      }),
+    );
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(body.error).toBe("invalid-room-id");
+  });
+
+  test("duplicate archived room → creates active copy, archive untouched", async () => {
+    seedRoom("arch-dup-src", (s) => {
+      seedShape(s, "shape:preserved", "preserved");
+      s.version = 3;
+    });
+    const { app } = makeApp({ storageDir: dir });
+
+    // Archive the source
+    await app.fetch(
+      new Request("http://localhost/api/rooms/arch-dup-src/archive", { method: "POST" }),
+    );
+
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/arch-dup-src/duplicate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ as: "arch-dup-active" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dir, ".archive", "arch-dup-src.json"))).toBe(true);
+    expect(existsSync(join(dir, "arch-dup-active.json"))).toBe(true);
   });
 });

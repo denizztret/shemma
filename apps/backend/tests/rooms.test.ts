@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FilePersistence } from "../src/persistence";
 import { Rooms, makeRoomState } from "../src/rooms";
+import { __resetConfigForTests } from "../src/config";
 
 function seedShape(state: ReturnType<typeof makeRoomState>, id: string, name: string) {
   state.store.store[id] = {
@@ -22,6 +23,97 @@ function seedShape(state: ReturnType<typeof makeRoomState>, id: string, name: st
   };
   state.didrawIndex.set(name, id);
 }
+
+describe("Rooms — linkedSession", () => {
+  test("linkedSession auto-set when CLAUDE_SESSION_ID === roomId", async () => {
+    process.env.CLAUDE_SESSION_ID = "my-session";
+    __resetConfigForTests();
+    try {
+      const r = new Rooms({ load: async () => null, save: async () => {} });
+      const s = await r.get("my-session");
+      expect(s.linkedSession).toBe("my-session");
+      expect(s.dirty).toBe(true);
+    } finally {
+      delete process.env.CLAUDE_SESSION_ID;
+      __resetConfigForTests();
+    }
+  });
+
+  test("linkedSession NOT set when CLAUDE_SESSION_ID differs from roomId", async () => {
+    process.env.CLAUDE_SESSION_ID = "other-session";
+    __resetConfigForTests();
+    try {
+      const r = new Rooms({ load: async () => null, save: async () => {} });
+      const s = await r.get("some-other-room");
+      expect(s.linkedSession).toBeUndefined();
+    } finally {
+      delete process.env.CLAUDE_SESSION_ID;
+      __resetConfigForTests();
+    }
+  });
+
+  test("linkedSession NOT set when CLAUDE_SESSION_ID not present", async () => {
+    delete process.env.CLAUDE_SESSION_ID;
+    __resetConfigForTests();
+    try {
+      const r = new Rooms({ load: async () => null, save: async () => {} });
+      const s = await r.get("any-room");
+      expect(s.linkedSession).toBeUndefined();
+    } finally {
+      __resetConfigForTests();
+    }
+  });
+
+  test("linkedSession not overwritten if already set in loaded state", async () => {
+    process.env.CLAUDE_SESSION_ID = "loaded-session";
+    __resetConfigForTests();
+    try {
+      const existing = makeRoomState();
+      existing.linkedSession = "original-link";
+      const r = new Rooms({ load: async () => existing, save: async () => {} });
+      const s = await r.get("loaded-session");
+      // Should preserve original, not overwrite with "loaded-session"
+      expect(s.linkedSession).toBe("original-link");
+    } finally {
+      delete process.env.CLAUDE_SESSION_ID;
+      __resetConfigForTests();
+    }
+  });
+
+  test("linkedSession survives persistence roundtrip", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "didraw-linked-"));
+    try {
+      process.env.CLAUDE_SESSION_ID = "persist-session";
+      __resetConfigForTests();
+
+      const persistence = new FilePersistence(dir);
+      const r = new Rooms({
+        load: (id) => persistence.load(id),
+        save: (id, s) => persistence.save(id, s),
+      });
+      r.setPersistence(persistence);
+
+      // Get creates room, sets linkedSession, marks dirty
+      const s = await r.get("persist-session");
+      expect(s.linkedSession).toBe("persist-session");
+
+      // Flush to disk
+      await persistence.flushIfDirty("persist-session");
+
+      // Evict from memory
+      await r.evict("persist-session");
+      expect(r.has("persist-session")).toBe(false);
+
+      // Reload from disk
+      const s2 = await r.get("persist-session");
+      expect(s2.linkedSession).toBe("persist-session");
+    } finally {
+      delete process.env.CLAUDE_SESSION_ID;
+      __resetConfigForTests();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("Rooms", () => {
   let rooms: Rooms;

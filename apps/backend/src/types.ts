@@ -35,6 +35,13 @@ export type RoomState = {
   // Индекс meta.didrawName → shape.id для O(1) lookup в compile.ts.
   // Перестраивается при каждой apply через store-ops.rebuildDidrawIndex().
   didrawIndex: Map<string, string>;
+  // Привязка к сессии Claude Code: проставляется автоматически при первом
+  // создании комнаты если CLAUDE_SESSION_ID === roomId.
+  linkedSession?: string;
+  // Рабочий каталог проекта, где был создан сервер. Используется для
+  // группировки комнат в Gallery (DRW-033). Опционально — старые файлы
+  // его не имеют и получают его при первом обращении.
+  projectDir?: string;
 };
 
 export type WsClientMessage =
