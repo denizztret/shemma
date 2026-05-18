@@ -85,7 +85,8 @@ export async function startServer(opts: AppOpts = {}) {
         if (!validateRoomId(room)) {
           return new Response("invalid room id", { status: 422 });
         }
-        if (srv.upgrade(req, { data: { room } as unknown as undefined })) return;
+        const clientId = crypto.randomUUID();
+        if (srv.upgrade(req, { data: { room, clientId } as unknown as undefined })) return;
         return new Response("upgrade failed", { status: 500 });
       }
       // serve frontend for release/debug profiles; dev relies on Vite's own server
@@ -97,11 +98,11 @@ export async function startServer(opts: AppOpts = {}) {
     },
     websocket: {
       open(ws) {
-        const { room } = ws.data as unknown as { room: string };
+        const { room } = ws.data as unknown as { room: string; clientId: string };
         bus.attach(room, ws as Sock);
       },
       async message(ws, raw) {
-        const { room } = ws.data as unknown as { room: string };
+        const { room, clientId } = ws.data as unknown as { room: string; clientId: string };
         const msg = parseClientMessage(raw);
         if (!msg) return; // malformed → ignore (must not crash)
         if (msg.kind === "hello") {
@@ -144,9 +145,18 @@ export async function startServer(opts: AppOpts = {}) {
           });
           return;
         }
+        if (msg.kind === "board-focus") {
+          if (msg.focused) {
+            bus.getActiveRooms().onFocus(msg.room, clientId);
+          } else {
+            bus.getActiveRooms().onBlur(msg.room, clientId);
+          }
+          return;
+        }
       },
       close(ws) {
-        const { room } = ws.data as unknown as { room: string };
+        const { room, clientId } = ws.data as unknown as { room: string; clientId: string };
+        bus.getActiveRooms().onDisconnect(clientId);
         bus.detach(room, ws as Sock);
       },
     },

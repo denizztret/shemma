@@ -75,6 +75,12 @@ export function parseClientMessage(
       typeof obj.clientOpId === "string" ? obj.clientOpId : undefined;
     return { kind: "user-change", changes, clientOpId };
   }
+  if (obj.kind === "board-focus") {
+    const o = obj as { kind?: unknown; room?: unknown; focused?: unknown };
+    if (typeof o.room !== "string" || o.room === "") return null;
+    if (typeof o.focused !== "boolean") return null;
+    return { kind: "board-focus", room: o.room, focused: o.focused };
+  }
   return null;
 }
 
