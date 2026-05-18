@@ -1,6 +1,3 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { portFor } from "./profile";
 
 export type AutoOpenMode = "never" | "once" | "always" | "confirm";
@@ -39,109 +36,6 @@ export function parseMcpStartFlags(argv: string[]): McpStartFlags {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Detection & refresh helpers
-// ---------------------------------------------------------------------------
-
-export type DetectedMcpClient = {
-  client: "claude" | "codex";
-  path: string;
-  hasShemma: boolean;
-};
-
-type DetectOpts = {
-  homeDir?: string;
-  platform?: NodeJS.Platform;
-};
-
-function claudeConfigPathFor(homeDir: string, platform: NodeJS.Platform): string {
-  if (platform === "darwin") {
-    return join(homeDir, "Library", "Application Support", "Claude", "claude_desktop_config.json");
-  }
-  return join(homeDir, ".config", "Claude", "claude_desktop_config.json");
-}
-
-function codexConfigPathFor(homeDir: string): string {
-  return join(homeDir, ".codex", "config.toml");
-}
-
-export function detectInstalledMcpConfigs(opts: DetectOpts = {}): DetectedMcpClient[] {
-  const home = opts.homeDir ?? homedir();
-  const platform = opts.platform ?? process.platform;
-  const out: DetectedMcpClient[] = [];
-
-  const claudePath = claudeConfigPathFor(home, platform);
-  if (existsSync(claudePath)) {
-    let hasShemma = false;
-    try {
-      const j = JSON.parse(readFileSync(claudePath, "utf8")) as {
-        mcpServers?: Record<string, unknown>;
-      };
-      hasShemma = Boolean(j.mcpServers && "shemma" in j.mcpServers);
-    } catch {
-      // malformed JSON — treat as no shemma entry
-    }
-    out.push({ client: "claude", path: claudePath, hasShemma });
-  }
-
-  const codexPath = codexConfigPathFor(home);
-  if (existsSync(codexPath)) {
-    let hasShemma = false;
-    try {
-      hasShemma = readFileSync(codexPath, "utf8").includes("[mcp_servers.shemma]");
-    } catch {
-      // unreadable — treat as no shemma entry
-    }
-    out.push({ client: "codex", path: codexPath, hasShemma });
-  }
-
-  return out;
-}
-
-export type RefreshOpts = {
-  homeDir?: string;
-  platform?: NodeJS.Platform;
-  projectDir: string;
-};
-
-export type RefreshResult = {
-  refreshed: ("claude" | "codex")[];
-  skipped: ("claude" | "codex")[];
-};
-
-export function refreshMcpConfigs(opts: RefreshOpts): RefreshResult {
-  const detected = detectInstalledMcpConfigs({ homeDir: opts.homeDir, platform: opts.platform });
-  const refreshed: ("claude" | "codex")[] = [];
-  const skipped: ("claude" | "codex")[] = [];
-
-  for (const entry of detected) {
-    if (!entry.hasShemma) {
-      skipped.push(entry.client);
-      continue;
-    }
-    const snippet =
-      entry.client === "claude"
-        ? JSON.stringify(
-            {
-              mcpServers: {
-                shemma: {
-                  command: "shemma",
-                  args: ["mcp", "start", "--cwd", opts.projectDir],
-                },
-              },
-            },
-            null,
-            2,
-          )
-        : `[mcp_servers.shemma]\ncommand = "shemma"\nargs = ["mcp", "start", "--cwd", "${opts.projectDir}"]\n`;
-    writeFileSync(`${entry.path}.bak.${Date.now()}`, readFileSync(entry.path));
-    writeFileSync(entry.path, snippet);
-    refreshed.push(entry.client);
-  }
-
-  return { refreshed, skipped };
-}
-
 export async function cmdMcpStart(argv: string[]): Promise<void> {
   const flags = parseMcpStartFlags(argv);
   const profile = flags.profile ?? "release";
@@ -155,4 +49,3 @@ export async function cmdMcpStart(argv: string[]): Promise<void> {
     autoOpenMode: flags.autoOpenMode,
   });
 }
-

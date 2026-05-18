@@ -15,22 +15,16 @@ const DEFAULT_LOG_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
 
 import { type Profile, ALL_PROFILES, logFile, pidFile, portFor } from "./profile";
 import { error as uiError, getOutput, success as uiSuccess } from "./ui";
-import { detectInstalledMcpConfigs } from "./mcp";
 
 function maybePrintMcpNudge(verbose: boolean): void {
   if (!verbose) return;
   if (process.env.SHEMMA_NO_MCP_NUDGE === "1") return;
   const ui = getOutput();
   if (ui.mode === "json") return;
-  try {
-    const detected = detectInstalledMcpConfigs();
-    if (detected.some((d) => d.hasShemma)) return;
-  } catch {
-    return;
-  }
-  // stderr to avoid polluting stdout consumers; nudge is informational, not an error.
+  // Full nudge text + once-per-process guard implemented in Task 7.
+  // Temporary minimal stub: print informational tip without detection logic.
   console.error(
-    "tip: run `shemma mcp install --client claude` (or --client codex) to register Shemma as MCP server",
+    "tip: see docs/mcp.md to register Shemma as MCP server in your agent client",
   );
 }
 
