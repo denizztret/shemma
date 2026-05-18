@@ -1,3 +1,12 @@
+## 0.12.3 — 2026-05-18 — Daemon spawn argv fix for compiled binary
+
+### Fixed
+
+- **`daemon start` from compiled binary** (DRW-060 follow-up) — `packages/shemma-cli/src/daemon.ts:start()` спавнил child с `[process.argv[1], "internal-server", ...]`. Для **bun source** это correct (argv[1] = script path), но для **compiled binary** argv[1] = first user arg (e.g. "daemon") → child получал `["daemon", "internal-server", ...]` → не находил `internal-server` cmd → exit'ил в `usage()` без binding на port. Health check fail. Fix: детектируем exec mode по `process.execPath` (`/bun(-[^/]+)?$/` → source) и passem argv[1] только в bun source mode.
+- **Effect:** `shemma daemon start --profile release` from installed compiled binary теперь реально стартует server (раньше silently fails). `shemma update` auto-restart после swap работает end-to-end.
+
+---
+
 ## 0.12.2 — 2026-05-18 — Robust daemon restart after self-update
 
 ### Fixed
