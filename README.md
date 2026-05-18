@@ -126,6 +126,8 @@ Exit codes: `0` ok, `1` usage/error, `2` not-found, `3` daemon-not-healthy.
 
 Shemma ships an MCP (Model Context Protocol) adapter so agentic clients (Claude Desktop, Codex, etc.) can call Shemma through typed tools and discoverable resources without shell quoting.
 
+> Полный гайд для пользователя — [`docs/mcp.md`](docs/mcp.md) (установка, обновление, жизненный цикл, auto-open, room resolution, trust model).
+
 ### Install
 
 ```bash
