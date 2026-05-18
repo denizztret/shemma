@@ -7,6 +7,15 @@ description: Use when user mentions canvas, drawing, schemas, architecture diagr
 
 You have a live canvas board for this Claude Code session. Domain-level commands below; do NOT use raw `shemma patch` — use `shemma define / connect / group / note / layout / delete / apply / context` instead.
 
+## MCP nudge
+
+If `shemma` MCP is available in this Claude session, prefer:
+- Read context via `shemma://room/{room}/context` resource or `shemma_context` tool.
+- Write via `shemma_define / connect / apply` instead of `bash shemma define ...`.
+- Read `shemma://workflow/overview` once at session start.
+
+Fall back to CLI commands described below if MCP tools are not registered.
+
 ## Current canvas context
 
 !`shemma context 2>/dev/null || echo '{"summary":{"total":0,"byRole":{}},"inView":[],"connections":[],"recentOps":[]}'`
