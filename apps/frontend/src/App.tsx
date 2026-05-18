@@ -200,11 +200,12 @@ export function App({ room }: { room: string }) {
         if (!active || userHasManuallyPanned.current) return;
         inProgrammaticCameraOp.current = true;
         editor.zoomToFit({ animation: { duration: 200 } });
-        // Clear in next macrotask after the animation has been scheduled — the
-        // store.listen callback is synchronous so this is sufficient.
+        // Hold the guard for the full animation duration + margin — each
+        // animation frame emits a camera change with source:"user" which would
+        // otherwise trip the user-pan listener and lock out further AI fits.
         setTimeout(() => {
           inProgrammaticCameraOp.current = false;
-        }, 0);
+        }, 300);
       }, 100);
     };
 
@@ -236,10 +237,12 @@ export function App({ room }: { room: string }) {
         const shapesCount = editor.getCurrentPageShapes().length;
         if (shapesCount) editor.zoomToFit({ animation: { duration: 0 } });
       }
-      // Clear in next macrotask after the camera listener fires synchronously.
+      // Initial fit uses duration:0 (no animation) — listener fires
+      // synchronously, but we still wait a small margin to cover any reactive
+      // signal propagation tick before clearing the guard.
       setTimeout(() => {
         inProgrammaticCameraOp.current = false;
-      }, 0);
+      }, 50);
 
       // Start WS store sync.
       const wsUrl = `ws://${location.host}/ws?room=${encodeURIComponent(room)}`;
