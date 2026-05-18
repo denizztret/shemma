@@ -41,6 +41,15 @@ export function parseMcpStartFlags(argv: string[]): McpStartFlags {
   return out;
 }
 
+function resolveProjectDir(): string {
+  const env = process.env.SHEMMA_CWD;
+  if (env !== undefined) {
+    const trimmed = env.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+  return process.cwd();
+}
+
 export async function cmdMcpStart(argv: string[]): Promise<void> {
   const flags = parseMcpStartFlags(argv);
   const profile = flags.profile ?? "release";
@@ -50,7 +59,7 @@ export async function cmdMcpStart(argv: string[]): Promise<void> {
     profile,
     baseUrl: flags.baseUrl ?? `http://localhost:${portFor(profile)}`,
     defaultRoom: flags.room ?? "default",
-    projectDir: process.cwd(),
+    projectDir: resolveProjectDir(),
     autoOpenMode: flags.autoOpenMode,
   });
 }
