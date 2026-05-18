@@ -4,7 +4,8 @@ export type ShemmaMcpErrorCode =
   | "validation-error"
   | "domain-error"
   | "http-error"
-  | "unexpected-error";
+  | "unexpected-error"
+  | "ambiguous-room";
 
 export type ShemmaMcpError = {
   ok: false;
