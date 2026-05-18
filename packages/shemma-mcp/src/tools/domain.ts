@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
 import { mapFetchError, toolResult } from "../errors";
 import type { RoomResolver } from "../room-resolver";
+import type { AutoOpenManager } from "../auto-open";
 import {
   DefineArgs,
   ConnectArgs,
@@ -17,6 +18,8 @@ export type ToolResult = ReturnType<typeof toolResult>;
 export type DomainDeps = {
   client: CanvasClient;
   resolver: RoomResolver;
+  defaultRoom?: string;
+  autoOpen?: AutoOpenManager;
 };
 
 export type DomainHandles = {
@@ -70,6 +73,15 @@ async function runActions(
     };
     if (resp.ok) {
       deps.resolver.recordTouch(resolved.room);
+      let autoOpen: { openedRoom?: string; openConsentRequired?: boolean } = {};
+      if (!args.dryRun && deps.autoOpen) {
+        try {
+          autoOpen = await deps.autoOpen.notifyWrite(resolved.room);
+        } catch {
+          // Auto-open failures should never break the write — swallow silently.
+          // notifyWrite errors are logged elsewhere (Task 20).
+        }
+      }
       return toolResult({
         ok: true,
         room: resolved.room,
@@ -77,7 +89,7 @@ async function runActions(
         version: resp.version,
         clientOpId,
         idempotent: resp.idempotent,
-        data: { results: resp.results, layout: resp.layout },
+        data: { results: resp.results, layout: resp.layout, autoOpen },
       });
     }
     return toolResult({

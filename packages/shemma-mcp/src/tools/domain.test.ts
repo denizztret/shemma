@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
+import { AutoOpenManager } from "../auto-open";
 import { RoomResolver } from "../room-resolver";
 import { registerDomainTools } from "./domain";
 
@@ -35,12 +36,37 @@ function makeResolver(opts: { mode: "direct" | "ambiguous" | "default"; room?: s
   });
 }
 
+function makeAutoOpen(opts: { mode?: "never" | "once" | "always" | "confirm"; throwOnNotify?: boolean } = {}) {
+  const calls: string[] = [];
+  const auto = new AutoOpenManager({
+    mode: opts.mode ?? "always",
+    env: {},
+    spawn: async (r) => {
+      if (opts.throwOnNotify) throw new Error("spawn failed");
+      calls.push(r);
+    },
+  });
+  return { auto, calls };
+}
+
 function setup(resolverOpts?: Parameters<typeof makeResolver>[0]) {
   const server = new McpServer({ name: "t", version: "0" });
   const client = new CanvasClient({ baseUrl: "http://test" });
   const resolver = makeResolver(resolverOpts);
   const handles = registerDomainTools(server, { client, resolver });
   return { server, client, resolver, handles };
+}
+
+function setupWithAutoOpen(
+  resolverOpts: Parameters<typeof makeResolver>[0] = { mode: "direct", room: "r" },
+  autoOpenOpts: Parameters<typeof makeAutoOpen>[0] = {},
+) {
+  const server = new McpServer({ name: "t", version: "0" });
+  const client = new CanvasClient({ baseUrl: "http://test" });
+  const resolver = makeResolver(resolverOpts);
+  const { auto, calls } = makeAutoOpen(autoOpenOpts);
+  const handles = registerDomainTools(server, { client, resolver, autoOpen: auto });
+  return { server, client, resolver, handles, auto, calls };
 }
 
 const okDomainResponse = {
@@ -246,5 +272,66 @@ describe("domain write tools", () => {
       clientOpId: "op-fail",
     });
     expect(r.isError).toBe(true);
+  });
+
+  // Auto-open integration tests
+  it("shemma_define with autoOpen=always calls notifyWrite on success", async () => {
+    mockFetch(() => ({ body: okDomainResponse }));
+    const { handles, calls } = setupWithAutoOpen(
+      { mode: "direct", room: "r" },
+      { mode: "always" },
+    );
+    const r = await handles.define.call({ name: "svc", role: "service" });
+    expect(calls).toEqual(["r"]);
+    expect(r.structuredContent).toMatchObject({
+      ok: true,
+      data: { autoOpen: { openedRoom: "r" } },
+    });
+  });
+
+  it("shemma_define with dryRun:true does NOT call notifyWrite", async () => {
+    mockFetch(() => ({ body: okDomainResponse }));
+    const { handles, calls } = setupWithAutoOpen(
+      { mode: "direct", room: "r" },
+      { mode: "always" },
+    );
+    const r = await handles.define.call({ name: "svc", role: "service", dryRun: true });
+    expect(calls).toEqual([]);
+    expect(r.structuredContent).toMatchObject({
+      ok: true,
+      data: { autoOpen: {} },
+    });
+  });
+
+  it("shemma_define without autoOpen dep emits autoOpen:{} in data", async () => {
+    mockFetch(() => ({ body: okDomainResponse }));
+    const { handles } = setup({ mode: "direct", room: "r" });
+    const r = await handles.define.call({ name: "svc", role: "service" });
+    expect(r.structuredContent).toMatchObject({
+      ok: true,
+      data: { autoOpen: {} },
+    });
+  });
+
+  it("shemma_define notifyWrite error does not break write — swallowed silently", async () => {
+    mockFetch(() => ({ body: okDomainResponse }));
+    const { handles } = setupWithAutoOpen(
+      { mode: "direct", room: "r" },
+      { throwOnNotify: true },
+    );
+    const r = await handles.define.call({ name: "svc", role: "service" });
+    // Write must still succeed even when notifyWrite throws
+    expect(r.structuredContent).toMatchObject({ ok: true, data: { results: okDomainResponse.results } });
+    expect(r.isError).toBeUndefined();
+  });
+
+  it("shemma_define with autoOpen=never returns empty autoOpen in data", async () => {
+    mockFetch(() => ({ body: okDomainResponse }));
+    const { handles, calls } = setupWithAutoOpen(
+      { mode: "direct", room: "r" },
+      { mode: "never" },
+    );
+    await handles.define.call({ name: "svc", role: "service" });
+    expect(calls).toEqual([]);
   });
 });
