@@ -31,6 +31,7 @@ export function makeHealthRoutes(storageDir: string) {
         profile: config.profile,
         storage: storageDir,
         version: VERSION.version,
+        pid: process.pid,
       }),
     );
 }

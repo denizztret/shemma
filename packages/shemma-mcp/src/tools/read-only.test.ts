@@ -40,10 +40,10 @@ describe("read-only tools", () => {
   });
 
   it("shemma_health with extended=true returns daemon info", async () => {
-    mockFetch(() => ({ body: { ok: true, profile: "release", storage: "/tmp", version: "0.12.3" } }));
+    mockFetch(() => ({ body: { ok: true, profile: "release", storage: "/tmp", version: "0.12.3", pid: 99 } }));
     const { handles } = setup();
     const r = await handles.health.call({ extended: true });
-    expect(r.structuredContent).toMatchObject({ ok: true, data: { profile: "release", version: "0.12.3" } });
+    expect(r.structuredContent).toMatchObject({ ok: true, data: { profile: "release", version: "0.12.3", pid: 99 } });
   });
 
   it("shemma_health extended returns daemon-unavailable when getHealth returns null", async () => {

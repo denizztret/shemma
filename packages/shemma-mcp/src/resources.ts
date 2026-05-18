@@ -2,12 +2,13 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { CanvasClient } from "@shemma/client";
+import { CanvasClient } from "@shemma/client";
 import type { Profile } from "./server";
+import { SHEMMA_MCP_VERSION } from "./version";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-const WORKFLOW_TOPICS = [
+export const WORKFLOW_TOPICS = [
   "overview",
   "read-context",
   "draw-architecture",
@@ -25,9 +26,14 @@ export type RegisterResourcesOpts = {
   client: CanvasClient;
   defaultRoom: string;
   profile: Profile;
+  /** Captured project directory for status resource. Falls back to process.cwd() if omitted. */
+  projectDir?: string;
 };
 
 export type RegisteredResource = { uri: string; read: () => Promise<string> };
+// RegisteredTemplate intentionally omits a `read` method — templates require a
+// room variable resolved at call time, so reads are dispatched via the SDK
+// callback with URI variables rather than a parameterless thunk (cf. RegisteredResource).
 export type RegisteredTemplate = { template: string };
 
 export type ResourcesSummary = {
@@ -41,7 +47,7 @@ export function registerResources(
   opts: RegisterResourcesOpts,
 ): ResourcesSummary {
   const { client } = opts;
-  const base = (client as unknown as { base: string }).base;
+  const base = client.baseUrl;
 
   // ── Workflow markdowns ──────────────────────────────────────────────────────
   const workflow: RegisteredResource[] = [];
@@ -56,9 +62,15 @@ export function registerResources(
         description: `Agent workflow guide — ${topic}`,
         mimeType: "text/markdown",
       },
-      async () => ({
-        contents: [{ uri, mimeType: "text/markdown", text: await read() }],
-      }),
+      async () => {
+        try {
+          const text = await read();
+          return { contents: [{ uri, mimeType: "text/markdown", text }] };
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return { contents: [{ uri, mimeType: "text/plain", text: `error loading ${topic}: ${msg}` }] };
+        }
+      },
     );
     workflow.push({ uri, read });
   }
@@ -70,15 +82,17 @@ export function registerResources(
     const active = await client.getActiveRooms().catch(() => ({ rooms: [] }));
     return JSON.stringify({
       ok: true,
-      serverVersion: "0.0.0",
+      serverVersion: SHEMMA_MCP_VERSION,
       cliVersion: health?.version ?? "unknown",
       profile: opts.profile,
       baseUrl: base,
       defaultRoom: opts.defaultRoom,
       suggestedRoom: opts.defaultRoom,
-      projectDir: process.cwd(),
+      projectDir: opts.projectDir ?? process.cwd(),
       daemon: health
-        ? { running: true as const, healthy: true, storage: health.storage }
+        ? { running: true as const, pid: health.pid, healthy: true, storage: health.storage }
+        // v1 always emits "unreachable"; spec §7.4 allows "not-started"/"unhealthy" —
+        // refine in Task 20 when ensureDaemon wires in.
         : { running: false as const, reason: "unreachable" as const },
       rooms: {},
       activeRooms: active.rooms,

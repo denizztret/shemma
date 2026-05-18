@@ -51,6 +51,10 @@ export class CanvasClient {
       opts.baseUrl ?? `http://localhost:${process.env.SHEMMA_PORT ?? 8787}`;
   }
 
+  get baseUrl(): string {
+    return this.base;
+  }
+
   private q(extra: Record<string, string | number | undefined> = {}) {
     const params = new URLSearchParams({ room: this.room });
     for (const [k, v] of Object.entries(extra))
@@ -161,6 +165,7 @@ export class CanvasClient {
     profile: string;
     storage: string;
     version: string;
+    pid: number;
   } | null> {
     try {
       const r = await fetch(`${this.base}/api/health`);
@@ -170,12 +175,14 @@ export class CanvasClient {
         profile?: unknown;
         storage?: unknown;
         version?: unknown;
+        pid?: unknown;
       };
       if (
         j.ok !== true ||
         typeof j.profile !== "string" ||
         typeof j.storage !== "string" ||
-        typeof j.version !== "string"
+        typeof j.version !== "string" ||
+        typeof j.pid !== "number"
       ) {
         return null;
       }
@@ -184,6 +191,7 @@ export class CanvasClient {
         profile: j.profile,
         storage: j.storage,
         version: j.version,
+        pid: j.pid,
       };
     } catch {
       return null;

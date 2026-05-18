@@ -22,8 +22,7 @@ export type ReadOnlyHandles = {
 
 function clientForRoom(deps: ReadOnlyDeps, room: string | undefined): CanvasClient {
   if (!room) return deps.client;
-  const base = (deps.client as unknown as { base?: string }).base ?? "";
-  return new CanvasClient({ baseUrl: base, room });
+  return new CanvasClient({ baseUrl: deps.client.baseUrl, room });
 }
 
 export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): ReadOnlyHandles {
