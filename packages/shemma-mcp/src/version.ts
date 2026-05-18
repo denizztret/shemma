@@ -1,1 +1,1 @@
-export const SHEMMA_MCP_VERSION = "0.0.0";
+export const SHEMMA_MCP_VERSION = "0.13.0";

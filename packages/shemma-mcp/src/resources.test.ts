@@ -114,6 +114,7 @@ describe("registerResources", () => {
   });
 
   it("status JSON serverVersion matches SHEMMA_MCP_VERSION", async () => {
+    const { SHEMMA_MCP_VERSION } = await import("./version");
     const server = makeServer();
     const client = makeClientStub(null);
     const summary = registerResources(server, { client, defaultRoom: "default", profile: "release" });
@@ -121,6 +122,6 @@ describe("registerResources", () => {
     const raw = await statusResource.read();
     const parsed = JSON.parse(raw);
     expect(typeof parsed.serverVersion).toBe("string");
-    expect(parsed.serverVersion).toBe("0.0.0");
+    expect(parsed.serverVersion).toBe(SHEMMA_MCP_VERSION);
   });
 });

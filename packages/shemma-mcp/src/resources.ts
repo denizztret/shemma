@@ -92,7 +92,7 @@ export function registerResources(
       daemon: health
         ? { running: true as const, pid: health.pid, healthy: true, storage: health.storage }
         // v1 always emits "unreachable"; spec §7.4 allows "not-started"/"unhealthy" —
-        // refine in Task 20 when ensureDaemon wires in.
+        // distinguishing them requires ensureDaemon-attempt state which is out of v1 scope.
         : { running: false as const, reason: "unreachable" as const },
       rooms: {},
       activeRooms: active.rooms,

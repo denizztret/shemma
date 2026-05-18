@@ -1,6 +1,6 @@
 {
   "name": "shemma",
-  "version": "0.12.3",
+  "version": "0.13.0",
   "private": true,
   "type": "module",
   "bin": { "shemma": "src/index.ts" },
