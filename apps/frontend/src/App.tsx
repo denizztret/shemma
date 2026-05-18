@@ -50,6 +50,10 @@ export function App({ room }: { room: string }) {
   // DRW-075: tracks whether the user has manually panned/zoomed.
   // When false, post-AI-change zoomToFit is allowed; reset on room change.
   const userHasManuallyPanned = useRef(false);
+  // True while we are inside a programmatic camera operation (initial fit,
+  // restored-camera setCamera, debounced post-AI zoomToFit). The camera
+  // listener uses this to distinguish programmatic moves from real user pans.
+  const inProgrammaticCameraOp = useRef(false);
   // PromptInput is toggled by ⌘K (Ctrl+K on non-Mac) — opens for the current
   // selection and stays open until Send/Esc/selection cleared.
   const [promptOpen, setPromptOpen] = useState(false);
@@ -180,6 +184,10 @@ export function App({ room }: { room: string }) {
     // DRW-075: reset user-pan flag on room/editor change so AI fit is active
     // for the fresh room until the user interacts with the camera.
     userHasManuallyPanned.current = false;
+    // Guard: programmatic zoomToFit also writes the camera with source:"user",
+    // which would otherwise trip the user-pan listener below. Set this ref to
+    // true around each programmatic fit so the listener can ignore those.
+    inProgrammaticCameraOp.current = false;
 
     // DRW-075: debounced zoomToFit after AI mutations; fires at most once per
     // 100ms burst of AI store-change frames. Cancelled on room change via the
@@ -190,7 +198,13 @@ export function App({ room }: { room: string }) {
       aiZoomTimer = setTimeout(() => {
         aiZoomTimer = null;
         if (!active || userHasManuallyPanned.current) return;
+        inProgrammaticCameraOp.current = true;
         editor.zoomToFit({ animation: { duration: 200 } });
+        // Clear in next macrotask after the animation has been scheduled — the
+        // store.listen callback is synchronous so this is sufficient.
+        setTimeout(() => {
+          inProgrammaticCameraOp.current = false;
+        }, 0);
       }, 100);
     };
 
@@ -214,6 +228,7 @@ export function App({ room }: { room: string }) {
       // content. If a saved camera exists the user has already navigated this
       // room — mark as manually panned so AI fit won't override it.
       const cam = loadCamera(room);
+      inProgrammaticCameraOp.current = true;
       if (cam) {
         editor.setCamera(cam, { immediate: true });
         userHasManuallyPanned.current = true;
@@ -221,6 +236,10 @@ export function App({ room }: { room: string }) {
         const shapesCount = editor.getCurrentPageShapes().length;
         if (shapesCount) editor.zoomToFit({ animation: { duration: 0 } });
       }
+      // Clear in next macrotask after the camera listener fires synchronously.
+      setTimeout(() => {
+        inProgrammaticCameraOp.current = false;
+      }, 0);
 
       // Start WS store sync.
       const wsUrl = `ws://${location.host}/ws?room=${encodeURIComponent(room)}`;
@@ -324,8 +343,12 @@ export function App({ room }: { room: string }) {
             camSaveTimer = setTimeout(() => saveCamera(room, cam), 150);
             // DRW-075: any user-driven camera move marks the viewport as
             // intentionally positioned — AI post-mutation zoomToFit will not
-            // override it anymore.
-            userHasManuallyPanned.current = true;
+            // override it anymore. Programmatic fits (set the
+            // inProgrammaticCameraOp ref) are excluded so chained AI batches
+            // can still re-fit as content grows.
+            if (!inProgrammaticCameraOp.current) {
+              userHasManuallyPanned.current = true;
+            }
           }
         },
         { source: "user", scope: "session" },
