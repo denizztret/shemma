@@ -1,8 +1,10 @@
 # tldraw 5.x cheat-sheet for shemma agents
 
-**Scope:** компактный справочник по API tldraw для тех частей кода и для subagent'ов, которые работают с canvas. Заполняется по мере investigation'ов; единственный источник — официальная docs `https://tldraw.dev/` (не type-defs).
+**Scope:** компактный справочник по API tldraw для тех частей кода и для subagent'ов, которые работают с canvas. Заполняется по мере investigation'ов.
 
-**Правило (memory `feedback-tldraw-docs`):** перед написанием/чтением tldraw-кода — сверяйся **с этим cheat-sheet'ом + с актуальной docs по URL'ам ниже**. Type-defs одни не достаточны: они не фиксируют API contracts (`richText` vs `text`, mutate-семантика creator-функций, обязательность bindings для arrow).
+> 📘 **Deep reference:** для полных enum'ов props, hidden required fields (типа `elbowMidPoint`, `snap`), migration mechanism, custom ShapeUtil template — см. **[`tldraw-5x-deep.md`](./tldraw-5x-deep.md)**. Этот файл — quick lookup; deep doc — авторитативный источник по precise типам и breaking changes.
+
+**Правило (memory `feedback-tldraw-docs`):** перед написанием/чтением tldraw-кода — открой этот cheat-sheet и deep doc. Источники: official docs `tldraw.dev/sdk-features/*` + type reference `tldraw.dev/reference/*` + GitHub source при расхождении.
 
 ---
 
@@ -173,7 +175,9 @@ editor.run(() => {
 })
 ```
 
-**Подтверждено (по investigation DRW-076, 2026-05-18):** структура binding props для arrow — `{ terminal: 'start' | 'end', normalizedAnchor: {x,y}, isPrecise: boolean, isExact: boolean }`. Bindings создаются отдельными записями `typeName: 'binding'`, `fromId = arrowId`, `toId = nodeId`.
+**Подтверждено (по investigation DRW-076, 2026-05-18):** структура binding props для arrow — `{ terminal: 'start' | 'end', normalizedAnchor: {x,y}, isPrecise: boolean, isExact: boolean, snap: ElbowArrowSnap }`. Bindings создаются отдельными записями `typeName: 'binding'`, `fromId = arrowId`, `toId = nodeId`.
+
+> ⚠️ **`snap: ElbowArrowSnap`** добавлено в v5 (см. [tldraw-5x-deep.md §3](./tldraw-5x-deep.md#3-tlarrowbindingprops--точная-схема)). В narrative docs не упомянуто, в type reference присутствует. Если ваш код создаёт arrow bindings вручную — выставляйте `snap` явно или ловите тот же ValidationError, что DRW-076. В shemma: `apps/backend/src/domain/compile.ts:makeArrowBindings` сейчас НЕ выставляет — кандидат на DRW-079.
 
 ### Gotcha 5.0+: обязательное `elbowMidPoint` в arrow props
 
