@@ -93,6 +93,7 @@ function makeArrowBindings(arrowId: string, fromShapeId: string, toShapeId: stri
         normalizedAnchor: { x: 0.5, y: 0.5 },
         isExact: false,
         isPrecise: false,
+        snap: "none",
       },
       meta: {},
     }) as TLRecord;

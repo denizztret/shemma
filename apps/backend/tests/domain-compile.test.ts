@@ -135,6 +135,34 @@ describe("compile.connect", () => {
     const props = arrows[0]!.props as Record<string, unknown>;
     expect(Object.prototype.hasOwnProperty.call(props, "text")).toBe(false);
   });
+
+  it("arrow bindings have snap='none' required by tldraw 5.x ElbowArrowSnap", () => {
+    const s = emptyStore();
+    s.store["shape:f"] = {
+      id: "shape:f",
+      typeName: "shape",
+      type: "geo",
+      meta: { didrawName: "front" },
+    } as TLRecord;
+    s.store["shape:b"] = {
+      id: "shape:b",
+      typeName: "shape",
+      type: "geo",
+      meta: { didrawName: "back" },
+    } as TLRecord;
+    const idx = rebuildDidrawIndex(s);
+    const r = compile(
+      [{ kind: "connect", from: "front", to: "back" }],
+      s,
+      idx,
+    );
+    const bindings = Object.values(r.batch.added).filter((x) => x.typeName === "binding");
+    expect(bindings.length).toBe(2);
+    for (const b of bindings) {
+      const props = b.props as Record<string, unknown>;
+      expect(props.snap).toBe("none");
+    }
+  });
 });
 
 describe("compile.group", () => {

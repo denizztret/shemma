@@ -33,6 +33,17 @@ export function backfillStoreRecords(
         out[id] = { ...r, props: newProps };
         continue;
       }
+    } else if (
+      r &&
+      typeof r === "object" &&
+      r.typeName === "binding" &&
+      r.type === "arrow"
+    ) {
+      const props = (r.props as Record<string, unknown> | undefined) ?? {};
+      if (props.snap === undefined) {
+        out[id] = { ...r, props: { ...props, snap: "none" } };
+        continue;
+      }
     }
     out[id] = r as unknown;
   }

@@ -108,4 +108,38 @@ describe("backfillStoreRecords", () => {
     const out = backfillStoreRecords(store);
     expect(out["shape:arr"]).toEqual(store["shape:arr"]);
   });
+
+  it("adds snap='none' on arrow bindings missing snap (tldraw 5.x ElbowArrowSnap)", () => {
+    const store = {
+      "binding:b1": {
+        id: "binding:b1",
+        typeName: "binding",
+        type: "arrow",
+        fromId: "shape:arrow1",
+        toId: "shape:geo1",
+        props: { terminal: "start", normalizedAnchor: { x: 0.5, y: 0.5 }, isExact: false, isPrecise: false },
+        meta: {},
+      },
+    };
+    const out = backfillStoreRecords(store);
+    const props = (out["binding:b1"] as { props: Record<string, unknown> }).props;
+    expect(props.snap).toBe("none");
+  });
+
+  it("does not overwrite existing snap on arrow bindings (idempotent backfill)", () => {
+    const store = {
+      "binding:b2": {
+        id: "binding:b2",
+        typeName: "binding",
+        type: "arrow",
+        fromId: "shape:arrow1",
+        toId: "shape:geo1",
+        props: { terminal: "end", normalizedAnchor: { x: 0.5, y: 0.5 }, isExact: false, isPrecise: false, snap: "edge" },
+        meta: {},
+      },
+    };
+    const out = backfillStoreRecords(store);
+    const props = (out["binding:b2"] as { props: Record<string, unknown> }).props;
+    expect(props.snap).toBe("edge");
+  });
 });
