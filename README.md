@@ -191,7 +191,7 @@ CLI remains the stable interface; MCP is an alternative for clients that support
 ## Tests
 
 ```bash
-bun run test                              # 611 unit/integration: 58 domain + 284 backend + 7 client + 152 cli + 110 mcp
+bun run test                              # 618 unit/integration: 58 domain + 284 backend + 7 client + 155 cli + 114 mcp
 cd apps/frontend && bunx playwright test  # golden-path e2e
 bun run lint                              # biome
 ```
@@ -199,9 +199,9 @@ bun run lint                              # biome
 ## Release build
 
 ```bash
-./scripts/build-release.sh 0.13.0 stable          # → release/shemma-{darwin-arm64,darwin-x64,linux-x64}
-./scripts/generate-manifest.sh 0.13.0 stable      # → release/release-manifest.json
-./scripts/publish-release.sh 0.13.0 stable        # build + manifest + gh release create (опционально)
+./scripts/build-release.sh 0.14.0 stable          # → release/shemma-{darwin-arm64,darwin-x64,linux-x64}
+./scripts/generate-manifest.sh 0.14.0 stable      # → release/release-manifest.json
+./scripts/publish-release.sh 0.14.0 stable        # build + manifest + gh release create (опционально)
 ```
 
 Бинарь — single-file (frontend assets вшиты через `import ... with { type: "file" }`).
