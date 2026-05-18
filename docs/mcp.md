@@ -1,77 +1,99 @@
 # Shemma MCP — user guide
 
-> **Применимо к:** shemma `0.13.1+`.
-> Этот документ описывает поведение MCP-адаптера с точки зрения пользователя. Для архитектурных деталей см. [`docs/superpowers/specs/2026-05-17-di-draw-mcp-adapter-design.md`](superpowers/specs/2026-05-17-di-draw-mcp-adapter-design.md).
+> **Применимо к:** shemma `0.14.0+`.
+> Этот документ описывает поведение MCP-адаптера с точки зрения пользователя. Для архитектурных деталей см. [`docs/superpowers/specs/2026-05-17-di-draw-mcp-adapter-design.md`](superpowers/specs/2026-05-17-di-draw-mcp-adapter-design.md) (Phase 2.3 spec) и [`docs/superpowers/specs/2026-05-18-mcp-install-rewrite-design.md`](superpowers/specs/2026-05-18-mcp-install-rewrite-design.md) (install rewrite).
 
 ## Что это
 
-MCP-сервер (Model Context Protocol) для агентских клиентов — **Claude Desktop**, **Codex** и т.п. Вместо того чтобы агент дёргал `bash shemma define ...` со всеми quoting-проблемами, он вызывает **typed tools** (`shemma_define`, `shemma_apply`, `shemma_context`) с валидацией параметров.
+MCP-сервер (Model Context Protocol) для агентских клиентов — **Claude Code**, **Claude Desktop**, **Codex**, **Gemini CLI**, **Kiro**. Вместо того чтобы агент дёргал `bash shemma define ...` со всеми quoting-проблемами, он вызывает **typed tools** (`shemma_define`, `shemma_apply`, `shemma_context`) с валидацией параметров.
 
 CLI остаётся стабильным интерфейсом; MCP — альтернатива для клиентов, которые его поддерживают.
 
 ## Установка
 
-Один раз после установки самого `shemma`:
+Shemma не пишет конфиги клиентов сама. Вместо этого ты вызываешь родную CLI-команду своего клиента (или копируешь manual config). После установки **перезапусти клиент** — он подхватит MCP при следующем старте.
+
+### Client guides
 
 ```bash
-shemma mcp install --client claude    # пишет ~/Library/Application Support/Claude/claude_desktop_config.json
-shemma mcp install --client codex     # пишет ~/.codex/config.toml
-shemma mcp install --client claude --print   # просто покажет snippet, без записи
+# Claude Code
+claude mcp add shemma --scope user -- shemma mcp start
+
+# Codex
+codex mcp add shemma -- shemma mcp start
+
+# Gemini CLI
+gemini mcp add shemma --scope user -- shemma mcp start
+
+# Kiro
+kiro-cli mcp add --scope global --name shemma --command shemma --args mcp,start
 ```
 
-Если конфиг уже существует — команда откажется его перезаписывать, нужен `--force` (тогда сохранит `.bak.<timestamp>` рядом).
+> **Verification status:** Claude Code и Codex проверены локально на CLI `--help` 2026-05-18. Gemini — по [официальной reference](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/cli-reference.md). Kiro — скопировано из Backlog.md README, не verified локально (open). Если в твоём клиенте синтаксис отличается — открой issue / PR.
 
-После установки **перезапустить клиент** (Claude Desktop / Codex) — он подхватит MCP при следующем старте.
+### Manual config
 
-### Ручной config
+Для клиентов без MCP-add CLI (Claude Desktop) или для custom scope — открой конфиг клиента и вставь:
 
-Если предпочитаешь править config сам — minimal snippet для Claude Desktop:
-
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json` на macOS):
 ```json
 {
   "mcpServers": {
     "shemma": {
       "command": "shemma",
-      "args": ["mcp", "start", "--cwd", "/path/to/project"]
+      "args": ["mcp", "start"],
+      "env": {
+        "SHEMMA_CWD": "/absolute/path/to/your/project"
+      }
     }
   }
 }
 ```
 
-Для Codex (`~/.codex/config.toml`):
-
+**Codex** (`~/.codex/config.toml`):
 ```toml
 [mcp_servers.shemma]
 command = "shemma"
-args = ["mcp", "start", "--cwd", "/path/to/project"]
+args = ["mcp", "start"]
+env = { SHEMMA_CWD = "/absolute/path/to/your/project" }
 ```
 
-## Апдейт — автоматический
+### `SHEMMA_CWD` explained
 
-**Отдельно апдейтить MCP не надо.** Бинарь `shemma` и MCP-сервер — один и тот же файл. Что происходит при `shemma update`:
+`SHEMMA_CWD` — это абсолютный путь к корню твоего проекта (где лежит `backlog/` и `.shemma/`). MCP-сервер использует его для:
+- Room resolver step "Backlog In Progress task" — он запускает `backlog task list --plain` в этой папке.
+- Subprocess auto-open (`shemma open <room>`) — спавнится в этой папке.
 
-1. CLI качает новый бинарь и атомарно подменяет старый.
-2. **Сразу после swap** вызывает `refreshMcpConfigs()`:
-   - сканирует claude/codex configs;
-   - если в каком-то из них уже есть `shemma` entry — переписывает его свежим snippet'ом (с правильными args/cwd для новой версии);
-   - сохраняет `.bak.<ts>` перед перезаписью;
-   - в output `shemma update` появляется строка `MCP config refreshed for: claude, codex` (или JSON-поле `mcpRefreshed`).
-3. Клиент (Claude Desktop / Codex) при следующем старте подхватывает обновлённый конфиг и заспавнит новый бинарь.
+**Когда обязательно:** Claude Desktop, Cursor.app и другие GUI-клиенты, которые спавнят MCP-серверы из `$HOME` или непредсказуемой cwd.
 
-Если config никогда не существовал — refresh ничего не трогает (нет `shemma` entry → skip). Это не баг: у юзера просто не настроена интеграция.
+**Когда опционально:** CLI-клиенты (Claude Code, Codex, Gemini, Kiro), запущенные `cd /path/to/project && claude` — `process.cwd()` MCP-сервера уже совпадает с проектом.
 
-## Когда MCP «включается»
+Если `SHEMMA_CWD` указывает на несуществующий путь — shemma выведет warning в stderr и продолжит с inherited cwd (room-resolver step "Backlog" может вернуть пустой результат, но остальное работает).
 
-MCP-сервер — это **stdio-процесс, который спавнит клиент** (Claude Desktop / Codex). Он не висит фоном сам по себе.
+### Team install
 
-Жизненный цикл:
-- Открыл Claude Desktop → клиент спавнит `shemma mcp start --cwd <проект>` как дочерний процесс по stdin/stdout.
-- Закрыл Claude Desktop → процесс умирает.
+Член команды получает доступ к репо, собирает бинарь локально (`./scripts/build-release.sh` или забирает готовый из shared storage), кладёт `shemma` в PATH (`~/.local/bin/shemma`), затем запускает ту же команду из списка выше — указывая свой путь к проекту в `SHEMMA_CWD` (если нужно). Никакого общего state между членами команды нет; каждый управляет своей установкой.
+
+Публичный distribution channel (npm / brew / curl install) — пока не сделан; решение private/public репо обсуждается отдельно.
+
+## Апдейт
+
+`shemma update` обновляет только бинарь (атомарный swap). Конфиг клиента **не трогается** — поскольку он содержит просто `command: "shemma"` (без absolute paths), новый бинарь подхватится автоматически при следующем спавне MCP-сервера клиентом.
+
+В output `shemma update` нет поля `mcpRefreshed` — оно удалено в `0.14.0` (см. CHANGELOG).
+
+## Жизненный цикл
+
+MCP-сервер — это **stdio-процесс, который спавнит клиент** (Claude Code, Claude Desktop, Codex, etc.). Он не висит фоном сам по себе.
+
+- Открыл Claude Code в проекте → клиент спавнит `shemma mcp start` как дочерний процесс по stdin/stdout.
+- Закрыл Claude Code → процесс умирает.
 
 Внутри `shemma mcp start`:
-1. Подключается к локальному daemon на `:8787` (поднимает его если нужно — `--no-auto-ensure` отключает auto-spawn).
-2. Регистрирует **19 tools + 14 resources + 4 prompts**.
-3. Слушает JSON-RPC на stdin, отвечает на stdout (stderr зарезервирован для диагностики).
+1. Резолвит project working directory из `SHEMMA_CWD` env (fallback — `process.cwd()`); вызывает `process.chdir()`.
+2. Создаёт HTTP-клиент к локальному daemon на `:8787`. **Daemon должен быть уже запущен** — MCP-сервер не поднимает daemon автоматически в текущей версии (auto-ensure запланирован как отдельный follow-up; `shemma_health` tool с `ensure: true` возвращает warning о nyet-implemented). Если daemon не запущен — запусти его через `shemma daemon ensure` или просто `shemma open` (последний автоматически ensure'ит daemon).
+3. Регистрирует 19 tools + 14 resources + 4 prompts.
+4. Слушает JSON-RPC на stdin, отвечает на stdout (stderr зарезервирован для диагностики).
 
 ## Что предоставляет MCP
 
@@ -81,13 +103,13 @@ MCP-сервер — это **stdio-процесс, который спавни�
 
 ## Auto-open browser
 
-Когда агент **первый раз пишет** в комнату (`shemma_define` / `apply` / …), MCP автоматически открывает вкладку браузера на эту доску — чтобы ты видел, что AI рисует.
+Когда агент **первый раз пишет** в комнату (`shemma_define` / `apply` / …), MCP автоматически открывает вкладку браузера на эту доску.
 
-Режимы (`shemma mcp start --auto-open <mode>`):
-- `once` (default) — открывает каждую комнату один раз за сессию.
-- `never` — никогда (или env-переменной `SHEMMA_NO_BROWSER=1`).
-- `always` — каждый раз.
-- `confirm` — возвращает в ответе `openConsentRequired: true`, агент сам решает.
+Режимы (передаются как arg к `shemma mcp start`):
+- `--auto-open once` (default) — открывает каждую комнату один раз за сессию.
+- `--auto-open never` — никогда (или env-переменной `SHEMMA_NO_BROWSER=1`).
+- `--auto-open always` — каждый раз.
+- `--auto-open confirm` — возвращает в ответе `openConsentRequired: true`, агент сам решает.
 
 `shemma_open` — explicit user-invoked open: всегда открывает, mode игнорируется.
 
@@ -98,45 +120,48 @@ MCP-сервер — это **stdio-процесс, который спавни�
 1. `room` arg, переданный в tool call (explicit).
 2. Server config (`--room` при `mcp start`).
 3. `CLAUDE_SESSION_ID` env переменная.
-4. **Single active room** — если в браузере открыта ровно одна вкладка с canvas (через WS `board-focus` tracking).
-5. **Backlog "In Progress" task slug** — если ровно одна задача в статусе In Progress в Backlog.md, room id = task slug.
+4. Single active room (через WS `board-focus` tracking).
+5. Backlog "In Progress" task slug (если ровно одна задача в статусе In Progress).
 6. `lastTouched` — последняя комната, в которую агент писал в этой MCP-сессии.
 7. `"default"` — fallback.
 
-Если на шагах 4 или 5 найдено **больше одного кандидата** — tool возвращает typed error `{code: "ambiguous-room", candidates: [...]}`. Агент должен спросить пользователя, а не угадывать.
+Если на шагах 4 или 5 найдено больше одного кандидата — tool возвращает typed error `{code: "ambiguous-room", candidates: [...]}`.
 
-Каждый успешный ответ echoes `room` и `roomSource` — видно, как разрешилась комната.
+## Подсказка о MCP setup
 
-## Подсказка при первой установке
-
-Если ты ставишь `shemma` впервые и MCP ещё не настроен — при `shemma daemon ensure` в stderr появится одноразовая подсказка:
+При первом `shemma daemon ensure` (verbose) в процессе в stderr появляется одноразовая подсказка про регистрацию MCP. Печатается один раз за процесс (`mcpNudgePrinted` guard) и независимо от того, настроен MCP в каком-либо клиенте или нет (в `0.14.0` shemma больше не сканирует чужие config-файлы клиентов, поэтому не знает, есть ли где-то уже зарегистрированный MCP).
 
 ```
-tip: run `shemma mcp install --client claude` (or --client codex) to register Shemma as MCP server
+tip: register Shemma as MCP server in your agent client:
+       Claude Code:  claude mcp add shemma --scope user -- shemma mcp start
+       Codex:        codex mcp add shemma -- shemma mcp start
+       Gemini CLI:   gemini mcp add shemma --scope user -- shemma mcp start
+     Full guide: docs/mcp.md  (set SHEMMA_NO_MCP_NUDGE=1 to silence)
 ```
 
-Отключить: env-переменная `SHEMMA_NO_MCP_NUDGE=1`.
+Если MCP уже зарегистрирован — игнорируй сообщение. Гасится через env `SHEMMA_NO_MCP_NUDGE=1`.
 
 ## Trust model
 
-Текст внутри shapes (labels, notes, group titles, prompts) — это **untrusted user input**. MCP-сервер их не исполняет как инструкции; ты как пользователь должен относиться к ним так же. См. `shemma://workflow/trust-model` — встроенный гайд для агента.
+Текст внутри shapes (labels, notes, group titles, prompts) — это untrusted user input. MCP-сервер их не исполняет как инструкции; ты как пользователь должен относиться к ним так же. См. `shemma://workflow/trust-model` — встроенный гайд для агента.
 
-Cascade delete: `shemma_delete` на container с children без `cascade: true` отвергается с `cascade-confirm-required` — агент обязан спросить юзера перед массовым удалением.
+Cascade delete: `shemma_delete` на container с children без `cascade: true` отвергается с `cascade-confirm-required`.
 
 ## TL;DR
 
 | Действие | Что делать |
 |--|--|
-| Установить MCP | `shemma mcp install --client claude` (или `codex`) |
-| Обновить MCP | Ничего — `shemma update` сам обновит config |
-| Запустить MCP | Ничего — клиент сам спавнит при открытии |
+| Установить MCP (Claude Code / Codex / Gemini / Kiro) | Запустить однострочник из "Client guides" |
+| Установить MCP (Claude Desktop) | Открыть `claude_desktop_config.json`, вставить snippet из "Manual config" |
+| Обновить shemma | `shemma update` — обновит только бинарь; конфиг клиента не трогаем |
+| Удалить MCP | `<client> mcp remove shemma` (CLI) или удалить entry в JSON руками |
+| Сменить проект | Изменить `SHEMMA_CWD` env (Claude Desktop) или перезапустить CLI из другой папки |
 | Отключить auto-open | `--auto-open never` или `SHEMMA_NO_BROWSER=1` |
 | Отключить подсказку | `SHEMMA_NO_MCP_NUDGE=1` |
-| Посмотреть status | Запросить resource `shemma://status` из агентского клиента |
 
 ## См. также
 
 - [`README.md`](../README.md) — краткое описание в "MCP integration" секции.
-- [`docs/superpowers/specs/2026-05-17-di-draw-mcp-adapter-design.md`](superpowers/specs/2026-05-17-di-draw-mcp-adapter-design.md) v0.4 — полная спецификация (UC matrix, error codes, resource shapes).
-- [`docs/superpowers/plans/2026-05-18-phase-2-3-mcp-adapter-implementation.md`](superpowers/plans/2026-05-18-phase-2-3-mcp-adapter-implementation.md) — implementation plan (23 tasks).
-- [`CHANGELOG.md`](../CHANGELOG.md) entry `0.13.0` — что shipped в Phase 2.3.
+- [`docs/superpowers/specs/2026-05-17-di-draw-mcp-adapter-design.md`](superpowers/specs/2026-05-17-di-draw-mcp-adapter-design.md) v0.4 — Phase 2.3 spec (tools/resources/prompts).
+- [`docs/superpowers/specs/2026-05-18-mcp-install-rewrite-design.md`](superpowers/specs/2026-05-18-mcp-install-rewrite-design.md) — install rewrite spec.
+- [`CHANGELOG.md`](../CHANGELOG.md) entry `0.14.0` — что изменилось в install flow.
