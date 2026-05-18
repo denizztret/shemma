@@ -131,6 +131,13 @@ export type StoreSyncDeps = {
    */
   onTruncated: () => void;
   /**
+   * Called after each inbound AI store-change batch is applied.
+   * Receives the set of record ids that were added or updated so callers can
+   * trigger tldraw side-effects (e.g. growY correction via editor.updateShape).
+   * DRW-075 / DRW-077.
+   */
+  onAiChange?: (changedIds: Set<string>) => void;
+  /**
    * Debounce window for outgoing user-change batches (ms). Default 50ms —
    * coalesces a single mouse-drag into one frame without noticeable latency.
    * Exposed for tests.
@@ -308,6 +315,15 @@ export function startStoreSync(deps: StoreSyncDeps): {
           deps.editor.store.applyDiff(batchToDiff(msg.changes));
         });
         if (msg.version > currentVersion) currentVersion = msg.version;
+        // DRW-075 / DRW-077: notify caller about AI-driven changes so it can
+        // trigger side-effects (growY correction, zoomToFit).
+        if (msg.source === "ai" && deps.onAiChange) {
+          const changedIds = new Set<string>([
+            ...Object.keys(msg.changes.added),
+            ...Object.keys(msg.changes.updated),
+          ]);
+          if (changedIds.size > 0) deps.onAiChange(changedIds);
+        }
         break;
       case "hello":
         // Legacy initial frame — no action; initial state already loaded.

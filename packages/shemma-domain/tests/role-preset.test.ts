@@ -20,4 +20,31 @@ describe("rolePreset", () => {
   test("note has sticky kind", () => {
     expect(rolePreset("note").kind).toBe("sticky");
   });
+
+  // DRW-077: wider defaults to prevent label overflow on typical names
+  test("service default dimensions are wide enough for labels (220×80)", () => {
+    const p = rolePreset("service");
+    expect(p.defaultW).toBe(220);
+    expect(p.defaultH).toBe(80);
+  });
+  test("datastore default dimensions are wide enough for labels (220×80)", () => {
+    const p = rolePreset("datastore");
+    expect(p.defaultW).toBe(220);
+    expect(p.defaultH).toBe(80);
+  });
+  test("external default dimensions are wide enough for labels (220×80)", () => {
+    const p = rolePreset("external");
+    expect(p.defaultW).toBe(220);
+    expect(p.defaultH).toBe(80);
+  });
+  test("queue keeps compact dimensions (unchanged)", () => {
+    const p = rolePreset("queue");
+    expect(p.defaultW).toBe(140);
+    expect(p.defaultH).toBe(50);
+  });
+  test("actor keeps compact dimensions (unchanged)", () => {
+    const p = rolePreset("actor");
+    expect(p.defaultW).toBe(120);
+    expect(p.defaultH).toBe(60);
+  });
 });
