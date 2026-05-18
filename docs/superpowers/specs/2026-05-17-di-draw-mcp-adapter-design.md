@@ -1,6 +1,6 @@
 # Phase 2.3 — MCP adapter v1 (Design)
 
-**Version:** 0.3
+**Version:** 0.4
 **Date:** 2026-05-18
 **Status:** ready for plan
 **Target release:** next minor after `0.12.3` (см. §17 release alignment)
@@ -11,7 +11,8 @@
 
 ## Changelog
 
-- **v0.3 (2026-05-18)** — добавлены §5.1 Room name resolution (включая task-derived из Backlog.md), §6.8 Auto-visualization (browser auto-open аналогично chrome-devtools MCP), tool `shemma_open`, поле `suggestedRoom` и `taskContext` в `shemma://status`. Расширена §15 (consent UX policy, off-by-default vs once-default).
+- **v0.4 (2026-05-18)** — §5.2 Active board detection (UC-B/C: user открыл доску → MCP знает); §5.1 chain дополнен уровнем "single active room"; §6.9 `ambiguous-room` error code; §17 Backend prerequisites (WS board-focus, `/api/active-rooms`); §18 Phase 2.4 background agent outline (отдельный пакет `shemma-agent`, out-of-v1); §19 UC coverage matrix.
+- v0.3 (2026-05-18) — добавлены §5.1 Room name resolution (включая task-derived из Backlog.md), §6.8 Auto-visualization (browser auto-open аналогично chrome-devtools MCP), tool `shemma_open`, поле `suggestedRoom` и `taskContext` в `shemma://status`. Расширена §15 (consent UX policy, off-by-default vs once-default).
 - v0.2 (2026-05-18) — `didraw` → `shemma` sweep; workflow resources разбиты на семейство `shemma://workflow/*`; зафиксирован контракт atomicity / clientOpId / dryRun по реальному backend; добавлен `shemma mcp install` в v1; зафиксировано pull-only для prompts (subscription deferred); добавлены §11.5 Logging и §11.6 Multi-client; уточнён `shemma_health`; добавлен `shemma_get_instructions` meta-tool; добавлено §17 release alignment.
 - v0.1 (2026-05-17) — initial draft.
 
@@ -174,6 +175,7 @@ claude mcp add shemma --scope user -- shemma mcp start --cwd /absolute/path/to/p
 1. **Tool arg `room`** — explicit override caller'а.
 2. **`shemma mcp start --room <id>`** — server-side default.
 3. **`CLAUDE_SESSION_ID`** env — host-provided session id.
+3.5. **Single active room** — если backend сообщает ровно одну room с активным UI focus (см. §5.2), она побеждает task-derived.
 4. **Task context (Backlog.md)** — derive room id из текущей "In Progress" задачи, если она одна. Чтение:
    - env hint: `SHEMMA_TASK_ID` если host выставил его явно;
    - иначе MCP server делает one-shot `backlog task list --plain --status "In Progress"` через subprocess (best-effort; если backlog CLI / project structure отсутствуют — silently skip).
@@ -191,6 +193,44 @@ Optional tool:
 | `shemma_room_suggest` | Возвращает predicted room id для текущего context (без mutation). Полезно для prompts/UX flows, где host хочет показать "будем рисовать в `<room>`, ok?". |
 
 Resource `shemma://status` обогащается полем `taskContext` (см. §7.4) — host видит, что MCP server понял про текущую задачу.
+
+### 5.2 Active board detection (UC-B / UC-C)
+
+**UC-B:** user открыл доску в browser (через `shemma open <id>` или из Gallery), затем в чате с агентом упоминает её. Агент должен суметь нацелиться именно на эту доску без явного указания id.
+
+**UC-C:** если открыто несколько досок, агент должен либо выбрать однозначно по контексту, либо попросить у user уточнение — никогда не выбирать silently.
+
+#### Backend support (см. §17)
+
+Backend tracks per-room "is UI focused" state:
+
+- WS clients шлют `{kind:"board-focus", room, focused:true|false}` при tab focus/blur и при open другой room.
+- Backend держит `Map<roomId, { clients: Set<clientId>, lastFocusedAt: number }>` in-memory.
+- `GET /api/active-rooms` возвращает `[{ room, clientCount, lastFocusedAt }]` отсортированный по `lastFocusedAt` desc.
+
+#### MCP surface
+
+| Surface | Purpose |
+|---|---|
+| Tool `shemma_active_rooms` | Возвращает list active rooms из backend. Read-only. |
+| Resource `shemma://active-rooms` | То же в resource form (для discovery). |
+| Field `shemma://status.activeRooms` | Embedded snapshot (avoid extra round-trip). |
+
+#### Resolution behaviour
+
+При implicit room resolution (см. §5.1 step 3.5):
+
+- 1 active room → use it.
+- >1 active rooms → НЕ выбирать silently. Tool возвращает `ambiguous-room` error (§6.9) с list для агента, чтобы он спросил user.
+- 0 active rooms → переход на task-derived → ... → default.
+
+Опциональный flag `shemma mcp start --auto-pick-most-recent` (default `false`) меняет поведение для >1 active: берёт самую недавно focused. Не рекомендуется как default — приводит к surprise.
+
+#### Edge cases
+
+- **WS disconnect race:** browser tab закрыт, но WS connection ещё не drained. Backend истекает entry через 30s idle timeout; до этого `clientCount` остаётся >0, но если все WS clients ушли — room снимается с активного состояния немедленно.
+- **Multi-device:** user открыл одну и ту же room на двух устройствах. `clientCount: 2`, room считается активной один раз (id уникален).
+- **Profile mismatch:** если MCP server смотрит на `release` daemon, а user открыл доску на `dev` — `shemma://status.otherProfiles` намекает, и MCP в response добавляет `data.profileMismatchHint: true`.
 
 ---
 
@@ -366,6 +406,28 @@ Behaviour first successful **write** tool call (`define/connect/group/note/apply
 - Auto-open безопасен в local-only контексте (Phase 2.3 MCP — stdio, localhost).
 - Если в будущем добавится Streamable HTTP / remote MCP — auto-open должен быть выключен по default (mode `never`), иначе remote agent может тригернуть browser на user machine. Это open question (§15).
 - Trust-model resource (`shemma://workflow/trust-model`) явно говорит: "MCP server открывает browser на твоей машине при первом draw; ты можешь отключить через `--auto-open never`".
+
+### 6.9 Ambiguous-room handling
+
+Если room не передан явно и chain §5.1 даёт неопределённый результат (>1 active rooms и нет других сигналов, или несколько "In Progress" Backlog tasks одновременно), tool возвращает error:
+
+```ts
+{
+  ok: false,
+  code: "ambiguous-room",
+  message: "Multiple candidate rooms; please specify `room` arg.",
+  details: {
+    candidates: [
+      { room: "drw-054-mcp", source: "task", lastFocusedAt?: number, clientCount?: number },
+      { room: "drw-055-settings", source: "active" }
+    ]
+  }
+}
+```
+
+Это **не fatal** — это сигнал агенту «спроси user». В `workflow/draw-architecture` явно сказано: при `ambiguous-room` нужно представить candidates и попросить выбор, не угадывать.
+
+Idempotency cache по `clientOpId` **не** заполняется для ambiguous-room ошибок (агент должен retry с правильным room).
 
 ---
 
@@ -679,6 +741,9 @@ Assert: stdout содержит только valid JSON-RPC frames (никаки
 - Auto-open `confirm`: `shemma_define` возвращает `data.openConsentRequired:true`, launcher не вызывался.
 - Room resolution: tool без `room` arg + seeded "In Progress" task (mock backlog subprocess) → response `room` = task slug, `data.roomSource:"task"`.
 - `shemma_room_suggest` возвращает тот же id, что effective resolution в реальном write tool.
+- Active rooms: открыть browser tab (mock WS `board-focus`) на room A → `shemma_active_rooms` возвращает `[A]`. Открыть второй tab на room B → `[B, A]` (lastFocused first). Закрыть A → `[B]`.
+- Tool call без `room` arg при двух active → `ambiguous-room` error c обоими candidates в `details`.
+- Tool call без `room` arg при одном active → используется он; `roomSource:"active"` в response.
 
 ### 14.4 CLI bridge tests
 
@@ -713,6 +778,8 @@ Assert: stdout содержит только valid JSON-RPC frames (никаки
 8. **`shemma_open` focus modes** — `focus:"selection"` требует знание о текущем selection в tldraw (не передаётся через WS из UI). Defer до Phase 3.x WS broadcast'а selection state.
 9. **Task derivation для multiple "In Progress"** — если в Backlog.md одновременно две задачи в статусе In Progress, MCP fallback'ит до `lastTouchedRoom`/`default`. Можно добавить heuristic (most recently modified) или попросить host передать `SHEMMA_TASK_ID` явно. Defer.
 10. **Cross-tool room consistency** — если caller передаёт `room` в одном tool call и не передаёт в следующем, `lastTouchedRoom` подхватит первый. Это intentional, но требует чёткой docs в `shemma://workflow/draw-architecture`.
+11. **Stale active-room entries** — браузер crash / network drop оставит entry в `activeRooms` пока не сработает idle timeout (30s). Это приемлемо для UI-уровня — heuristic; user сам видит, какая доска открыта.
+12. **Active room на dev profile когда MCP смотрит на release** — пока ограничиваемся warning'ом (`profileMismatchHint:true`); cross-profile MCP не делаем в v1.
 
 ---
 
@@ -740,9 +807,143 @@ Project-internal references:
 
 ---
 
-## 17. Release alignment
+## 17. Backend prerequisites (in scope Phase 2.3)
 
-Phase 2.3 (MCP adapter) — independent от phase 3.x. Текущий tag — `0.12.3`. Possible alignment:
+MCP adapter sам по себе тонкий, но §5.2 Active board detection требует backend support. Эти изменения **входят в scope Phase 2.3 plan**, не выделяются в отдельную phase:
+
+### 17.1 WS protocol extension
+
+В `apps/backend/src/types.ts` `WsClientMessage` добавить вариант:
+
+```ts
+| { kind: "board-focus"; room: string; focused: boolean }
+```
+
+Frontend (`apps/frontend/src/transport/ws.ts`) шлёт его при:
+
+- Tab gains focus (`window.addEventListener("focus", ...)`) → `{focused:true}`.
+- Tab loses focus или закрывается → `{focused:false}` (best-effort, может не дойти).
+- Room switch внутри одного tab → `{focused:false}` на старую + `{focused:true}` на новую.
+
+### 17.2 Backend state
+
+В `WsHub`/`apps/backend/src/ws/` добавить:
+
+```ts
+type ActiveRoomEntry = { clients: Set<string>; lastFocusedAt: number };
+const activeRooms = new Map<RoomId, ActiveRoomEntry>();
+```
+
+- On `board-focus {focused:true}` → add `clientId` to entry, update `lastFocusedAt`.
+- On `board-focus {focused:false}` или WS disconnect → remove `clientId`; если `clients.size === 0` через 30s idle timeout — удалить entry полностью.
+- Idle timeout — single shared timer, не per-room.
+
+### 17.3 HTTP endpoint
+
+`apps/backend/src/routes/active-rooms.ts`:
+
+```http
+GET /api/active-rooms
+→ 200 { rooms: [{ room: string, clientCount: number, lastFocusedAt: number }] }
+```
+
+Сортировка по `lastFocusedAt` desc. Endpoint read-only, без auth (consistent с остальными local endpoints).
+
+### 17.4 Client wrapper
+
+В `packages/shemma-client/src/index.ts` добавить:
+
+```ts
+async getActiveRooms(): Promise<{ rooms: Array<{ room: string; clientCount: number; lastFocusedAt: number }> }>
+```
+
+### 17.5 Tests (backend)
+
+- WS protocol: send `board-focus {true}` → `GET /api/active-rooms` shows room. Send `{false}` → room убрана.
+- Multiple clients per room: clientCount == 2.
+- WS disconnect без explicit `{focused:false}` → entry убрана после idle timeout (test с fake timers).
+- Two rooms focused в порядке A, then B → response order `[B, A]`.
+
+**Impact на existing surface:** zero — это чистое extension, не меняет существующие WS messages или endpoints.
+
+---
+
+## 18. Future: Phase 2.4 background agent (out of v1)
+
+UC-D пользователя: «background agent на базе Sonnet реагирует на prompt'ы на доске — отвечает либо рисует».
+
+**Это не входит в Phase 2.3 MCP scope, а оформляется отдельной phase.** Причина: Phase 2.3 предоставляет **capability**, Phase 2.4 — **orchestrator**. Смешивать их означает раздуть spec в 2 раза и сцепить независимые concerns (transport invariants vs LLM prompt engineering).
+
+### 18.1 Architectural sketch
+
+```text
+shemma-agent (long-running)
+   ↓ MCP client (stdio)
+shemma-mcp ← (current Phase 2.3)
+   ↓ @shemma/client
+backend
+```
+
+- Separate package `packages/shemma-agent`.
+- Long-running process: `shemma agent start --model claude-sonnet-4-6 --room <id|active|task>`.
+- Internal: Anthropic SDK + MCP TS SDK client.
+- Subscribes на `prompt-created` events (требует §15 OQ1 — resource subscription, активизируется в Phase 2.4).
+- Per-prompt decision (LLM-driven):
+  - Pure Q&A → `shemma_prompt_resolve(response: <answer>)`.
+  - Drawing action → `shemma_apply([{kind:..., ...}])` + `shemma_prompt_resolve(response: "Done: <summary>")`.
+  - Ambiguous → leave prompt as `pending`, escalate human.
+- Per-room conversation memory: `.shemma/agent-mem/<room>.jsonl` (append-only events log).
+- Auth: `ANTHROPIC_API_KEY` env; missing key → graceful disable + WARN.
+
+### 18.2 Dependencies on Phase 2.3
+
+- **Resource subscriptions** (§15 OQ1) — переходит из defer в required для Phase 2.4. Phase 2.3 закладывает hook (`prompt-created` already broadcasts через WS), MCP server adds subscription handler в 2.4.
+- **`shemma_active_rooms`** (§5.2) — agent сам выбирает room через ту же chain.
+- **`shemma_apply` atomicity + idempotency** (§6.3-6.4) — критично для safe retries при network blips.
+
+### 18.3 Phase 2.4 deliverables (preview, не scope этой spec)
+
+- spec `docs/superpowers/specs/<date>-shemma-bg-agent-design.md`
+- package `packages/shemma-agent` с CLI bridge `shemma agent start|stop|status`
+- system prompt templates для Q&A / draw decision
+- conversation memory format + replay
+- daemon-style lifecycle aligned с `shemma daemon` (pid файл, log rotation)
+- failure modes: model rate-limit, prompt injection через canvas labels (trust-model уже в Phase 2.3)
+
+### 18.4 Что Phase 2.3 НЕ блокирует
+
+- User по-прежнему может вручную poll'ить prompts через `shemma prompts list` или `shemma_prompts_list` MCP tool и resolve'ить вручную из чата с любым агентом.
+- Любая внешняя automation (cron, GitHub Action, IFTTT) может работать поверх Phase 2.3 capabilities без Phase 2.4.
+
+---
+
+## 19. Use-case coverage matrix
+
+Цель: дать агенту (через `shemma://workflow/overview`) и человеку быструю карту "что я могу делать".
+
+| UC | Use case | Поддержка в v1 | Tools/resources |
+|----|----------|----------------|------------------|
+| **A** | Agent рисует — browser open'ится автоматически | ✅ Default `--auto-open once` | `shemma_define/connect/apply` + auto-open (§6.8) |
+| **B** | User открыл доску, упомянул в чате — agent её знает | ✅ Via active-rooms (§5.2) | `shemma_active_rooms`, `shemma://active-rooms`, `shemma://status.activeRooms` |
+| **C** | Несколько досок открыто — выбор активной | ✅ Via `ambiguous-room` error | §6.9; agent должен ask user |
+| **D** | Background agent (Sonnet) реагирует на prompts | ❌ Out of v1 → Phase 2.4 | §18 sketch |
+| **E** | Agent отвечает на вопрос про current canvas | ✅ Read context | `shemma_context`, `shemma://room/{room}/context` |
+| **F** | Iterative refinement ("сделай стрелку async") | ✅ Read+write через domain | `shemma_context` → `shemma_apply [{kind:"connect", connectionKind:"async"}]` |
+| **G** | Cross-session continuity (закрыл → открыл — продолжаю) | ✅ Room persistence | room files on disk; agent читает `shemma_context` при resume |
+| **H** | Manual draw + AI annotation | ✅ Geometry context | `shemma_context({viewport})`, `shemma://room/{room}/context/geometry` |
+| **I** | Multi-device (chat на phone, browser на ноуте) | ✅ Local WS broadcast | tldraw WS sync существует (Phase 3.0) |
+| **J** | Templates / quick-actions | ✅ MCP prompts | `shemma_draw_architecture`, `shemma_review_canvas`, `shemma_explain_canvas` |
+| **K** | Visual diff с момента N | ✅ Versioned context | `shemma_context({since:N})` |
+| **L** | Pre-flight check без mutation | ✅ dryRun | `shemma_apply({dryRun:true})` |
+| **M** | Retry safety при network blip | ✅ Idempotency cache | `clientOpId` echo (§6.4) |
+
+Эта таблица также копируется в `shemma://workflow/overview` для агента.
+
+---
+
+## 20. Release alignment
+
+Phase 2.3 (MCP adapter + backend prerequisites из §17) — independent от phase 3.x. Текущий tag — `0.12.3`. Possible alignment:
 
 - Если phase 3.x ещё в work — MCP уходит в `0.13.0` (next minor).
 - Если выпускается параллельно с другими fixes — MCP может стать частью `0.13.x` patch series, но реалистичнее dedicated minor.
