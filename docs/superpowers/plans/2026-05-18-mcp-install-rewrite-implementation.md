@@ -1333,11 +1333,11 @@ Expected: line `<N> pass` where N ≥ 611 (baseline) + delta.
 
 Example: `Тестов: +14 добавлено (5 nudge + 4 cmdMcpStart resolution + 2 chdir + 1 integration + 2 parser), −10 удалено (snippet generators + detect + refresh). Net delta: +4. Final pass count: 615 (baseline 611).`
 
-- [ ] **Step 3: Manual sanity — backup-restore based install verification**
+- [ ] **Step 3: Manual sanity — isolated-HOME install verification**
 
 Для каждого доступного клиента (минимум **Claude Code и Codex** — обязательно оба per spec AC #12):
 
-> **Trust principle:** не мутируем существующие user MCP configs deструктивно. Backup → install в **project scope** → verify через `<client> mcp list` → restore (или просто удалить test scope).
+> **Trust principle:** ни одна sanity-команда не trogает реальный user config (`~/.claude.json`, `~/.codex/config.toml`). Используются изолированные temp директории — либо как `--scope project` cwd (Claude Code), либо как `HOME=$SANITY_HOME` (Codex / опциональный Claude user-scope). `trap` cleanup гарантирует removal даже при failure посередине последовательности.
 
 **Claude Code (project-scope в temp dir, не трогает user config):**
 ```bash
@@ -1351,32 +1351,43 @@ cd - && rm -rf /tmp/shemma-sanity-claude
 
 Expected: `.mcp.json` contains `{"mcpServers":{"shemma":{"command":"shemma","args":["mcp","start"]}}}` (без `--cwd`, без `env.SHEMMA_CWD` потому что project-scope CLI inherits cwd).
 
-**Codex (backup/restore real `~/.codex/config.toml`):**
+**Codex (isolated temp HOME — не трогает real `~/.codex/config.toml`):**
 ```bash
-BACKUP=~/.codex/config.toml.shemma-sanity-$(date +%s)
-cp ~/.codex/config.toml "$BACKUP"
-codex mcp add shemma -- shemma mcp start
-grep -q '\[mcp_servers.shemma\]' ~/.codex/config.toml && echo "codex install OK"
-codex mcp list 2>&1 | grep -q 'shemma' && echo "codex list shows shemma"
-# Restore оригинал (отметает только наш test entry, save user's other servers):
-mv "$BACKUP" ~/.codex/config.toml
+SANITY_HOME=$(mktemp -d /tmp/shemma-sanity-codex-XXXXXX)
+trap 'rm -rf "$SANITY_HOME"' EXIT
+HOME="$SANITY_HOME" codex mcp add shemma -- shemma mcp start
+test -f "$SANITY_HOME/.codex/config.toml" \
+  && grep -q '\[mcp_servers.shemma\]' "$SANITY_HOME/.codex/config.toml" \
+  && echo "codex install OK"
+HOME="$SANITY_HOME" codex mcp list 2>&1 | grep -q 'shemma' && echo "codex list shows shemma"
+cat "$SANITY_HOME/.codex/config.toml"  # verify shape
+trap - EXIT
+rm -rf "$SANITY_HOME"
 ```
 
-Expected: `[mcp_servers.shemma]` block добавился; `codex mcp list` показывает shemma; restore возвращает config к исходному состоянию.
+Expected: новый `$SANITY_HOME/.codex/config.toml` содержит `[mcp_servers.shemma]\ncommand = "shemma"\nargs = ["mcp", "start"]` (без `--cwd`, без env keys потому что project cwd клиент inherit'ит). Real `~/.codex/config.toml` не trogается. `trap` гарантирует cleanup даже при failure.
 
-**Bonus (если есть claude.json и user хочет verify user-scope flow):** аналогичный backup/restore паттерн для `~/.claude.json`:
+**Bonus (опциональный user-scope verify через isolated HOME — не трогает real `~/.claude.json`):**
 ```bash
-BACKUP=~/.claude.json.shemma-sanity-$(date +%s)
-cp ~/.claude.json "$BACKUP"
-claude mcp add shemma --scope user -- shemma mcp start
-claude mcp list | grep -q shemma && echo "claude user install OK"
-mv "$BACKUP" ~/.claude.json
+SANITY_HOME=$(mktemp -d /tmp/shemma-sanity-claude-XXXXXX)
+trap 'rm -rf "$SANITY_HOME"' EXIT
+HOME="$SANITY_HOME" claude mcp add shemma --scope user -- shemma mcp start
+test -f "$SANITY_HOME/.claude.json" \
+  && grep -q '"shemma"' "$SANITY_HOME/.claude.json" \
+  && echo "claude user-scope install OK"
+HOME="$SANITY_HOME" claude mcp list | grep -q shemma && echo "claude list shows shemma"
+trap - EXIT
+rm -rf "$SANITY_HOME"
 ```
+
+Expected: новый `$SANITY_HOME/.claude.json` содержит `mcpServers.shemma`; real user config не trogается.
+
+> **Trust principle:** ни одна команда в Step 3 не trogает реальный user config. Все mutations происходят в `mktemp -d` директориях с `trap` cleanup, гарантирующим удаление даже при failure посредине sequence.
 
 Запиши результаты в task notes:
-- claude-code project-scope: passed / failed
-- codex backup/restore: passed / failed
-- (опционально) claude user-scope backup/restore: passed / failed
+- claude-code project-scope (isolated temp dir): passed / failed
+- codex isolated HOME: passed / failed
+- (опционально) claude user-scope isolated HOME: passed / failed
 - Если какой-то клиент не установлен — отметь "client not installed, skipped".
 
 - [ ] **Step 4: Commit changelog delta + sanity confirmation**
