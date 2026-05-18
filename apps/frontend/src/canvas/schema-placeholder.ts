@@ -18,8 +18,15 @@ export function backfillStoreRecords(
       r.type === "arrow"
     ) {
       const props = (r.props as Record<string, unknown> | undefined) ?? {};
+      let newProps: Record<string, unknown> | undefined;
       if (props.kind === undefined) {
-        out[id] = { ...r, props: { ...props, kind: "arc" } };
+        newProps = { ...(newProps ?? props), kind: "arc" };
+      }
+      if (props.elbowMidPoint === undefined) {
+        newProps = { ...(newProps ?? props), elbowMidPoint: 0.5 };
+      }
+      if (newProps !== undefined) {
+        out[id] = { ...r, props: newProps };
         continue;
       }
     }

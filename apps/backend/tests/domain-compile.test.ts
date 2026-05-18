@@ -79,6 +79,34 @@ describe("compile.connect", () => {
     expect(arrows[0]!.meta?.connectionKind).toBe("data");
     expect(bindings.length).toBe(2);
   });
+
+  it("arrow shape has elbowMidPoint=0.5 required by tldraw 5.0+ schema", () => {
+    const s = emptyStore();
+    s.store["shape:f"] = {
+      id: "shape:f",
+      typeName: "shape",
+      type: "geo",
+      meta: { didrawName: "front" },
+    } as TLRecord;
+    s.store["shape:b"] = {
+      id: "shape:b",
+      typeName: "shape",
+      type: "geo",
+      meta: { didrawName: "back" },
+    } as TLRecord;
+    const idx = rebuildDidrawIndex(s);
+    const r = compile(
+      [{ kind: "connect", from: "front", to: "back" }],
+      s,
+      idx,
+    );
+    const arrows = Object.values(r.batch.added).filter(
+      (x) => x.typeName === "shape" && x.type === "arrow",
+    );
+    expect(arrows.length).toBe(1);
+    const props = arrows[0]!.props as Record<string, unknown>;
+    expect(props.elbowMidPoint).toBe(0.5);
+  });
 });
 
 describe("compile.group", () => {
