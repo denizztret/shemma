@@ -108,4 +108,17 @@ describe("RoomResolver", () => {
     });
     expect(await r.resolve({})).toEqual({ ok: true, room: "default", source: "default" });
   });
+
+  it("recordTouch after resolve still affects next resolve", async () => {
+    const r = new RoomResolver({
+      configRoom: undefined,
+      sessionEnv: undefined,
+      getActiveRooms: async () => ({ rooms: [] }),
+      getInProgressTasks: async () => [],
+    });
+    await r.resolve({});
+    r.recordTouch("touched-after");
+    const next = await r.resolve({});
+    expect(next).toEqual({ ok: true, room: "touched-after", source: "lastTouched" });
+  });
 });

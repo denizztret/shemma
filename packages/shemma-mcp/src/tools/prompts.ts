@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
 import { mapFetchError, toolResult } from "../errors";
+import { clientForRoom } from "../client-utils";
 
 export type PromptDeps = { client: CanvasClient; defaultRoom: string };
 
@@ -14,16 +15,11 @@ export type PromptHandles = {
   ai_activity_stop: { call: (input: { room?: string }) => Promise<ToolResult> };
 };
 
-function clientForRoom(deps: PromptDeps, room: string | undefined): CanvasClient {
-  if (!room) return deps.client;
-  return new CanvasClient({ baseUrl: deps.client.baseUrl, room });
-}
-
 export function registerPromptAndActivityTools(server: McpServer, deps: PromptDeps): PromptHandles {
   // ── shemma_prompt_resolve ──────────────────────────────────────────────────
   async function promptResolveCall(input: { id: string; response?: string; room?: string }): Promise<ToolResult> {
     try {
-      const c = clientForRoom(deps, input.room);
+      const c = clientForRoom(deps.client, input.room);
       const data = await c.resolvePrompt(input.id, input.response);
       const room = input.room ?? deps.defaultRoom;
       return toolResult({ ok: true, room, data });
@@ -48,7 +44,7 @@ export function registerPromptAndActivityTools(server: McpServer, deps: PromptDe
   // ── shemma_prompt_dismiss ──────────────────────────────────────────────────
   async function promptDismissCall(input: { id: string; room?: string }): Promise<ToolResult> {
     try {
-      const c = clientForRoom(deps, input.room);
+      const c = clientForRoom(deps.client, input.room);
       const data = await c.dismissPrompt(input.id);
       const room = input.room ?? deps.defaultRoom;
       return toolResult({ ok: true, room, data });
@@ -72,7 +68,7 @@ export function registerPromptAndActivityTools(server: McpServer, deps: PromptDe
   // ── shemma_ai_activity_start ───────────────────────────────────────────────
   async function aiActivityStartCall(input: { actor: string; task: string; room?: string }): Promise<ToolResult> {
     try {
-      const c = clientForRoom(deps, input.room);
+      const c = clientForRoom(deps.client, input.room);
       const data = await c.aiStart(input.actor, input.task);
       const room = input.room ?? deps.defaultRoom;
       return toolResult({ ok: true, room, data });
@@ -97,7 +93,7 @@ export function registerPromptAndActivityTools(server: McpServer, deps: PromptDe
   // ── shemma_ai_activity_stop ────────────────────────────────────────────────
   async function aiActivityStopCall(input: { room?: string }): Promise<ToolResult> {
     try {
-      const c = clientForRoom(deps, input.room);
+      const c = clientForRoom(deps.client, input.room);
       const data = await c.aiStop();
       const room = input.room ?? deps.defaultRoom;
       return toolResult({ ok: true, room, data });

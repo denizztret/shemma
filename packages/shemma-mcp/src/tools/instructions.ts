@@ -43,6 +43,7 @@ export function registerInstructionsTool(
     {
       description: "Return workflow guidance markdown (overview, read-context, draw-architecture, resolve-prompts, trust-model). Mirror of shemma://workflow/* resources for clients without resource support.",
       inputSchema,
+      annotations: { readOnlyHint: true },
     },
     async (args) => call(args as { topic?: string }),
   );

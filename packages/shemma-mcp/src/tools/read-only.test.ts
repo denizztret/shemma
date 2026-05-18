@@ -111,4 +111,29 @@ describe("read-only tools", () => {
     const r = await handles.version.call({});
     expect(r.structuredContent).toMatchObject({ ok: false, code: "daemon-unavailable" });
   });
+
+  it("shemma_health with ensure:true on unreachable daemon includes warning", async () => {
+    mockFetch(() => ({ body: { ok: false }, status: 500 }));
+    const { handles } = setup();
+    const r = await handles.health.call({ extended: true, ensure: true });
+    expect(r.structuredContent).toMatchObject({
+      ok: false,
+      code: "daemon-unavailable",
+      details: { warning: "ensure not yet implemented; pass --auto-ensure to shemma mcp start instead" },
+    });
+  });
+
+  it("shemma_health basic with ensure:true and unhealthy returns warning in data", async () => {
+    // health() calls /healthz and returns response.ok (HTTP status boolean).
+    // Mock a 503 response so health() returns false.
+    globalThis.fetch = (async () =>
+      new Response("", { status: 503 })
+    ) as typeof fetch;
+    const { handles } = setup();
+    const r = await handles.health.call({ ensure: true });
+    expect(r.structuredContent).toMatchObject({
+      ok: true,
+      data: { healthy: false, warning: "ensure not yet implemented; pass --auto-ensure to shemma mcp start instead" },
+    });
+  });
 });

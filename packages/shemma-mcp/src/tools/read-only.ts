@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
 import { mapFetchError, toolResult } from "../errors";
+import { clientForRoom } from "../client-utils";
 
 export type ToolResult = ReturnType<typeof toolResult>;
 
@@ -20,23 +21,24 @@ export type ReadOnlyHandles = {
   ai_activity_status: { call: (input: { room?: string }) => Promise<ToolResult> };
 };
 
-function clientForRoom(deps: ReadOnlyDeps, room: string | undefined): CanvasClient {
-  if (!room) return deps.client;
-  return new CanvasClient({ baseUrl: deps.client.baseUrl, room });
-}
-
 export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): ReadOnlyHandles {
   // ── shemma_health ──────────────────────────────────────────────────────────
+  const ENSURE_WARNING = "ensure not yet implemented; pass --auto-ensure to shemma mcp start instead";
+
   async function healthCall(input: { ensure?: boolean; extended?: boolean }): Promise<ToolResult> {
     try {
       if (input.extended) {
         const info = await deps.client.getHealth();
         if (!info) {
-          return toolResult({ ok: false, code: "daemon-unavailable", message: "daemon unreachable" });
+          const details = input.ensure ? { warning: ENSURE_WARNING } : undefined;
+          return toolResult({ ok: false, code: "daemon-unavailable", message: "daemon unreachable", details });
         }
         return toolResult({ ok: true, data: info });
       }
       const healthy = await deps.client.health();
+      if (!healthy && input.ensure) {
+        return toolResult({ ok: true, data: { healthy: false, warning: ENSURE_WARNING } });
+      }
       return toolResult({ ok: true, data: { healthy } });
     } catch (e) {
       return toolResult(mapFetchError(e));
@@ -119,7 +121,7 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
   // ── shemma_context ─────────────────────────────────────────────────────────
   async function contextCall(input: { room?: string; since?: number; viewport?: string; select?: string[] }): Promise<ToolResult> {
     try {
-      const client = clientForRoom(deps, input.room);
+      const client = clientForRoom(deps.client, input.room);
       const data = await client.getContext({ since: input.since, viewport: input.viewport, select: input.select });
       const room = input.room ?? deps.defaultRoom;
       return toolResult({ ok: true, room, data });
@@ -146,7 +148,7 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
   // ── shemma_prompts_list ────────────────────────────────────────────────────
   async function promptsListCall(input: { room?: string; status?: "pending" | "resolved" | "dismissed" | "all" }): Promise<ToolResult> {
     try {
-      const client = clientForRoom(deps, input.room);
+      const client = clientForRoom(deps.client, input.room);
       const data = await client.getPrompts(input.status ?? "pending");
       return toolResult({ ok: true, data });
     } catch (e) {
@@ -170,7 +172,7 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
   // ── shemma_ai_activity_status ──────────────────────────────────────────────
   async function aiActivityStatusCall(input: { room?: string }): Promise<ToolResult> {
     try {
-      const client = clientForRoom(deps, input.room);
+      const client = clientForRoom(deps.client, input.room);
       const data = await client.aiActivity();
       return toolResult({ ok: true, data });
     } catch (e) {

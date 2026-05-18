@@ -39,4 +39,12 @@ describe("discoverInProgressTasks", () => {
     });
     expect(tasks).toEqual([]);
   });
+
+  it("ignores malformed lines", async () => {
+    const tasks = await discoverInProgressTasks({
+      env: {},
+      runBacklog: async () => "not-a-valid-line\nDRW-001 - Valid task (medium)\nDRW-001 missing dash\n",
+    });
+    expect(tasks).toEqual([{ id: "DRW-001", slug: "drw-001-valid-task" }]);
+  });
 });

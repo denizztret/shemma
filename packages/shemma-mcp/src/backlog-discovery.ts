@@ -41,7 +41,7 @@ export async function discoverInProgressTasks(opts: DiscoveryOpts): Promise<InPr
 
 /** Default subprocess runner; can be replaced in tests. */
 export async function runBacklogCli(args: string[]): Promise<string> {
-  const proc = Bun.spawn(["backlog", ...args], { stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn(["backlog", ...args], { stdout: "pipe", stderr: "ignore" });
   const out = await new Response(proc.stdout).text();
   const exit = await proc.exited;
   if (exit !== 0) throw new Error(`backlog exited ${exit}`);

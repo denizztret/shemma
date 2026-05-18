@@ -1,6 +1,5 @@
 export type ShemmaMcpErrorCode =
   | "daemon-unavailable"
-  | "invalid-room"
   | "validation-error"
   | "domain-error"
   | "http-error"
