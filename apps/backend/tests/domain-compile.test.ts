@@ -107,6 +107,34 @@ describe("compile.connect", () => {
     const props = arrows[0]!.props as Record<string, unknown>;
     expect(props.elbowMidPoint).toBe(0.5);
   });
+
+  it("arrow shape props do NOT contain legacy text field (tldraw 5.x removed it)", () => {
+    const s = emptyStore();
+    s.store["shape:f"] = {
+      id: "shape:f",
+      typeName: "shape",
+      type: "geo",
+      meta: { didrawName: "front" },
+    } as TLRecord;
+    s.store["shape:b"] = {
+      id: "shape:b",
+      typeName: "shape",
+      type: "geo",
+      meta: { didrawName: "back" },
+    } as TLRecord;
+    const idx = rebuildDidrawIndex(s);
+    const r = compile(
+      [{ kind: "connect", from: "front", to: "back" }],
+      s,
+      idx,
+    );
+    const arrows = Object.values(r.batch.added).filter(
+      (x) => x.typeName === "shape" && x.type === "arrow",
+    );
+    expect(arrows.length).toBe(1);
+    const props = arrows[0]!.props as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(props, "text")).toBe(false);
+  });
 });
 
 describe("compile.group", () => {

@@ -25,6 +25,10 @@ export function backfillStoreRecords(
       if (props.elbowMidPoint === undefined) {
         newProps = { ...(newProps ?? props), elbowMidPoint: 0.5 };
       }
+      if (Object.prototype.hasOwnProperty.call(newProps ?? props, "text")) {
+        const { text: _text, ...rest } = newProps ?? props;
+        newProps = rest;
+      }
       if (newProps !== undefined) {
         out[id] = { ...r, props: newProps };
         continue;

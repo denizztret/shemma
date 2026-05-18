@@ -81,4 +81,31 @@ describe("backfillStoreRecords", () => {
     const out = backfillStoreRecords(undefined);
     expect(out).toEqual({});
   });
+
+  it("strips legacy props.text from arrow shapes (tldraw 5.x removed text, uses richText)", () => {
+    const store = {
+      "shape:arr": {
+        id: "shape:arr",
+        typeName: "shape",
+        type: "arrow",
+        props: { kind: "arc", elbowMidPoint: 0.5, text: "" },
+      },
+    };
+    const out = backfillStoreRecords(store);
+    const props = (out["shape:arr"] as { props: Record<string, unknown> }).props;
+    expect(Object.prototype.hasOwnProperty.call(props, "text")).toBe(false);
+  });
+
+  it("passes through arrow shapes without text unchanged (no spurious writes)", () => {
+    const store = {
+      "shape:arr": {
+        id: "shape:arr",
+        typeName: "shape",
+        type: "arrow",
+        props: { kind: "arc", elbowMidPoint: 0.5 },
+      },
+    };
+    const out = backfillStoreRecords(store);
+    expect(out["shape:arr"]).toEqual(store["shape:arr"]);
+  });
 });

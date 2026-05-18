@@ -68,7 +68,6 @@ function makeArrowShape(opts: {
       end: { x: 0, y: 0 },
       bend: 0,
       elbowMidPoint: 0.5,
-      text: "",
       labelPosition: 0.5,
       scale: 1,
       richText: richText(opts.label),
