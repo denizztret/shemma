@@ -50,6 +50,7 @@
       "dependencies": {
         "@shemma/backend": "workspace:*",
         "@shemma/client": "workspace:*",
+        "@shemma/mcp": "workspace:*",
       },
     },
     "packages/shemma-client": {

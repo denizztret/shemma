@@ -28,6 +28,7 @@ import { cmdPs } from "./ps";
 import { cmdPrompts } from "./prompts";
 import { cmdDoctor } from "./doctor";
 import { cmdUpdate, cmdUpdateCheck, cmdUpdateSetChannel } from "./update";
+import { cmdMcpInstall, cmdMcpStart } from "./mcp";
 import { cmdVersion } from "./version-cmd";
 import { error as uiError, initOutput, parseOutputMode } from "./ui";
 
@@ -208,6 +209,20 @@ async function main() {
     usage();
     process.exit(1);
   }
+  if (cmd === "mcp") {
+    const mcpSub = argv[1];
+    const mcpRest = argv.slice(2);
+    if (mcpSub === "start") {
+      return cmdMcpStart(mcpRest);
+    }
+    if (mcpSub === "install") {
+      cmdMcpInstall(mcpRest);
+      return;
+    }
+    console.error(`unknown mcp subcommand: ${mcpSub}; expected start|install`);
+    process.exit(1);
+  }
+
   // Zero-arg `shemma` === `shemma open` (no room → "default").
   // `shemma open <room>` overrides room. Also matches when user passes only
   // flags (e.g. `shemma --storage /foo`) — first token starts with `--`,
@@ -445,6 +460,13 @@ Data:
 Diagnostics:
   logs     [--tail N] [--follow] [--all | --profile p]  # read daemon log
   doctor   [--all | --profile p] [--json]               # read-only health checks
+
+MCP integration:
+  mcp start [--profile <p>] [--cwd <dir>] [--room <id>] [--base-url <url>]
+            [--auto-open never|once|always|confirm] [--no-auto-ensure]
+                                              # start stdio MCP server (for agentic clients)
+  mcp install --client claude|codex [--print] [--force]
+                                              # generate/write MCP config for the chosen client
 
 Versioning:
   version
