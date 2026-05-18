@@ -2,6 +2,7 @@ export type LayoutMode = "layered-lr" | "layered-tb" | "tree" | "pack" | "force"
 export type Spacing = "compact" | "normal" | "loose";
 
 export const ALL_MODES: readonly LayoutMode[] = ["layered-lr", "layered-tb", "tree", "pack", "force"];
+export const ALL_SPACINGS: readonly Spacing[] = ["compact", "normal", "loose"];
 
 export function isValidLayoutMode(s: string): s is LayoutMode {
   return (ALL_MODES as readonly string[]).includes(s);

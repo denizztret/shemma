@@ -5,6 +5,7 @@ import { arch, homedir, platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { authHeaders, readToken } from "./auth";
 import { ensure, stop } from "./daemon";
+import { refreshMcpConfigs } from "./mcp";
 import { parseProfile } from "./profile";
 import { fail } from "./util";
 import { error as uiError, getOutput, success as uiSuccess } from "./ui";
@@ -358,6 +359,15 @@ export async function cmdUpdate(argv: string[]) {
   // ensure() calls process.exit(3) directly on health timeout, which would suppress
   // this output if printed after; the caller reads stdout, not exit code, for success.
   const profile = parseProfile(argv);
+
+  let mcpRefreshed: string[] = [];
+  try {
+    const r = refreshMcpConfigs({ projectDir: process.cwd() });
+    mcpRefreshed = r.refreshed;
+  } catch {
+    // best-effort — не блокируем update если refresh упал
+  }
+
   const ui = getOutput();
   if (ui.mode === "json") {
     console.log(
@@ -368,10 +378,14 @@ export async function cmdUpdate(argv: string[]) {
         channel,
         profile,
         rollback: `mv '${oldPath}' '${target}'`,
+        mcpRefreshed,
       }),
     );
   } else {
     uiSuccess(`updated v${CURRENT_VERSION} → v${ch.version} (channel ${channel})`);
+    if (mcpRefreshed.length > 0) {
+      uiSuccess(`MCP config refreshed for: ${mcpRefreshed.join(", ")}`);
+    }
   }
 
   // ensure() self-spawns from process.execPath, which now points at the new binary.

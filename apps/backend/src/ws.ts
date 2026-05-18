@@ -1,11 +1,13 @@
 import type { StoreChangeBatch } from "./store-types";
 import type { AiActivity, Prompt, StoreChangeBus, WsMessage } from "./types";
+import { ActiveRoomsTracker } from "./ws/active-rooms";
 
 export type Sock = { send: (data: string) => void; readyState: number };
 const OPEN = 1;
 
 export class WsHub implements StoreChangeBus {
   private rooms = new Map<string, Set<Sock>>();
+  private readonly _activeRooms = new ActiveRoomsTracker();
 
   attach(room: string, sock: Sock) {
     if (!this.rooms.has(room)) this.rooms.set(room, new Set());
@@ -17,6 +19,10 @@ export class WsHub implements StoreChangeBus {
     if (!set) return;
     set.delete(sock);
     if (set.size === 0) this.rooms.delete(room);
+  }
+
+  getActiveRooms(): ActiveRoomsTracker {
+    return this._activeRooms;
   }
 
   publish(

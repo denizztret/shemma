@@ -1,6 +1,6 @@
 # Phase 2.3 — Shemma MCP Adapter Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` to implement this plan task-by-task. Each task = один git commit. Review policy — batched (3-5 tasks за раз) per memory `feedback-batched-reviews`. Final spec+quality review — после Task 22.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` to implement this plan task-by-task. Each task = один git commit. Review policy — batched (3-5 tasks за раз) per memory `feedback-batched-reviews`. Final spec+quality review — после Task 23.
 
 **Goal:** добавить тонкий MCP-adapter поверх `@shemma/client`, дающий agent-native interface (typed tools, discoverable resources, workflow prompts, auto-open browser, room-resolution chain включая Backlog.md task-derived). Backend получает мелкий extension — WS `board-focus` tracking + `/api/active-rooms` для UC-B/C.
 
@@ -3667,13 +3667,270 @@ git commit -m "docs: MCP integration section in README + skill MCP nudge"
 
 ---
 
-## Phase-end checklist (after Task 22)
+### Task 23: Install/update hook — auto-refresh MCP config
+
+**Files:**
+- Modify: `packages/shemma-cli/src/mcp.ts` (add `detectInstalledMcpConfigs`, `refreshMcpConfigs`)
+- Modify: `packages/shemma-cli/src/update.ts` (call `refreshMcpConfigs` after atomic swap)
+- Modify: `packages/shemma-cli/src/daemon.ts` (one-time nudge on `ensureDaemon` success when no MCP config detected; gated by env opt-out)
+- Test: `packages/shemma-cli/src/mcp.test.ts` (extend)
+
+**Motivation:** при обновлении бинаря `shemma update` агентские MCP-клиенты (Claude Desktop, Codex) продолжат запускать тот же `shemma mcp start` — но если в новой версии изменился args layout / cwd defaults, конфиг устарел. Auto-refresh после atomic swap делает конфиг idempotent. Для свежей установки (когда MCP ещё ни разу не настроен) показываем one-time hint про `shemma mcp install` чтобы пользователь не искал команду в README.
+
+- [ ] **Step 1: write the failing test**
+
+Extend `packages/shemma-cli/src/mcp.test.ts`:
+
+```ts
+import { describe, expect, it } from "bun:test";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  detectInstalledMcpConfigs,
+  refreshMcpConfigs,
+} from "./mcp";
+
+describe("detectInstalledMcpConfigs", () => {
+  it("returns empty when neither config exists", () => {
+    const home = mkdtempSync(join(tmpdir(), "shemma-mcp-detect-"));
+    const r = detectInstalledMcpConfigs({ homeDir: home });
+    expect(r).toEqual([]);
+  });
+
+  it("detects claude config with shemma entry", () => {
+    const home = mkdtempSync(join(tmpdir(), "shemma-mcp-detect-"));
+    const dir = join(home, "Library/Application Support/Claude");
+    mkdirSync(dir, { recursive: true });
+    const cfg = { mcpServers: { shemma: { command: "shemma", args: ["mcp", "start"] } } };
+    writeFileSync(join(dir, "claude_desktop_config.json"), JSON.stringify(cfg));
+    const r = detectInstalledMcpConfigs({ homeDir: home, platform: "darwin" });
+    expect(r).toHaveLength(1);
+    expect(r[0]?.client).toBe("claude");
+    expect(r[0]?.hasShemma).toBe(true);
+  });
+
+  it("detects codex config without shemma entry", () => {
+    const home = mkdtempSync(join(tmpdir(), "shemma-mcp-detect-"));
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(join(home, ".codex", "config.toml"), `[mcp_servers.other]\ncommand = "x"\n`);
+    const r = detectInstalledMcpConfigs({ homeDir: home, platform: "darwin" });
+    const codex = r.find((e) => e.client === "codex");
+    expect(codex).toBeDefined();
+    expect(codex?.hasShemma).toBe(false);
+  });
+});
+
+describe("refreshMcpConfigs", () => {
+  it("rewrites only configs with existing shemma entry", () => {
+    const home = mkdtempSync(join(tmpdir(), "shemma-mcp-refresh-"));
+    const dir = join(home, "Library/Application Support/Claude");
+    mkdirSync(dir, { recursive: true });
+    const stale = { mcpServers: { shemma: { command: "/old/shemma", args: ["mcp", "start"] } } };
+    writeFileSync(join(dir, "claude_desktop_config.json"), JSON.stringify(stale));
+    const r = refreshMcpConfigs({ homeDir: home, projectDir: "/p", platform: "darwin" });
+    expect(r.refreshed).toEqual(["claude"]);
+    const fresh = JSON.parse(readFileSync(join(dir, "claude_desktop_config.json"), "utf8"));
+    expect(fresh.mcpServers.shemma.command).toBe("shemma");
+    expect(fresh.mcpServers.shemma.args).toEqual(["mcp", "start", "--cwd", "/p"]);
+  });
+
+  it("skips configs without shemma entry", () => {
+    const home = mkdtempSync(join(tmpdir(), "shemma-mcp-refresh-"));
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(join(home, ".codex", "config.toml"), `[mcp_servers.other]\ncommand = "x"\n`);
+    const r = refreshMcpConfigs({ homeDir: home, projectDir: "/p", platform: "darwin" });
+    expect(r.refreshed).toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 2: run test — fail**
+
+Run: `bun --cwd packages/shemma-cli test mcp.test`
+Expected: FAIL — `detectInstalledMcpConfigs` / `refreshMcpConfigs` not exported.
+
+- [ ] **Step 3: implement helpers**
+
+В `packages/shemma-cli/src/mcp.ts` добавить (после `mcpInstall`):
+
+```ts
+export type DetectedMcpClient = {
+  client: "claude" | "codex";
+  path: string;
+  hasShemma: boolean;
+};
+
+type DetectOpts = {
+  homeDir?: string;
+  platform?: NodeJS.Platform;
+};
+
+function claudeConfigPathFor(homeDir: string, platform: NodeJS.Platform): string {
+  if (platform === "darwin") {
+    return join(homeDir, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+  }
+  return join(homeDir, ".config", "Claude", "claude_desktop_config.json");
+}
+
+function codexConfigPathFor(homeDir: string): string {
+  return join(homeDir, ".codex", "config.toml");
+}
+
+export function detectInstalledMcpConfigs(opts: DetectOpts = {}): DetectedMcpClient[] {
+  const home = opts.homeDir ?? homedir();
+  const platform = opts.platform ?? process.platform;
+  const out: DetectedMcpClient[] = [];
+
+  const claudePath = claudeConfigPathFor(home, platform);
+  if (existsSync(claudePath)) {
+    let hasShemma = false;
+    try {
+      const j = JSON.parse(readFileSync(claudePath, "utf8")) as {
+        mcpServers?: Record<string, unknown>;
+      };
+      hasShemma = Boolean(j.mcpServers && "shemma" in j.mcpServers);
+    } catch {
+      // malformed JSON — treat as no shemma entry
+    }
+    out.push({ client: "claude", path: claudePath, hasShemma });
+  }
+
+  const codexPath = codexConfigPathFor(home);
+  if (existsSync(codexPath)) {
+    let hasShemma = false;
+    try {
+      hasShemma = readFileSync(codexPath, "utf8").includes("[mcp_servers.shemma]");
+    } catch {
+      // unreadable — treat as no shemma entry
+    }
+    out.push({ client: "codex", path: codexPath, hasShemma });
+  }
+
+  return out;
+}
+
+export type RefreshOpts = {
+  homeDir?: string;
+  platform?: NodeJS.Platform;
+  projectDir: string;
+};
+
+export type RefreshResult = {
+  refreshed: ("claude" | "codex")[];
+  skipped: ("claude" | "codex")[];
+};
+
+export function refreshMcpConfigs(opts: RefreshOpts): RefreshResult {
+  const detected = detectInstalledMcpConfigs({ homeDir: opts.homeDir, platform: opts.platform });
+  const refreshed: ("claude" | "codex")[] = [];
+  const skipped: ("claude" | "codex")[] = [];
+
+  for (const entry of detected) {
+    if (!entry.hasShemma) {
+      skipped.push(entry.client);
+      continue;
+    }
+    const snippet =
+      entry.client === "claude"
+        ? generateClaudeConfigSnippet({ projectDir: opts.projectDir })
+        : generateCodexConfigSnippet({ projectDir: opts.projectDir });
+    writeFileSync(`${entry.path}.bak.${Date.now()}`, readFileSync(entry.path));
+    writeFileSync(entry.path, snippet);
+    refreshed.push(entry.client);
+  }
+
+  return { refreshed, skipped };
+}
+```
+
+Note: для refresh используем **whole-file overwrite** snippets (то же что `mcpInstall` без merge). Это conservative — не пытаемся merge'ить с другими `mcpServers` keys. Если у пользователя есть другие entries, они потеряются. Bak-копия (`.bak.<ts>`) сохраняется перед перезаписью. В будущем можно перейти на in-place JSON/TOML merge — но это вне scope Phase 2.3.
+
+- [ ] **Step 4: hook into `cmdUpdate`**
+
+В `packages/shemma-cli/src/update.ts` найти место **после успешного atomic swap** (после блока с `await fs.rename(tmpfile, target)` или EXDEV fallback, перед emit success / restart daemon). Импортировать `refreshMcpConfigs`:
+
+```ts
+import { refreshMcpConfigs } from "./mcp";
+```
+
+После swap, перед success print, добавить:
+
+```ts
+let mcpRefreshed: string[] = [];
+try {
+  const r = refreshMcpConfigs({ projectDir: process.cwd() });
+  mcpRefreshed = r.refreshed;
+} catch {
+  // best-effort — не блокируем update если refresh упал
+}
+```
+
+И в success-output JSON добавить `mcpRefreshed`:
+
+```ts
+console.log(
+  JSON.stringify({
+    ok: true,
+    from: CURRENT_VERSION,
+    to: ch.version,
+    channel,
+    profile,
+    rollback: `mv '${oldPath}' '${target}'`,
+    mcpRefreshed,   // <- new
+  }),
+);
+```
+
+В human-mode output добавить отдельную строку если `mcpRefreshed.length > 0`:
+
+```ts
+uiSuccess(`MCP config refreshed for: ${mcpRefreshed.join(", ")}`);
+```
+
+- [ ] **Step 5: hook into `ensureDaemon` — one-time nudge**
+
+В `packages/shemma-cli/src/daemon.ts`: в самом конце `ensureDaemon` (verbose=true ветке after success), если `process.env.SHEMMA_NO_MCP_NUDGE !== "1"` и `detectInstalledMcpConfigs()` пуст ИЛИ ни у одного entry `hasShemma === true`, печатаем info-уровень nudge (НЕ uiSuccess, чтобы не путать со status):
+
+```ts
+import { detectInstalledMcpConfigs } from "./mcp";
+
+// ... в конце ensureDaemon, после успешного return:
+if (verbose && process.env.SHEMMA_NO_MCP_NUDGE !== "1") {
+  const detected = detectInstalledMcpConfigs();
+  const hasShemmaSomewhere = detected.some((d) => d.hasShemma);
+  if (!hasShemmaSomewhere) {
+    const ui = getOutput();
+    if (ui.mode !== "json") {
+      console.error("tip: run `shemma mcp install --client claude` (or --client codex) to register Shemma as MCP server");
+    }
+  }
+}
+```
+
+Note: stderr (`console.error`) чтобы не ломать stdout JSON consumers; nudge — не error.
+
+- [ ] **Step 6: run tests**
+
+Run: `bun --cwd packages/shemma-cli test`
+Expected: PASS (existing + new from Step 1).
+
+- [ ] **Step 7: commit**
+
+```bash
+git add packages/shemma-cli/src/mcp.ts packages/shemma-cli/src/mcp.test.ts packages/shemma-cli/src/update.ts packages/shemma-cli/src/daemon.ts
+git commit -m "feat(cli): auto-refresh MCP config on update + nudge on first ensure"
+```
+
+---
+
+## Phase-end checklist (after Task 23)
 
 This is NOT a task — это поэтапная checklist для контроллера subagent-driven flow после Task 22.
 
 1. **Full test suite** — `bun run test`. Expected: все pass (current baseline 461 + ~60-80 new ≈ 520+).
 2. **Code-simplifier subagent** на diff `main..feature/phase-2.3-mcp-adapter`. Применить упрощения, commit `refactor(mcp): code-simplifier pass`.
-3. **Final spec+quality review** (per memory `feedback-batched-reviews`) — single pass через все commits фазы; subagent проверяет spec coverage (§3-§19) + code quality.
+3. **Final spec+quality review** (per memory `feedback-batched-reviews`) — single pass через все commits фазы (Tasks 1-23); subagent проверяет spec coverage (§3-§19) + code quality.
 4. **Address review findings** в commits `fix(mcp): <area>`.
 5. **Update CHANGELOG.md** — добавить раздел для new version (e.g., `0.13.0`):
 

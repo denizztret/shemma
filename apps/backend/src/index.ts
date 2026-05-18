@@ -3,6 +3,7 @@ import { config } from "./config";
 import { EMBEDDED_ASSETS } from "./embedded-assets";
 import { FilePersistence } from "./persistence";
 import { type RoomStore, Rooms, pushOpLog, validateRoomId } from "./rooms";
+import { activeRoomsRoutes } from "./routes/active-rooms";
 import { aiRoutes } from "./routes/ai";
 import { contextRoutes } from "./routes/context";
 import { domainRoutes } from "./routes/domain";
@@ -52,6 +53,7 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", viewportRoutes(rooms));
   app.route("/", domainRoutes(rooms, bus, { onDirty }));
   app.route("/", contextRoutes(rooms));
+  app.route("/", activeRoomsRoutes(bus.getActiveRooms()));
   return { app, rooms, bus, persistence };
 }
 
@@ -85,7 +87,8 @@ export async function startServer(opts: AppOpts = {}) {
         if (!validateRoomId(room)) {
           return new Response("invalid room id", { status: 422 });
         }
-        if (srv.upgrade(req, { data: { room } as unknown as undefined })) return;
+        const clientId = crypto.randomUUID();
+        if (srv.upgrade(req, { data: { room, clientId } as unknown as undefined })) return;
         return new Response("upgrade failed", { status: 500 });
       }
       // serve frontend for release/debug profiles; dev relies on Vite's own server
@@ -97,11 +100,11 @@ export async function startServer(opts: AppOpts = {}) {
     },
     websocket: {
       open(ws) {
-        const { room } = ws.data as unknown as { room: string };
+        const { room } = ws.data as unknown as { room: string; clientId: string };
         bus.attach(room, ws as Sock);
       },
       async message(ws, raw) {
-        const { room } = ws.data as unknown as { room: string };
+        const { room, clientId } = ws.data as unknown as { room: string; clientId: string };
         const msg = parseClientMessage(raw);
         if (!msg) return; // malformed → ignore (must not crash)
         if (msg.kind === "hello") {
@@ -144,9 +147,21 @@ export async function startServer(opts: AppOpts = {}) {
           });
           return;
         }
+        if (msg.kind === "board-focus") {
+          // Always use `room` from ws.data (WS connection scope), NOT msg.room.
+          // A client connected to room "A" could send {room:"B"} to pollute
+          // tracker state for room "B" — msg.room is untrusted client input.
+          if (msg.focused) {
+            bus.getActiveRooms().onFocus(room, clientId);
+          } else {
+            bus.getActiveRooms().onBlur(room, clientId);
+          }
+          return;
+        }
       },
       close(ws) {
-        const { room } = ws.data as unknown as { room: string };
+        const { room, clientId } = ws.data as unknown as { room: string; clientId: string };
+        bus.getActiveRooms().onDisconnect(clientId);
         bus.detach(room, ws as Sock);
       },
     },

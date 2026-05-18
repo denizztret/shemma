@@ -1,3 +1,72 @@
+## 0.13.0 — 2026-05-18 — Phase 2.3 MCP adapter
+
+Shemma теперь работает как MCP-сервер для агентских клиентов (Claude Desktop, Codex, etc.) — typed tools, discoverable resources, auto-open browser, room-resolution chain включая Backlog "In Progress" task slug. Background-agent loop (UC-D) отложен на Phase 2.4.
+
+### Added — backend prerequisites (UC-B/C)
+
+- **WS `board-focus` message** — frontend tab emits `{kind:"board-focus", room, focused}` on focus/blur/beforeunload. Backend trusts `ws.data.room` (not client-supplied room), guards against cross-room spoofing.
+- **`ActiveRoomsTracker`** (`apps/backend/src/ws/active-rooms.ts`) — in-memory per-room `Map<roomId, {clients, lastFocusedAt}>` with `onFocus/onBlur/onDisconnect/list`. Sorted by `lastFocusedAt` desc. Idle-timeout reserved for future (§17.2 OQ11: immediate removal accepted for v1).
+- **`GET /api/active-rooms`** — JSON array of `{room, clientCount, lastFocusedAt}`. Wired through `WsHub.getActiveRooms()`.
+- **`/api/health` returns `pid`** — required by spec §7.4 status resource.
+
+### Added — `@shemma/mcp` workspace package
+
+Тонкий adapter поверх `@shemma/client`. Stdio JSON-RPC entry (`startStdio`) + pure factory (`createShemmaMcpServer`). Domain enums sourced strictly из `@shemma/domain` (никаких local redeclarations).
+
+- **Tools** (19): `shemma_define / connect / group / note / layout / delete / apply` (writes); `shemma_health / version / rooms_list / active_rooms / context / prompts_list / ai_activity_status` (reads); `shemma_open` (explicit browser open); `shemma_prompt_resolve / dismiss` (CMD+K canvas prompts); `shemma_ai_activity_start / stop`; `shemma_get_instructions` (workflow guide fallback).
+- **Resources** (14): `shemma://workflow/{overview, read-context, draw-architecture, resolve-prompts, trust-model}` (markdown), `shemma://status / rooms / active-rooms` (JSON), 6 room templates `shemma://room/{room}/{context, context/geometry, prompts/pending, prompts/all, state/compact, state/full}`.
+- **Prompts** (4): `shemma_draw_architecture`, `shemma_review_canvas`, `shemma_explain_canvas`, `shemma_resolve_canvas_prompts`.
+- **Room resolver** (spec §5.1): chain `arg → server config → CLAUDE_SESSION_ID → single active → Backlog "In Progress" task slug → lastTouched → "default"`. Multiple active rooms или multiple In Progress tasks → typed error `{code:"ambiguous-room", candidates}`.
+- **Auto-open policy** (spec §6.8): `never | once | always | confirm`, default `once`. `SHEMMA_NO_BROWSER=1` overrides to `never`. `shemma_open` ignores mode (всегда opens). Auto-open errors swallowed silently — never break the write.
+- **Typed result shapes** (spec §9): `ShemmaMcpSuccess<T> = {ok:true, room?, roomSource?, version?, clientOpId?, idempotent?, data}`; `ShemmaMcpError = {ok:false, code, message, status?, clientOpId?, details?}`. `toolResult` wraps both. Codes: `daemon-unavailable | ambiguous-room | validation-error | domain-error | http-error | unexpected-error`.
+- **`ensureDaemonSilent`** — pure helper для silent daemon-ensure (stdio JSON-RPC reserved; никакой stdout pollution).
+- **Stdio purity** verified by `stdio-purity.test.ts` — server creation pisha zero bytes на stdout.
+
+### Added — CLI `shemma mcp ...` subcommands
+
+- `shemma mcp start [--profile|--cwd|--room|--base-url|--auto-open never|once|always|confirm|--no-auto-ensure]` — запускает stdio MCP-сервер. Lazy-imports `@shemma/mcp` (non-mcp invocations не платят).
+- `shemma mcp install --client claude|codex [--scope user|project] [--print] [--force]` — генерирует `claude_desktop_config.json` или `~/.codex/config.toml`. Refuses overwrite without `--force`; сохраняет `.bak.<ts>` backup.
+
+### Added — install/update integration
+
+- **Auto-refresh MCP configs on `shemma update`** — после atomic binary swap CLI вызывает `refreshMcpConfigs(projectDir: cwd)`. Best-effort: failures не блокируют update. JSON output расширен полем `mcpRefreshed: string[]`. В human-mode дополнительный `uiSuccess` если что-то rewritten.
+- **One-time MCP nudge on `daemon ensure`** — stderr подсказка `tip: run shemma mcp install --client claude (or --client codex)` если ни в одном detected клиенте нет shemma entry. Gated by `SHEMMA_NO_MCP_NUDGE=1`, suppressed in JSON-mode и в non-verbose paths.
+
+### Added — frontend
+
+- **`createBoardFocusBeacon({send, getCurrentRoom})`** factory (`apps/frontend/src/transport/ws.ts`) — emitFocus/emitBlur/notifyRoomSwitch. Integrated into `startStoreSync` (extends `StoreSyncDeps` с `room: string`). App.tsx wires `window.addEventListener('focus' | 'blur' | 'beforeunload')` с useEffect-scoped cleanup.
+
+### Added — `@shemma/client`
+
+- `CanvasClient.getActiveRooms()` — wraps `GET /api/active-rooms`.
+- `CanvasClient.baseUrl` public getter — replaces private-field casts в MCP package.
+- `CanvasClient.getHealth()` теперь возвращает `pid: number`.
+
+### Added — docs
+
+- README MCP section (install, manual config, tools/resources/prompts, behaviour).
+- `.claude/skills/draw/SKILL.md` MCP nudge: prefer MCP tools over CLI bash invocations when available.
+- 5 workflow markdown guides (overview, read-context, draw-architecture, resolve-prompts, trust-model) — served как `shemma://workflow/*` resources AND через `shemma_get_instructions` meta-tool (Backlog.md pattern для hosts без resource support).
+
+### Tests
+
+- **611 pass** (58 domain + 284 backend + 7 client + 152 cli + 110 mcp) — был baseline 461 (Phase 2.2). +150 новых тестов поверх Phase 2.3 work, включая stdio-purity smoke и 3-batched code-quality fix iterations.
+
+### Spec + plan
+
+- `docs/superpowers/specs/2026-05-17-di-draw-mcp-adapter-design.md` v0.4 — UC matrix A-M, backend prereqs §17 in-scope, Phase 2.4 background-agent sketch §18 out-of-v1.
+- `docs/superpowers/plans/2026-05-18-phase-2-3-mcp-adapter-implementation.md` — 23 tasks, 3700+ строк, batched review policy (3-5 tasks per block).
+
+### Out of v1 (deferred / known limitations)
+
+- `shemma_room_suggest` tool (spec §5.1 marked optional).
+- `SHEMMA_MCP_LOG` env var with stderr/file/off modes (§11.5) — stdout-purity достигнута, но extensible logging API отложен.
+- `taskContext` + `otherProfiles` поля в `shemma://status` payload.
+- Dynamic `autoOpen.openedRooms` reflection в status resource (currently hardcoded `[]`).
+- Background agent loop — Phase 2.4.
+
+---
+
 ## 0.12.3 — 2026-05-18 — Daemon spawn argv fix for compiled binary
 
 ### Fixed

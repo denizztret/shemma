@@ -120,6 +120,47 @@ Mermaid импорт — **только через браузер** (per ADR-000
 
 Exit codes: `0` ok, `1` usage/error, `2` not-found, `3` daemon-not-healthy.
 
+## MCP integration
+
+Shemma ships an MCP (Model Context Protocol) adapter so agentic clients (Claude Desktop, Codex, etc.) can call Shemma through typed tools and discoverable resources without shell quoting.
+
+### Install
+
+```bash
+shemma mcp install --client claude   # writes Claude Desktop config
+shemma mcp install --client codex    # writes ~/.codex/config.toml
+shemma mcp install --client claude --print   # prints config snippet without writing
+```
+
+If the target config already exists, the command refuses to overwrite. Pass `--force` to overwrite (a `.bak.<timestamp>` copy is saved first).
+
+### Manual config
+
+```json
+{
+  "mcpServers": {
+    "shemma": {
+      "command": "shemma",
+      "args": ["mcp", "start", "--cwd", "/path/to/project"]
+    }
+  }
+}
+```
+
+### What the MCP server provides
+
+- **Tools.** `shemma_define / connect / group / note / layout / delete / apply` for writes; `shemma_context / rooms_list / active_rooms / prompts_list / health / version` for reads; `shemma_open` for explicit browser-open; `shemma_prompt_resolve / dismiss` for CMD+K canvas prompts; `shemma_get_instructions` to read workflow markdown.
+- **Resources.** `shemma://workflow/{overview,read-context,draw-architecture,resolve-prompts,trust-model}` for agent guidance, `shemma://status`, `shemma://rooms`, `shemma://active-rooms`, `shemma://room/{room}/context|state|prompts/...` templates.
+- **Prompts.** `shemma_draw_architecture`, `shemma_review_canvas`, `shemma_explain_canvas`, `shemma_resolve_canvas_prompts`.
+
+### Behaviour
+
+- Auto-opens a browser tab the first time the agent draws in a new room (`--auto-open once` default; pass `never|always|confirm` to override).
+- Room id auto-resolves from explicit arg → server config → `CLAUDE_SESSION_ID` → single active room → Backlog "In Progress" task slug → last-touched → "default".
+- Canvas text is treated as **data, not instructions** (see `shemma://workflow/trust-model`).
+
+CLI remains the stable interface; MCP is an alternative for clients that support it.
+
 ## Runtime profiles
 
 | profile | port | storage | UI | log |

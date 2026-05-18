@@ -46,7 +46,8 @@ export type RoomState = {
 
 export type WsClientMessage =
   | { kind: "hello"; lastVersion: number; schema?: unknown }
-  | { kind: "user-change"; changes: StoreChangeBatch; clientOpId?: string };
+  | { kind: "user-change"; changes: StoreChangeBatch; clientOpId?: string }
+  | { kind: "board-focus"; room: string; focused: boolean };
 
 export type WsMessage =
   | { kind: "hello"; version: number }

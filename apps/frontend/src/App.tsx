@@ -128,6 +128,7 @@ export function App({ room }: { room: string }) {
     if (!editor) return;
     let active = true;
     let syncHandle: ReturnType<typeof startStoreSync> | undefined;
+    let focusCleanup: (() => void) | undefined;
     let unsubSel: (() => void) | undefined;
     let camSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -172,6 +173,7 @@ export function App({ room }: { room: string }) {
       syncHandle = startStoreSync({
         editor,
         wsUrl,
+        room,
         initialVersion: loaded.version,
         onTruncated: () => {
           // DRW-018: pause the (now zombie) syncer immediately so any frames
@@ -190,6 +192,7 @@ export function App({ room }: { room: string }) {
               syncHandle = startStoreSync({
                 editor,
                 wsUrl,
+                room,
                 initialVersion: fresh.version,
                 onTruncated: () => {
                   // Pathological loop — log and stop trying.
@@ -202,6 +205,23 @@ export function App({ room }: { room: string }) {
           })();
         },
       });
+
+      // Wire window focus/blur/beforeunload → board-focus beacon.
+      // Each focus change notifies the MCP layer which room the human is on.
+      // Handlers reference syncHandle via closure so they always reach the
+      // latest syncer instance (recovery may replace it).
+      const onFocus = () => syncHandle?.beacon.emitFocus();
+      const onBlur = () => syncHandle?.beacon.emitBlur();
+      window.addEventListener("focus", onFocus);
+      window.addEventListener("blur", onBlur);
+      window.addEventListener("beforeunload", onBlur);
+      // Capture removers in a closure variable so the useEffect cleanup can
+      // detach them without needing a global window property.
+      focusCleanup = () => {
+        window.removeEventListener("focus", onFocus);
+        window.removeEventListener("blur", onBlur);
+        window.removeEventListener("beforeunload", onBlur);
+      };
 
       // Dev-console helper: window.shemmaImportMermaid(source). Mutates store;
       // startStoreSync auto-forwards the batch to backend over WS.
@@ -245,6 +265,8 @@ export function App({ room }: { room: string }) {
 
     return () => {
       active = false;
+      focusCleanup?.();
+      focusCleanup = undefined;
       syncHandle?.stop();
       unsubSel?.();
       if (camSaveTimer) {

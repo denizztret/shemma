@@ -184,7 +184,7 @@ claude mcp add shemma --scope user -- shemma mcp start --cwd /absolute/path/to/p
 5. **Last-used room** — MCP server держит in-memory `lastTouchedRoom` от предыдущего tool call внутри session.
 6. **Fallback** — `"default"`.
 
-Resolved room возвращается **в каждом** success response под `room` (§9 `ShemmaMcpSuccess.room`), чтобы caller видел effective value. При derived-from-task room — добавляется `data.roomSource: "task" | "session" | "config" | "arg" | "default"` для transparency.
+Resolved room возвращается **в каждом** success response под `room` (§9 `ShemmaMcpSuccess.room`), чтобы caller видел effective value. При derived room — добавляется `roomSource` (top-level, рядом с `room`) с одним из: `"arg" | "config" | "session" | "active" | "task" | "lastTouched" | "default"` для transparency.
 
 Optional tool:
 
@@ -551,6 +551,8 @@ Success shape:
 type ShemmaMcpSuccess<T> = {
   ok: true;
   room?: string;
+  // Moved from `data.roomSource` to envelope to match `room` field placement.
+  roomSource?: "arg" | "config" | "session" | "active" | "task" | "lastTouched" | "default";
   version?: number;
   clientOpId?: string;     // echo (см. §6.4) — нужен для retry
   idempotent?: true;       // true если backend вернул из idempotency cache
@@ -565,11 +567,11 @@ type ShemmaMcpError = {
   ok: false;
   code:
     | "daemon-unavailable"
-    | "invalid-room"
     | "validation-error"
     | "domain-error"
     | "http-error"
-    | "unexpected-error";
+    | "unexpected-error"
+    | "ambiguous-room";   // >1 active rooms, no other hint — agent must ask user
   message: string;
   status?: number;
   clientOpId?: string;    // echo (см. §6.4) — для safe retry
@@ -739,7 +741,7 @@ Assert: stdout содержит только valid JSON-RPC frames (никаки
 - Auto-open `once`: первый `shemma_define` → `openedRooms` содержит room, browser launch вызван (mock). Второй `shemma_define` на ту же room — `openedRooms` без изменений, launcher не вызывался.
 - Auto-open `never`: `shemma_define` не триггерит launcher; явный `shemma_open` всё ещё работает.
 - Auto-open `confirm`: `shemma_define` возвращает `data.openConsentRequired:true`, launcher не вызывался.
-- Room resolution: tool без `room` arg + seeded "In Progress" task (mock backlog subprocess) → response `room` = task slug, `data.roomSource:"task"`.
+- Room resolution: tool без `room` arg + seeded "In Progress" task (mock backlog subprocess) → response `room` = task slug, `roomSource:"task"` (top-level).
 - `shemma_room_suggest` возвращает тот же id, что effective resolution в реальном write tool.
 - Active rooms: открыть browser tab (mock WS `board-focus`) на room A → `shemma_active_rooms` возвращает `[A]`. Открыть второй tab на room B → `[B, A]` (lastFocused first). Закрыть A → `[B]`.
 - Tool call без `room` arg при двух active → `ambiguous-room` error c обоими candidates в `details`.
