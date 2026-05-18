@@ -12,3 +12,11 @@ apps/backend/src/frontend-dist/
 
 # Backlog.md (local-only task management, не коммитим)
 backlog/
+
+# Shemma local storage (per-project; smoke / accidental cwd runs)
+.shemma/
+# Legacy: pre-rename storage folder
+.didraw/
+
+# Shemma auth state (local user config)
+.config/shemma/
