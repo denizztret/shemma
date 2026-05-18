@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { portFor } from "./profile";
 
 export type AutoOpenMode = "never" | "once" | "always" | "confirm";
 
@@ -192,11 +193,12 @@ export function refreshMcpConfigs(opts: RefreshOpts): RefreshResult {
 
 export async function cmdMcpStart(argv: string[]): Promise<void> {
   const flags = parseMcpStartFlags(argv);
+  const profile = flags.profile ?? "release";
   // Lazy-load @shemma/mcp so non-mcp invocations don't pay the cost.
   const { startStdio } = await import("@shemma/mcp");
   await startStdio({
-    profile: flags.profile ?? "release",
-    baseUrl: flags.baseUrl ?? `http://localhost:${process.env.SHEMMA_PORT ?? 8787}`,
+    profile,
+    baseUrl: flags.baseUrl ?? `http://localhost:${portFor(profile)}`,
     defaultRoom: flags.room ?? "default",
     projectDir: flags.cwd ?? process.cwd(),
     autoOpenMode: flags.autoOpenMode,
