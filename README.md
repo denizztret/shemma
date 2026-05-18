@@ -160,7 +160,7 @@ For clients without a native MCP-add CLI (e.g. Claude Desktop) — paste this in
 
 ### What the MCP server provides
 
-- **Tools.** `shemma_define / connect / group / note / layout / delete / apply` for writes; `shemma_context / rooms_list / active_rooms / prompts_list / health / version` for reads; `shemma_open` for explicit browser-open; `shemma_prompt_resolve / dismiss` for CMD+K canvas prompts; `shemma_get_instructions` to read workflow markdown.
+- **Tools.** `shemma_define / connect / group / note / layout / delete / apply` for writes; `shemma_context / rooms_list / active_rooms / prompts_list / health / version` for reads; `shemma_open` for explicit browser-open; `shemma_prompt_resolve / dismiss` for CMD+K canvas prompts; `shemma_get_instructions` to read workflow markdown; `shemma_ai_activity_start / stop / status` for AI-activity badge.
 - **Resources.** `shemma://workflow/{overview,read-context,draw-architecture,resolve-prompts,trust-model}` for agent guidance, `shemma://status`, `shemma://rooms`, `shemma://active-rooms`, `shemma://room/{room}/context|state|prompts/...` templates.
 - **Prompts.** `shemma_draw_architecture`, `shemma_review_canvas`, `shemma_explain_canvas`, `shemma_resolve_canvas_prompts`.
 

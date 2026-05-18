@@ -92,12 +92,12 @@ MCP-сервер — это **stdio-процесс, который спавни�
 Внутри `shemma mcp start`:
 1. Резолвит project working directory из `SHEMMA_CWD` env (fallback — `process.cwd()`); вызывает `process.chdir()`.
 2. Создаёт HTTP-клиент к локальному daemon на `:8787`. **Daemon должен быть уже запущен** — MCP-сервер не поднимает daemon автоматически в текущей версии (auto-ensure запланирован как отдельный follow-up; `shemma_health` tool с `ensure: true` возвращает warning о nyet-implemented). Если daemon не запущен — запусти его через `shemma daemon ensure` или просто `shemma open` (последний автоматически ensure'ит daemon).
-3. Регистрирует 19 tools + 14 resources + 4 prompts.
+3. Регистрирует 20 tools + 14 resources + 4 prompts.
 4. Слушает JSON-RPC на stdin, отвечает на stdout (stderr зарезервирован для диагностики).
 
 ## Что предоставляет MCP
 
-- **Tools.** `shemma_define / connect / group / note / layout / delete / apply` для записи; `shemma_context / rooms_list / active_rooms / prompts_list / health / version` для чтения; `shemma_open` для явного открытия браузера; `shemma_prompt_resolve / dismiss` для CMD+K canvas-промптов; `shemma_get_instructions` для чтения workflow-гайдов.
+- **Tools.** `shemma_define / connect / group / note / layout / delete / apply` для записи; `shemma_context / rooms_list / active_rooms / prompts_list / health / version` для чтения; `shemma_open` для явного открытия браузера; `shemma_prompt_resolve / dismiss` для CMD+K canvas-промптов; `shemma_get_instructions` для чтения workflow-гайдов; `shemma_ai_activity_start / stop / status` для AI-activity badge.
 - **Resources.** `shemma://workflow/{overview, read-context, draw-architecture, resolve-prompts, trust-model}` для агентского guidance, `shemma://status`, `shemma://rooms`, `shemma://active-rooms`, `shemma://room/{room}/context|state|prompts/...` templates.
 - **Prompts.** `shemma_draw_architecture`, `shemma_review_canvas`, `shemma_explain_canvas`, `shemma_resolve_canvas_prompts`.
 
