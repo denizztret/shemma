@@ -31,4 +31,20 @@ describe("chdirToProjectDir helper", () => {
     expect(captured.chdirArg).toBe("/tmp/proj");
     expect(captured.stderrChunks.join("")).toBe("");
   });
+
+  it("emits stderr warning and does not throw when process.chdir throws", async () => {
+    setup();
+    chdirSpy.mockRestore();
+    chdirSpy = spyOn(process, "chdir").mockImplementation(() => {
+      throw new Error("ENOENT: no such file or directory");
+    });
+    const { chdirToProjectDir } = await import("./index");
+
+    // Must not throw.
+    expect(() => chdirToProjectDir("/nonexistent/path")).not.toThrow();
+
+    expect(captured.stderrChunks.join("")).toMatch(/SHEMMA_CWD.*not accessible/);
+    expect(captured.stderrChunks.join("")).toMatch(/ENOENT/);
+    expect(captured.stderrChunks.join("")).toMatch(/continuing with inherited cwd/);
+  });
 });
