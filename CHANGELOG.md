@@ -1,3 +1,35 @@
+## 0.14.2 — 2026-05-19 — UX: camera fit + label sizing
+
+Bug-fix релиз: после 0.14.1 (arrow rendering восстановлен) выяснилось, что viewport не вписывает контент после AI-mutations и длинные labels вылезают за границы shape. Закрывает DRW-075 (camera fit) и DRW-077 (label overflow).
+
+### Fixed
+
+- **DRW-075 — Camera fit-to-content после AI mutations.** В `apps/frontend/src/App.tsx` добавлен debounced `scheduleAiZoom` (100ms): после каждой WS `store-change` с `source:'ai'` (от backend MCP/HTTP ops), если пользователь не делал manual pan — вызывается `editor.zoomToFit({ animation: { duration: 200 } })`. Detection user-gesture через `editor.store.listen({ source:'user' })`. **Гард** для programmatic camera ops: ref-флаг `inProgrammaticCameraOp` оборачивает каждый собственный `setCamera/zoomToFit` (initial restore + scheduleAiZoom), удерживается на 300ms (продолжительность animation) — без него первый programmatic fit засчитывался listener'ом как user gesture и блокировал последующие fits.
+- **DRW-077 — Label overflow в geo shapes.**
+  - `packages/shemma-domain/src/role-preset.ts` — default w/h для ролей `service` / `datastore` / `external`: **w 140 → 220, h 70 → 80**. Покрывает большинство реальных labels (≤53 chars).
+  - `apps/frontend/src/App.tsx:triggerGrowY` — после `loadSnapshot` и на каждый WS AI-change для затронутых ids вызывает `editor.updateShape({ id, type:'geo', props })` (no-op patch). Это запускает `GeoShapeUtil.onBeforeUpdate` → `calculateGrowY` → `measureUnscaledLabelSize`. Без этого hook'и tldraw'а не срабатывают (они вызываются только из `editor.createShapes/updateShapes`, а не из `store.put` через `loadSnapshot` / `mergeRemoteChanges`).
+  - Результат: shapes рендерятся в DOM как 240x87 (240 = 220 + tldraw padding; 87 = 80 + growY +7), длинные labels умещаются с переносом.
+
+### Added
+
+- `apps/frontend/src/transport/ws.ts` — опциональный коллбек `onAiChange(changedIds: Set<string>)` в `StoreSyncDeps`, вызывается из WS handler при `store-change` с `source:'ai'`. Используется фронтом для post-mutation growY/zoomToFit.
+
+### Tests
+
+- `packages/shemma-domain/tests/role-preset.test.ts` — добавлено 5 ассертов на новые defaults для service/datastore/external + verification что queue/actor не тронуты.
+- Итого: 626 backend (+5) + 64 frontend (= 690 total).
+
+### Verification
+
+Manual в чистой комнате `madsight-v3`: 7 нод (включая длинные labels типа `repo: scenarios/*.json, fixtures/*.json` и `JSON-вердикт + AI-объяснение`) + 10 connections + `layered-lr` layout. Camera z=1.09 (fit на полный content bbox), 0 console errors, labels читаемы.
+
+### Known limitations
+
+- Длинные labels (60+ chars) всё ещё могут обрезаться — growY ограничен ~10-15px над defaults. Долгосрочное решение — custom ShapeUtil или DOM-based measure (отдельный backlog item, не входит в 0.14.2).
+- Arrow label overlap при tight layered-lr — кандидат на улучшение в DRW-078 (taxonomy + edge spacing).
+
+---
+
 ## 0.14.1 — 2026-05-19 — Arrow rendering fix (tldraw 5.x schema)
 
 Bug-fix релиз для DRW-076 — стрелки domain `connection` не отрисовывались в tldraw UI, несмотря на корректный domain state. Root cause — три schema mismatch'а с tldraw 5.x в `makeArrowShape` / `makeArrowBindings` + `loadSnapshot` молча проваливался с `ValidationError`, который подавлялся в `mergeRemoteChanges`.
