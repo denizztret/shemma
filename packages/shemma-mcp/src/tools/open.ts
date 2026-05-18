@@ -1,21 +1,19 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AutoOpenManager } from "../auto-open";
-import { toolResult } from "../errors";
+import { toolResult, type ToolResult } from "../errors";
 
 export type OpenDeps = {
   autoOpen: AutoOpenManager;
   defaultRoom: string;
 };
 
-export type ToolResult = ReturnType<typeof toolResult>;
-
 export type OpenHandles = {
   open: { call: (input: { room?: string; noBrowser?: boolean }) => Promise<ToolResult> };
 };
 
 export function registerOpenTool(server: McpServer, deps: OpenDeps): OpenHandles {
-  const openCall = async (input: { room?: string; noBrowser?: boolean }): Promise<ToolResult> => {
+  async function openCall(input: { room?: string; noBrowser?: boolean }): Promise<ToolResult> {
     const room = input.room ?? deps.defaultRoom;
     if (input.noBrowser) {
       return toolResult({ ok: true, room, data: { spawned: false, reason: "noBrowser" } });
@@ -27,7 +25,7 @@ export function registerOpenTool(server: McpServer, deps: OpenDeps): OpenHandles
       const msg = e instanceof Error ? e.message : String(e);
       return toolResult({ ok: false, code: "unexpected-error", message: `failed to open: ${msg}` });
     }
-  };
+  }
 
   server.registerTool(
     "shemma_open",

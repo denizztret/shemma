@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
-import { mapFetchError, toolResult } from "../errors";
+import { mapFetchError, toolResult, type ToolResult } from "../errors";
 import type { RoomResolver } from "../room-resolver";
 import type { AutoOpenManager } from "../auto-open";
 import {
@@ -13,8 +13,6 @@ import {
   DeleteArgs,
   ApplyArgs,
 } from "../schemas";
-
-export type ToolResult = ReturnType<typeof toolResult>;
 
 export type DomainDeps = {
   client: CanvasClient;

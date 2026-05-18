@@ -47,6 +47,8 @@ export function mapHttpResponse(
   return { ok: false, code: "http-error", message: `HTTP ${status}`, status, details: body, clientOpId };
 }
 
+export type ToolResult = ReturnType<typeof toolResult>;
+
 export function toolResult<T>(payload: ShemmaMcpSuccess<T> | ShemmaMcpError) {
   if (payload.ok) {
     return {

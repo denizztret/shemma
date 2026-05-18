@@ -1,12 +1,10 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
-import { mapFetchError, toolResult } from "../errors";
+import { mapFetchError, toolResult, type ToolResult } from "../errors";
 import { clientForRoom } from "../client-utils";
 
 export type PromptDeps = { client: CanvasClient; defaultRoom: string };
-
-export type ToolResult = ReturnType<typeof toolResult>;
 
 export type PromptHandles = {
   prompt_resolve: { call: (input: { id: string; response?: string; room?: string }) => Promise<ToolResult> };
@@ -16,16 +14,21 @@ export type PromptHandles = {
 };
 
 export function registerPromptAndActivityTools(server: McpServer, deps: PromptDeps): PromptHandles {
-  // ── shemma_prompt_resolve ──────────────────────────────────────────────────
-  async function promptResolveCall(input: { id: string; response?: string; room?: string }): Promise<ToolResult> {
+  /** Wraps a room-scoped client call in the standard try/catch → toolResult pattern. */
+  async function roomFetch(roomArg: string | undefined, fetch: (c: CanvasClient) => Promise<unknown>): Promise<ToolResult> {
     try {
-      const c = clientForRoom(deps.client, input.room);
-      const data = await c.resolvePrompt(input.id, input.response);
-      const room = input.room ?? deps.defaultRoom;
+      const c = clientForRoom(deps.client, roomArg);
+      const data = await fetch(c);
+      const room = roomArg ?? deps.defaultRoom;
       return toolResult({ ok: true, room, data });
     } catch (e) {
       return toolResult(mapFetchError(e));
     }
+  }
+
+  // ── shemma_prompt_resolve ──────────────────────────────────────────────────
+  async function promptResolveCall(input: { id: string; response?: string; room?: string }): Promise<ToolResult> {
+    return roomFetch(input.room, (c) => c.resolvePrompt(input.id, input.response));
   }
 
   server.registerTool(
@@ -43,14 +46,7 @@ export function registerPromptAndActivityTools(server: McpServer, deps: PromptDe
 
   // ── shemma_prompt_dismiss ──────────────────────────────────────────────────
   async function promptDismissCall(input: { id: string; room?: string }): Promise<ToolResult> {
-    try {
-      const c = clientForRoom(deps.client, input.room);
-      const data = await c.dismissPrompt(input.id);
-      const room = input.room ?? deps.defaultRoom;
-      return toolResult({ ok: true, room, data });
-    } catch (e) {
-      return toolResult(mapFetchError(e));
-    }
+    return roomFetch(input.room, (c) => c.dismissPrompt(input.id));
   }
 
   server.registerTool(
@@ -67,14 +63,7 @@ export function registerPromptAndActivityTools(server: McpServer, deps: PromptDe
 
   // ── shemma_ai_activity_start ───────────────────────────────────────────────
   async function aiActivityStartCall(input: { actor: string; task: string; room?: string }): Promise<ToolResult> {
-    try {
-      const c = clientForRoom(deps.client, input.room);
-      const data = await c.aiStart(input.actor, input.task);
-      const room = input.room ?? deps.defaultRoom;
-      return toolResult({ ok: true, room, data });
-    } catch (e) {
-      return toolResult(mapFetchError(e));
-    }
+    return roomFetch(input.room, (c) => c.aiStart(input.actor, input.task));
   }
 
   server.registerTool(
@@ -92,14 +81,7 @@ export function registerPromptAndActivityTools(server: McpServer, deps: PromptDe
 
   // ── shemma_ai_activity_stop ────────────────────────────────────────────────
   async function aiActivityStopCall(input: { room?: string }): Promise<ToolResult> {
-    try {
-      const c = clientForRoom(deps.client, input.room);
-      const data = await c.aiStop();
-      const room = input.room ?? deps.defaultRoom;
-      return toolResult({ ok: true, room, data });
-    } catch (e) {
-      return toolResult(mapFetchError(e));
-    }
+    return roomFetch(input.room, (c) => c.aiStop());
   }
 
   server.registerTool(

@@ -8,7 +8,7 @@ export type DiscoveryOpts = {
 function slugify(s: string): string {
   return s
     .toLowerCase()
-    .replace(/^\s+|\s+$/g, "")
+    .trim()
     .replace(/[^a-z0-9а-яё.-]+/giu, "-")
     .replace(/^-+|-+$/g, "");
 }

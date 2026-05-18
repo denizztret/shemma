@@ -1,5 +1,3 @@
-// packages/shemma-mcp/src/room-resolver.ts
-
 export type ActiveRoom = { room: string; clientCount: number; lastFocusedAt: number };
 
 export type InProgressTask = { id: string; slug: string };

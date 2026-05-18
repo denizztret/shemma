@@ -1,10 +1,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
-import { mapFetchError, toolResult } from "../errors";
+import { mapFetchError, toolResult, type ToolResult } from "../errors";
 import { clientForRoom } from "../client-utils";
-
-export type ToolResult = ReturnType<typeof toolResult>;
 
 export type ReadOnlyDeps = {
   client: CanvasClient;
@@ -22,6 +20,16 @@ export type ReadOnlyHandles = {
 };
 
 export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): ReadOnlyHandles {
+  /** Wraps a no-argument client fetch in the standard try/catch → toolResult pattern. */
+  async function fetchData(fetch: () => Promise<unknown>): Promise<ToolResult> {
+    try {
+      const data = await fetch();
+      return toolResult({ ok: true, data });
+    } catch (e) {
+      return toolResult(mapFetchError(e));
+    }
+  }
+
   // ── shemma_health ──────────────────────────────────────────────────────────
   const ENSURE_WARNING = "ensure not yet implemented; pass --auto-ensure to shemma mcp start instead";
 
@@ -60,12 +68,7 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
 
   // ── shemma_version ─────────────────────────────────────────────────────────
   async function versionCall(_input: Record<string, never>): Promise<ToolResult> {
-    try {
-      const data = await deps.client.getVersion();
-      return toolResult({ ok: true, data });
-    } catch (e) {
-      return toolResult(mapFetchError(e));
-    }
+    return fetchData(() => deps.client.getVersion());
   }
 
   server.registerTool(
@@ -80,12 +83,7 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
 
   // ── shemma_rooms_list ──────────────────────────────────────────────────────
   async function roomsListCall(_input: Record<string, never>): Promise<ToolResult> {
-    try {
-      const data = await deps.client.listRooms();
-      return toolResult({ ok: true, data });
-    } catch (e) {
-      return toolResult(mapFetchError(e));
-    }
+    return fetchData(() => deps.client.listRooms());
   }
 
   server.registerTool(
@@ -100,12 +98,7 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
 
   // ── shemma_active_rooms ────────────────────────────────────────────────────
   async function activeRoomsCall(_input: Record<string, never>): Promise<ToolResult> {
-    try {
-      const data = await deps.client.getActiveRooms();
-      return toolResult({ ok: true, data });
-    } catch (e) {
-      return toolResult(mapFetchError(e));
-    }
+    return fetchData(() => deps.client.getActiveRooms());
   }
 
   server.registerTool(
@@ -171,13 +164,7 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
 
   // ── shemma_ai_activity_status ──────────────────────────────────────────────
   async function aiActivityStatusCall(input: { room?: string }): Promise<ToolResult> {
-    try {
-      const client = clientForRoom(deps.client, input.room);
-      const data = await client.aiActivity();
-      return toolResult({ ok: true, data });
-    } catch (e) {
-      return toolResult(mapFetchError(e));
-    }
+    return fetchData(() => clientForRoom(deps.client, input.room).aiActivity());
   }
 
   server.registerTool(
