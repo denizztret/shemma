@@ -1,4 +1,12 @@
-## 0.12.0 (Unreleased) — Group B distribution
+## 0.12.1 — 2026-05-18 — Friendly dev-mode update hint
+
+### Changed
+
+- **`shemma update` в dev mode** теперь печатает actionable hint вместо однострочного refusal: предлагает `git pull && ./scripts/build-release.sh` для rebuild ИЛИ `./scripts/install.sh --version` для установки release binary. JSON mode сохраняет structured `code: "dev-mode-no-update"`.
+
+---
+
+## 0.12.0 — 2026-05-17 — Group B distribution
 
 ### Fixed
 
