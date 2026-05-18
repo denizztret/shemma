@@ -15,6 +15,24 @@ const DEFAULT_LOG_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
 
 import { type Profile, ALL_PROFILES, logFile, pidFile, portFor } from "./profile";
 import { error as uiError, getOutput, success as uiSuccess } from "./ui";
+import { detectInstalledMcpConfigs } from "./mcp";
+
+function maybePrintMcpNudge(verbose: boolean): void {
+  if (!verbose) return;
+  if (process.env.SHEMMA_NO_MCP_NUDGE === "1") return;
+  const ui = getOutput();
+  if (ui.mode === "json") return;
+  try {
+    const detected = detectInstalledMcpConfigs();
+    if (detected.some((d) => d.hasShemma)) return;
+  } catch {
+    return;
+  }
+  // stderr to avoid polluting stdout consumers; nudge is informational, not an error.
+  console.error(
+    "tip: run `shemma mcp install --client claude` (or --client codex) to register Shemma as MCP server",
+  );
+}
 
 function logMaxBytes(): number {
   const raw = process.env.SHEMMA_LOG_MAX_MB;
@@ -169,6 +187,7 @@ async function ensureDaemon(profile: Profile, verbose: boolean) {
           uiSuccess(`daemon already running (profile ${profile}, port ${port})`);
         }
       }
+      maybePrintMcpNudge(verbose);
       return;
     }
     uiError(`shemma: SHEMMA_PORT is set but server not healthy on :${port}`);
@@ -186,13 +205,17 @@ async function ensureDaemon(profile: Profile, verbose: boolean) {
         );
       }
     }
+    maybePrintMcpNudge(verbose);
     return;
   }
   await start(profile);
   const port = portFor(profile);
   for (let i = 0; i < 50; i++) {
     await new Promise((r) => setTimeout(r, 100));
-    if (await isHealthy(port)) return;
+    if (await isHealthy(port)) {
+      maybePrintMcpNudge(verbose);
+      return;
+    }
   }
   uiError(`shemma: not healthy within 5s on :${port}`);
   process.exit(3);
