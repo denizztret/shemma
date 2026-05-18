@@ -28,7 +28,7 @@ import { cmdPs } from "./ps";
 import { cmdPrompts } from "./prompts";
 import { cmdDoctor } from "./doctor";
 import { cmdUpdate, cmdUpdateCheck, cmdUpdateSetChannel } from "./update";
-import { cmdMcpInstall, cmdMcpStart } from "./mcp";
+import { cmdMcpStart } from "./mcp";
 import { cmdVersion } from "./version-cmd";
 import { error as uiError, initOutput, parseOutputMode } from "./ui";
 
@@ -215,11 +215,7 @@ async function main() {
     if (mcpSub === "start") {
       return cmdMcpStart(mcpRest);
     }
-    if (mcpSub === "install") {
-      cmdMcpInstall(mcpRest);
-      return;
-    }
-    console.error(`unknown mcp subcommand: ${mcpSub}; expected start|install`);
+    console.error(`unknown mcp subcommand: ${mcpSub}; expected start`);
     process.exit(1);
   }
 
@@ -465,8 +461,6 @@ MCP integration:
   mcp start [--profile <p>] [--cwd <dir>] [--room <id>] [--base-url <url>]
             [--auto-open never|once|always|confirm] [--no-auto-ensure]
                                               # start stdio MCP server (for agentic clients)
-  mcp install --client claude|codex [--print] [--force]
-                                              # generate/write MCP config for the chosen client
 
 Versioning:
   version

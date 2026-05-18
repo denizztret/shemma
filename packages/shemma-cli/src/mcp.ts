@@ -39,66 +39,6 @@ export function parseMcpStartFlags(argv: string[]): McpStartFlags {
   return out;
 }
 
-export function generateClaudeConfigSnippet(opts: { projectDir: string }): string {
-  return JSON.stringify(
-    {
-      mcpServers: {
-        shemma: {
-          command: "shemma",
-          args: ["mcp", "start", "--cwd", opts.projectDir],
-        },
-      },
-    },
-    null,
-    2,
-  );
-}
-
-export function generateCodexConfigSnippet(opts: { projectDir: string }): string {
-  return `[mcp_servers.shemma]
-command = "shemma"
-args = ["mcp", "start", "--cwd", "${opts.projectDir}"]
-`;
-}
-
-export type McpInstallOpts = {
-  client: "claude" | "codex";
-  scope: "user" | "project";
-  print: boolean;
-  force: boolean;
-  projectDir: string;
-};
-
-export function claudeConfigPath(): string {
-  if (process.platform === "darwin") {
-    return join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
-  }
-  return join(homedir(), ".config", "Claude", "claude_desktop_config.json");
-}
-
-export function codexConfigPath(): string {
-  return join(homedir(), ".codex", "config.toml");
-}
-
-export function mcpInstall(opts: McpInstallOpts): { written: string | null; snippet: string } {
-  const snippet =
-    opts.client === "claude"
-      ? generateClaudeConfigSnippet({ projectDir: opts.projectDir })
-      : generateCodexConfigSnippet({ projectDir: opts.projectDir });
-
-  if (opts.print) return { written: null, snippet };
-
-  const path = opts.client === "claude" ? claudeConfigPath() : codexConfigPath();
-  if (existsSync(path) && !opts.force) {
-    throw new Error(`${path} exists; pass --force to overwrite or --print to copy manually`);
-  }
-  if (existsSync(path)) {
-    writeFileSync(`${path}.bak.${Date.now()}`, readFileSync(path));
-  }
-  writeFileSync(path, snippet);
-  return { written: path, snippet };
-}
-
 // ---------------------------------------------------------------------------
 // Detection & refresh helpers
 // ---------------------------------------------------------------------------
@@ -181,8 +121,19 @@ export function refreshMcpConfigs(opts: RefreshOpts): RefreshResult {
     }
     const snippet =
       entry.client === "claude"
-        ? generateClaudeConfigSnippet({ projectDir: opts.projectDir })
-        : generateCodexConfigSnippet({ projectDir: opts.projectDir });
+        ? JSON.stringify(
+            {
+              mcpServers: {
+                shemma: {
+                  command: "shemma",
+                  args: ["mcp", "start", "--cwd", opts.projectDir],
+                },
+              },
+            },
+            null,
+            2,
+          )
+        : `[mcp_servers.shemma]\ncommand = "shemma"\nargs = ["mcp", "start", "--cwd", "${opts.projectDir}"]\n`;
     writeFileSync(`${entry.path}.bak.${Date.now()}`, readFileSync(entry.path));
     writeFileSync(entry.path, snippet);
     refreshed.push(entry.client);
@@ -205,29 +156,3 @@ export async function cmdMcpStart(argv: string[]): Promise<void> {
   });
 }
 
-export function cmdMcpInstall(argv: string[]): void {
-  let client: "claude" | "codex" | undefined;
-  let scope: "user" | "project" = "user";
-  let print = false;
-  let force = false;
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--client") {
-      const v = argv[++i];
-      if (v !== "claude" && v !== "codex") throw new Error(`invalid --client: ${v}`);
-      client = v;
-    } else if (a === "--scope") {
-      const v = argv[++i];
-      if (v !== "user" && v !== "project") throw new Error(`invalid --scope: ${v}`);
-      scope = v;
-    } else if (a === "--print") print = true;
-    else if (a === "--force") force = true;
-  }
-  if (!client) throw new Error("--client is required (claude|codex)");
-  const result = mcpInstall({ client, scope, print, force, projectDir: process.cwd() });
-  if (result.written) {
-    console.log(`wrote ${result.written}`);
-  } else {
-    console.log(result.snippet);
-  }
-}
