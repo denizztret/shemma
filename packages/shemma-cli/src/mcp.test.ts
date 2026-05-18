@@ -1,5 +1,5 @@
-import { describe, expect, it, mock } from "bun:test";
-import { parseMcpStartFlags } from "./mcp";
+import { afterEach, describe, expect, it } from "bun:test";
+import { __resolveProjectDirForTesting, parseMcpStartFlags } from "./mcp";
 
 describe("parseMcpStartFlags", () => {
   it("parses defaults", () => {
@@ -34,52 +34,30 @@ describe("parseMcpStartFlags", () => {
   });
 });
 
-describe("cmdMcpStart projectDir resolution", () => {
-  // We mock the @shemma/mcp dynamic import so cmdMcpStart doesn't actually
-  // try to open stdio. We capture the projectDir argument passed to startStdio.
-  let captured: { projectDir?: string } = {};
+describe("resolveProjectDir (SHEMMA_CWD env resolution)", () => {
+  // Pure helper test — no module mocks. cmdMcpStart just forwards the return
+  // value of resolveProjectDir() to startStdio's projectDir argument.
+  afterEach(() => {
+    delete process.env.SHEMMA_CWD;
+  });
 
-  function mockStartStdio() {
-    captured = {};
-    mock.module("@shemma/mcp", () => ({
-      startStdio: async (opts: { projectDir: string }) => {
-        captured.projectDir = opts.projectDir;
-      },
-    }));
-  }
-
-  it("uses SHEMMA_CWD env when set", async () => {
-    mockStartStdio();
+  it("uses SHEMMA_CWD env when set", () => {
     process.env.SHEMMA_CWD = "/tmp/from-env";
-    const { cmdMcpStart } = await import("./mcp");
-    await cmdMcpStart([]);
-    expect(captured.projectDir).toBe("/tmp/from-env");
-    delete process.env.SHEMMA_CWD;
+    expect(__resolveProjectDirForTesting()).toBe("/tmp/from-env");
   });
 
-  it("falls back to process.cwd() when SHEMMA_CWD unset", async () => {
-    mockStartStdio();
+  it("falls back to process.cwd() when SHEMMA_CWD unset", () => {
     delete process.env.SHEMMA_CWD;
-    const { cmdMcpStart } = await import("./mcp");
-    await cmdMcpStart([]);
-    expect(captured.projectDir).toBe(process.cwd());
+    expect(__resolveProjectDirForTesting()).toBe(process.cwd());
   });
 
-  it("trims SHEMMA_CWD whitespace", async () => {
-    mockStartStdio();
+  it("trims SHEMMA_CWD whitespace", () => {
     process.env.SHEMMA_CWD = "  /tmp/trimmed  ";
-    const { cmdMcpStart } = await import("./mcp");
-    await cmdMcpStart([]);
-    expect(captured.projectDir).toBe("/tmp/trimmed");
-    delete process.env.SHEMMA_CWD;
+    expect(__resolveProjectDirForTesting()).toBe("/tmp/trimmed");
   });
 
-  it("treats empty SHEMMA_CWD as unset", async () => {
-    mockStartStdio();
+  it("treats empty SHEMMA_CWD as unset", () => {
     process.env.SHEMMA_CWD = "";
-    const { cmdMcpStart } = await import("./mcp");
-    await cmdMcpStart([]);
-    expect(captured.projectDir).toBe(process.cwd());
-    delete process.env.SHEMMA_CWD;
+    expect(__resolveProjectDirForTesting()).toBe(process.cwd());
   });
 });

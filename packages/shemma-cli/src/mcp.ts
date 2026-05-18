@@ -50,6 +50,11 @@ function resolveProjectDir(): string {
   return process.cwd();
 }
 
+/** Test-only: expose internal helper under stable name. */
+export function __resolveProjectDirForTesting(): string {
+  return resolveProjectDir();
+}
+
 export async function cmdMcpStart(argv: string[]): Promise<void> {
   const flags = parseMcpStartFlags(argv);
   const profile = flags.profile ?? "release";
