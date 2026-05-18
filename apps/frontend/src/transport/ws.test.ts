@@ -8,10 +8,11 @@
 // We mock the WebSocket and the tldraw Editor.store seam — no real network,
 // no DOM — so this file runs under `bun test` without a browser.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
 import {
   type StoreChangeBatch,
   batchToDiff,
+  createBoardFocusBeacon,
   diffToBatch,
   startStoreSync,
 } from "./ws";
@@ -122,7 +123,7 @@ class MockStore {
   }
 }
 
-function makeDeps(initialVersion = 0) {
+function makeDeps(initialVersion = 0, room = "test-room") {
   const sock = new MockSocket();
   const store = new MockStore();
   const editor = { store } as unknown as Parameters<
@@ -132,6 +133,7 @@ function makeDeps(initialVersion = 0) {
   const sync = startStoreSync({
     editor,
     wsUrl: "ws://test/ws?room=t",
+    room,
     initialVersion,
     onTruncated: () => {
       truncated += 1;
@@ -144,6 +146,7 @@ function makeDeps(initialVersion = 0) {
     store,
     stop: sync.stop,
     setPaused: sync.setPaused,
+    beacon: sync.beacon,
     truncatedCount: () => truncated,
   };
 }
@@ -174,7 +177,8 @@ describe("startStoreSync — handshake", () => {
   test("sends hello with initialVersion and schema on open", () => {
     const t = makeDeps(7);
     t.sock.open();
-    expect(t.sock.sent.length).toBe(1);
+    // Frame 0: hello, Frame 1: board-focus
+    expect(t.sock.sent.length).toBe(2);
     const frame = JSON.parse(t.sock.sent[0]!);
     expect(frame.kind).toBe("hello");
     expect(frame.lastVersion).toBe(7);
@@ -202,9 +206,9 @@ describe("startStoreSync — outbound user-change", () => {
       removed: {},
     });
     await sleep(15); // > debounceMs (5)
-    // 1 hello + 1 user-change
-    expect(t.sock.sent.length).toBe(2);
-    const frame = JSON.parse(t.sock.sent[1]!);
+    // hello + board-focus + user-change
+    expect(t.sock.sent.length).toBe(3);
+    const frame = JSON.parse(t.sock.sent[2]!);
     expect(frame.kind).toBe("user-change");
     expect(typeof frame.clientOpId).toBe("string");
     expect(frame.clientOpId.length).toBeGreaterThan(0);
@@ -217,7 +221,7 @@ describe("startStoreSync — outbound user-change", () => {
     const t = makeDeps(0);
     t.sock.open();
     await sleep(15);
-    expect(t.sock.sent.length).toBe(1); // only hello
+    expect(t.sock.sent.length).toBe(2); // hello + board-focus
     t.stop();
   });
 });
@@ -251,7 +255,8 @@ describe("startStoreSync — inbound store-change", () => {
     });
     // Wait briefly for debounce flush.
     return sleep(15).then(() => {
-      const outFrame = JSON.parse(t.sock.sent[1]!);
+      // sent[0]=hello, sent[1]=board-focus, sent[2]=user-change
+      const outFrame = JSON.parse(t.sock.sent[2]!);
       const myOpId = outFrame.clientOpId;
       // Server re-broadcasts back with our opId — must be ignored.
       t.sock.message({
@@ -362,9 +367,9 @@ describe("startStoreSync — setPaused (DRW-018)", () => {
       removed: {},
     });
     await sleep(15); // > debounceMs
-    // hello + one user-change frame.
-    expect(t.sock.sent.length).toBe(2);
-    const frame = JSON.parse(t.sock.sent[1]!);
+    // hello + board-focus + user-change
+    expect(t.sock.sent.length).toBe(3);
+    const frame = JSON.parse(t.sock.sent[2]!);
     expect(frame.kind).toBe("user-change");
     expect(Object.keys(frame.changes.added)).toEqual(["shape:p"]);
     t.stop();
@@ -380,6 +385,90 @@ describe("startStoreSync — setPaused (DRW-018)", () => {
   });
 });
 
+// --- createBoardFocusBeacon standalone tests --------------------------------
+
+describe("createBoardFocusBeacon", () => {
+  it("emits focused=true on focus event", () => {
+    const sent: object[] = [];
+    const beacon = createBoardFocusBeacon({
+      send: (m) => sent.push(m),
+      getCurrentRoom: () => "room-a",
+    });
+    beacon.emitFocus();
+    expect(sent).toEqual([
+      { kind: "board-focus", room: "room-a", focused: true },
+    ]);
+  });
+
+  it("emits focused=false on blur", () => {
+    const sent: object[] = [];
+    const beacon = createBoardFocusBeacon({
+      send: (m) => sent.push(m),
+      getCurrentRoom: () => "room-a",
+    });
+    beacon.emitBlur();
+    expect(sent).toEqual([
+      { kind: "board-focus", room: "room-a", focused: false },
+    ]);
+  });
+
+  it("on room switch emits blur(old) then focus(new)", () => {
+    const sent: object[] = [];
+    let current = "room-a";
+    const beacon = createBoardFocusBeacon({
+      send: (m) => sent.push(m),
+      getCurrentRoom: () => current,
+    });
+    beacon.emitFocus();
+    sent.length = 0;
+    beacon.notifyRoomSwitch("room-a", "room-b");
+    current = "room-b";
+    expect(sent).toEqual([
+      { kind: "board-focus", room: "room-a", focused: false },
+      { kind: "board-focus", room: "room-b", focused: true },
+    ]);
+  });
+});
+
+// --- startStoreSync board-focus integration test ----------------------------
+
+describe("startStoreSync — board-focus beacon", () => {
+  test("sends board-focus(focused=true) after open, after hello", () => {
+    const t = makeDeps(0, "my-room");
+    t.sock.open();
+    // Frame 0: hello, Frame 1: board-focus
+    expect(t.sock.sent.length).toBe(2);
+    const focus = JSON.parse(t.sock.sent[1]!);
+    expect(focus).toEqual({
+      kind: "board-focus",
+      room: "my-room",
+      focused: true,
+    });
+    t.stop();
+  });
+
+  test("beacon.emitBlur sends board-focus(focused=false)", () => {
+    const t = makeDeps(0, "room-x");
+    t.sock.open();
+    const before = t.sock.sent.length; // hello + focus = 2
+    t.beacon.emitBlur();
+    expect(t.sock.sent.length).toBe(before + 1);
+    const blur = JSON.parse(t.sock.sent[before]!);
+    expect(blur).toEqual({ kind: "board-focus", room: "room-x", focused: false });
+    t.stop();
+  });
+
+  test("beacon respects stopped flag — no send after stop()", () => {
+    const t = makeDeps(0, "room-z");
+    t.sock.open();
+    t.stop();
+    const countAfterStop = t.sock.sent.length;
+    t.beacon.emitFocus();
+    t.beacon.emitBlur();
+    expect(t.sock.sent.length).toBe(countAfterStop); // nothing new
+  });
+});
+
 describe("startStoreSync — stop()", () => {
   test("closes socket and detaches listener", () => {
     const t = makeDeps(0);
@@ -392,7 +481,7 @@ describe("startStoreSync — stop()", () => {
       updated: {},
       removed: {},
     });
-    // hello is the only frame.
-    expect(t.sock.sent.length).toBe(1);
+    // hello + board-focus are the only frames (stop prevents new ones).
+    expect(t.sock.sent.length).toBe(2);
   });
 });

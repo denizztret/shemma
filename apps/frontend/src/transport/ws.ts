@@ -75,9 +75,54 @@ type StoreSyncMessage =
   | { kind: "prompt-removed"; ids: string[] }
   | { kind: "ai-activity"; activity: AiActivity | null };
 
+// ---------------------------------------------------------------------------
+// BoardFocusBeacon — standalone factory for sending board-focus WS messages.
+// Emitted on tab focus/blur and on room switch so MCP clients know which room
+// the human is actively looking at.
+// ---------------------------------------------------------------------------
+
+export type BoardFocusBeaconOpts = {
+  send: (msg: { kind: "board-focus"; room: string; focused: boolean }) => void;
+  getCurrentRoom: () => string;
+};
+
+export type BoardFocusBeacon = {
+  emitFocus: () => void;
+  emitBlur: () => void;
+  notifyRoomSwitch: (oldRoom: string, newRoom: string) => void;
+};
+
+export function createBoardFocusBeacon(
+  opts: BoardFocusBeaconOpts,
+): BoardFocusBeacon {
+  return {
+    emitFocus: () =>
+      opts.send({
+        kind: "board-focus",
+        room: opts.getCurrentRoom(),
+        focused: true,
+      }),
+    emitBlur: () =>
+      opts.send({
+        kind: "board-focus",
+        room: opts.getCurrentRoom(),
+        focused: false,
+      }),
+    notifyRoomSwitch: (oldRoom, newRoom) => {
+      opts.send({ kind: "board-focus", room: oldRoom, focused: false });
+      opts.send({ kind: "board-focus", room: newRoom, focused: true });
+    },
+  };
+}
+
 export type StoreSyncDeps = {
   editor: Editor;
   wsUrl: string;
+  /**
+   * The current room id. Used by the board-focus beacon so callers don't
+   * have to parse it back out of `wsUrl`.
+   */
+  room: string;
   initialVersion: number;
   /**
    * Called when the server reports the client is too far behind to replay.
@@ -126,9 +171,11 @@ export type StoreSyncDeps = {
  *   THIS syncer's `pending` at `stop()` time are dropped — pending is local
  *   to each syncer instance. This pre-dates DRW-018.)
  */
-export function startStoreSync(
-  deps: StoreSyncDeps,
-): { stop: () => void; setPaused: (p: boolean) => void } {
+export function startStoreSync(deps: StoreSyncDeps): {
+  stop: () => void;
+  setPaused: (p: boolean) => void;
+  beacon: BoardFocusBeacon;
+} {
   const debounceMs = deps.debounceMs ?? 50;
   const clientOpId =
     typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -140,6 +187,18 @@ export function startStoreSync(
 
   const factory = deps.socketFactory ?? ((url: string) => new WebSocket(url));
   const ws = factory(deps.wsUrl);
+
+  // Board-focus beacon: sends {kind:"board-focus", room, focused} frames.
+  // Guards against stopped state and non-OPEN socket so callers can call
+  // emitBlur() freely from beforeunload without caring about lifecycle.
+  const beacon = createBoardFocusBeacon({
+    send: (msg) => {
+      if (stopped) return;
+      if (ws.readyState !== ws.OPEN) return;
+      ws.send(JSON.stringify(msg));
+    },
+    getCurrentRoom: () => deps.room,
+  });
 
   const pending: StoreChangeBatch = {
     added: {},
@@ -188,6 +247,8 @@ export function startStoreSync(
     ws.send(
       JSON.stringify({ kind: "hello", lastVersion: currentVersion, schema }),
     );
+    // Announce that this tab is now focused on this room.
+    beacon.emitFocus();
   });
 
   ws.addEventListener("message", (e: MessageEvent) => {
@@ -281,6 +342,7 @@ export function startStoreSync(
     setPaused(p: boolean) {
       paused = p;
     },
+    beacon,
   };
 }
 

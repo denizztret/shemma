@@ -172,6 +172,7 @@ export function App({ room }: { room: string }) {
       syncHandle = startStoreSync({
         editor,
         wsUrl,
+        room,
         initialVersion: loaded.version,
         onTruncated: () => {
           // DRW-018: pause the (now zombie) syncer immediately so any frames
@@ -190,6 +191,7 @@ export function App({ room }: { room: string }) {
               syncHandle = startStoreSync({
                 editor,
                 wsUrl,
+                room,
                 initialVersion: fresh.version,
                 onTruncated: () => {
                   // Pathological loop — log and stop trying.
@@ -202,6 +204,23 @@ export function App({ room }: { room: string }) {
           })();
         },
       });
+
+      // Wire window focus/blur/beforeunload → board-focus beacon.
+      // Each focus change notifies the MCP layer which room the human is on.
+      // Handlers reference syncHandle via closure so they always reach the
+      // latest syncer instance (recovery may replace it).
+      const onFocus = () => syncHandle?.beacon.emitFocus();
+      const onBlur = () => syncHandle?.beacon.emitBlur();
+      window.addEventListener("focus", onFocus);
+      window.addEventListener("blur", onBlur);
+      window.addEventListener("beforeunload", onBlur);
+      // Store removers so cleanup can detach them.
+      // biome-ignore lint/suspicious/noExplicitAny: dynamic window property
+      (window as any).__shemmaFocusCleanup = () => {
+        window.removeEventListener("focus", onFocus);
+        window.removeEventListener("blur", onBlur);
+        window.removeEventListener("beforeunload", onBlur);
+      };
 
       // Dev-console helper: window.shemmaImportMermaid(source). Mutates store;
       // startStoreSync auto-forwards the batch to backend over WS.
@@ -245,6 +264,11 @@ export function App({ room }: { room: string }) {
 
     return () => {
       active = false;
+      // biome-ignore lint/suspicious/noExplicitAny: cleaning up focus listeners
+      (window as any).__shemmaFocusCleanup?.();
+      // biome-ignore lint/suspicious/noExplicitAny: cleaning up window property
+      // biome-ignore lint/performance/noDelete: intentional property removal
+      delete (window as any).__shemmaFocusCleanup;
       syncHandle?.stop();
       unsubSel?.();
       if (camSaveTimer) {
