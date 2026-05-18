@@ -4,7 +4,6 @@ export type AutoOpenMode = "never" | "once" | "always" | "confirm";
 
 export type McpStartFlags = {
   profile?: "dev" | "release" | "debug";
-  cwd?: string;
   room?: string;
   baseUrl?: string;
   autoOpenMode: AutoOpenMode;
@@ -15,8 +14,14 @@ export function parseMcpStartFlags(argv: string[]): McpStartFlags {
   const out: McpStartFlags = { autoOpenMode: "once", noAutoEnsure: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--cwd") out.cwd = argv[++i];
-    else if (a === "--room") out.room = argv[++i];
+    if (a === "--cwd") {
+      throw new Error(
+        "the --cwd flag was removed in 0.14.0. " +
+          "Set SHEMMA_CWD env var instead (in your MCP client config or shell). " +
+          "See docs/mcp.md → \"Setup\" for the new manual config snippet.",
+      );
+    }
+    if (a === "--room") out.room = argv[++i];
     else if (a === "--base-url") out.baseUrl = argv[++i];
     else if (a === "--no-auto-ensure") out.noAutoEnsure = true;
     else if (a === "--profile") {
@@ -45,7 +50,7 @@ export async function cmdMcpStart(argv: string[]): Promise<void> {
     profile,
     baseUrl: flags.baseUrl ?? `http://localhost:${portFor(profile)}`,
     defaultRoom: flags.room ?? "default",
-    projectDir: flags.cwd ?? process.cwd(),
+    projectDir: process.cwd(),
     autoOpenMode: flags.autoOpenMode,
   });
 }

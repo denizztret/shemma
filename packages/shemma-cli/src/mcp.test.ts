@@ -15,8 +15,16 @@ describe("parseMcpStartFlags", () => {
   it("parses --no-auto-ensure", () => {
     expect(parseMcpStartFlags(["--no-auto-ensure"]).noAutoEnsure).toBe(true);
   });
-  it("parses --cwd path", () => {
-    expect(parseMcpStartFlags(["--cwd", "/tmp/x"]).cwd).toBe("/tmp/x");
+  it("throws hard error on --cwd with migration message (removed in 0.14.0)", () => {
+    expect(() => parseMcpStartFlags(["--cwd", "/tmp/x"])).toThrow(
+      /--cwd flag was removed in 0\.14\.0/,
+    );
+    expect(() => parseMcpStartFlags(["--cwd", "/tmp/x"])).toThrow(
+      /Set SHEMMA_CWD env/,
+    );
+  });
+  it("silently ignores other unknown flags (minimal surface change)", () => {
+    expect(() => parseMcpStartFlags(["--unknown-future-flag", "x"])).not.toThrow();
   });
   it("parses --room id", () => {
     expect(parseMcpStartFlags(["--room", "abc"]).room).toBe("abc");
