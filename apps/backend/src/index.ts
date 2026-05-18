@@ -3,6 +3,7 @@ import { config } from "./config";
 import { EMBEDDED_ASSETS } from "./embedded-assets";
 import { FilePersistence } from "./persistence";
 import { type RoomStore, Rooms, pushOpLog, validateRoomId } from "./rooms";
+import { activeRoomsRoutes } from "./routes/active-rooms";
 import { aiRoutes } from "./routes/ai";
 import { contextRoutes } from "./routes/context";
 import { domainRoutes } from "./routes/domain";
@@ -52,6 +53,7 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", viewportRoutes(rooms));
   app.route("/", domainRoutes(rooms, bus, { onDirty }));
   app.route("/", contextRoutes(rooms));
+  app.route("/", activeRoomsRoutes(bus.getActiveRooms()));
   return { app, rooms, bus, persistence };
 }
 
