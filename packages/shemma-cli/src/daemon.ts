@@ -100,15 +100,19 @@ export async function start(profile: Profile, opts: StartOpts = {}) {
   if (opts.storageDir !== undefined) {
     env.SHEMMA_STORAGE_DIR = opts.storageDir;
   }
-  const child = spawn(
-    process.execPath,
-    [process.argv[1], "internal-server", "--profile", profile],
-    {
-      detached: true,
-      stdio: ["ignore", logFd, logFd],
-      env,
-    },
-  );
+  // process.argv[1] differs by exec mode:
+  //   bun source: ".../shemma-cli/src/index.ts" (script path needed by bun)
+  //   compiled binary: first user arg (e.g. "daemon") — must NOT be passed through.
+  // Detect bun source via execPath ending in "bun" / "bun-canary" / etc.
+  const isBunSource = /\/bun(-[^/]+)?$/.test(process.execPath);
+  const childArgs = isBunSource
+    ? [process.argv[1], "internal-server", "--profile", profile]
+    : ["internal-server", "--profile", profile];
+  const child = spawn(process.execPath, childArgs, {
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+    env,
+  });
   child.unref();
   if (!child.pid) {
     uiError("failed to spawn daemon: no PID");
