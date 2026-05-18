@@ -73,6 +73,11 @@ export async function startServer(opts: AppOpts = {}) {
   const { app, bus, persistence, rooms } = makeApp(opts);
   const server = Bun.serve({
     port: opts.port ?? config.port,
+    // SO_REUSEPORT: освобождает port:bind race после graceful stop() — без него
+    // re-bind на :8787 сразу после stop() может упасть с EADDRINUSE из-за
+    // TIME_WAIT (~15s на macOS). Critical для shemma update flow (stop → start
+    // в одном process). Bun honours `reusePort` since v1.0 (см. bun.sh docs).
+    reusePort: true,
     fetch: async (req, srv) => {
       const url = new URL(req.url);
       if (url.pathname === "/ws") {

@@ -1,3 +1,15 @@
+## 0.12.2 — 2026-05-18 — Robust daemon restart after self-update
+
+### Fixed
+
+- **`shemma update` post-swap auto-restart race** (DRW-060) — после successful `shemma update` (atomic binary swap) flow `stop(profile)` → `ensure(profile)` падал с `✖ shemma: SHEMMA_PORT is set but server not healthy on :8787` вместо запуска нового binary. Root cause: `packages/shemma-cli/src/index.ts` populates `process.env.SHEMMA_PORT = portFor(profile)` для каждого CLI-инвокa (чтобы внутренние `CanvasClient` calls hit нужный daemon), но `ensureDaemon` fast path трактовал любой выставленный `SHEMMA_PORT` как "externally provided — caller owns the server, only verify health, иначе exit(3)". После `stop()` daemon dead → health fail → `process.exit(3)`.
+  - Введён marker `SHEMMA_PORT_AUTOSET=1` в `index.ts`: проставляется одновременно с `SHEMMA_PORT` когда CLI сам резолвит port из `--profile`. `ensureDaemon` fast path триггерит только если `SHEMMA_PORT` set И marker absent — externally-set semantics ограничены testing scenarios (in-process `Bun.serve` в `lifecycle.http.test`).
+  - `cmdUpdate` explicitly `delete process.env.SHEMMA_PORT` + `SHEMMA_PORT_AUTOSET` перед `ensure()` — defensive layer, гарантирует чистый `status()` + `start()` path для нового binary независимо от inherited env.
+  - `apps/backend/src/index.ts:Bun.serve` получил `reusePort: true` — освобождает порт от TIME_WAIT race при быстром stop→start cycle на macOS (~15s TIME_WAIT по умолчанию). Critical для update flow в одном process.
+- **Tests** — `packages/shemma-cli/tests/daemon-ensure-fallback.test.ts` (3 subprocess test'а): fast path success при externally-set `SHEMMA_PORT` + healthy server, fast path exit(3) при externally-set + unhealthy, и marker-bypass при auto-set + healthy. CLI: 135 → 138 (+3).
+
+---
+
 ## 0.12.1 — 2026-05-18 — Friendly dev-mode update hint
 
 ### Changed

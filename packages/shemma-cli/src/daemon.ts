@@ -142,11 +142,19 @@ export async function ensureSilent(profile: Profile) {
 }
 
 async function ensureDaemon(profile: Profile, verbose: boolean) {
-  // Fast path: if SHEMMA_PORT is explicitly set (e.g. in tests or when the
-  // caller already knows the port), skip PID-file checks and just verify
-  // the server is healthy. This avoids spurious daemon spawns when an
-  // in-process test server is already listening on the target port.
-  if (process.env.SHEMMA_PORT !== undefined) {
+  // Fast path: SHEMMA_PORT is set externally (tests / explicit caller override).
+  // We must NOT spawn a competing daemon — caller owns the listening server
+  // (e.g. in-process Bun.serve in lifecycle.http.test). Just verify health.
+  //
+  // SHEMMA_PORT_AUTOSET=1 marker (set by index.ts when port was derived from
+  // --profile, not externally provided) signals "fast path doesn't apply" —
+  // fall through to normal status/start flow. Otherwise post-update restart
+  // (cmdUpdate calls stop() then ensure() in the same process where index.ts
+  // had already populated SHEMMA_PORT) would exit(3) instead of relaunching.
+  const portFromEnv =
+    process.env.SHEMMA_PORT !== undefined &&
+    process.env.SHEMMA_PORT_AUTOSET !== "1";
+  if (portFromEnv) {
     const port = portFor(profile);
     if (await isHealthy(port)) {
       if (verbose) {
