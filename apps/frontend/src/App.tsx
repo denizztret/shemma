@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { type Editor, Tldraw } from "tldraw";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { type Editor, type TLGeoShape, Tldraw } from "tldraw";
 import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
@@ -17,11 +17,39 @@ import { getState, seedSchema } from "./transport/api";
 import { viewportReporter } from "./transport/viewport";
 import { type AiActivity, startStoreSync } from "./transport/ws";
 
+/**
+ * DRW-077: Re-trigger tldraw's growY side-effect for geo shapes.
+ *
+ * tldraw's GeoShapeUtil.onBeforeUpdate runs growY only when shapes are
+ * mutated via editor.createShapes/updateShapes (not via store.put /
+ * mergeRemoteChanges). Calling editor.updateShape with the same props forces
+ * onBeforeUpdate to run and correct the height to fit the label text.
+ *
+ * @param editor  Live tldraw editor instance.
+ * @param ids     Optional set of shape ids to process; when omitted all geo
+ *                shapes on the current page are processed.
+ */
+function triggerGrowY(editor: Editor, ids?: Set<string>): void {
+  const shapes = editor.getCurrentPageShapes().filter(
+    (s): s is TLGeoShape =>
+      s.type === "geo" && (ids === undefined || ids.has(s.id)),
+  );
+  if (shapes.length === 0) return;
+  editor.run(() => {
+    for (const s of shapes) {
+      editor.updateShape<TLGeoShape>({ id: s.id, type: "geo", props: s.props });
+    }
+  });
+}
+
 export function App({ room }: { room: string }) {
   const [editor, setEditor] = useState<Editor | null>(null);
   const [selection, setSelection] = useState<string[]>([]);
   const [promptsTick, setPromptsTick] = useState(0);
   const [cameraTick, setCameraTick] = useState(0);
+  // DRW-075: tracks whether the user has manually panned/zoomed.
+  // When false, post-AI-change zoomToFit is allowed; reset on room change.
+  const userHasManuallyPanned = useRef(false);
   // PromptInput is toggled by ⌘K (Ctrl+K on non-Mac) — opens for the current
   // selection and stays open until Send/Esc/selection cleared.
   const [promptOpen, setPromptOpen] = useState(false);
@@ -149,6 +177,23 @@ export function App({ room }: { room: string }) {
       return { version: s.version };
     };
 
+    // DRW-075: reset user-pan flag on room/editor change so AI fit is active
+    // for the fresh room until the user interacts with the camera.
+    userHasManuallyPanned.current = false;
+
+    // DRW-075: debounced zoomToFit after AI mutations; fires at most once per
+    // 100ms burst of AI store-change frames. Cancelled on room change via the
+    // `active` flag checked inside the callback.
+    let aiZoomTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleAiZoom = () => {
+      if (aiZoomTimer !== null) clearTimeout(aiZoomTimer);
+      aiZoomTimer = setTimeout(() => {
+        aiZoomTimer = null;
+        if (!active || userHasManuallyPanned.current) return;
+        editor.zoomToFit({ animation: { duration: 200 } });
+      }, 100);
+    };
+
     const hydrateAndSync = async () => {
       const loaded = await fetchAndLoadSnapshot();
       if (!loaded) return;
@@ -159,10 +204,19 @@ export function App({ room }: { room: string }) {
         .then((j) => active && setAiActivity(j.activity ?? null))
         .catch(() => {});
 
-      // Camera: restore from localStorage, otherwise zoomToFit if there's content.
+      // DRW-077: re-trigger growY for all geo shapes after initial snapshot
+      // load. loadSnapshot uses store.put (not editor.createShapes), so
+      // tldraw's onBeforeUpdate growY never fires. A no-op updateShape forces
+      // the util to recalculate height based on actual text bounds.
+      triggerGrowY(editor);
+
+      // Camera: restore from localStorage, otherwise zoomToFit if there's
+      // content. If a saved camera exists the user has already navigated this
+      // room — mark as manually panned so AI fit won't override it.
       const cam = loadCamera(room);
       if (cam) {
         editor.setCamera(cam, { immediate: true });
+        userHasManuallyPanned.current = true;
       } else {
         const shapesCount = editor.getCurrentPageShapes().length;
         if (shapesCount) editor.zoomToFit({ animation: { duration: 0 } });
@@ -175,6 +229,14 @@ export function App({ room }: { room: string }) {
         wsUrl,
         room,
         initialVersion: loaded.version,
+        // DRW-077 + DRW-075: on each AI store-change batch re-trigger growY
+        // for affected geo shapes and schedule a camera fit if the user hasn't
+        // manually navigated.
+        onAiChange: (changedIds) => {
+          if (!active) return;
+          triggerGrowY(editor, changedIds);
+          scheduleAiZoom();
+        },
         onTruncated: () => {
           // DRW-018: pause the (now zombie) syncer immediately so any frames
           // that arrive between this callback and ws.close() — or any straggler
@@ -194,6 +256,11 @@ export function App({ room }: { room: string }) {
                 wsUrl,
                 room,
                 initialVersion: fresh.version,
+                onAiChange: (changedIds) => {
+                  if (!active) return;
+                  triggerGrowY(editor, changedIds);
+                  scheduleAiZoom();
+                },
                 onTruncated: () => {
                   // Pathological loop — log and stop trying.
                   console.warn("[shemma] truncated recovery looped, giving up");
@@ -255,6 +322,10 @@ export function App({ room }: { room: string }) {
             setCameraTick((x) => x + 1);
             if (camSaveTimer) clearTimeout(camSaveTimer);
             camSaveTimer = setTimeout(() => saveCamera(room, cam), 150);
+            // DRW-075: any user-driven camera move marks the viewport as
+            // intentionally positioned — AI post-mutation zoomToFit will not
+            // override it anymore.
+            userHasManuallyPanned.current = true;
           }
         },
         { source: "user", scope: "session" },
@@ -269,6 +340,10 @@ export function App({ room }: { room: string }) {
       focusCleanup = undefined;
       syncHandle?.stop();
       unsubSel?.();
+      if (aiZoomTimer !== null) {
+        clearTimeout(aiZoomTimer);
+        aiZoomTimer = null;
+      }
       if (camSaveTimer) {
         clearTimeout(camSaveTimer);
         saveCamera(room, editor.getCamera());
