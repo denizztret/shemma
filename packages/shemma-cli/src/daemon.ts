@@ -16,16 +16,34 @@ const DEFAULT_LOG_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
 import { type Profile, ALL_PROFILES, logFile, pidFile, portFor } from "./profile";
 import { error as uiError, getOutput, success as uiSuccess } from "./ui";
 
+// Module-level guard: nudge is informational — print at most once per process,
+// not once per ensureDaemon() call. Tests reset via __resetNudgeForTesting.
+let mcpNudgePrinted = false;
+
 function maybePrintMcpNudge(verbose: boolean): void {
+  if (mcpNudgePrinted) return;
   if (!verbose) return;
   if (process.env.SHEMMA_NO_MCP_NUDGE === "1") return;
   const ui = getOutput();
   if (ui.mode === "json") return;
-  // Full nudge text + once-per-process guard implemented in Task 7.
-  // Temporary minimal stub: print informational tip without detection logic.
   console.error(
-    "tip: see docs/mcp.md to register Shemma as MCP server in your agent client",
+    "tip: register Shemma as MCP server in your agent client:\n" +
+      "       Claude Code:  claude mcp add shemma --scope user -- shemma mcp start\n" +
+      "       Codex:        codex mcp add shemma -- shemma mcp start\n" +
+      "       Gemini CLI:   gemini mcp add shemma --scope user -- shemma mcp start\n" +
+      "     Full guide: docs/mcp.md  (set SHEMMA_NO_MCP_NUDGE=1 to silence)",
   );
+  mcpNudgePrinted = true;
+}
+
+/** Test-only: reset module-level guard between tests. */
+export function __resetNudgeForTesting(): void {
+  mcpNudgePrinted = false;
+}
+
+/** Test-only: expose internal function under stable name (it's not exported normally). */
+export function __maybePrintMcpNudgeForTesting(verbose: boolean): void {
+  maybePrintMcpNudge(verbose);
 }
 
 function logMaxBytes(): number {
