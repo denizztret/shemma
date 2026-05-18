@@ -1,3 +1,55 @@
+## 0.14.0 — 2026-05-18 — MCP install rewrite (Backlog.md-style)
+
+MCP install flow переделан под подход Backlog.md: shemma больше не пишет конфиги клиентов сама, install происходит через родную CLI-команду каждого клиента (`claude mcp add`, `codex mcp add`, `gemini mcp add`, `kiro-cli mcp add`) или копипастом manual JSON config. CWD проекта приходит через `SHEMMA_CWD` env var (fallback — `process.cwd()`).
+
+### Breaking
+
+- **`shemma mcp install` команда удалена.** Используй родную CLI клиента (см. `docs/mcp.md` → Setup). Существующие 0.13.x entries в `claude_desktop_config.json` остаются valid если переписаны по migration (ниже).
+- **`shemma mcp start --cwd <path>` flag удалён.** При попытке использовать — hard error с migration message: "the --cwd flag was removed in 0.14.0. Set SHEMMA_CWD env var instead." Конфиги клиентов, переехавшие с 0.13.x с unchanged `args: ["mcp","start","--cwd","/path"]`, **не запустятся** до migration.
+- **`shemma update` output больше не содержит поле `mcpRefreshed`** (JSON) и строку `MCP config refreshed for: ...` (text). `shemma update` не редактирует чужие конфиги клиентов.
+- **`detectInstalledMcpConfigs` и `refreshMcpConfigs` экспорты из `@shemma/cli` удалены** (internal symbols, теоретическая breaking surface для downstream consumers).
+
+### Added
+
+- **`SHEMMA_CWD` env var** — определяет project working directory для MCP-сервера. Резолвится `process.env.SHEMMA_CWD.trim() || process.cwd()`. `startStdio` вызывает `process.chdir()` для resolved path, гарантируя что subprocess spawns (`backlog`, `shemma open`) получают правильный cwd.
+- **Graceful chdir fallback** — если `SHEMMA_CWD` указывает на несуществующий path, MCP-сервер выводит warning в stderr и продолжает с inherited cwd (room-resolver step "Backlog" просто вернёт пустой список).
+- **Module-level `mcpNudgePrinted` guard** в `maybePrintMcpNudge` — теперь print строго один раз за процесс независимо от количества `ensureDaemon` вызовов.
+- **`docs/mcp.md` — полностью переписан** под новый flow; включает Team install параграф.
+
+### Changed
+
+- **MCP nudge text** обновлён: вместо `shemma mcp install --client claude` показывает три client-команды (Claude Code / Codex / Gemini) + ссылку на docs/mcp.md.
+- **`README.md` → `## MCP integration`** — переписан под Backlog.md-style (client guides блок + manual config + behaviour).
+
+### Migration from 0.13.x
+
+Если у тебя есть существующая MCP-установка `0.13.x`, после обновления до `0.14.0` запусти:
+
+1. Открой конфиг своего MCP-клиента:
+   - **Claude Desktop**: `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) или `~/.config/Claude/claude_desktop_config.json` (Linux).
+   - **Codex**: `~/.codex/config.toml`.
+2. Найди entry `mcpServers.shemma` (или `[mcp_servers.shemma]` для TOML).
+3. Удали `--cwd` и абсолютный путь из `args`. Должно остаться:
+   ```json
+   "args": ["mcp", "start"]
+   ```
+4. Добавь `env.SHEMMA_CWD` (только для Claude Desktop и других GUI-клиентов — CLI-клиенты этот шаг могут пропустить):
+   ```json
+   "env": { "SHEMMA_CWD": "/absolute/path/to/your/project" }
+   ```
+5. Перезапусти клиента.
+
+Альтернатива — снести entry и установить заново через нативный `mcp add` команды (для Claude Code / Codex / Gemini / Kiro). См. `docs/mcp.md` → Setup.
+
+### Notes
+
+- Phase 2.3 MCP-сервер core (tools, resources, prompts, room-resolver, auto-open) **не менялся** — это покрытый rewrite одного слоя (install + cwd resolution).
+- Внутренний `--cwd` flag в `parseMcpStartFlags` теперь специально throw'ит targeted error (не silent ignore), чтобы недо-мигрированные configs ломались явно, а не "молча работали неправильно с $HOME cwd".
+- Тестов: 611 baseline → **618 final** (net +7). Added 15: 2 parser (--cwd hard error + unknown flag) + 4 resolution (SHEMMA_CWD env) + 1 chdir happy + 1 ENOENT graceful + 5 nudge guard + 2 integration (ordering + real cwd). Removed 8: 1 replaced cwd-parse test + 2 snippet generators + 5 detect/refresh blocks.
+- Sanity verified (2026-05-18) — isolated-HOME / project-scope tests без mutation реальных user configs: **claude mcp add** (project-scope, temp dir) → `.mcp.json` корректный, без `--cwd`; **codex mcp add** (`HOME=$mktemp_d`) → `~/.codex/config.toml` создан с `[mcp_servers.shemma]`, без `--cwd`. Gemini/Kiro не verified локально (CLI не установлены).
+
+---
+
 ## 0.13.1 — 2026-05-18 — README polish for 0.13.0 release
 
 ### Fixed

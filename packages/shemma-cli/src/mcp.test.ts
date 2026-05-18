@@ -1,14 +1,5 @@
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "bun:test";
-import {
-  detectInstalledMcpConfigs,
-  generateClaudeConfigSnippet,
-  generateCodexConfigSnippet,
-  parseMcpStartFlags,
-  refreshMcpConfigs,
-} from "./mcp";
+import { afterEach, describe, expect, it } from "bun:test";
+import { __resolveProjectDirForTesting, parseMcpStartFlags } from "./mcp";
 
 describe("parseMcpStartFlags", () => {
   it("parses defaults", () => {
@@ -24,8 +15,16 @@ describe("parseMcpStartFlags", () => {
   it("parses --no-auto-ensure", () => {
     expect(parseMcpStartFlags(["--no-auto-ensure"]).noAutoEnsure).toBe(true);
   });
-  it("parses --cwd path", () => {
-    expect(parseMcpStartFlags(["--cwd", "/tmp/x"]).cwd).toBe("/tmp/x");
+  it("throws hard error on --cwd with migration message (removed in 0.14.0)", () => {
+    expect(() => parseMcpStartFlags(["--cwd", "/tmp/x"])).toThrow(
+      /--cwd flag was removed in 0\.14\.0/,
+    );
+    expect(() => parseMcpStartFlags(["--cwd", "/tmp/x"])).toThrow(
+      /Set SHEMMA_CWD env/,
+    );
+  });
+  it("silently ignores other unknown flags (minimal surface change)", () => {
+    expect(() => parseMcpStartFlags(["--unknown-future-flag", "x"])).not.toThrow();
   });
   it("parses --room id", () => {
     expect(parseMcpStartFlags(["--room", "abc"]).room).toBe("abc");
@@ -35,73 +34,30 @@ describe("parseMcpStartFlags", () => {
   });
 });
 
-describe("generateClaudeConfigSnippet", () => {
-  it("includes shemma command + cwd", () => {
-    const s = generateClaudeConfigSnippet({ projectDir: "/p" });
-    const j = JSON.parse(s);
-    expect(j.mcpServers.shemma.command).toBe("shemma");
-    expect(j.mcpServers.shemma.args).toEqual(["mcp", "start", "--cwd", "/p"]);
-  });
-});
-
-describe("generateCodexConfigSnippet", () => {
-  it("emits TOML with shemma binary", () => {
-    const t = generateCodexConfigSnippet({ projectDir: "/p" });
-    expect(t).toContain("[mcp_servers.shemma]");
-    expect(t).toContain('command = "shemma"');
-    expect(t).toContain('"--cwd", "/p"');
-  });
-});
-
-describe("detectInstalledMcpConfigs", () => {
-  it("returns empty when neither config exists", () => {
-    const home = mkdtempSync(join(tmpdir(), "shemma-mcp-detect-"));
-    const r = detectInstalledMcpConfigs({ homeDir: home });
-    expect(r).toEqual([]);
+describe("resolveProjectDir (SHEMMA_CWD env resolution)", () => {
+  // Pure helper test — no module mocks. cmdMcpStart just forwards the return
+  // value of resolveProjectDir() to startStdio's projectDir argument.
+  afterEach(() => {
+    delete process.env.SHEMMA_CWD;
   });
 
-  it("detects claude config with shemma entry", () => {
-    const home = mkdtempSync(join(tmpdir(), "shemma-mcp-detect-"));
-    const dir = join(home, "Library/Application Support/Claude");
-    mkdirSync(dir, { recursive: true });
-    const cfg = { mcpServers: { shemma: { command: "shemma", args: ["mcp", "start"] } } };
-    writeFileSync(join(dir, "claude_desktop_config.json"), JSON.stringify(cfg));
-    const r = detectInstalledMcpConfigs({ homeDir: home, platform: "darwin" });
-    expect(r).toHaveLength(1);
-    expect(r[0]?.client).toBe("claude");
-    expect(r[0]?.hasShemma).toBe(true);
+  it("uses SHEMMA_CWD env when set", () => {
+    process.env.SHEMMA_CWD = "/tmp/from-env";
+    expect(__resolveProjectDirForTesting()).toBe("/tmp/from-env");
   });
 
-  it("detects codex config without shemma entry", () => {
-    const home = mkdtempSync(join(tmpdir(), "shemma-mcp-detect-"));
-    mkdirSync(join(home, ".codex"), { recursive: true });
-    writeFileSync(join(home, ".codex", "config.toml"), `[mcp_servers.other]\ncommand = "x"\n`);
-    const r = detectInstalledMcpConfigs({ homeDir: home, platform: "darwin" });
-    const codex = r.find((e) => e.client === "codex");
-    expect(codex).toBeDefined();
-    expect(codex?.hasShemma).toBe(false);
-  });
-});
-
-describe("refreshMcpConfigs", () => {
-  it("rewrites only configs with existing shemma entry", () => {
-    const home = mkdtempSync(join(tmpdir(), "shemma-mcp-refresh-"));
-    const dir = join(home, "Library/Application Support/Claude");
-    mkdirSync(dir, { recursive: true });
-    const stale = { mcpServers: { shemma: { command: "/old/shemma", args: ["mcp", "start"] } } };
-    writeFileSync(join(dir, "claude_desktop_config.json"), JSON.stringify(stale));
-    const r = refreshMcpConfigs({ homeDir: home, projectDir: "/p", platform: "darwin" });
-    expect(r.refreshed).toEqual(["claude"]);
-    const fresh = JSON.parse(readFileSync(join(dir, "claude_desktop_config.json"), "utf8"));
-    expect(fresh.mcpServers.shemma.command).toBe("shemma");
-    expect(fresh.mcpServers.shemma.args).toEqual(["mcp", "start", "--cwd", "/p"]);
+  it("falls back to process.cwd() when SHEMMA_CWD unset", () => {
+    delete process.env.SHEMMA_CWD;
+    expect(__resolveProjectDirForTesting()).toBe(process.cwd());
   });
 
-  it("skips configs without shemma entry", () => {
-    const home = mkdtempSync(join(tmpdir(), "shemma-mcp-refresh-"));
-    mkdirSync(join(home, ".codex"), { recursive: true });
-    writeFileSync(join(home, ".codex", "config.toml"), `[mcp_servers.other]\ncommand = "x"\n`);
-    const r = refreshMcpConfigs({ homeDir: home, projectDir: "/p", platform: "darwin" });
-    expect(r.refreshed).toEqual([]);
+  it("trims SHEMMA_CWD whitespace", () => {
+    process.env.SHEMMA_CWD = "  /tmp/trimmed  ";
+    expect(__resolveProjectDirForTesting()).toBe("/tmp/trimmed");
+  });
+
+  it("treats empty SHEMMA_CWD as unset", () => {
+    process.env.SHEMMA_CWD = "";
+    expect(__resolveProjectDirForTesting()).toBe(process.cwd());
   });
 });

@@ -1,6 +1,6 @@
 # shemma
 
-> **Применимо к:** shemma `0.13.0` (2026-05-18).
+> **Применимо к:** shemma `0.14.0` (2026-05-18).
 > Документ описывает поведение текущей версии. Поведение может измениться — сверяйтесь с [CHANGELOG.md](CHANGELOG.md) для следующих версий.
 
 AI-driven canvas board для Claude Code сессий. tldraw 5.x frontend + Bun backend + `shemma` CLI + skill cheat-sheet + persistent watcher pattern.
@@ -124,36 +124,43 @@ Exit codes: `0` ok, `1` usage/error, `2` not-found, `3` daemon-not-healthy.
 
 ## MCP integration
 
-Shemma ships an MCP (Model Context Protocol) adapter so agentic clients (Claude Desktop, Codex, etc.) can call Shemma through typed tools and discoverable resources without shell quoting.
+Shemma ships an MCP (Model Context Protocol) server so agentic clients (Claude Code, Claude Desktop, Codex, Gemini CLI, Kiro) can call Shemma through typed tools and discoverable resources without shell quoting.
 
-> Полный гайд для пользователя — [`docs/mcp.md`](docs/mcp.md) (установка, обновление, жизненный цикл, auto-open, room resolution, trust model).
+The easiest way to register Shemma is to call your client's own MCP-add command. Full user guide — [`docs/mcp.md`](docs/mcp.md).
 
-### Install
+### Client guides
 
-```bash
-shemma mcp install --client claude   # writes Claude Desktop config
-shemma mcp install --client codex    # writes ~/.codex/config.toml
-shemma mcp install --client claude --print   # prints config snippet without writing
+```text
+Claude Code:  claude mcp add shemma --scope user -- shemma mcp start
+Codex:        codex mcp add shemma -- shemma mcp start
+Gemini CLI:   gemini mcp add shemma --scope user -- shemma mcp start
+Kiro:         kiro-cli mcp add --scope global --name shemma \
+                               --command shemma --args mcp,start
 ```
 
-If the target config already exists, the command refuses to overwrite. Pass `--force` to overwrite (a `.bak.<timestamp>` copy is saved first).
-
 ### Manual config
+
+For clients without a native MCP-add CLI (e.g. Claude Desktop) — paste this into the client's MCP servers config:
 
 ```json
 {
   "mcpServers": {
     "shemma": {
       "command": "shemma",
-      "args": ["mcp", "start", "--cwd", "/path/to/project"]
+      "args": ["mcp", "start"],
+      "env": {
+        "SHEMMA_CWD": "/absolute/path/to/your/project"
+      }
     }
   }
 }
 ```
 
+`SHEMMA_CWD` is only required when the client spawns MCP servers from a neutral working directory (Claude Desktop). CLI clients run from your project root, so `SHEMMA_CWD` may be omitted. Restart the client after editing config.
+
 ### What the MCP server provides
 
-- **Tools.** `shemma_define / connect / group / note / layout / delete / apply` for writes; `shemma_context / rooms_list / active_rooms / prompts_list / health / version` for reads; `shemma_open` for explicit browser-open; `shemma_prompt_resolve / dismiss` for CMD+K canvas prompts; `shemma_get_instructions` to read workflow markdown.
+- **Tools.** `shemma_define / connect / group / note / layout / delete / apply` for writes; `shemma_context / rooms_list / active_rooms / prompts_list / health / version` for reads; `shemma_open` for explicit browser-open; `shemma_prompt_resolve / dismiss` for CMD+K canvas prompts; `shemma_get_instructions` to read workflow markdown; `shemma_ai_activity_start / stop / status` for AI-activity badge.
 - **Resources.** `shemma://workflow/{overview,read-context,draw-architecture,resolve-prompts,trust-model}` for agent guidance, `shemma://status`, `shemma://rooms`, `shemma://active-rooms`, `shemma://room/{room}/context|state|prompts/...` templates.
 - **Prompts.** `shemma_draw_architecture`, `shemma_review_canvas`, `shemma_explain_canvas`, `shemma_resolve_canvas_prompts`.
 
@@ -184,7 +191,7 @@ CLI remains the stable interface; MCP is an alternative for clients that support
 ## Tests
 
 ```bash
-bun run test                              # 611 unit/integration: 58 domain + 284 backend + 7 client + 152 cli + 110 mcp
+bun run test                              # 618 unit/integration: 58 domain + 284 backend + 7 client + 155 cli + 114 mcp
 cd apps/frontend && bunx playwright test  # golden-path e2e
 bun run lint                              # biome
 ```
@@ -192,9 +199,9 @@ bun run lint                              # biome
 ## Release build
 
 ```bash
-./scripts/build-release.sh 0.13.0 stable          # → release/shemma-{darwin-arm64,darwin-x64,linux-x64}
-./scripts/generate-manifest.sh 0.13.0 stable      # → release/release-manifest.json
-./scripts/publish-release.sh 0.13.0 stable        # build + manifest + gh release create (опционально)
+./scripts/build-release.sh 0.14.0 stable          # → release/shemma-{darwin-arm64,darwin-x64,linux-x64}
+./scripts/generate-manifest.sh 0.14.0 stable      # → release/release-manifest.json
+./scripts/publish-release.sh 0.14.0 stable        # build + manifest + gh release create (опционально)
 ```
 
 Бинарь — single-file (frontend assets вшиты через `import ... with { type: "file" }`).
