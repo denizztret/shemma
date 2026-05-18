@@ -1,23 +1,24 @@
 # shemma
 
-> **Применимо к:** shemma `0.0.1` (2026-05-15).
+> **Применимо к:** shemma `0.13.0` (2026-05-18).
 > Документ описывает поведение текущей версии. Поведение может измениться — сверяйтесь с [CHANGELOG.md](CHANGELOG.md) для следующих версий.
 
 AI-driven canvas board для Claude Code сессий. tldraw 5.x frontend + Bun backend + `shemma` CLI + skill cheat-sheet + persistent watcher pattern.
 
 Один single-binary `shemma`, в который вшиты backend, embedded UI и CLI dispatcher (`bun build --compile` + generated embedded-assets manifest).
 
-## Features (0.0.1)
+## Features
 
 - **Multi-room canvas** — `~/.claude/projects/<slug>/canvas/<room>.json`, изоляция по сессии Claude Code.
-- **Real-time collaboration** через WebSocket (`patch`, `prompt-created`, `prompt-resolved`, `prompt-removed`, `ai-activity`).
-- **AI workflow** через Bash CLI: skill `/draw` инжектит canvas state + pending prompts в каждый AI turn.
+- **Real-time collaboration** через WebSocket (`patch`, `prompt-created`, `prompt-resolved`, `prompt-removed`, `ai-activity`, `board-focus`).
+- **MCP integration** (0.13.0+) — typed tools, discoverable resources, auto-open browser, room-resolution chain для агентских клиентов (Claude Desktop, Codex). См. [MCP integration](#mcp-integration).
+- **AI workflow через Bash CLI** — skill `/draw` инжектит canvas state + pending prompts в каждый AI turn (legacy path; MCP — preferred).
 - **AI activity badge** — оранжевый чип сверху по центру показывает, что агент что-то делает (actor + task), пока работает.
 - **Per-shape prompts** — выдели shape, нажми `⌘K`/`Ctrl+K`, введи команду; она попадает в drawer слева. Удаление: `×` per-card или `🗑 N` (purge non-pending) с confirm.
 - **Persistent watcher pattern** — Sonnet subagent в фоне обрабатывает pending prompts: применяет patch + резолвит. Latency 3–10с. См. [Watcher workflow](#ai-workflow-watcher-vs-manual).
 - **Style roundtrip** — изменение цвета/заливки в любую сторону (AI ↔ backend ↔ tldraw). Ограничение: tldraw 5.x использует один `color` для stroke и fill (см. known issues).
 - **Auto-center camera** на shapes, добавленных AI; персистентность позиции/zoom per room в localStorage.
-- **Mermaid импорт** в браузере: `await window.shemmaImportMermaid('graph LR\n  app --> db')`.
+- **Mermaid импорт** — `⌘M`/`Ctrl+M` или кнопка в toolbar открывает модал для вставки mermaid-кода. Программный доступ из DevTools: `await window.shemmaImportMermaid('graph LR\n  app --> db')`.
 
 ## Quick start (manual mode)
 
@@ -39,14 +40,15 @@ Storage precedence: `--storage <path>` > `SHEMMA_STORAGE_DIR` env > auto-cwd `.s
 - Браузер можно открыть в любой момент: `http://localhost:8787/?room=<CLAUDE_SESSION_ID>`.
 - На canvas: выдели объект(ы), нажми `⌘K`, введи промпт — он попадёт в drawer слева с привязкой к ID. AI увидит pending prompts через `shemma prompts list` и ответит через `shemma prompts resolve`.
 
-## AI workflow: watcher vs manual
+## AI workflow: MCP vs CLI vs watcher
 
-В версии `0.0.1` есть два пути обработки prompts:
+Три пути обработки prompts (в порядке предпочтения):
 
-1. **Manual / `/draw` invocation.** Pending prompts видны AI только при следующем явном вызове skill'а или `shemma prompts list`. Подходит для редких команд.
-2. **Persistent watcher** — Sonnet subagent в фоне опрашивает pending каждые 1–4с и применяет. Запускается из родительской Claude Code сессии через Agent tool с `subagent_type=general-purpose, model=sonnet, run_in_background=true`. Описание паттерна — в [`docs/handoff/watcher-pattern.md`](docs/handoff/watcher-pattern.md) (TODO в этой версии).
+1. **MCP** (0.13.0+) — агентский клиент (Claude Desktop, Codex, etc.) подключается к stdio MCP-серверу `shemma mcp start`. Использует typed tools (`shemma_define`, `shemma_apply`, `shemma_prompts_list`, etc.) и discoverable resources вместо bash quoting. См. [MCP integration](#mcp-integration).
+2. **Manual / `/draw` invocation** — pending prompts видны AI только при следующем явном вызове skill'а или `shemma prompts list`. Подходит для редких команд.
+3. **Persistent watcher** — Sonnet subagent в фоне опрашивает pending каждые 1–4с и применяет. Запускается из родительской Claude Code сессии через Agent tool с `subagent_type=general-purpose, model=sonnet, run_in_background=true`.
 
-> ⚠️ Stand-alone `shemma watch` (без Claude Code, через Anthropic API напрямую) — **не реализован** в `0.0.1`, см. backlog.
+> ⚠️ Stand-alone `shemma watch` (без Claude Code, через Anthropic API напрямую) — **не реализован**. Background-agent loop планируется в Phase 2.4 (см. spec §18).
 
 ## CLI reference
 
@@ -116,7 +118,7 @@ shemma update --channel stable|nightly|dev
 shemma update                      # download + sha256 + atomic swap + restart
 ```
 
-Mermaid импорт — **только через браузер** (per ADR-0001): открой canvas и в DevTools console выполни `await window.shemmaImportMermaid('graph LR\n  app --> db')`.
+Mermaid импорт — **в браузере** (per ADR-0001): `⌘M`/`Ctrl+M` или кнопка в toolbar открывает модал; программный путь — DevTools console `await window.shemmaImportMermaid('graph LR\n  app --> db')`.
 
 Exit codes: `0` ok, `1` usage/error, `2` not-found, `3` daemon-not-healthy.
 
@@ -180,7 +182,7 @@ CLI remains the stable interface; MCP is an alternative for clients that support
 ## Tests
 
 ```bash
-bun run test                              # 64 unit/integration: 50 backend + 4 client + 7 cli + 3 autosave/persistence
+bun run test                              # 611 unit/integration: 58 domain + 284 backend + 7 client + 152 cli + 110 mcp
 cd apps/frontend && bunx playwright test  # golden-path e2e
 bun run lint                              # biome
 ```
@@ -188,9 +190,9 @@ bun run lint                              # biome
 ## Release build
 
 ```bash
-./scripts/build-release.sh 0.0.1 stable          # → release/shemma-{darwin-arm64,darwin-x64,linux-x64}
-./scripts/generate-manifest.sh 0.0.1 stable      # → release/release-manifest.json
-./scripts/publish-release.sh 0.0.1 stable        # build + manifest + gh release create (опционально)
+./scripts/build-release.sh 0.13.0 stable          # → release/shemma-{darwin-arm64,darwin-x64,linux-x64}
+./scripts/generate-manifest.sh 0.13.0 stable      # → release/release-manifest.json
+./scripts/publish-release.sh 0.13.0 stable        # build + manifest + gh release create (опционально)
 ```
 
 Бинарь — single-file (frontend assets вшиты через `import ... with { type: "file" }`).

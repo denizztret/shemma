@@ -1,3 +1,19 @@
+## 0.13.1 — 2026-05-18 — README polish for 0.13.0 release
+
+### Fixed
+
+- **README.md** перенесён с Phase 1 формулировок: `Применимо к: 0.0.1 (2026-05-15)` → `0.13.0 (2026-05-18)`, removed `Features (0.0.1)` section title, добавлен MCP integration entry в Features list, MCP-aware AI workflow section (MCP > manual > watcher; Phase 2.4 указан для stand-alone watch).
+- **Mermaid импорт** в README — упоминаются `⌘M`/`Ctrl+M` + toolbar button (фактическое поведение с DRW-053), оставлен программный путь через `window.shemmaImportMermaid` для DevTools.
+- **Test count в README** — `64 unit/integration` → `611 unit/integration` (58 domain + 284 backend + 7 client + 152 cli + 110 mcp).
+- **Release build examples** — версия `0.0.1` → `0.13.0` в строках `./scripts/build-release.sh`.
+- **`WebSocket` message types** — добавлен `board-focus` в list message types.
+
+### Notes
+
+Этот патч-релиз содержит только docs-правки + version bump (`0.13.0` → `0.13.1` в `package.json` × 3 + `version.ts`). Никаких runtime изменений за пределами CLI/MCP `version` команды (которая теперь reports `0.13.1`).
+
+---
+
 ## 0.13.0 — 2026-05-18 — Phase 2.3 MCP adapter
 
 Shemma теперь работает как MCP-сервер для агентских клиентов (Claude Desktop, Codex, etc.) — typed tools, discoverable resources, auto-open browser, room-resolution chain включая Backlog "In Progress" task slug. Background-agent loop (UC-D) отложен на Phase 2.4.
