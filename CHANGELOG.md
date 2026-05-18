@@ -1,3 +1,26 @@
+## 0.14.1 — 2026-05-19 — Arrow rendering fix (tldraw 5.x schema)
+
+Bug-fix релиз для DRW-076 — стрелки domain `connection` не отрисовывались в tldraw UI, несмотря на корректный domain state. Root cause — три schema mismatch'а с tldraw 5.x в `makeArrowShape` / `makeArrowBindings` + `loadSnapshot` молча проваливался с `ValidationError`, который подавлялся в `mergeRemoteChanges`.
+
+### Fixed
+
+- **`apps/backend/src/domain/compile.ts:makeArrowShape`** — добавлен `elbowMidPoint: 0.5` (обязательное поле `TLArrowShapeProps` начиная с tldraw 5.0.0). Удалена строка `text: ""` (legacy v4-поле, в v5.x заменено на `richText`, которое уже выставляется).
+- **`apps/backend/src/domain/compile.ts:makeArrowBindings`** — добавлен `snap: "none"` (обязательное поле `TLArrowBindingProps`, enum `ElbowArrowSnap = 'center'|'edge-point'|'edge'|'none'`, default из tldraw `arrowBindingMigrations.AddSnap`).
+- **`apps/frontend/src/canvas/schema-placeholder.ts:backfillStoreRecords`** — backfill всех трёх полей для legacy rooms: инжект `elbowMidPoint` если отсутствует, strip `text`, инжект `snap='none'` для arrow bindings. Идемпотентно, не перезаписывает явно выставленные значения.
+
+### Tests
+
+- 618 baseline → **621 backend** (+3 в `domain-compile.test.ts` — assertions на новые поля и отсутствие `text`).
+- 58 baseline → **64 frontend** (+6 в `schema-placeholder.test.ts` — backfill каждого поля, идемпотентность, passthrough).
+- Manual verify в браузере: чистая комната (2 ноды + 1 connect) и комната с legacy-данными (7 нод + 10 connections с 20 bindings без `elbowMidPoint`/`snap` и с `text:""`) — обе рендерятся со стрелками, 0 console errors.
+
+### Notes
+
+- Этот фикс не regression 0.14.0 — баг pre-existing с момента upgrade на tldraw 5.0.0, просто не был пойман в QA. Phase 2.3 MCP-сервер сделал domain ops доступным AI-инструментам, что увеличило поверхность реального тестирования и поймало латентную несовместимость.
+- Camera-fit при первом define (DRW-075) и label overflow в длинных метках (DRW-077) — **отдельные тикеты, не входят в 0.14.1**.
+
+---
+
 ## 0.14.0 — 2026-05-18 — MCP install rewrite (Backlog.md-style)
 
 MCP install flow переделан под подход Backlog.md: shemma больше не пишет конфиги клиентов сама, install происходит через родную CLI-команду каждого клиента (`claude mcp add`, `codex mcp add`, `gemini mcp add`, `kiro-cli mcp add`) или копипастом manual JSON config. CWD проекта приходит через `SHEMMA_CWD` env var (fallback — `process.cwd()`).
