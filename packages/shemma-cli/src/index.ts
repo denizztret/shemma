@@ -458,7 +458,7 @@ Diagnostics:
   doctor   [--all | --profile p] [--json]               # read-only health checks
 
 MCP integration:
-  mcp start [--profile <p>] [--cwd <dir>] [--room <id>] [--base-url <url>]
+  mcp start [--profile <p>] [--room <id>] [--base-url <url>]
             [--auto-open never|once|always|confirm] [--no-auto-ensure]
                                               # start stdio MCP server (for agentic clients)
 
