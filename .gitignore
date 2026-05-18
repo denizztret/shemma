@@ -20,3 +20,6 @@ backlog/
 
 # Shemma auth state (local user config)
 .config/shemma/
+
+# obsidian
+docs/.obsidian/

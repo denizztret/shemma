@@ -4,7 +4,9 @@
       "WebSearch",
       "WebFetch(domain:tldraw.dev)",
       "Skill(superpowers:brainstorming)",
-      "Bash(backlog --version)"
+      "Bash(backlog --version)",
+      "Bash(curl -s http://127.0.0.1:8787/api/health)",
+      "Bash(curl -s http://127.0.0.1:8787/api/rooms)"
     ]
   }
 }
