@@ -7,7 +7,7 @@ import { authHeaders, readToken } from "./auth";
 import { ensure, stop } from "./daemon";
 import { parseProfile } from "./profile";
 import { fail } from "./util";
-import { getOutput, success as uiSuccess } from "./ui";
+import { error as uiError, getOutput, success as uiSuccess } from "./ui";
 
 export const VALID_CHANNELS = ["stable", "nightly", "dev"] as const;
 type Channel = (typeof VALID_CHANNELS)[number];
@@ -272,10 +272,16 @@ async function downloadAndVerify(
 export async function cmdUpdate(argv: string[]) {
   // Refuse to overwrite the bun interpreter when run as `bun src/index.ts` in dev.
   // Compiled binaries have execPath ending with the artifact name (shemma / shemma-*).
-  if (!/shemma(-[^/]+)?$/.test(process.execPath))
-    fail(
-      "update is only available for compiled release binaries; use bun in dev",
-    );
+  if (!/shemma(-[^/]+)?$/.test(process.execPath)) {
+    uiError("self-update works only on compiled release binary", {
+      code: "dev-mode-no-update",
+      hint: [
+        "in dev: `git pull && ./scripts/build-release.sh <ver>` to rebuild",
+        "or install release binary: `./scripts/install.sh --version <ver>`",
+      ],
+    });
+    process.exit(1);
+  }
 
   const channel = resolveChannel();
 
