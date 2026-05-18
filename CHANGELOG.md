@@ -45,7 +45,8 @@ MCP install flow переделан под подход Backlog.md: shemma бо�
 
 - Phase 2.3 MCP-сервер core (tools, resources, prompts, room-resolver, auto-open) **не менялся** — это покрытый rewrite одного слоя (install + cwd resolution).
 - Внутренний `--cwd` flag в `parseMcpStartFlags` теперь специально throw'ит targeted error (не silent ignore), чтобы недо-мигрированные configs ломались явно, а не "молча работали неправильно с $HOME cwd".
-- Тестов: actual delta будет зафиксирован в финальном release-commit'е Task 13.
+- Тестов: 611 baseline → **618 final** (net +7). Added 15: 2 parser (--cwd hard error + unknown flag) + 4 resolution (SHEMMA_CWD env) + 1 chdir happy + 1 ENOENT graceful + 5 nudge guard + 2 integration (ordering + real cwd). Removed 8: 1 replaced cwd-parse test + 2 snippet generators + 5 detect/refresh blocks.
+- Sanity verified (2026-05-18) — isolated-HOME / project-scope tests без mutation реальных user configs: **claude mcp add** (project-scope, temp dir) → `.mcp.json` корректный, без `--cwd`; **codex mcp add** (`HOME=$mktemp_d`) → `~/.codex/config.toml` создан с `[mcp_servers.shemma]`, без `--cwd`. Gemini/Kiro не verified локально (CLI не установлены).
 
 ---
 
