@@ -148,10 +148,13 @@ export async function startServer(opts: AppOpts = {}) {
           return;
         }
         if (msg.kind === "board-focus") {
+          // Always use `room` from ws.data (WS connection scope), NOT msg.room.
+          // A client connected to room "A" could send {room:"B"} to pollute
+          // tracker state for room "B" — msg.room is untrusted client input.
           if (msg.focused) {
-            bus.getActiveRooms().onFocus(msg.room, clientId);
+            bus.getActiveRooms().onFocus(room, clientId);
           } else {
-            bus.getActiveRooms().onBlur(msg.room, clientId);
+            bus.getActiveRooms().onBlur(room, clientId);
           }
           return;
         }

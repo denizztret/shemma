@@ -1,21 +1,28 @@
 import { describe, expect, it } from "bun:test";
-import { ActiveRoomsTracker } from "./active-rooms";
+import { WsHub } from "../ws";
 
-describe("WsHub board-focus integration", () => {
-  it("dispatches board-focus to tracker", () => {
-    const tracker = new ActiveRoomsTracker();
-    function handle(
-      msg: { kind: string; room?: string; focused?: boolean },
-      clientId: string,
-    ) {
-      if (msg.kind === "board-focus" && typeof msg.room === "string") {
-        if (msg.focused) tracker.onFocus(msg.room, clientId);
-        else tracker.onBlur(msg.room, clientId);
-      }
-    }
-    handle({ kind: "board-focus", room: "r-1", focused: true }, "c-1");
-    expect(tracker.list()[0]).toMatchObject({ room: "r-1", clientCount: 1 });
-    handle({ kind: "board-focus", room: "r-1", focused: false }, "c-1");
-    expect(tracker.list()).toEqual([]);
+describe("WsHub.getActiveRooms()", () => {
+  it("returns the same tracker instance across calls", () => {
+    const bus = new WsHub();
+    const t1 = bus.getActiveRooms();
+    const t2 = bus.getActiveRooms();
+    expect(t1).toBe(t2);
+  });
+
+  it("tracker state is observable via getActiveRooms()", () => {
+    const bus = new WsHub();
+    bus.getActiveRooms().onFocus("room-a", "client-1");
+    expect(bus.getActiveRooms().list()).toHaveLength(1);
+    expect(bus.getActiveRooms().list()[0]).toMatchObject({
+      room: "room-a",
+      clientCount: 1,
+    });
+  });
+
+  it("tracker state reflects blur via getActiveRooms()", () => {
+    const bus = new WsHub();
+    bus.getActiveRooms().onFocus("room-a", "client-1");
+    bus.getActiveRooms().onBlur("room-a", "client-1");
+    expect(bus.getActiveRooms().list()).toEqual([]);
   });
 });

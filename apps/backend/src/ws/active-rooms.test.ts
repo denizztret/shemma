@@ -40,10 +40,10 @@ describe("ActiveRoomsTracker", () => {
     expect(t.list()).toEqual([]);
   });
 
-  it("removes entry after idle timeout when client disconnects without blur", () => {
+  it("removes entry immediately on disconnect", () => {
     t.onFocus("room-a", "client-1");
     t.onDisconnect("client-1");
-    expect(t.list()).toEqual([]); // disconnect counts as immediate blur
+    expect(t.list()).toEqual([]);
   });
 
   it("sorts list by lastFocusedAt desc", () => {

@@ -2,7 +2,6 @@ import type { StoreChangeBatch } from "./store-types";
 import type { AiActivity, Prompt, StoreChangeBus, WsMessage } from "./types";
 import { ActiveRoomsTracker } from "./ws/active-rooms";
 
-export type { ActiveRoomsTracker };
 export type Sock = { send: (data: string) => void; readyState: number };
 const OPEN = 1;
 

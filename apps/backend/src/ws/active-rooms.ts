@@ -17,6 +17,16 @@ export type ActiveRoomsOpts = {
 export class ActiveRoomsTracker {
   private rooms = new Map<string, Internal>();
   private clientToRoom = new Map<string, string>(); // client → currently-focused room
+  /**
+   * v1: removal is immediate on the last client's disconnect/blur.
+   * Spec §17.2 specifies a 30s idle grace window for stale entries
+   * (browser crash / network drop with no WS close event). §15 OQ11
+   * classifies the immediate-removal gap as acceptable for v1.
+   * `idleTimeoutMs` is reserved for the future implementation.
+   *
+   * TODO: implement a real idle-timeout sweep using `idleTimeoutMs` so that
+   * entries for crashed/disconnected clients age out gracefully.
+   */
   private readonly idleTimeoutMs: number;
   private readonly nowFn: () => number;
 

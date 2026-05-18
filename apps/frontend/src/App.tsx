@@ -128,6 +128,7 @@ export function App({ room }: { room: string }) {
     if (!editor) return;
     let active = true;
     let syncHandle: ReturnType<typeof startStoreSync> | undefined;
+    let focusCleanup: (() => void) | undefined;
     let unsubSel: (() => void) | undefined;
     let camSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -214,9 +215,9 @@ export function App({ room }: { room: string }) {
       window.addEventListener("focus", onFocus);
       window.addEventListener("blur", onBlur);
       window.addEventListener("beforeunload", onBlur);
-      // Store removers so cleanup can detach them.
-      // biome-ignore lint/suspicious/noExplicitAny: dynamic window property
-      (window as any).__shemmaFocusCleanup = () => {
+      // Capture removers in a closure variable so the useEffect cleanup can
+      // detach them without needing a global window property.
+      focusCleanup = () => {
         window.removeEventListener("focus", onFocus);
         window.removeEventListener("blur", onBlur);
         window.removeEventListener("beforeunload", onBlur);
@@ -264,11 +265,8 @@ export function App({ room }: { room: string }) {
 
     return () => {
       active = false;
-      // biome-ignore lint/suspicious/noExplicitAny: cleaning up focus listeners
-      (window as any).__shemmaFocusCleanup?.();
-      // biome-ignore lint/suspicious/noExplicitAny: cleaning up window property
-      // biome-ignore lint/performance/noDelete: intentional property removal
-      delete (window as any).__shemmaFocusCleanup;
+      focusCleanup?.();
+      focusCleanup = undefined;
       syncHandle?.stop();
       unsubSel?.();
       if (camSaveTimer) {
