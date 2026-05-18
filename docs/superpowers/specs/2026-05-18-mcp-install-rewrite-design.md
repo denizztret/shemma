@@ -74,8 +74,8 @@ Breaking changes:
 │                                                                    │
 │  Option A — через CLI клиента:                                     │
 │    $ claude mcp add shemma --scope user -- shemma mcp start        │
-│    $ codex mcp add shemma shemma mcp start                         │
-│    $ gemini mcp add shemma -s user shemma mcp start                │
+│    $ codex mcp add shemma -- shemma mcp start                      │
+│    $ gemini mcp add shemma --scope user -- shemma mcp start        │
 │    $ kiro-cli mcp add --scope global --name shemma                 │
 │                       --command shemma --args mcp,start            │
 │                                                                    │
