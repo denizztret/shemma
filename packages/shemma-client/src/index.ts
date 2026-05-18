@@ -219,6 +219,13 @@ export class CanvasClient {
     return r.json();
   }
 
+  async getActiveRooms(): Promise<{
+    rooms: Array<{ room: string; clientCount: number; lastFocusedAt: number }>;
+  }> {
+    const r = await fetch(`${this.base}/api/active-rooms`);
+    return r.json();
+  }
+
   async archiveRoom(id: string) {
     const r = await fetch(
       `${this.base}/api/rooms/${encodeURIComponent(id)}/archive`,
