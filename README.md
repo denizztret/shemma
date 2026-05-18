@@ -1,6 +1,6 @@
 # shemma
 
-> **Применимо к:** shemma `0.13.0` (2026-05-18).
+> **Применимо к:** shemma `0.14.0` (2026-05-18).
 > Документ описывает поведение текущей версии. Поведение может измениться — сверяйтесь с [CHANGELOG.md](CHANGELOG.md) для следующих версий.
 
 AI-driven canvas board для Claude Code сессий. tldraw 5.x frontend + Bun backend + `shemma` CLI + skill cheat-sheet + persistent watcher pattern.
@@ -124,32 +124,39 @@ Exit codes: `0` ok, `1` usage/error, `2` not-found, `3` daemon-not-healthy.
 
 ## MCP integration
 
-Shemma ships an MCP (Model Context Protocol) adapter so agentic clients (Claude Desktop, Codex, etc.) can call Shemma through typed tools and discoverable resources without shell quoting.
+Shemma ships an MCP (Model Context Protocol) server so agentic clients (Claude Code, Claude Desktop, Codex, Gemini CLI, Kiro) can call Shemma through typed tools and discoverable resources without shell quoting.
 
-> Полный гайд для пользователя — [`docs/mcp.md`](docs/mcp.md) (установка, обновление, жизненный цикл, auto-open, room resolution, trust model).
+The easiest way to register Shemma is to call your client's own MCP-add command. Full user guide — [`docs/mcp.md`](docs/mcp.md).
 
-### Install
+### Client guides
 
-```bash
-shemma mcp install --client claude   # writes Claude Desktop config
-shemma mcp install --client codex    # writes ~/.codex/config.toml
-shemma mcp install --client claude --print   # prints config snippet without writing
+```text
+Claude Code:  claude mcp add shemma --scope user -- shemma mcp start
+Codex:        codex mcp add shemma -- shemma mcp start
+Gemini CLI:   gemini mcp add shemma --scope user -- shemma mcp start
+Kiro:         kiro-cli mcp add --scope global --name shemma \
+                               --command shemma --args mcp,start
 ```
 
-If the target config already exists, the command refuses to overwrite. Pass `--force` to overwrite (a `.bak.<timestamp>` copy is saved first).
-
 ### Manual config
+
+For clients without a native MCP-add CLI (e.g. Claude Desktop) — paste this into the client's MCP servers config:
 
 ```json
 {
   "mcpServers": {
     "shemma": {
       "command": "shemma",
-      "args": ["mcp", "start", "--cwd", "/path/to/project"]
+      "args": ["mcp", "start"],
+      "env": {
+        "SHEMMA_CWD": "/absolute/path/to/your/project"
+      }
     }
   }
 }
 ```
+
+`SHEMMA_CWD` is only required when the client spawns MCP servers from a neutral working directory (Claude Desktop). CLI clients run from your project root, so `SHEMMA_CWD` may be omitted. Restart the client after editing config.
 
 ### What the MCP server provides
 
