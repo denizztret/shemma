@@ -376,6 +376,13 @@ export async function cmdUpdate(argv: string[]) {
 
   // ensure() self-spawns from process.execPath, which now points at the new binary.
   await stop(profile).catch(() => {});
+  // Discard inherited/auto-set SHEMMA_PORT before relaunch: ensureDaemon's
+  // fast path treats externally-set SHEMMA_PORT as "caller owns the server"
+  // and refuses to spawn. After stop() we ARE the spawner, so clear both
+  // the port and the autoset marker — ensureDaemon will then run the full
+  // status() + start() path.
+  delete process.env.SHEMMA_PORT;
+  delete process.env.SHEMMA_PORT_AUTOSET;
   await ensure(profile);
   // Successful restart — drop the rollback backup to avoid accumulating ~70MB
   // per update. If ensure() throws (process.exit(3)), .old stays for manual rollback.

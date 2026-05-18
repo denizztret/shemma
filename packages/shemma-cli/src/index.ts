@@ -39,7 +39,13 @@ const explicitProfileProvided =
 applyProfile(profile);
 // Resolve --profile → SHEMMA_PORT so any CanvasClient (data/prompts/layout/version) hits the right daemon.
 // Explicit SHEMMA_PORT is honoured if already set (portFor checks env first).
-process.env.SHEMMA_PORT ??= String(portFor(profile));
+// SHEMMA_PORT_AUTOSET marks "we set this internally" so ensureDaemon's fast
+// path can distinguish externally-supplied port (tests with in-process server)
+// from CLI-auto-derived port (don't block daemon restart after update).
+if (process.env.SHEMMA_PORT === undefined) {
+  process.env.SHEMMA_PORT = String(portFor(profile));
+  process.env.SHEMMA_PORT_AUTOSET = "1";
+}
 // Parse --json global flag (DRW-056) BEFORE stripping --profile so per-command
 // parsers don't see either flag.
 const { mode: outputMode, rest: argvAfterJson } = parseOutputMode(rawArgv);
