@@ -10,12 +10,12 @@ export type RolePreset = {
 
 const PRESETS: Record<Role, RolePreset> = {
   actor:     { kind: "ellipse", style: { color: "violet", fill: "semi" },     defaultW: 120, defaultH: 60 },
-  service:   { kind: "rect",    style: { color: "blue",   fill: "semi" },     defaultW: 140, defaultH: 70 },
-  datastore: { kind: "rect",    style: { color: "green",  fill: "solid" },    defaultW: 140, defaultH: 70 },
+  service:   { kind: "rect",    style: { color: "blue",   fill: "semi" },     defaultW: 220, defaultH: 80 },
+  datastore: { kind: "rect",    style: { color: "green",  fill: "solid" },    defaultW: 220, defaultH: 80 },
   queue:     { kind: "rect",    style: { color: "orange", fill: "pattern" },  defaultW: 140, defaultH: 50 },
   network:   { kind: "frame",   style: { color: "grey",   stroke: "dashed" }, container: true, defaultW: 400, defaultH: 300 },
   boundary:  { kind: "frame",   style: { color: "red",    stroke: "dashed" }, container: true, defaultW: 400, defaultH: 300 },
-  external:  { kind: "rect",    style: { color: "yellow", fill: "semi" },     defaultW: 140, defaultH: 70 },
+  external:  { kind: "rect",    style: { color: "yellow", fill: "semi" },     defaultW: 220, defaultH: 80 },
   note:      { kind: "sticky",  style: { color: "yellow" },                   defaultW: 200, defaultH: 100 },
 };
 
