@@ -18,8 +18,30 @@ export function backfillStoreRecords(
       r.type === "arrow"
     ) {
       const props = (r.props as Record<string, unknown> | undefined) ?? {};
+      let newProps: Record<string, unknown> | undefined;
       if (props.kind === undefined) {
-        out[id] = { ...r, props: { ...props, kind: "arc" } };
+        newProps = { ...(newProps ?? props), kind: "arc" };
+      }
+      if (props.elbowMidPoint === undefined) {
+        newProps = { ...(newProps ?? props), elbowMidPoint: 0.5 };
+      }
+      if (Object.prototype.hasOwnProperty.call(newProps ?? props, "text")) {
+        const { text: _text, ...rest } = newProps ?? props;
+        newProps = rest;
+      }
+      if (newProps !== undefined) {
+        out[id] = { ...r, props: newProps };
+        continue;
+      }
+    } else if (
+      r &&
+      typeof r === "object" &&
+      r.typeName === "binding" &&
+      r.type === "arrow"
+    ) {
+      const props = (r.props as Record<string, unknown> | undefined) ?? {};
+      if (props.snap === undefined) {
+        out[id] = { ...r, props: { ...props, snap: "none" } };
         continue;
       }
     }

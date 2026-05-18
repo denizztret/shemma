@@ -67,7 +67,7 @@ function makeArrowShape(opts: {
       start: { x: 0, y: 0 },
       end: { x: 0, y: 0 },
       bend: 0,
-      text: "",
+      elbowMidPoint: 0.5,
       labelPosition: 0.5,
       scale: 1,
       richText: richText(opts.label),
@@ -93,6 +93,7 @@ function makeArrowBindings(arrowId: string, fromShapeId: string, toShapeId: stri
         normalizedAnchor: { x: 0.5, y: 0.5 },
         isExact: false,
         isPrecise: false,
+        snap: "none",
       },
       meta: {},
     }) as TLRecord;
