@@ -521,70 +521,89 @@ git commit -m "feat(cli): cmdMcpStart resolves projectDir from SHEMMA_CWD env"
 
 ---
 
-## Task 5: `startStdio` calls `process.chdir(projectDir)` before server create
+## Task 5: Extract `chdirToProjectDir` helper + wire into `startStdio` (happy path)
 
 **Files:**
-- Modify: `packages/shemma-mcp/src/index.ts` — `startStdio` calls `process.chdir(opts.projectDir)` в самом начале (try/catch добавляется в Task 6).
-- Create: `packages/shemma-mcp/src/index.test.ts` — tests for chdir behavior.
+- Modify: `packages/shemma-mcp/src/index.ts` — export `chdirToProjectDir(projectDir: string): void` helper; `startStdio` вызывает helper в начале (до создания client/server).
+- Create: `packages/shemma-mcp/src/chdir.test.ts` — pure unit tests на helper (без module mocking).
 
-- [ ] **Step 1: Write failing test (chdir invoked with projectDir)**
+> **Why extract helper:** module-level mocks в `bun:test` сохраняются между тестами в файле; если testing `startStdio` через `mock.module` + dynamic import, subsequent тесты могут получить stale mocks (см. review pass P2). Extract helper устраняет проблему — testing pure function без stdio dependencies.
 
-Create `packages/shemma-mcp/src/index.test.ts`:
+- [ ] **Step 1: Write failing test for helper**
+
+Create `packages/shemma-mcp/src/chdir.test.ts`:
 ```ts
-import { describe, expect, it, spyOn, mock } from "bun:test";
+import { describe, expect, it, spyOn, afterEach } from "bun:test";
 
-describe("startStdio chdir", () => {
-  it("calls process.chdir(projectDir) before connecting transport", async () => {
-    const chdirSpy = spyOn(process, "chdir").mockImplementation(() => undefined);
-    // Stub StdioServerTransport.connect via module mock so test doesn't hang on stdio.
-    mock.module("@modelcontextprotocol/sdk/server/stdio.js", () => ({
-      StdioServerTransport: class {},
-    }));
-    // Stub server.connect to no-op.
-    mock.module("./server", () => ({
-      createShemmaMcpServer: () => ({
-        server: { connect: async () => undefined },
-      }),
-    }));
-    // Stub CanvasClient (uses fetch — keep inert).
-    mock.module("@shemma/client", () => ({
-      CanvasClient: class {
-        constructor(_: unknown) {}
-      },
-    }));
+describe("chdirToProjectDir helper", () => {
+  let chdirSpy: ReturnType<typeof spyOn>;
+  let stderrSpy: ReturnType<typeof spyOn>;
+  const captured: { chdirArg?: string; stderrChunks: string[] } = {
+    stderrChunks: [],
+  };
 
-    const { startStdio } = await import("./index");
-    await startStdio({
-      profile: "release",
-      baseUrl: "http://localhost:8787",
-      defaultRoom: "default",
-      projectDir: "/tmp/proj",
+  function setup() {
+    captured.chdirArg = undefined;
+    captured.stderrChunks = [];
+    chdirSpy = spyOn(process, "chdir").mockImplementation((p) => {
+      captured.chdirArg = String(p);
     });
+    stderrSpy = spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      captured.stderrChunks.push(String(chunk));
+      return true;
+    });
+  }
 
-    expect(chdirSpy).toHaveBeenCalledWith("/tmp/proj");
-    chdirSpy.mockRestore();
+  afterEach(() => {
+    chdirSpy?.mockRestore();
+    stderrSpy?.mockRestore();
+  });
+
+  it("calls process.chdir with given projectDir on success", async () => {
+    setup();
+    const { chdirToProjectDir } = await import("./index");
+    chdirToProjectDir("/tmp/proj");
+    expect(captured.chdirArg).toBe("/tmp/proj");
+    expect(captured.stderrChunks.join("")).toBe("");
   });
 });
 ```
 
 - [ ] **Step 2: Run test — verify failure**
 
-Run: `bun test packages/shemma-mcp/src/index.test.ts`
-Expected: FAIL — current `startStdio` не вызывает `process.chdir`.
+Run: `bun test packages/shemma-mcp/src/chdir.test.ts`
+Expected: FAIL — `chdirToProjectDir` not exported из `./index`.
 
-- [ ] **Step 3: Implement chdir in `startStdio`**
+- [ ] **Step 3: Add helper + wire into `startStdio`**
 
-В `packages/shemma-mcp/src/index.ts` заменить body `startStdio`:
+В `packages/shemma-mcp/src/index.ts` добавить export'ом ABOVE existing `startStdio`:
+```ts
+/**
+ * Fix project working directory for ALL subsequent subprocess spawns
+ * (backlog-discovery `Bun.spawn(["backlog",...])`, auto-open
+ * `Bun.spawn(["shemma","open",...])`). MCP clients (esp. Claude Desktop)
+ * spawn this process from $HOME or unpredictable cwd; without chdir, downstream
+ * subprocesses inherit the wrong cwd. See spec §4.4.
+ *
+ * Graceful fallback: if projectDir doesn't exist or chdir fails, emit stderr
+ * warning and continue with inherited cwd (room-resolver step 5 may skip;
+ * other paths still work). See spec §4.4 graceful degradation.
+ */
+export function chdirToProjectDir(projectDir: string): void {
+  try {
+    process.chdir(projectDir);
+  } catch (e) {
+    process.stderr.write(
+      `shemma mcp: SHEMMA_CWD/${projectDir} not accessible (${(e as Error).message}); continuing with inherited cwd\n`,
+    );
+  }
+}
+```
 
+И заменить `startStdio` тело:
 ```ts
 export async function startStdio(opts: StartOpts): Promise<void> {
-  // Fix project working directory for ALL subsequent subprocess spawns
-  // (backlog-discovery, auto-open shemma open). MCP clients (esp. Claude Desktop)
-  // spawn this process from $HOME or unpredictable cwd; without chdir, downstream
-  // `Bun.spawn(["backlog", ...])` and `Bun.spawn(["shemma","open",...])` would
-  // inherit the wrong cwd. See spec §4.4.
-  process.chdir(opts.projectDir);
-
+  chdirToProjectDir(opts.projectDir);
   const client = new CanvasClient({ baseUrl: opts.baseUrl, room: opts.defaultRoom });
   const { server } = createShemmaMcpServer({
     client,
@@ -602,102 +621,56 @@ export async function startStdio(opts: StartOpts): Promise<void> {
 
 - [ ] **Step 4: Run test — verify pass**
 
-Run: `bun test packages/shemma-mcp/src/index.test.ts`
+Run: `bun test packages/shemma-mcp/src/chdir.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
-Run:
 ```bash
-git add packages/shemma-mcp/src/index.ts packages/shemma-mcp/src/index.test.ts
-git commit -m "feat(mcp): startStdio calls process.chdir(projectDir) before subprocess spawns"
+git add packages/shemma-mcp/src/index.ts packages/shemma-mcp/src/chdir.test.ts
+git commit -m "feat(mcp): chdirToProjectDir helper + wire into startStdio"
 ```
 
 ---
 
-## Task 6: `startStdio` chdir graceful fallback on ENOENT
+## Task 6: `chdirToProjectDir` ENOENT graceful fallback test
 
 **Files:**
-- Modify: `packages/shemma-mcp/src/index.ts` — wrap `process.chdir` in try/catch, emit stderr warning, continue.
-- Modify: `packages/shemma-mcp/src/index.test.ts` — add ENOENT scenario test.
+- Modify: `packages/shemma-mcp/src/chdir.test.ts` — add ENOENT scenario.
 
-- [ ] **Step 1: Write failing test (chdir throws, continue with stderr warning)**
+> Implementation уже добавлена в Task 5 (try/catch + stderr warning). Эта задача — explicit test для graceful path. Если test pass'нет first run (impl already там) — это нормально, TDD-ifying existing behavior.
 
-В `packages/shemma-mcp/src/index.test.ts` добавить test в существующий `describe("startStdio chdir"...)`:
+- [ ] **Step 1: Write test for ENOENT graceful fallback**
+
+В `packages/shemma-mcp/src/chdir.test.ts` добавить test в existing `describe("chdirToProjectDir helper"...)`:
 ```ts
-  it("emits stderr warning and continues when process.chdir throws", async () => {
-    const chdirSpy = spyOn(process, "chdir").mockImplementation(() => {
+  it("emits stderr warning and does not throw when process.chdir throws", async () => {
+    setup();
+    chdirSpy.mockRestore();
+    chdirSpy = spyOn(process, "chdir").mockImplementation(() => {
       throw new Error("ENOENT: no such file or directory");
     });
-    const stderrWrites: string[] = [];
-    const writeSpy = spyOn(process.stderr, "write").mockImplementation((chunk) => {
-      stderrWrites.push(String(chunk));
-      return true;
-    });
-    mock.module("@modelcontextprotocol/sdk/server/stdio.js", () => ({
-      StdioServerTransport: class {},
-    }));
-    let connectCalled = false;
-    mock.module("./server", () => ({
-      createShemmaMcpServer: () => ({
-        server: { connect: async () => { connectCalled = true; } },
-      }),
-    }));
-    mock.module("@shemma/client", () => ({
-      CanvasClient: class { constructor(_: unknown) {} },
-    }));
+    const { chdirToProjectDir } = await import("./index");
 
-    const { startStdio } = await import("./index");
-    await startStdio({
-      profile: "release",
-      baseUrl: "http://localhost:8787",
-      defaultRoom: "default",
-      projectDir: "/nonexistent",
-    });
+    // Must not throw.
+    expect(() => chdirToProjectDir("/nonexistent/path")).not.toThrow();
 
-    expect(stderrWrites.join("")).toMatch(/SHEMMA_CWD.*not accessible/);
-    expect(connectCalled).toBe(true);
-
-    chdirSpy.mockRestore();
-    writeSpy.mockRestore();
+    expect(captured.stderrChunks.join("")).toMatch(/SHEMMA_CWD.*not accessible/);
+    expect(captured.stderrChunks.join("")).toMatch(/ENOENT/);
+    expect(captured.stderrChunks.join("")).toMatch(/continuing with inherited cwd/);
   });
 ```
 
-- [ ] **Step 2: Run test — verify failure**
+- [ ] **Step 2: Run test — should pass (impl already в Task 5)**
 
-Run: `bun test packages/shemma-mcp/src/index.test.ts -t "graceful"`
-Expected: FAIL — `process.chdir` throw'ит и `startStdio` тоже throw'ит наружу (нет try/catch).
+Run: `bun test packages/shemma-mcp/src/chdir.test.ts`
+Expected: 2 tests pass. Если FAIL — Task 5 impl неполна; investigate.
 
-- [ ] **Step 3: Implement try/catch + stderr warning**
-
-В `packages/shemma-mcp/src/index.ts` обернуть `process.chdir`:
-```ts
-export async function startStdio(opts: StartOpts): Promise<void> {
-  try {
-    process.chdir(opts.projectDir);
-  } catch (e) {
-    // SHEMMA_CWD points to a missing/inaccessible path. Continue with inherited
-    // cwd — backlog-discovery may return empty (room-resolver step 5 skipped),
-    // but other paths still work. See spec §4.4 graceful degradation.
-    process.stderr.write(
-      `shemma mcp: SHEMMA_CWD/${opts.projectDir} not accessible (${(e as Error).message}); continuing with inherited cwd\n`,
-    );
-  }
-
-  const client = new CanvasClient({ baseUrl: opts.baseUrl, room: opts.defaultRoom });
-  // ... остальной код без изменений
-```
-
-- [ ] **Step 4: Run tests**
-
-Run: `bun test packages/shemma-mcp/src/index.test.ts`
-Expected: 2 tests pass (Task 5 + Task 6).
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add packages/shemma-mcp/src/index.ts packages/shemma-mcp/src/index.test.ts
-git commit -m "feat(mcp): startStdio chdir graceful fallback with stderr warning on ENOENT"
+git add packages/shemma-mcp/src/chdir.test.ts
+git commit -m "test(mcp): chdirToProjectDir ENOENT graceful fallback test"
 ```
 
 ---
@@ -827,35 +800,78 @@ git commit -m "feat(cli): maybePrintMcpNudge once-per-process guard + new client
 
 ---
 
-## Task 8: Integration test — real `process.cwd()` после startStdio
+## Task 8: Integration test — real `process.cwd()` + ordering invariant
 
 **Files:**
-- Modify: `packages/shemma-mcp/src/index.test.ts` — add integration test using real `process.chdir`.
+- Create: `packages/shemma-mcp/src/index.test.ts` — integration tests с **stable top-level mocks** + mutable captured state + ordering assertion.
 
-- [ ] **Step 1: Write failing test (using real chdir, temp dir)**
+> **Why separate file from `chdir.test.ts`:** integration test использует `mock.module` для server/client/stdio. Эти mock'и module-scoped в bun:test — мы ставим их ONE TIME на top level и используем mutable объект `captured` для verification across тесты. Не пересекается с `chdir.test.ts` (там вообще нет module mocks — только `spyOn(process, ...)`).
 
-В `packages/shemma-mcp/src/index.test.ts` добавить новый describe:
+- [ ] **Step 1: Write failing test — single integration test file with stable mocks**
+
+Create `packages/shemma-mcp/src/index.test.ts`:
 ```ts
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 
-describe("startStdio integration — real cwd", () => {
-  it("after startStdio, process.cwd() equals projectDir (verifies subprocess spawn invariant)", async () => {
-    // Use real process.chdir; create + cleanup temp dir.
-    const tempDir = mkdtempSync(join(tmpdir(), "shemma-mcp-cwd-"));
-    const originalCwd = process.cwd();
+// Mutable state captured across tests — mocks reference this object.
+const captured: {
+  callOrder: string[];
+  connectArg?: unknown;
+} = { callOrder: [] };
 
-    // Stub subsystems that would hang or do I/O.
-    mock.module("@modelcontextprotocol/sdk/server/stdio.js", () => ({
-      StdioServerTransport: class {},
-    }));
-    mock.module("./server", () => ({
-      createShemmaMcpServer: () => ({ server: { connect: async () => undefined } }),
-    }));
-    mock.module("@shemma/client", () => ({
-      CanvasClient: class { constructor(_: unknown) {} },
-    }));
+// Top-level stable mocks: registered ONCE for this file. Tests mutate `captured`
+// to verify per-call behavior без re-mocking (which bun:test can't reliably do).
+mock.module("@modelcontextprotocol/sdk/server/stdio.js", () => ({
+  StdioServerTransport: class {},
+}));
+mock.module("./server", () => ({
+  createShemmaMcpServer: (_opts: unknown) => {
+    captured.callOrder.push("createServer");
+    return {
+      server: {
+        connect: async (transport: unknown) => {
+          captured.callOrder.push("serverConnect");
+          captured.connectArg = transport;
+        },
+      },
+    };
+  },
+}));
+mock.module("@shemma/client", () => ({
+  CanvasClient: class {
+    constructor(_: unknown) {
+      captured.callOrder.push("newCanvasClient");
+    }
+  },
+}));
+
+describe("startStdio integration", () => {
+  let originalCwd: string;
+  let tempDir: string;
+
+  beforeEach(() => {
+    captured.callOrder = [];
+    captured.connectArg = undefined;
+    originalCwd = process.cwd();
+    tempDir = mkdtempSync(join(tmpdir(), "shemma-mcp-cwd-"));
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("calls chdir BEFORE createServer + serverConnect (spec §4.4 ordering)", async () => {
+    // We instrument chdir as a callOrder entry to verify it runs first.
+    // Direct chdir(tempDir) (no spy/mock) — real cwd change.
+    const realChdir = process.chdir.bind(process);
+    process.chdir = ((p: string) => {
+      captured.callOrder.push("chdir");
+      return realChdir(p);
+    }) as typeof process.chdir;
 
     try {
       const { startStdio } = await import("./index");
@@ -865,29 +881,46 @@ describe("startStdio integration — real cwd", () => {
         defaultRoom: "default",
         projectDir: tempDir,
       });
-      // Invariant: after chdir, process.cwd() === projectDir.
-      // This is what backlog-discovery and auto-open Bun.spawn rely on.
-      expect(process.cwd()).toBe(tempDir);
     } finally {
-      process.chdir(originalCwd);
-      rmSync(tempDir, { recursive: true, force: true });
+      process.chdir = realChdir;
     }
+
+    // Assert exact order: chdir → CanvasClient ctor → createServer → server.connect.
+    expect(captured.callOrder).toEqual([
+      "chdir",
+      "newCanvasClient",
+      "createServer",
+      "serverConnect",
+    ]);
+  });
+
+  it("after startStdio, process.cwd() equals projectDir (subprocess spawn invariant)", async () => {
+    const { startStdio } = await import("./index");
+    await startStdio({
+      profile: "release",
+      baseUrl: "http://localhost:8787",
+      defaultRoom: "default",
+      projectDir: tempDir,
+    });
+    // Real-world invariant: backlog-discovery + auto-open spawn без cwd
+    // arg будут наследовать ЭТОТ cwd. Без него — fall back to $HOME.
+    expect(process.cwd()).toBe(tempDir);
   });
 });
 ```
 
-- [ ] **Step 2: Run test — should already pass (Task 5 imp'l)**
+- [ ] **Step 2: Run test — should pass (Task 5 impl already in place)**
 
-Run: `bun test packages/shemma-mcp/src/index.test.ts -t "real cwd"`
-Expected: PASS — this confirms the invariant that Tasks 5+6 establish.
+Run: `bun test packages/shemma-mcp/src/index.test.ts`
+Expected: 2 tests pass.
 
-Если FAIL — investigate; не commit'ить пока не понял почему. Probable: `mock.module` from prior test polluted state, или chdir spy from Task 5 mock не cleared.
+Если FAIL — investigate: bun:test module mock semantics, или chdirToProjectDir вызван не первым в startStdio.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add packages/shemma-mcp/src/index.test.ts
-git commit -m "test(mcp): integration test for real process.cwd() invariant after startStdio"
+git commit -m "test(mcp): integration tests for startStdio ordering invariant + real cwd"
 ```
 
 ---
@@ -1076,7 +1109,7 @@ MCP-сервер — это **stdio-процесс, который спавни�
 
 Внутри `shemma mcp start`:
 1. Резолвит project working directory из `SHEMMA_CWD` env (fallback — `process.cwd()`); вызывает `process.chdir()`.
-2. Подключается к локальному daemon на `:8787` (поднимает его если нужно — `--no-auto-ensure` отключает auto-spawn).
+2. Создаёт HTTP-клиент к локальному daemon на `:8787`. **Daemon должен быть уже запущен** — MCP-сервер не поднимает daemon автоматически в текущей версии (auto-ensure запланирован как отдельный follow-up; `shemma_health` tool с `ensure: true` возвращает warning о nyet-implemented). Если daemon не запущен — запусти его через `shemma daemon ensure` или просто `shemma open` (последний автоматически ensure'ит daemon).
 3. Регистрирует 19 tools + 14 resources + 4 prompts.
 4. Слушает JSON-RPC на stdin, отвечает на stdout (stderr зарезервирован для диагностики).
 
@@ -1112,9 +1145,9 @@ MCP-сервер — это **stdio-процесс, который спавни�
 
 Если на шагах 4 или 5 найдено больше одного кандидата — tool возвращает typed error `{code: "ambiguous-room", candidates: [...]}`.
 
-## Подсказка при первой установке
+## Подсказка о MCP setup
 
-Если ты ставишь `shemma` впервые и MCP ещё не настроен — при `shemma daemon ensure` в stderr появится одноразовая подсказка (`mcpNudgePrinted` guard, печатает 1 раз за процесс):
+При первом `shemma daemon ensure` (verbose) в процессе в stderr появляется одноразовая подсказка про регистрацию MCP. Печатается один раз за процесс (`mcpNudgePrinted` guard) и независимо от того, настроен MCP в каком-либо клиенте или нет (в `0.14.0` shemma больше не сканирует чужие config-файлы клиентов, поэтому не знает, есть ли где-то уже зарегистрированный MCP).
 
 ```
 tip: register Shemma as MCP server in your agent client:
@@ -1123,6 +1156,8 @@ tip: register Shemma as MCP server in your agent client:
        Gemini CLI:   gemini mcp add shemma --scope user -- shemma mcp start
      Full guide: docs/mcp.md  (set SHEMMA_NO_MCP_NUDGE=1 to silence)
 ```
+
+Если MCP уже зарегистрирован — игнорируй сообщение. Гасится через env `SHEMMA_NO_MCP_NUDGE=1`.
 
 ## Trust model
 
@@ -1298,18 +1333,51 @@ Expected: line `<N> pass` where N ≥ 611 (baseline) + delta.
 
 Example: `Тестов: +14 добавлено (5 nudge + 4 cmdMcpStart resolution + 2 chdir + 1 integration + 2 parser), −10 удалено (snippet generators + detect + refresh). Net delta: +4. Final pass count: 615 (baseline 611).`
 
-- [ ] **Step 3: Manual sanity — copy-paste install commands**
+- [ ] **Step 3: Manual sanity — backup-restore based install verification**
 
-Для каждого доступного клиента (минимум Claude Code, Codex):
+Для каждого доступного клиента (минимум **Claude Code и Codex** — обязательно оба per spec AC #12):
 
+> **Trust principle:** не мутируем существующие user MCP configs deструктивно. Backup → install в **project scope** → verify через `<client> mcp list` → restore (или просто удалить test scope).
+
+**Claude Code (project-scope в temp dir, не трогает user config):**
 ```bash
-# Test 1: Claude Code
-claude mcp remove shemma 2>/dev/null || true
-claude mcp add shemma --scope user -- shemma mcp start
-claude mcp list  # expect shemma in list
+mkdir -p /tmp/shemma-sanity-claude && cd /tmp/shemma-sanity-claude
+# Project-scope install пишет в ./.mcp.json (local to test dir), не в ~/.claude.json.
+claude mcp add shemma --scope project -- shemma mcp start
+test -f .mcp.json && grep -q '"shemma"' .mcp.json && echo "claude-code project install OK"
+cat .mcp.json  # verify shape: command="shemma", args=["mcp","start"], no --cwd
+cd - && rm -rf /tmp/shemma-sanity-claude
 ```
 
-Запиши результат в task notes (manual sanity passed / failed + причина).
+Expected: `.mcp.json` contains `{"mcpServers":{"shemma":{"command":"shemma","args":["mcp","start"]}}}` (без `--cwd`, без `env.SHEMMA_CWD` потому что project-scope CLI inherits cwd).
+
+**Codex (backup/restore real `~/.codex/config.toml`):**
+```bash
+BACKUP=~/.codex/config.toml.shemma-sanity-$(date +%s)
+cp ~/.codex/config.toml "$BACKUP"
+codex mcp add shemma -- shemma mcp start
+grep -q '\[mcp_servers.shemma\]' ~/.codex/config.toml && echo "codex install OK"
+codex mcp list 2>&1 | grep -q 'shemma' && echo "codex list shows shemma"
+# Restore оригинал (отметает только наш test entry, save user's other servers):
+mv "$BACKUP" ~/.codex/config.toml
+```
+
+Expected: `[mcp_servers.shemma]` block добавился; `codex mcp list` показывает shemma; restore возвращает config к исходному состоянию.
+
+**Bonus (если есть claude.json и user хочет verify user-scope flow):** аналогичный backup/restore паттерн для `~/.claude.json`:
+```bash
+BACKUP=~/.claude.json.shemma-sanity-$(date +%s)
+cp ~/.claude.json "$BACKUP"
+claude mcp add shemma --scope user -- shemma mcp start
+claude mcp list | grep -q shemma && echo "claude user install OK"
+mv "$BACKUP" ~/.claude.json
+```
+
+Запиши результаты в task notes:
+- claude-code project-scope: passed / failed
+- codex backup/restore: passed / failed
+- (опционально) claude user-scope backup/restore: passed / failed
+- Если какой-то клиент не установлен — отметь "client not installed, skipped".
 
 - [ ] **Step 4: Commit changelog delta + sanity confirmation**
 
