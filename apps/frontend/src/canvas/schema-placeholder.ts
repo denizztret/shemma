@@ -44,6 +44,20 @@ export function backfillStoreRecords(
         out[id] = { ...r, props: { ...props, snap: "none" } };
         continue;
       }
+    } else if (
+      r &&
+      typeof r === "object" &&
+      r.typeName === "shape" &&
+      r.type === "frame"
+    ) {
+      // tldraw 5.x added required props.color to TLFrameShape (migration
+      // AddColorProp, default "black"). Frames persisted before this become
+      // invalid on loadSnapshot — backfill default to match migration.
+      const props = (r.props as Record<string, unknown> | undefined) ?? {};
+      if (props.color === undefined) {
+        out[id] = { ...r, props: { ...props, color: "black" } };
+        continue;
+      }
     }
     out[id] = r as unknown;
   }

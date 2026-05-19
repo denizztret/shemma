@@ -223,7 +223,7 @@ export function compile(
           isLocked: false,
           opacity: 1,
           rotation: 0,
-          props: { w: 400, h: 300, name: a.label ?? a.name },
+          props: { w: 400, h: 300, name: a.label ?? a.name, color: "black" },
           meta: { didrawName: a.name, didrawIsGroup: true, role: a.as },
         } as TLRecord;
         const sub: StoreChangeBatch = { added: { [fid]: frame }, updated: {}, removed: {} };

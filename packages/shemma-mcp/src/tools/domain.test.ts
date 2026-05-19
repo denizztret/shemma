@@ -234,6 +234,35 @@ describe("domain write tools", () => {
     });
   });
 
+  // DRW-072: domain validator требует as ∈ {network, boundary}. MCP wrapper
+  // должен подставить default 'boundary' если клиент не указал, иначе любой
+  // shemma_group падает с "group.as must be network|boundary".
+  it("shemma_group defaults as='boundary' when caller omits it (DRW-072)", async () => {
+    let capturedBody: unknown;
+    mockFetch((_, init) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return { body: okDomainResponse };
+    });
+    const { handles } = setup({ mode: "direct", room: "r" });
+    await handles.group.call({ name: "g1", children: ["a", "b"] });
+    expect((capturedBody as { actions: Array<Record<string, unknown>> }).actions[0]).toMatchObject({
+      kind: "group", as: "boundary",
+    });
+  });
+
+  it("shemma_group passes through explicit as='network'", async () => {
+    let capturedBody: unknown;
+    mockFetch((_, init) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return { body: okDomainResponse };
+    });
+    const { handles } = setup({ mode: "direct", room: "r" });
+    await handles.group.call({ name: "net1", children: ["a", "b"], as: "network" });
+    expect((capturedBody as { actions: Array<Record<string, unknown>> }).actions[0]).toMatchObject({
+      kind: "group", as: "network",
+    });
+  });
+
   it("shemma_note sends note action with text", async () => {
     let capturedBody: unknown;
     mockFetch((_, init) => {
