@@ -397,4 +397,105 @@ describe("POST /api/agent/layout-selection", () => {
     expect(rAfter.store.store["shape:out2"]!.x).toBe(600);
     expect(rAfter.store.store["shape:out2"]!.y).toBe(200);
   });
+
+  // DRW-099: hierarchical multi-pass — два frame'а с детьми + cross-compound edge.
+  // Select: все дети + оба frame'а. Ожидаем: children parent-relative внутри своих
+  // frame'ов; frame'а расставлены без overlapping; non-selected не тронуты.
+  test("DRW-099: hierarchical layout — two frames with children + cross-compound edge", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const room = "test-drw099-hierarchical";
+    const r = await rooms.get(room);
+    const snap = emptySnapshot();
+
+    // Frame A with 3 children
+    snap.store["shape:fA"] = makeFrame("shape:fA", 0, 0, 400, 300, "fA");
+    snap.store["shape:cA1"] = makeShape("shape:cA1", 0, 0, "cA1", {}, {}, "shape:fA");
+    snap.store["shape:cA2"] = makeShape("shape:cA2", 5, 0, "cA2", {}, {}, "shape:fA");
+    snap.store["shape:cA3"] = makeShape("shape:cA3", 0, 5, "cA3", {}, {}, "shape:fA");
+
+    // Frame B with 2 children
+    snap.store["shape:fB"] = makeFrame("shape:fB", 500, 0, 400, 300, "fB");
+    snap.store["shape:cB1"] = makeShape("shape:cB1", 0, 0, "cB1", {}, {}, "shape:fB");
+    snap.store["shape:cB2"] = makeShape("shape:cB2", 5, 0, "cB2", {}, {}, "shape:fB");
+
+    // Cross-compound edge: cA1 → cB1
+    const arrowId = "shape:cross_arrow";
+    snap.store[arrowId] = {
+      id: arrowId, typeName: "shape", type: "arrow",
+      x: 0, y: 0, parentId: "page:page", props: {}, meta: {},
+    } as TLRecord;
+    snap.store["binding:ca-s"] = {
+      id: "binding:ca-s", typeName: "binding",
+      fromId: arrowId, toId: "shape:cA1",
+      props: { terminal: "start" },
+    } as TLRecord;
+    snap.store["binding:cb-e"] = {
+      id: "binding:cb-e", typeName: "binding",
+      fromId: arrowId, toId: "shape:cB1",
+      props: { terminal: "end" },
+    } as TLRecord;
+
+    // Non-selected shape
+    snap.store["shape:nonsel"] = makeShape("shape:nonsel", 1200, 1200, "nonsel");
+
+    r.store = snap;
+    r.version = 1;
+
+    const res = await postLayoutSelection(
+      app,
+      {
+        ids: ["shape:fA", "shape:fB", "shape:cA1", "shape:cA2", "shape:cA3", "shape:cB1", "shape:cB2"],
+        mode: "layered-tb",
+      },
+      room,
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+
+    const rAfter = await rooms.get(room);
+
+    // Non-selected must not be moved
+    expect(rAfter.store.store["shape:nonsel"]!.x).toBe(1200);
+    expect(rAfter.store.store["shape:nonsel"]!.y).toBe(1200);
+
+    const fA = rAfter.store.store["shape:fA"]! as { x: number; y: number; props: { w: number; h: number } };
+    const fB = rAfter.store.store["shape:fB"]! as { x: number; y: number; props: { w: number; h: number } };
+
+    // Frames must have valid sizes
+    expect(fA.props.w).toBeGreaterThan(0);
+    expect(fA.props.h).toBeGreaterThan(0);
+    expect(fB.props.w).toBeGreaterThan(0);
+    expect(fB.props.h).toBeGreaterThan(0);
+
+    // Children of fA: parent-relative inside fA bounds
+    for (const cid of ["shape:cA1", "shape:cA2", "shape:cA3"]) {
+      const c = rAfter.store.store[cid]! as { x: number; y: number; parentId: string; props: { w: number; h: number } };
+      expect(c.parentId).toBe("shape:fA");
+      expect(c.x).toBeGreaterThanOrEqual(0);
+      expect(c.y).toBeGreaterThanOrEqual(0);
+      expect(c.x + (c.props?.w ?? 120)).toBeLessThanOrEqual(fA.props.w + 5);
+      expect(c.y + (c.props?.h ?? 60)).toBeLessThanOrEqual(fA.props.h + 5);
+    }
+
+    // Children of fB: parent-relative inside fB bounds
+    for (const cid of ["shape:cB1", "shape:cB2"]) {
+      const c = rAfter.store.store[cid]! as { x: number; y: number; parentId: string; props: { w: number; h: number } };
+      expect(c.parentId).toBe("shape:fB");
+      expect(c.x).toBeGreaterThanOrEqual(0);
+      expect(c.y).toBeGreaterThanOrEqual(0);
+      expect(c.x + (c.props?.w ?? 120)).toBeLessThanOrEqual(fB.props.w + 5);
+      expect(c.y + (c.props?.h ?? 60)).toBeLessThanOrEqual(fB.props.h + 5);
+    }
+
+    // Frames should not overlap each other (with generous slack)
+    const SLACK = 10;
+    const noOverlap =
+      fA.x + fA.props.w <= fB.x + SLACK ||
+      fB.x + fB.props.w <= fA.x + SLACK ||
+      fA.y + fA.props.h <= fB.y + SLACK ||
+      fB.y + fB.props.h <= fA.y + SLACK;
+    expect(noOverlap).toBe(true);
+  });
 });
