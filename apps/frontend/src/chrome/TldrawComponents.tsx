@@ -1,7 +1,11 @@
 import {
+  DefaultContextMenu,
+  DefaultContextMenuContent,
   DefaultToolbar,
   DefaultToolbarContent,
   type TLComponents,
+  useEditor,
+  useValue,
 } from "tldraw";
 import { tokens } from "../design-tokens";
 import { GalleryLink } from "./GalleryLink";
@@ -15,12 +19,61 @@ import { RoomBadge } from "./RoomBadge";
  *   button that invokes the provided callback (used by App.tsx to open the
  *   MermaidImportModal). Hotkey ⌘M остаётся primary trigger; кнопка —
  *   discoverability.
+ * - `ContextMenu` (DRW-088) extends default context menu with "Tidy" item
+ *   when 2+ shapes are selected. Hotkey ⌘⇧L остаётся primary trigger;
+ *   пункт меню — discoverability для пользователей.
  */
 export function buildTldrawComponents(
   room: string,
-  opts: { onMermaidImport?: () => void } = {},
+  opts: {
+    onMermaidImport?: () => void;
+    /** DRW-088: called with selected shape ids when user chooses "Tidy" */
+    onTidySelection?: (ids: string[]) => void;
+  } = {},
 ): TLComponents {
-  const { onMermaidImport } = opts;
+  const { onMermaidImport, onTidySelection } = opts;
+
+  // DRW-088 AC#1: ContextMenu wrapper — extends DefaultContextMenu with "Tidy"
+  // group when 2+ shapes are selected. We wrap DefaultContextMenu with custom
+  // children content (DefaultContextMenu accepts children to override its inner
+  // content while keeping the Radix context-menu shell + canvas rendering).
+  function TidyContextMenu() {
+    const editor = useEditor();
+    const selectedCount = useValue(
+      "selectedCount",
+      () => editor.getSelectedShapeIds().length,
+      [editor],
+    );
+
+    return (
+      <DefaultContextMenu>
+        <DefaultContextMenuContent />
+        {selectedCount >= 2 && (
+          // DRW-088: "Tidy" item using plain tlui CSS classes.
+          // Avoids TldrawUiMenuGroup/TldrawUiMenuItem which have bigint in return
+          // type union (TypeScript ReactNode incompatibility in strict mode).
+          <div className="tlui-menu__group">
+            <button
+              type="button"
+              className="tlui-button tlui-button__menu"
+              onPointerDown={(e) => {
+                // Prevent context menu close from stealing the click before onPointerUp fires
+                e.stopPropagation();
+              }}
+              onClick={() => {
+                const ids = editor.getSelectedShapeIds() as unknown as string[];
+                onTidySelection!(ids);
+              }}
+            >
+              <span className="tlui-button__label">Tidy selection</span>
+              <kbd className="tlui-kbd">⌘⇧L</kbd>
+            </button>
+          </div>
+        )}
+      </DefaultContextMenu>
+    );
+  }
+
   return {
     SharePanel: () => (
       // tlui-layout has pointer-events:none; restore it here so the link is clickable.
@@ -69,5 +122,8 @@ export function buildTldrawComponents(
         ) : null}
       </DefaultToolbar>
     ),
+    // DRW-088: AC#1 — context menu "Tidy" item.
+    // TidyContextMenu wraps DefaultContextMenu with custom children content.
+    ContextMenu: onTidySelection ? TidyContextMenu : undefined,
   };
 }

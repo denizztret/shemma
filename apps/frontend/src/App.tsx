@@ -5,6 +5,7 @@ import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
 import { importMermaid, unionBoundsOf } from "./canvas/mermaid-import";
 import { backfillStoreRecords } from "./canvas/schema-placeholder";
+import { makeTidyHotkeyHandler, tidyLayout } from "./canvas/tidy-layout";
 import { AiActivityBadge } from "./chrome/AiActivityBadge";
 import { AppChrome } from "./chrome/AppChrome";
 import { ErrorBanner } from "./chrome/ErrorBanner";
@@ -64,8 +65,14 @@ export function App({ room }: { room: string }) {
 
   // tldraw requires `components` prop to be memoized (or defined outside the
   // component) to avoid re-mounting the editor on every render.
+  // DRW-088: onTidySelection is passed so the context menu can call tidyLayout.
+  const onTidySelection = useRef<((ids: string[]) => void) | null>(null);
   const tldrawComponents = useMemo(
-    () => buildTldrawComponents(room, { onMermaidImport: () => setMermaidOpen(true) }),
+    () =>
+      buildTldrawComponents(room, {
+        onMermaidImport: () => setMermaidOpen(true),
+        onTidySelection: (ids) => onTidySelection.current?.(ids),
+      }),
     [room],
   );
 
@@ -96,6 +103,33 @@ export function App({ room }: { room: string }) {
   useEffect(() => {
     if (selection.length === 0) setPromptOpen(false);
   }, [selection.length]);
+
+  // DRW-088: ⌘⇧L / Ctrl+Shift+L — tidy layout for current selection.
+  // Wired here (not in the editor useEffect) so it activates even before
+  // the editor is fully mounted (handler is a no-op before editor is ready).
+  useEffect(() => {
+    const handler = makeTidyHotkeyHandler(
+      () => (editor ? (editor.getSelectedShapeIds() as unknown as string[]) : []),
+      async (ids) => {
+        if (!editor) return;
+        const result = await tidyLayout(ids, room);
+        if (result.kind === "ok" && result.affected.length > 0 && !inProgrammaticCameraOp.current) {
+          // AC#6: zoom to the affected shapes' bounding box.
+          const affectedIds = result.affected as unknown as Parameters<typeof unionBoundsOf>[1];
+          const bounds = unionBoundsOf(editor, affectedIds);
+          if (bounds) {
+            inProgrammaticCameraOp.current = true;
+            editor.zoomToBounds(bounds, { animation: { duration: 200 }, inset: 64 });
+            setTimeout(() => {
+              inProgrammaticCameraOp.current = false;
+            }, 300);
+          }
+        }
+      },
+    );
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [editor, room]);
 
   // Periodic re-fetch of AI activity (10s). Cheap insurance against WS drops
   // that leave the badge in a stale state; also re-fires on tab focus.
@@ -179,6 +213,24 @@ export function App({ room }: { room: string }) {
         editor.loadSnapshot(snapshot);
       });
       return { version: s.version };
+    };
+
+    // DRW-088: wire tidy callback used by context menu. Uses the same logic
+    // as the keyboard shortcut handler above, but accessed via the ref so
+    // TldrawComponents can call it without importing editor state.
+    onTidySelection.current = async (ids: string[]) => {
+      const result = await tidyLayout(ids, room);
+      if (result.kind === "ok" && result.affected.length > 0 && !inProgrammaticCameraOp.current) {
+        const affectedIds = result.affected as unknown as Parameters<typeof unionBoundsOf>[1];
+        const bounds = unionBoundsOf(editor, affectedIds);
+        if (bounds) {
+          inProgrammaticCameraOp.current = true;
+          editor.zoomToBounds(bounds, { animation: { duration: 200 }, inset: 64 });
+          setTimeout(() => {
+            inProgrammaticCameraOp.current = false;
+          }, 300);
+        }
+      }
     };
 
     // DRW-075: reset user-pan flag on room/editor change so AI fit is active
