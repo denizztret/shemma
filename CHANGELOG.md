@@ -1,3 +1,26 @@
+## 0.18.0 — 2026-05-19 — Tidy selection: настоящий subgraph mode + frame anchor container
+
+Hot-fix следующий после 0.17.0 dogfood-сессии. Tidy в 0.17.0 был сломан в primary use case (partial reorg): ELK строил graph на ВСЕХ shapes и потом pin'ил non-selected, поэтому selected перекрывали non-selected; shapes внутри tldraw `frame` вылетали из него. Теперь — true subgraph filter + anchor-frame compound в одном fix-пакете. Закрывает DRW-091 + DRW-092.
+
+### Fixed
+
+- **DRW-091 — true subgraph mode.** `buildElkGraph` принимает optional `filterToIds?: Set<string>`; при subgraph mode в ELK input попадают только selected leaves + edges, у которых **оба** endpoint'а в filter set. Старый pin-trick (`scope='affected' && !affectedIds.has(s.id) → pinnedSet.add`) удалён — non-affected больше не присутствуют в graph вовсе. После ELK включена **origin preservation**: ELK output транслируется на `(centroid_orig − centroid_elk)` (или anchor by pinned, если в выделении есть `meta.pinned`-shape), чтобы выделенная группа осталась рядом со своим оригинальным местом. `batch.updated` содержит только shapes из `filterToIds`. Покрывает: AC#1/#2/#3/#4/#5/#6/#7 — overlap test (4 shapes: 2 в кучу слева selected, 2 справа non-selected — после layout без пересечения), mixed shape types (geo + note + image + frame).
+- **DRW-092 — frame anchor container.** `buildElkGraph` автоматически детектирует **anchor frames** — frame, который НЕ в `filterToIds`, но имеет ≥1 ребёнка в filter set. Такой frame включается как ELK compound node с `FIXED_SIZE` constraint (`frame.props.w/h` → container bounds, `rectpacking` алгоритм внутри); сам frame в batch не пишется. Parent-relative конверсия для детей anchor frame теперь корректно использует ELK output frame pos, а не оригинал. `parentId` детей сохраняется. AC#1/#2/#3/#4/#5/#6.
+
+### Tests
+
+- 680 tests pass: +7 backend integration (`routes-layout-selection.test.ts`: overlap, mixed types, frame parent, origin preservation, subgraph filter) + 2 unit (`domain/layout.test.ts`: subgraph mode positions, anchor frame children parent-relative).
+- TDD: 2 atomic commits (test-first + impl), затем code-simplifier pass (`refactor(layout): remove dead frameOrigPos, inline selectedFrameIds, ...`) -32 LOC при 314/0 pass.
+
+### Implementation notes
+
+- Anchor frame detection — внутри `buildElkGraph`, без расширения `LayoutHint` API. Route `/api/agent/layout-selection` не изменялся.
+- Origin preservation отключена, если есть anchor frame: frame стоит на месте, ELK layout'ит детей внутри его bounds через compound + padding `[top=40,left=20,bottom=20,right=20]`.
+- При overflow (если ELK всё же выдаёт детей больше frame.w/h при `FIXED_SIZE` — edge case) применяется post-ELK scale+translate clamp, сохраняющий взаимные пропорции.
+- Pin discipline (DRW-003) и DRW-082 frame parent-relative coords для `scope='all'` не задеты.
+
+---
+
 ## 0.17.0 — 2026-05-19 — Tidy selection: localized ELK на subgraph (UI + MCP twin)
 
 Selection-aware версия layout: правый клик / ⌘⇧L на выделение → ELK прогоняется через `runLayout(scope='affected', affectedIds=selection)` — pinned shapes защищены, non-selected не двигаются. MCP twin `shemma_layout_selection` для AI workflows (post-import tidying, partial reorg). Закрывает DRW-088.
