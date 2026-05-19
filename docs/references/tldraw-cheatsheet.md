@@ -259,15 +259,55 @@ editor.rotateShapesBy(ids, angleRadians)
 | arrow + bindings | `apps/backend/src/domain/compile.ts` (`makeArrowShape` строки 40–77; `makeArrowBindings` 80–100; `case "connect"` 189–210) | [[DRW-076]] |
 | schema backfill для legacy rooms | `apps/frontend/src/canvas/schema-placeholder.ts` (`backfillStoreRecords` — backfill `kind:"arc"`, нужно добавить `elbowMidPoint`) | [[DRW-076]] |
 | Snapshot load + WS apply | `apps/backend/src/transport/ws.ts` (store-change broadcast); `apps/frontend/src/App.tsx:146-148` (`loadSnapshot`) | — |
-| zoomToFit / camera | (заполнить — frontend bootstrap после load room) | [[DRW-075]] |
-| autoSize / shape resize | (заполнить — ShapeUtil для shemma node) | [[DRW-077]] |
+| zoomToFit / camera | `apps/frontend/src/App.tsx` — `hydrateAndSync` блок camera restore + `scheduleAiZoom` (debounced post-AI fit с guard inProgrammaticCameraOp); listener `editor.store.listen({source:'user', scope:'session'})` для detection user pan | [[DRW-075]] ✅ 0.14.2 |
+| autoSize / shape resize | role-preset.ts defaults bump (220×80) + `triggerGrowY` (no-op due to identity-equal props в tldraw 5.x — research DRW-081); долгосрочно — Mermaid pivot | [[DRW-077]] ✅ 0.14.2 part A; [[DRW-081]] research closed |
+| frame children parent-relative | `apps/backend/src/domain/layout.ts` runLayout — для shape с parentId in frameIds subtract parent's abs position перед записью | [[DRW-082]] ✅ 0.14.4 |
+| frame.props.color required | `compile.ts:226` (makeFrameShape) + backfill `schema-placeholder.ts` | [[DRW-080]] ✅ 0.14.3 |
+| ELK spacing для dense graphs | `packages/shemma-domain/src/layout-modes.ts` SPACING_PRESETS + layered between-layers + edge-label spacing | [[DRW-079]] ✅ 0.14.3 |
+| Mermaid import + hybrid workflow | `apps/frontend/src/canvas/mermaid-import.ts` (importMermaid через `@tldraw/mermaid.createMermaidDiagram` + slugify didrawName); ⌘M hotkey + `window.shemmaImportMermaid(source)` console fallback | [[DRW-053]] ✅; [[DRW-067]] docs ✅ 0.14.4 |
 
 **TODO:** subagent DRW-076 после investigation должен дополнить эту таблицу конкретными `file:line`.
 
 ---
 
-## 10. Расширение этого документа
+## 10. Mermaid-first / hybrid workflow
+
+Для сложных диаграмм (≥10 нод, длинные multi-line labels, type signatures) manual `shemma_define → shemma_connect → shemma_layout` даёт **tight/cramped output**:
+- `geo` labels не shrink-to-fit программно (нет public auto-resize API в tldraw 5.x — [[DRW-081]]).
+- ELK layered routing crowds parallel edges в dense graphs.
+
+**Solution: Mermaid import + incremental shemma_define для tweaks.**
+
+### Path
+
+1. **UI**: ⌘M / Ctrl+M открывает modal — paste mermaid source.
+2. **Programmatic**: `window.shemmaImportMermaid("flowchart LR\n  A --> B")` в DevTools console.
+3. `@tldraw/mermaid.createMermaidDiagram(editor, source)` парсит + лэйаут'ит mermaid'овским engine'ом, пишет shapes через `editor.createShape` — это **триггерит `onBeforeCreate`** → `calculateGrowY` отрабатывает (label overflow не возникает; manual path этот hook ловит мимо store.put).
+4. Каждый imported node получает `meta.didrawName` (slugified label) → **domain-aware**; `shemma_define`/`connect`/`layout` находят shapes по этому имени.
+5. WS sync шлёт shapes в backend автоматически (без manual `sendPatch`).
+
+### Post-import interactivity
+
+| Действие | Команда | Поведение |
+|---|---|---|
+| Добавить ноду | `shemma_define { name: "x", role: "service" }` | Append поверх imported шейпов |
+| Соединить с imported | `shemma_connect { from: "<imported_slug>", to: "x", connectionKind: "sync" }` | Резолвится по didrawName |
+| Обернуть в group | `shemma_group { name, as: "boundary", ids: [...] }` | Создаёт frame container с children |
+| Ungroup imported | `editor.ungroupShapes([rootId])` в console | Bindings сохраняются (id-based), edges + labels OK |
+| Re-layout всё | `shemma_layout { mode, scope: "all" }` | Mixed imported+manual работает uniformly |
+
+### Когда что использовать
+
+- **Mermaid-first**: ≥10 нод, длинные labels, AI знает mermaid representation цели.
+- **Manual shemma_define**: iterative (≤5 нод), additive design, нет mermaid в контексте.
+- **Hybrid** (recommended): mermaid для bulk → shemma_define для incremental → один `shemma_layout` в конце.
+
+Source: `apps/frontend/src/canvas/mermaid-import.ts` (`importMermaid`) + ADR `docs/decisions/0001-mermaid-import-location.md`.
+
+---
+
+## 11. Расширение этого документа
 
 - Любая новая investigation → одна-две строки сюда (что нашёл + URL источника).
-- При расхождении type-defs vs docs — **docs primary** (см. `feedback-tldraw-docs`).
+- При расхождении type-defs vs docs — **docs primary** (см. `feedback-tldraw-docs`); type defs точнее для precise schemas (новые required fields).
 - Не дублировать tldraw docs целиком — фиксировать только то, что неочевидно из типов или укусило в shemma.
