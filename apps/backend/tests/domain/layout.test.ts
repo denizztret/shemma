@@ -202,17 +202,17 @@ describe("runLayout", () => {
     expect(bAfter.x).toBeLessThan(700);
   });
 
-  // DRW-092: anchor frame — frame not in affectedIds but children are → frame not updated, children updated parent-relative.
-  test("DRW-092: anchor frame not updated, children stay inside frame bounds (parent-relative)", async () => {
+  // DRW-092 v3: anchor frame stays at original x/y, w/h grow under ELK-computed
+  // layered output. Children parent-relative against ELK-output frame compound.
+  test("DRW-092: anchor frame stays put (x/y), grows to fit children (w/h)", async () => {
     const frame = makeShape("shape:e_frame", "fr", { type: "frame", x: 100, y: 200, w: 400, h: 300 });
-    // 4 children all clustered at (0,0) relative
+    // 4 children clustered at (0,0) relative — disconnected (no edges)
     const c1 = makeShape("shape:e_c1", "c1", { x: 0, y: 0, parentId: "shape:e_frame" });
     const c2 = makeShape("shape:e_c2", "c2", { x: 5, y: 0, parentId: "shape:e_frame" });
     const c3 = makeShape("shape:e_c3", "c3", { x: 0, y: 5, parentId: "shape:e_frame" });
     const c4 = makeShape("shape:e_c4", "c4", { x: 5, y: 5, parentId: "shape:e_frame" });
     const s = snapshotWith([frame, c1, c2, c3, c4]);
     const idx = rebuildDidrawIndex(s);
-    // frame NOT in affectedIds — it's an anchor container
     const r = await runLayout(s, {
       mode: "layered-tb",
       scope: "affected",
@@ -221,16 +221,15 @@ describe("runLayout", () => {
     }, idx);
     expect(r.reason).toBeUndefined();
 
-    // frame must NOT be in batch.updated (it's an anchor, not selected)
-    expect(r.batch.updated["shape:e_frame"]).toBeUndefined();
-
     const ns = applyStoreChanges(s, r.batch);
     const fr = ns.store["shape:e_frame"] as { x: number; y: number; props: { w: number; h: number } };
-    // Frame stays at original position
+    // Frame x/y unchanged
     expect(fr.x).toBe(100);
     expect(fr.y).toBe(200);
+    // Frame w/h may have grown (ELK compound size); MUST be sized to fit children.
+    expect(fr.props.w).toBeGreaterThan(0);
+    expect(fr.props.h).toBeGreaterThan(0);
 
-    // All children should have parentId=frame and be within frame bounds (parent-relative)
     for (const cid of ["shape:e_c1", "shape:e_c2", "shape:e_c3", "shape:e_c4"]) {
       const c = ns.store[cid] as { x: number; y: number; parentId: string; props: { w: number; h: number } };
       expect(c.parentId).toBe("shape:e_frame");

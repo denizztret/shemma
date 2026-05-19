@@ -1,3 +1,23 @@
+## 0.18.3 — 2026-05-19 — Tidy UX: smart zoom + frame anchor grows layered (DRW-096, DRW-092 v3)
+
+Dogfood feedback PATCH из той же сессии что и 0.18.2. Два фикса по UX Tidy:
+
+### Fixed
+
+- **DRW-092 v3 — anchor frame использует layered, growth вместо clamp.** Initial DRW-092 импл (shipped в 0.18.0) использовал ELK `rectpacking` algorithm + `FIXED_SIZE` constraint для anchor frame — дети пакались в угол, теряли layered ranking и edge routing (Image #12 от user 2026-05-19: graph внутри frame теряет всю структуру). v3: anchor frame использует тот же layered algorithm что и outer (опции `opts`). Frame **растёт** до ELK-computed compound size (w/h обновляется в `batch.updated`), x/y остаётся original. Дети flow naturally inside. Дропнули ~50 LOC scale-clamp logic + `anchorSpacingPx` — больше не нужны.
+- **DRW-096 — Smart zoom: skip когда affected уже видны.** Auto-zoom после ⌘⇧L / Tidy раньше срабатывал безусловно с `userHasManuallyPanned` guard'ом. User feedback: "иногда мешает". Новое поведение: zoom только если post-layout affected bbox **не целиком в текущем viewport** (helper `isBoundsContained` в `apps/frontend/src/canvas/mermaid-import.ts`). Если уже видно — камера стоит. Вырезает 80% случаев navy autozoom без потери "уехали из viewport → найди их".
+
+### Tests
+
+- 315 backend pass / 0 fail (test "anchor frame not updated" → "anchor frame stays put, grows to fit").
+- 93 frontend pass / 0 fail (+4 для `isBoundsContained` helper).
+
+### Known limitations
+
+- Mermaid-imported диаграммы с nested `subgraph` блоками (`geo+role=boundary` через DRW-084 hybrid B) — после ручного ungroup / удаления boundary shapes children остаются со stale `parentId` и могут давать неожиданный layout (см. user Image #14). Отдельная задача в backlog.
+
+---
+
 ## 0.18.2 — 2026-05-19 — Daemon crash hotfix: conflicting WS user-change batches (DRW-094)
 
 PATCH critical: daemon крашился на normal user interaction. Frontend WS accumulator может склеить rapid create→delete (typically binding записи при быстром draw+undo arrow'а) в один user-change frame с одной и той же id в `added` И `removed`. `applyStoreChanges` Phase 3.0 sanity throw считал это logic bug → uncaught async exception → процесс daemon dies.

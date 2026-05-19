@@ -108,14 +108,6 @@ function bindingsForArrow(store: TLStoreSnapshot, arrowId: string): BindingRec[]
   return out;
 }
 
-function anchorSpacingPx(spacing: string): number {
-  switch (spacing) {
-    case "compact": return 10;
-    case "loose": return 30;
-    default: return 20;
-  }
-}
-
 /**
  * Build ELK graph from shapes + arrow-bindings, treating frames as compound nodes.
  *
@@ -183,27 +175,13 @@ function buildElkGraph(
     };
   };
 
-  const buildFrame = (f: ShapeRec, isAnchor: boolean) => {
+  const buildFrame = (f: ShapeRec, _isAnchor: boolean) => {
     const b = shapeBounds(f);
     const children = (childrenByFrame.get(f.id) ?? []).map(buildLeaf);
-    if (isAnchor) {
-      // Anchor frame (DRW-092): children layout inside using rectpacking to ensure
-      // they fill within frame.props.w/h. The frame itself won't be written to batch.
-      return {
-        id: f.id,
-        width: b.w,
-        height: b.h,
-        layoutOptions: {
-          "elk.algorithm": "rectpacking",
-          "elk.padding": "[top=40,left=20,bottom=20,right=20]",
-          "elk.spacing.nodeNode": String(anchorSpacingPx(hint.spacing)),
-          "elk.nodeSize.constraints": "FIXED_SIZE",
-          "elk.nodeSize.fixedGraphSize": "true",
-        },
-        children,
-      };
-    }
-    // Normal frame (selected frame, or full-canvas mode): use inherited layered layout opts.
+    // DRW-092 v3: frames (anchor и selected) используют тот же layered algorithm
+    // что и outer — сохраняем ranks + edge routing. Не зажимаем размер: ELK сам
+    // вычислит compound size под реальный children layout, мы это запишем в
+    // frame.props.w/h (anchor frame растёт под содержимое, x/y остаётся).
     return {
       id: f.id,
       width: b.w,
@@ -440,66 +418,12 @@ export async function runLayout(
     }
   }
 
-  // DRW-092: ELK rectpacking may overflow frame bounds with 4+ nodes and no edges;
-  // scale+translate to fit within padded frame area.
-  if (isSubgraphMode && anchorFrameIds.size > 0) {
-    const PAD_TOP = 40;
-    const PAD_SIDE = 20;
-    const shapeById = new Map(shapes.map((s) => [s.id, s]));
-    for (const frameId of anchorFrameIds) {
-      const frameShape = shapeById.get(frameId);
-      if (!frameShape) continue;
-      const frameBounds = shapeBounds(frameShape);
-      const availW = frameBounds.w - PAD_SIDE * 2;
-      const availH = frameBounds.h - PAD_TOP - PAD_SIDE;
-      // Find children of this anchor frame that have positions.
-      const frameElkPos = positions[frameId];
-      if (!frameElkPos) continue;
-      const childIds = shapes
-        .filter((s) => s.parentId === frameId && filterToIds?.has(s.id))
-        .map((s) => s.id);
-      if (childIds.length === 0) continue;
-      // Bbox of children in ELK output, relative to anchor frame ELK position.
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-      for (const cid of childIds) {
-        const cp = positions[cid];
-        if (!cp) continue;
-        const cs = shapeById.get(cid);
-        const cw = cp.w ?? (cs ? shapeBounds(cs).w : DEFAULT_W);
-        const ch = cp.h ?? (cs ? shapeBounds(cs).h : DEFAULT_H);
-        const relX = cp.x - frameElkPos.x;
-        const relY = cp.y - frameElkPos.y;
-        minX = Math.min(minX, relX);
-        minY = Math.min(minY, relY);
-        maxX = Math.max(maxX, relX + cw);
-        maxY = Math.max(maxY, relY + ch);
-      }
-      if (!Number.isFinite(minX)) continue;
-      const contentW = maxX - minX;
-      const contentH = maxY - minY;
-      // Scale down uniformly if content exceeds available space, then pin to padding origin.
-      const scale = Math.min(contentW > availW ? availW / contentW : 1, contentH > availH ? availH / contentH : 1);
-      const offsetX = PAD_SIDE - minX * scale;
-      const offsetY = PAD_TOP - minY * scale;
-      for (const cid of childIds) {
-        const cp = positions[cid];
-        if (!cp) continue;
-        const relX = cp.x - frameElkPos.x;
-        const relY = cp.y - frameElkPos.y;
-        positions[cid] = { ...cp, x: frameElkPos.x + relX * scale + offsetX, y: frameElkPos.y + relY * scale + offsetY };
-      }
-    }
-  }
-
   // DRW-003 displacement.
   applyDisplacement(positions, shapes, pinnedSet);
 
   // Build updated batch — only записи, у которых реально поменялись x/y/w/h.
-  // In subgraph mode: anchor frames are EXCLUDED from batch even if ELK moved them.
-  // They serve as fixed containers and their coords must not change.
+  // DRW-092 v3: anchor frame — x/y остаются original, но w/h обновляются под
+  // ELK-computed compound size (frame растёт под содержимое).
   const updated: Record<string, [TLRecord, TLRecord]> = {};
   const affected: string[] = [];
   const EPS = 1e-6;
@@ -517,10 +441,9 @@ export async function runLayout(
   for (const s of shapes) {
     const p = positions[s.id];
     if (!p) continue;
-    // Anchor frames: excluded from batch — they stay at original position.
-    if (anchorFrameIds.has(s.id)) continue;
-    // In subgraph mode: only shapes in filterToIds are allowed in batch.
-    if (filterToIds && !filterToIds.has(s.id)) continue;
+    const isAnchor = anchorFrameIds.has(s.id);
+    // In subgraph mode: только shapes из filterToIds или anchor-frames попадают в batch.
+    if (!isAnchor && filterToIds && !filterToIds.has(s.id)) continue;
     const oldB = shapeBounds(s);
     const isFrame = s.type === "frame";
     const parentIsFrame =
@@ -528,7 +451,11 @@ export async function runLayout(
 
     let newX: number;
     let newY: number;
-    if (parentIsFrame) {
+    if (isAnchor) {
+      // Anchor frame stays put — x/y из original; w/h ниже обновляется до ELK output.
+      newX = oldB.x;
+      newY = oldB.y;
+    } else if (parentIsFrame) {
       const parentPos = positions[s.parentId as string];
       newX = parentPos ? p.x - parentPos.x : p.x;
       newY = parentPos ? p.y - parentPos.y : p.y;

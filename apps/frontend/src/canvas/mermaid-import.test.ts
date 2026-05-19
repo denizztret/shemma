@@ -388,6 +388,38 @@ describe("unionBoundsOf (DRW-086)", () => {
   });
 });
 
+// --- DRW-096: isBoundsContained helper ---------------------------------------
+
+describe("isBoundsContained (DRW-096)", () => {
+  test("inner fully inside outer → true", async () => {
+    const { isBoundsContained } = await import("./mermaid-import");
+    expect(
+      isBoundsContained({ x: 10, y: 10, w: 20, h: 20 }, { x: 0, y: 0, w: 100, h: 100 }),
+    ).toBe(true);
+  });
+
+  test("inner overlaps but extends beyond outer → false", async () => {
+    const { isBoundsContained } = await import("./mermaid-import");
+    expect(
+      isBoundsContained({ x: 80, y: 0, w: 50, h: 50 }, { x: 0, y: 0, w: 100, h: 100 }),
+    ).toBe(false);
+  });
+
+  test("inner completely outside outer → false", async () => {
+    const { isBoundsContained } = await import("./mermaid-import");
+    expect(
+      isBoundsContained({ x: 200, y: 200, w: 50, h: 50 }, { x: 0, y: 0, w: 100, h: 100 }),
+    ).toBe(false);
+  });
+
+  test("inner touches edge but stays inside → true", async () => {
+    const { isBoundsContained } = await import("./mermaid-import");
+    expect(
+      isBoundsContained({ x: 0, y: 0, w: 100, h: 100 }, { x: 0, y: 0, w: 100, h: 100 }),
+    ).toBe(true);
+  });
+});
+
 // --- DRW-093: source passes through unchanged ---------------------------------
 
 describe("importMermaid — DRW-093: source passes through unchanged", () => {
