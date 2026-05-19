@@ -106,6 +106,12 @@ Each imported node gets `meta.didrawName` (slugified label) so it becomes **doma
 
 Dev-console fallback: `window.shemmaImportMermaid("flowchart LR\n  A --> B")` does the same thing programmatically.
 
+### Layout engine: DAGRE only (DRW-093)
+
+`@tldraw/mermaid@5.0.0` ships with mermaid but does **not** register `@mermaid-js/layout-elk` via `mermaid.registerLayoutLoaders`. Any `config: layout: elk` frontmatter in source — explicit or auto-prepended — silently degrades to DAGRE: mermaid does not raise an error when a requested layout loader is absent.
+
+For ELK-style output after import, run `shemma_layout` or `shemma_layout_selection` against the imported shapes — those go through our own ELK pipeline (`elkjs`) which is independent of mermaid's layout engine and produces orthogonal edges with tight ranking.
+
 ### Post-import interactivity
 
 - **Add nodes**: `shemma_define { name: "new_service", role: "service", label: "..." }` — appended; subsequent `shemma_layout` repositions everything including imported shapes.

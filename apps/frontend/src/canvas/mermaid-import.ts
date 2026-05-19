@@ -40,23 +40,6 @@ export function unionBoundsOf(editor: Editor, shapeIds: TLShapeId[]): BoundsLike
 // Нет промежуточного "build ops → sendPatch" — store сам и есть транспортный
 // слой.
 
-// DRW-084: ELK frontmatter constant.
-const ELK_FRONTMATTER = "---\nconfig:\n  layout: elk\n---\n";
-
-/**
- * Prepend ELK layout frontmatter to a Mermaid source string if it has none.
- * Mermaid frontmatter must start at position 0 with "---".
- * If the source already starts with "---" (any frontmatter) — return as-is.
- * @internal
- */
-export function prependElkFrontmatter(source: string): string {
-  if (source.trimStart().startsWith("---")) {
-    // Already has frontmatter (or trimmed variant — preserve original).
-    return source;
-  }
-  return `${ELK_FRONTMATTER}${source}`;
-}
-
 // Lazy-load @tldraw/mermaid — pulls in mermaid + heavy deps; only paid когда
 // пользователь реально импортирует.
 async function loadMermaid() {
@@ -117,14 +100,11 @@ export async function importMermaid(
     editor.getCurrentPageShapes().map((s) => s.id as unknown as string),
   );
 
-  // DRW-084 AC#6: auto-prepend ELK frontmatter for more compact visual layout.
-  const processedSource = prependElkFrontmatter(source);
-
-  // DRW-084 hotfix (hybrid strategy B): no mapNodeToRenderSpec override.
-  // Subgraph nodes render as default geo shapes (library default). The library
-  // sets parentId on children automatically via blueprint node.parentId.
-  // Post-process below detects geo containers by heuristic and tags them.
-  await mermaidMod.createMermaidDiagram(editor, processedSource);
+  // DRW-093: source passes through as-is. `@tldraw/mermaid@5.0.0` does NOT call
+  // `mermaid.registerLayoutLoaders` and `@mermaid-js/layout-elk` is not bundled,
+  // so any `config: layout: elk` frontmatter silently degrades to DAGRE. Use
+  // `shemma_layout` / `shemma_layout_selection` after import for ELK output.
+  await mermaidMod.createMermaidDiagram(editor, source);
 
   const after = editor.getCurrentPageShapes();
   const newShapes = after.filter(
