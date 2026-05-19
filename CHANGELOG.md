@@ -1,3 +1,26 @@
+## 0.18.5 — 2026-05-19 — Hierarchical multi-pass layout (DRW-099)
+
+PATCH: closes последний dogfood-обнаруженный layout-bug сессии 2026-05-19. После 0.18.3 (DRW-092 v3 anchor-frame-grow) + 0.18.4 (DRW-098 geo+role=boundary recognition) — base case nested compounds лучше, но на сложных диаграммах (Mermaid с 5+ subgraphs + cross-edges + smart-select-all) single-pass ELK с `INCLUDE_CHILDREN` всё ещё линеаризовал всю цепочку leaves через cross-compound edges (user Image #16).
+
+### Fixed
+
+- **DRW-099 — hierarchical multi-pass layout.** В `apps/backend/src/domain/layout.ts` для subgraph mode (scope='affected' + filterToIds) реализован user-предложенный иерархический алгоритм:
+  - **Pass A** (`runPassA`): рекурсивный ELK на children каждого anchor container (frame / geo+role=boundary). Дети получают parent-relative coords. Container w/h растёт под содержимое.
+  - **Pass B** (`runLayoutSubgraph`): flat ELK на top-level selected shapes. Selected containers с детьми обработанными в Pass A — leaf nodes с computed sizes. Cross-compound edges remap'ятся в container-to-container edges.
+- **Не задеты**: `scope='all'` path (single-pass через INCLUDE_CHILDREN, как раньше). Pin discipline (DRW-003). Parent-relative coords (DRW-082). Group bbox writeback (DRW-004). DRW-092 v3 anchor frame grow. DRW-098 geo+role=boundary container detection.
+
+### Tests
+
+- 321 backend pass / 0 fail (+6 для DRW-099): two-container-cross-edge, mixed root selection (frame+bare), nested anchor frames recursive, cross-compound edge remap, scope=all regression, integration test.
+
+### Known limitations
+
+- Cross-compound edge между child одного selected container и child другого, где second container — anchor (не в selection): edge дропается в Pass B (acceptable trade-off).
+- Origin preservation отключена при mixed selections с containers — containers сами определяют центр кластера.
+- 3+ уровень nesting (frame в frame в frame): работает рекурсивно но не тестировался напрямую.
+
+---
+
 ## 0.18.4 — 2026-05-19 — Layout: geo+role=boundary распознаются как container (DRW-098)
 
 PATCH следующий за 0.18.3. User dogfood (Image #15): Mermaid-imported диаграмма с nested `subgraph` блоками после Tidy раскладывается в одну горизонтальную линию вместо layered tree.
