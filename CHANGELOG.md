@@ -1,3 +1,35 @@
+## 0.18.9 — 2026-05-19 — Code simplifier pass на stabilization diff (-109 LOC)
+
+PATCH chore: упрощение кода stabilization-серии 0.18.0..0.18.8 без изменения наблюдаемого поведения. Никаких behavior changes, никаких bug fixes — только дедупликация и dead-code removal.
+
+### Refactored
+
+- **`apps/backend/src/domain/layout.ts` (1053 → 964, -89 LOC).** 7 simplifications:
+  - `resolveArrowEndpoints` helper заменил 3 копии find-2-bindings+resolve паттерна (`buildEdges`/`buildElkGraph`/`runLayoutSubgraph`).
+  - Удалён мёртвый код в `runPassA`: `ccChildren` с багой `!isLayoutCandidate === false`, неиспользуемая `ccFiltered`, дублирующий `ccFilteredActual`.
+  - Удалён duplicate `anchorFrameIds` scan в `runLayoutSubgraph` (562-572 сразу затирался `.clear()` на 593) + неиспользуемый helper `getAncestorContainers`.
+  - Single pass для `containerIds`/`frameIds`/`shapeById` prebuild в `runLayout` (было 3 прохода) + `Map.get` вместо O(n) `find` в origin-preservation.
+  - `directSelectedChildrenOf(parentId)` helper заменил 3 копии `filter(s => s.parentId === X)`.
+  - `sizeFor(s)` helper заменил повторяющийся `passARes ? passARes.newW : origB.w` паттерн.
+  - `buildElkGraph`: `filterToIds` параметр был всегда `undefined`, удалена subgraph-ветка с anchor flag detection.
+- **`apps/frontend/src/App.tsx` (-20 LOC).** Два helper'а:
+  - `maybeZoomToAffected(editor, ids, ref)` — module-level helper заменил два идентичных блока (Tidy hotkey + context menu) с viewport-containment check + setTimeout-guard.
+  - `runMermaidImport(source, requestId, focus)` — local closure в primary `useEffect` заменил два дубля `onImportMermaid` handler (initial syncer + recovery syncer после `truncated` event).
+- **`apps/frontend/src/canvas/mermaid-import.ts`.** Перенесён orphan JSDoc-блок (стоял над `isBoundsContained`, относился к `unionBoundsOf`).
+
+### Архитектурные инварианты (сохранены)
+
+- `isContainerShape(s)` = `frame OR (geo + meta.role === "boundary")`.
+- Origin preservation: translation `(centroid_orig - centroid_elk)` только для top-level positions, НЕ children parent-relative.
+- `childToTopContainer` строится walk'ом по ВСЕМ shapes (не только selected) — критично для tldraw selection mutex.
+- Pin discipline, group bbox writeback, `scope='all'` legacy single-pass — нетронуты.
+
+### Tests
+
+- 321 backend pass / 0 fail. 93 frontend pass / 0 fail. 142 mcp pass / 0 fail. Total: 626 pass / 0 fail across 5 packages.
+
+---
+
 ## 0.18.8 — 2026-05-19 — Bundle workflow/*.md в SFE (DRW-063)
 
 PATCH: `shemma_get_instructions` падал с `{"ok":false,"code":"read-error","message":"ENOENT: no such file or directory, open '/$bunfs/root/workflow/overview.md'"}` в released binary. Root cause — `readFileSync(join(HERE, "workflow/..."))` работал в dev (файлы рядом с исходниками), но в SFE `bun build --compile` делает виртуальную ФС `$bunfs/root/...` и workflow/*.md не были embed'нуты.
