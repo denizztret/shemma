@@ -108,6 +108,14 @@ function bindingsForArrow(store: TLStoreSnapshot, arrowId: string): BindingRec[]
   return out;
 }
 
+function anchorSpacingPx(spacing: string): number {
+  switch (spacing) {
+    case "compact": return 10;
+    case "loose": return 30;
+    default: return 20;
+  }
+}
+
 /**
  * Build ELK graph from shapes + arrow-bindings, treating frames as compound nodes.
  *
@@ -133,35 +141,24 @@ function buildElkGraph(
   const frames = shapes.filter((s) => s.type === "frame");
   const leaves = shapes.filter((s) => s.type !== "frame");
 
-  // Subgraph filter: determine which leaves/frames are included.
   const includedLeaves = filterToIds
     ? leaves.filter((s) => filterToIds.has(s.id))
     : leaves;
 
-  // Included leaf ids set for edge filtering and anchor detection.
-  const includedLeafIds = new Set(includedLeaves.map((s) => s.id));
-
-  // Determine anchor frames: frame NOT in filterToIds but has ≥1 included child.
-  // Also included selected frames: frame.id ∈ filterToIds.
+  // Anchor frames: parent of ≥1 included leaf, but not themselves in filterToIds.
+  // Included as fixed-size containers in ELK; their position is NOT written back.
   const anchorFrameIds = new Set<string>();
-  const selectedFrameIds = new Set<string>();
   if (filterToIds) {
     for (const f of frames) {
-      if (filterToIds.has(f.id)) {
-        selectedFrameIds.add(f.id);
-      } else {
-        // Check if any included leaf has this frame as parent
-        const hasIncludedChild = includedLeaves.some((s) => s.parentId === f.id);
-        if (hasIncludedChild) {
-          anchorFrameIds.add(f.id);
-        }
+      if (!filterToIds.has(f.id) && includedLeaves.some((s) => s.parentId === f.id)) {
+        anchorFrameIds.add(f.id);
       }
     }
   }
 
-  // When filtering: include only selected frames + anchor frames (as containers).
+  // Include selected frames (in filterToIds) + anchor frames.
   const includedFrames = filterToIds
-    ? frames.filter((f) => selectedFrameIds.has(f.id) || anchorFrameIds.has(f.id))
+    ? frames.filter((f) => filterToIds.has(f.id) || anchorFrameIds.has(f.id))
     : frames;
 
   // Children of frame: shapes whose parentId === frame.id (layout candidates).
@@ -199,7 +196,7 @@ function buildElkGraph(
         layoutOptions: {
           "elk.algorithm": "rectpacking",
           "elk.padding": "[top=40,left=20,bottom=20,right=20]",
-          "elk.spacing.nodeNode": String(hint.spacing === "compact" ? 10 : hint.spacing === "loose" ? 30 : 20),
+          "elk.spacing.nodeNode": String(anchorSpacingPx(hint.spacing)),
           "elk.nodeSize.constraints": "FIXED_SIZE",
           "elk.nodeSize.fixedGraphSize": "true",
         },
@@ -216,9 +213,9 @@ function buildElkGraph(
     };
   };
 
-  // All shape ids included in this graph (for edge filtering).
+  // All shape ids included in this graph (for edge filtering in subgraph mode).
   const allIncludedIds = new Set([
-    ...includedLeafIds,
+    ...includedLeaves.map((s) => s.id),
     ...includedFrames.map((f) => f.id),
   ]);
 
@@ -404,13 +401,9 @@ export async function runLayout(
     }
   }
 
-  // DRW-091 AC#2: origin preservation for subgraph mode (no anchor frame case).
-  // When selected shapes are top-level (no anchor frame containing them), translate
-  // the ELK output so that the centroid of selected shapes stays near original centroid.
-  // This prevents selected cluster from jumping to (0,0) or the non-selected territory.
-  // Only non-pinned positions are translated; pinned shapes keep their original coords.
+  // DRW-091 AC#2: when selected shapes are top-level (no anchor frame), translate ELK
+  // output to preserve original centroid. Prevents cluster from jumping to (0,0).
   if (isSubgraphMode && anchorFrameIds.size === 0 && filterToIds && filterToIds.size > 0) {
-    // Collect original positions of selected shapes (only non-pinned, non-frame for centroid).
     const selectedShapes = shapes.filter(
       (s) => filterToIds.has(s.id) && !pinnedSet.has(s.id) && s.type !== "frame",
     );
@@ -438,9 +431,8 @@ export async function runLayout(
         elkCY /= count;
         const dx = origCX - elkCX;
         const dy = origCY - elkCY;
-        // Translate all non-pinned positions in the ELK output by (dx, dy).
         for (const id in positions) {
-          if (pinnedSet.has(id)) continue; // pinned shapes keep their original coords
+          if (pinnedSet.has(id)) continue;
           const p = positions[id];
           positions[id] = { ...p, x: p.x + dx, y: p.y + dy };
         }
@@ -448,10 +440,8 @@ export async function runLayout(
     }
   }
 
-  // DRW-092: clamp children of anchor frames to fit within frame bounds (parent-relative).
-  // ELK may lay out children exceeding frame.props.w/h (especially with 4+ nodes, no edges).
-  // We scale+translate the ELK layout to fit within [padding_left, frame.w - padding_right]
-  // × [padding_top, frame.h - padding_bottom].
+  // DRW-092: ELK rectpacking may overflow frame bounds with 4+ nodes and no edges;
+  // scale+translate to fit within padded frame area.
   if (isSubgraphMode && anchorFrameIds.size > 0) {
     const PAD_TOP = 40;
     const PAD_SIDE = 20;
@@ -469,7 +459,7 @@ export async function runLayout(
         .filter((s) => s.parentId === frameId && filterToIds?.has(s.id))
         .map((s) => s.id);
       if (childIds.length === 0) continue;
-      // Compute bbox of children in ELK output (relative to anchor frame ELK position).
+      // Bbox of children in ELK output, relative to anchor frame ELK position.
       let minX = Infinity;
       let minY = Infinity;
       let maxX = -Infinity;
@@ -490,11 +480,8 @@ export async function runLayout(
       if (!Number.isFinite(minX)) continue;
       const contentW = maxX - minX;
       const contentH = maxY - minY;
-      // Scale factors: if content exceeds available space, scale down uniformly.
-      const scaleX = contentW > availW ? availW / contentW : 1;
-      const scaleY = contentH > availH ? availH / contentH : 1;
-      const scale = Math.min(scaleX, scaleY);
-      // Translation: move top-left of content to (PAD_SIDE, PAD_TOP) within frame.
+      // Scale down uniformly if content exceeds available space, then pin to padding origin.
+      const scale = Math.min(contentW > availW ? availW / contentW : 1, contentH > availH ? availH / contentH : 1);
       const offsetX = PAD_SIDE - minX * scale;
       const offsetY = PAD_TOP - minY * scale;
       for (const cid of childIds) {
@@ -502,11 +489,7 @@ export async function runLayout(
         if (!cp) continue;
         const relX = cp.x - frameElkPos.x;
         const relY = cp.y - frameElkPos.y;
-        // New relative position (after scale + translate).
-        const newRelX = relX * scale + offsetX;
-        const newRelY = relY * scale + offsetY;
-        // Store back as absolute ELK (frame ELK pos + new relative).
-        positions[cid] = { ...cp, x: frameElkPos.x + newRelX, y: frameElkPos.y + newRelY };
+        positions[cid] = { ...cp, x: frameElkPos.x + relX * scale + offsetX, y: frameElkPos.y + relY * scale + offsetY };
       }
     }
   }
@@ -531,16 +514,6 @@ export async function runLayout(
     if (s.type === "frame") frameIds.add(s.id);
   }
 
-  // Build a lookup for original (pre-ELK) frame positions to correctly compute
-  // parent-relative coords for anchor frame children (DRW-092).
-  // Anchor frames stay at original coords, so children's relative = ELK_abs - frame_orig.
-  const frameOrigPos = new Map<string, { x: number; y: number }>();
-  for (const s of shapes) {
-    if (s.type === "frame") {
-      frameOrigPos.set(s.id, { x: s.x ?? 0, y: s.y ?? 0 });
-    }
-  }
-
   for (const s of shapes) {
     const p = positions[s.id];
     if (!p) continue;
@@ -556,12 +529,7 @@ export async function runLayout(
     let newX: number;
     let newY: number;
     if (parentIsFrame) {
-      const parentId = s.parentId as string;
-      // Use ELK output position of parent frame to convert abs ELK → relative.
-      // For anchor frames: ELK places them at some position (often 0,0 in subgraph
-      // since they're the root container). Child abs ELK - frame abs ELK = child
-      // relative inside frame, which is what tldraw expects.
-      const parentPos = positions[parentId];
+      const parentPos = positions[s.parentId as string];
       newX = parentPos ? p.x - parentPos.x : p.x;
       newY = parentPos ? p.y - parentPos.y : p.y;
     } else {
