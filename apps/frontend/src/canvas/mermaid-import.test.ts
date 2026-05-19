@@ -322,6 +322,72 @@ describe("importMermaid — DRW-084: subgraph remains geo with meta.role='bounda
   });
 });
 
+// --- DRW-086: unionBoundsOf helper -------------------------------------------
+
+describe("unionBoundsOf (DRW-086)", () => {
+  // Mock Box class for union calculation
+  function makeBox(x: number, y: number, w: number, h: number) {
+    return { x, y, w, h };
+  }
+
+  test("returns union box for multiple shapes with bounds", async () => {
+    const PAGE = "page:page";
+    const editor = makeFakeEditor(PAGE);
+    // Augment fake editor with getShapePageBounds
+    const boundsMap: Record<string, { x: number; y: number; w: number; h: number }> = {
+      "shape:a": makeBox(0, 0, 100, 50),
+      "shape:b": makeBox(200, 100, 80, 60),
+    };
+    (editor as unknown as Record<string, unknown>).getShapePageBounds = (id: string) => boundsMap[id] ?? undefined;
+
+    const { unionBoundsOf } = await import("./mermaid-import");
+    const result = unionBoundsOf(editor as never, ["shape:a" as never, "shape:b" as never]);
+    // Union of (0,0,100,50) and (200,100,80,60) should produce (0,0,280,160)
+    expect(result).not.toBeNull();
+    expect(result!.x).toBe(0);
+    expect(result!.y).toBe(0);
+    expect(result!.w).toBe(280);
+    expect(result!.h).toBe(160);
+  });
+
+  test("returns null when no shapes have bounds", async () => {
+    const PAGE = "page:page";
+    const editor = makeFakeEditor(PAGE);
+    (editor as unknown as Record<string, unknown>).getShapePageBounds = (_id: string) => undefined;
+
+    const { unionBoundsOf } = await import("./mermaid-import");
+    const result = unionBoundsOf(editor as never, ["shape:a" as never]);
+    expect(result).toBeNull();
+  });
+
+  test("returns null for empty shapeIds array", async () => {
+    const PAGE = "page:page";
+    const editor = makeFakeEditor(PAGE);
+    (editor as unknown as Record<string, unknown>).getShapePageBounds = (_id: string) => undefined;
+
+    const { unionBoundsOf } = await import("./mermaid-import");
+    const result = unionBoundsOf(editor as never, []);
+    expect(result).toBeNull();
+  });
+
+  test("returns single box when only one shape", async () => {
+    const PAGE = "page:page";
+    const editor = makeFakeEditor(PAGE);
+    (editor as unknown as Record<string, unknown>).getShapePageBounds = (id: string) => {
+      if (id === "shape:solo") return makeBox(10, 20, 50, 30);
+      return undefined;
+    };
+
+    const { unionBoundsOf } = await import("./mermaid-import");
+    const result = unionBoundsOf(editor as never, ["shape:solo" as never]);
+    expect(result).not.toBeNull();
+    expect(result!.x).toBe(10);
+    expect(result!.y).toBe(20);
+    expect(result!.w).toBe(50);
+    expect(result!.h).toBe(30);
+  });
+});
+
 // --- DRW-084: ELK frontmatter auto-prepend ------------------------------------
 
 describe("importMermaid — DRW-084: ELK frontmatter auto-prepend", () => {
