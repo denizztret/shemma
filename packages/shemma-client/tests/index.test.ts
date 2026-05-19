@@ -76,6 +76,57 @@ describe("CanvasClient", () => {
     expect(h).toBeNull();
   });
 
+  test("importMermaid sends POST to /api/agent/import-mermaid with correct body", async () => {
+    // This test verifies the client method sends the right HTTP request.
+    // The backend endpoint does not yet exist — we mock fetch.
+    const originalFetch = globalThis.fetch;
+    let capturedUrl = "";
+    let capturedBody: unknown;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      capturedUrl = typeof url === "string" ? url : url.toString();
+      capturedBody = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({ ok: true, shape_ids: ["s1", "s2"], didraw_names: ["a", "b"], root_ids: ["s1"] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const c = new CanvasClient({ baseUrl: `http://localhost:${srv.port}`, room: "mermaid-test" });
+      const result = await c.importMermaid({ source: "graph LR; A-->B", mode: "append", requestId: "req-123" }) as {
+        ok: boolean; shape_ids: string[]; didraw_names: string[]; root_ids: string[];
+      };
+      expect(capturedUrl).toContain("/api/agent/import-mermaid");
+      expect(capturedUrl).toContain("room=mermaid-test");
+      expect((capturedBody as { source: string }).source).toBe("graph LR; A-->B");
+      expect((capturedBody as { mode: string }).mode).toBe("append");
+      expect((capturedBody as { requestId: string }).requestId).toBe("req-123");
+      expect(result.ok).toBe(true);
+      expect(result.shape_ids).toEqual(["s1", "s2"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("importMermaid defaults mode to append when omitted", async () => {
+    const originalFetch = globalThis.fetch;
+    let capturedBody: unknown;
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({ ok: true, shape_ids: [], didraw_names: [], root_ids: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const c = new CanvasClient({ baseUrl: `http://localhost:${srv.port}`, room: "r" });
+      await c.importMermaid({ source: "graph LR; A-->B" });
+      // mode not in body when undefined — backend defaults to append
+      expect((capturedBody as Record<string, unknown>).mode).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("deletePrompt + purgePrompts", async () => {
     const c = new CanvasClient({
       baseUrl: `http://localhost:${srv.port}`,

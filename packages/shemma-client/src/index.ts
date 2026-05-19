@@ -351,6 +351,20 @@ export class CanvasClient {
     return r.json();
   }
 
+  async importMermaid(body: {
+    source: string;
+    mode?: "append" | "replace";
+    clientOpId?: string;
+    requestId?: string;
+  }) {
+    const r = await fetch(`${this.base}/api/agent/import-mermaid?${this.q()}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return r.json();
+  }
+
   async postViewport(vp: { x: number; y: number; w: number; h: number; zoom?: number }) {
     const r = await fetch(`${this.base}/api/viewport?${this.q()}`, {
       method: "POST",
