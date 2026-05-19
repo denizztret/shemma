@@ -1,3 +1,20 @@
+## 0.15.0 — 2026-05-19 — shemma_import_mermaid MCP tool
+
+Feature: `shemma_import_mermaid` MCP tool — AI теперь может импортировать Mermaid-диаграммы прямо на canvas без участия пользователя. Реализована через WS command path (option b): backend пересылает frame в открытый browser tab, frontend вызывает `@tldraw/mermaid.createMermaidDiagram`, shapes возвращаются через store-change sync. **Append-only:** инструмент всегда дописывает shapes, никогда не стирает existing canvas state — preserve user's manual layout edits — это hard invariant. Закрывает DRW-083.
+
+### Added
+
+- **DRW-083 — `shemma_import_mermaid` MCP tool.** Новый инструмент с параметрами `source` (mermaid source, обязательный), `room?`, `clientOpId?`. Возвращает `{shape_ids, didraw_names, root_ids}` для downstream `shemma_connect` вызовов. **APPEND-only** — нет `mode` параметра, AI никогда не wipes canvas. Wipe-операции — отдельный будущий `shemma_clear_room` с user-confirmation.
+- **Backend `POST /api/agent/import-mermaid`.** Endpoint принимает `{room, source, clientOpId?}`, проверяет наличие WS-subscriber в room (503 если нет), генерирует `requestId` (UUID), отправляет WS frame первому открытому subscriber'у, ждёт результат до 10s (timeout → `500 {error:"client did not respond"}`). На 503 response включает `room_url` — AI agent открывает URL в браузере и retry-ит.
+- **WS message kinds `import-mermaid` + `import-mermaid-result`.** Добавлены в `WsMessage` (backend→client) и `WsClientMessage` (client→backend) union типы. `WsHub.sendImportMermaid()` + `WsHub.resolveImportMermaid()` для управления pending promises.
+- **Frontend `onImportMermaid` callback** в `startStoreSync`. При получении `import-mermaid` frame вызывает callback (App.tsx → `importMermaid(editor, source)`), отправляет обратно `import-mermaid-result`. Frontend всегда append'ит — никаких preprocessing-шагов.
+- **`CanvasClient.importMermaid({source, clientOpId?, requestId?})`.** HTTP-метод для MCP layer через `POST /api/agent/import-mermaid`.
+- **`ImportMermaidArgs` Zod-схема** в `packages/shemma-mcp/src/schemas.ts` (`source`, `room?`, `clientOpId?`).
+- **MCP tool description** явно инструктирует AI: APPEND-only; `shemma_context` перед вызовом; retry по `room_url` на 503.
+- Workflow docs обновлены: `shemma_import_mermaid` теперь primary path; ⌘M modal — manual fallback. Добавлены секции "Edit, don't redraw" + "Handling no-client-connected error".
+
+---
+
 ## 0.14.4 — 2026-05-19 — Frame children parent-relative coords
 
 Bug-fix релиз: после 0.14.3 (containers с visible header) обнаружено что children в multi-frame схемах оказывались off-screen — tldraw хранит x/y child shape с parentId=frame как parent-relative, но ELK runLayout писал absolute page coords. Закрывает DRW-082.

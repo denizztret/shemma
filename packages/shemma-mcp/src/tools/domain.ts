@@ -12,6 +12,7 @@ import {
   LayoutArgs,
   DeleteArgs,
   ApplyArgs,
+  ImportMermaidArgs,
 } from "../schemas";
 
 export type DomainDeps = {
@@ -28,6 +29,7 @@ type NoteInput = z.infer<z.ZodObject<typeof NoteArgs>>;
 type LayoutInput = z.infer<z.ZodObject<typeof LayoutArgs>>;
 type DeleteInput = z.infer<z.ZodObject<typeof DeleteArgs>>;
 type ApplyInput = z.infer<z.ZodObject<typeof ApplyArgs>>;
+type ImportMermaidInput = z.infer<z.ZodObject<typeof ImportMermaidArgs>>;
 
 export type DomainHandles = {
   define: { call: (input: DefineInput) => Promise<ToolResult> };
@@ -37,6 +39,7 @@ export type DomainHandles = {
   layout: { call: (input: LayoutInput) => Promise<ToolResult> };
   delete: { call: (input: DeleteInput) => Promise<ToolResult> };
   apply: { call: (input: ApplyInput) => Promise<ToolResult> };
+  importMermaid: { call: (input: ImportMermaidInput) => Promise<ToolResult> };
 };
 
 type CommonArgs = {
@@ -237,6 +240,80 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
     async (args) => applyCall(args as ApplyInput),
   );
 
+  // ── shemma_import_mermaid ───────────────────────────────────────────────────
+  // Append-only. The MCP layer never sends a mode flag — wiping the canvas is
+  // a separate explicit action that requires user confirmation.
+  async function importMermaidCall(input: ImportMermaidInput): Promise<ToolResult> {
+    const { room: argRoom, clientOpId, source } = input;
+    const resolved = await deps.resolver.resolve({ argRoom });
+    if (!resolved.ok) {
+      return toolResult({
+        ok: false,
+        code: "ambiguous-room",
+        message: resolved.message,
+        details: { candidates: resolved.candidates },
+      });
+    }
+
+    try {
+      const c = new CanvasClient({ baseUrl: deps.client.baseUrl, room: resolved.room });
+      const resp = (await c.importMermaid({
+        source,
+        clientOpId,
+      })) as {
+        ok?: boolean;
+        shape_ids?: string[];
+        didraw_names?: string[];
+        root_ids?: string[];
+        error?: string;
+        room_url?: string;
+      };
+
+      if (resp.ok) {
+        deps.resolver.recordTouch(resolved.room);
+        return toolResult({
+          ok: true,
+          room: resolved.room,
+          roomSource: resolved.source,
+          shape_ids: resp.shape_ids ?? [],
+          didraw_names: resp.didraw_names ?? [],
+          root_ids: resp.root_ids ?? [],
+        });
+      }
+
+      // 503 "no client connected" path: backend ships `room_url` so AI can
+      // open the tab and retry. Surface it both in the structured message
+      // (so AI can read the URL from the text content) and in details.
+      if (resp.room_url) {
+        return toolResult({
+          ok: false,
+          code: "no-client-connected",
+          message: `${resp.error ?? "no client connected"}. Open ${resp.room_url} in a browser, then retry.`,
+          details: { room: resolved.room, room_url: resp.room_url },
+        });
+      }
+
+      return toolResult({
+        ok: false,
+        code: "import-failed",
+        message: resp.error ?? "import failed",
+        details: { room: resolved.room },
+      });
+    } catch (e) {
+      return toolResult({ ...mapFetchError(e) });
+    }
+  }
+
+  server.registerTool(
+    "shemma_import_mermaid",
+    {
+      description:
+        "Imports a Mermaid diagram into the canvas room. APPEND-only — never replaces or deletes existing shapes; preserves user's manual layout edits.\n\nBefore calling: invoke `shemma_context` first to inspect existing element didraw_names — Mermaid node ids that collide with existing names will be auto-deduplicated (e.g. \"api-2\"), so avoid emitting Mermaid labels that already exist as nodes.\n\nRequires an open browser tab on the same room. On 503 \"no client connected\", caller should open the returned room_url (e.g. via a browser/devtools tool) and retry once.\n\nReturns: shape_ids, didraw_names, root_ids — usable for follow-up shemma_connect / shemma_group.",
+      inputSchema: ImportMermaidArgs,
+    },
+    async (args) => importMermaidCall(args as ImportMermaidInput),
+  );
+
   return {
     define: { call: defineCall },
     connect: { call: connectCall },
@@ -245,5 +322,6 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
     layout: { call: layoutCall },
     delete: { call: deleteCall },
     apply: { call: applyCall },
+    importMermaid: { call: importMermaidCall },
   };
 }

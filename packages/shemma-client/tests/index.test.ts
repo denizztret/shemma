@@ -76,6 +76,38 @@ describe("CanvasClient", () => {
     expect(h).toBeNull();
   });
 
+  test("importMermaid sends POST to /api/agent/import-mermaid with correct body", async () => {
+    // This test verifies the client method sends the right HTTP request.
+    // Append-only — no `mode` field by design (DRW-083 follow-up).
+    const originalFetch = globalThis.fetch;
+    let capturedUrl = "";
+    let capturedBody: unknown;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      capturedUrl = typeof url === "string" ? url : url.toString();
+      capturedBody = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({ ok: true, shape_ids: ["s1", "s2"], didraw_names: ["a", "b"], root_ids: ["s1"] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const c = new CanvasClient({ baseUrl: `http://localhost:${srv.port}`, room: "mermaid-test" });
+      const result = await c.importMermaid({ source: "graph LR; A-->B", requestId: "req-123" }) as {
+        ok: boolean; shape_ids: string[]; didraw_names: string[]; root_ids: string[];
+      };
+      expect(capturedUrl).toContain("/api/agent/import-mermaid");
+      expect(capturedUrl).toContain("room=mermaid-test");
+      expect((capturedBody as { source: string }).source).toBe("graph LR; A-->B");
+      expect((capturedBody as { requestId: string }).requestId).toBe("req-123");
+      // No mode field — append-only.
+      expect((capturedBody as Record<string, unknown>).mode).toBeUndefined();
+      expect(result.ok).toBe(true);
+      expect(result.shape_ids).toEqual(["s1", "s2"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("deletePrompt + purgePrompts", async () => {
     const c = new CanvasClient({
       baseUrl: `http://localhost:${srv.port}`,

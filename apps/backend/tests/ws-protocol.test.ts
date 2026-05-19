@@ -50,6 +50,49 @@ describe("parseClientMessage", () => {
   });
 });
 
+describe("parseClientMessage — import-mermaid-result", () => {
+  it("parses ok:true result with all fields", () => {
+    const msg = parseClientMessage(JSON.stringify({
+      kind: "import-mermaid-result",
+      requestId: "req-abc",
+      ok: true,
+      shape_ids: ["s1", "s2"],
+      didraw_names: ["node-a", "node-b"],
+      root_ids: ["s1"],
+    }));
+    expect(msg).not.toBeNull();
+    expect(msg?.kind).toBe("import-mermaid-result");
+    if (msg?.kind === "import-mermaid-result") {
+      expect(msg.requestId).toBe("req-abc");
+      expect(msg.ok).toBe(true);
+      expect(msg.shape_ids).toEqual(["s1", "s2"]);
+      expect(msg.root_ids).toEqual(["s1"]);
+    }
+  });
+
+  it("parses ok:false result with error field", () => {
+    const msg = parseClientMessage(JSON.stringify({
+      kind: "import-mermaid-result",
+      requestId: "req-err",
+      ok: false,
+      error: "invalid mermaid syntax",
+    }));
+    expect(msg?.kind).toBe("import-mermaid-result");
+    if (msg?.kind === "import-mermaid-result") {
+      expect(msg.ok).toBe(false);
+      expect(msg.error).toBe("invalid mermaid syntax");
+    }
+  });
+
+  it("rejects import-mermaid-result with missing requestId", () => {
+    expect(parseClientMessage(JSON.stringify({ kind: "import-mermaid-result", ok: true }))).toBeNull();
+  });
+
+  it("rejects import-mermaid-result with missing ok", () => {
+    expect(parseClientMessage(JSON.stringify({ kind: "import-mermaid-result", requestId: "r" }))).toBeNull();
+  });
+});
+
 describe("isPlaceholderSchema", () => {
   it("identifies the V1 stub produced by defaultSchema() as placeholder", () => {
     const stub = { schemaVersion: 1, storeVersion: 4, recordVersions: {} };

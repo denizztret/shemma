@@ -485,3 +485,98 @@ describe("startStoreSync — stop()", () => {
     expect(t.sock.sent.length).toBe(2);
   });
 });
+
+describe("startStoreSync — import-mermaid callback (DRW-083)", () => {
+  function makeDepsWithImport(
+    onImportMermaid?: (
+      source: string,
+      requestId: string,
+    ) => Promise<{
+      ok: boolean;
+      shapeIds?: string[];
+      didrawNames?: string[];
+      rootIds?: string[];
+      error?: string;
+    }>,
+  ) {
+    const sock = new MockSocket();
+    const store = new MockStore();
+    const editor = { store } as unknown as Parameters<typeof startStoreSync>[0]["editor"];
+    const sync = startStoreSync({
+      editor,
+      wsUrl: "ws://test/ws?room=t",
+      room: "test-room",
+      initialVersion: 0,
+      onTruncated: () => {},
+      debounceMs: 5,
+      socketFactory: () => sock as unknown as WebSocket,
+      onImportMermaid,
+    });
+    return { sock, store, stop: sync.stop };
+  }
+
+  test("import-mermaid frame calls onImportMermaid callback and sends result back", async () => {
+    const calls: Array<{ source: string; requestId: string }> = [];
+    const { sock, stop } = makeDepsWithImport(async (source, requestId) => {
+      calls.push({ source, requestId });
+      return { ok: true, shapeIds: ["s1", "s2"], didrawNames: ["a", "b"], rootIds: ["s1"] };
+    });
+    sock.open();
+    const beforeSent = sock.sent.length;
+
+    sock.message({ kind: "import-mermaid", source: "graph LR; A-->B", requestId: "req-xyz" });
+
+    // Wait for the async callback to complete
+    await sleep(20);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.source).toBe("graph LR; A-->B");
+    expect(calls[0]!.requestId).toBe("req-xyz");
+
+    // Should have sent back import-mermaid-result
+    const resultFrames = sock.sent.slice(beforeSent).map((s) => JSON.parse(s));
+    const resultFrame = resultFrames.find((f: { kind: string }) => f.kind === "import-mermaid-result");
+    expect(resultFrame).toBeDefined();
+    expect(resultFrame.ok).toBe(true);
+    expect(resultFrame.requestId).toBe("req-xyz");
+    expect(resultFrame.shape_ids).toEqual(["s1", "s2"]);
+    expect(resultFrame.root_ids).toEqual(["s1"]);
+
+    stop();
+  });
+
+  test("import-mermaid sends error result when callback throws", async () => {
+    const { sock, stop } = makeDepsWithImport(async () => {
+      throw new Error("invalid mermaid");
+    });
+    sock.open();
+    const beforeSent = sock.sent.length;
+
+    sock.message({ kind: "import-mermaid", source: "bad source", requestId: "req-err" });
+    await sleep(20);
+
+    const resultFrames = sock.sent.slice(beforeSent).map((s) => JSON.parse(s));
+    const resultFrame = resultFrames.find((f: { kind: string }) => f.kind === "import-mermaid-result");
+    expect(resultFrame).toBeDefined();
+    expect(resultFrame.ok).toBe(false);
+    expect(resultFrame.error).toContain("invalid mermaid");
+    expect(resultFrame.requestId).toBe("req-err");
+
+    stop();
+  });
+
+  test("import-mermaid is silently ignored when no onImportMermaid callback", async () => {
+    const { sock, stop } = makeDepsWithImport(undefined);
+    sock.open();
+    const beforeSent = sock.sent.length;
+
+    sock.message({ kind: "import-mermaid", source: "graph LR; A-->B", requestId: "req-noop" });
+    await sleep(20);
+
+    // No extra frames sent (no callback → no result)
+    const newFrames = sock.sent.slice(beforeSent);
+    expect(newFrames.length).toBe(0);
+
+    stop();
+  });
+});

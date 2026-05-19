@@ -73,7 +73,8 @@ type StoreSyncMessage =
   | { kind: "prompt-created"; prompt: unknown }
   | { kind: "prompt-resolved"; id: string; response?: string }
   | { kind: "prompt-removed"; ids: string[] }
-  | { kind: "ai-activity"; activity: AiActivity | null };
+  | { kind: "ai-activity"; activity: AiActivity | null }
+  | { kind: "import-mermaid"; source: string; requestId: string };
 
 // ---------------------------------------------------------------------------
 // BoardFocusBeacon — standalone factory for sending board-focus WS messages.
@@ -148,6 +149,24 @@ export type StoreSyncDeps = {
    * Defaults to the global `WebSocket`.
    */
   socketFactory?: (url: string) => WebSocket;
+  /**
+   * Called when the backend sends an import-mermaid command frame (DRW-083).
+   * The handler should call importMermaid(editor, source) and return the result.
+   * If not provided, the frame is silently ignored.
+   *
+   * Append-only by design: no mode parameter. AI must never wipe existing
+   * canvas state — preserving user's manual layout edits is a hard invariant.
+   */
+  onImportMermaid?: (
+    source: string,
+    requestId: string,
+  ) => Promise<{
+    ok: boolean;
+    shapeIds?: string[];
+    didrawNames?: string[];
+    rootIds?: string[];
+    error?: string;
+  }>;
 };
 
 /**
@@ -327,6 +346,40 @@ export function startStoreSync(deps: StoreSyncDeps): {
         break;
       case "hello":
         // Legacy initial frame — no action; initial state already loaded.
+        break;
+      case "import-mermaid":
+        if (deps.onImportMermaid) {
+          const { source, requestId } = msg;
+          void deps.onImportMermaid(source, requestId).then(
+            (result) => {
+              if (stopped) return;
+              if (ws.readyState !== ws.OPEN) return;
+              ws.send(
+                JSON.stringify({
+                  kind: "import-mermaid-result",
+                  requestId,
+                  ok: result.ok,
+                  shape_ids: result.shapeIds,
+                  didraw_names: result.didrawNames,
+                  root_ids: result.rootIds,
+                  error: result.error,
+                }),
+              );
+            },
+            (err: unknown) => {
+              if (stopped) return;
+              if (ws.readyState !== ws.OPEN) return;
+              ws.send(
+                JSON.stringify({
+                  kind: "import-mermaid-result",
+                  requestId,
+                  ok: false,
+                  error: err instanceof Error ? err.message : String(err),
+                }),
+              );
+            },
+          );
+        }
         break;
       case "prompt-created":
       case "prompt-resolved":
