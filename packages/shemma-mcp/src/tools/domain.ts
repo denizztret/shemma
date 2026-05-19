@@ -10,6 +10,7 @@ import {
   GroupArgs,
   NoteArgs,
   LayoutArgs,
+  LayoutSelectionArgs,
   DeleteArgs,
   ApplyArgs,
   ImportMermaidArgs,
@@ -27,6 +28,7 @@ type ConnectInput = z.infer<z.ZodObject<typeof ConnectArgs>>;
 type GroupInput = z.infer<z.ZodObject<typeof GroupArgs>>;
 type NoteInput = z.infer<z.ZodObject<typeof NoteArgs>>;
 type LayoutInput = z.infer<z.ZodObject<typeof LayoutArgs>>;
+type LayoutSelectionInput = z.infer<z.ZodObject<typeof LayoutSelectionArgs>>;
 type DeleteInput = z.infer<z.ZodObject<typeof DeleteArgs>>;
 type ApplyInput = z.infer<z.ZodObject<typeof ApplyArgs>>;
 type ImportMermaidInput = z.infer<z.ZodObject<typeof ImportMermaidArgs>>;
@@ -37,6 +39,7 @@ export type DomainHandles = {
   group: { call: (input: GroupInput) => Promise<ToolResult> };
   note: { call: (input: NoteInput) => Promise<ToolResult> };
   layout: { call: (input: LayoutInput) => Promise<ToolResult> };
+  layoutSelection: { call: (input: LayoutSelectionInput) => Promise<ToolResult> };
   delete: { call: (input: DeleteInput) => Promise<ToolResult> };
   apply: { call: (input: ApplyInput) => Promise<ToolResult> };
   importMermaid: { call: (input: ImportMermaidInput) => Promise<ToolResult> };
@@ -240,6 +243,73 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
     async (args) => applyCall(args as ApplyInput),
   );
 
+  // ── shemma_layout_selection ────────────────────────────────────────────────
+  // DRW-088: selection-aware ELK layout. Tidy only the provided shapes,
+  // leaving the rest of the canvas untouched (pinned shapes never move).
+  // AC#7: пустой ids → full-canvas noop (endpoint returns count:0 + hint).
+  async function layoutSelectionCall(input: LayoutSelectionInput): Promise<ToolResult> {
+    const { room: argRoom, ids, mode, spacing } = input;
+    const resolved = await deps.resolver.resolve({ argRoom });
+    if (!resolved.ok) {
+      return toolResult({
+        ok: false,
+        code: "ambiguous-room",
+        message: resolved.message,
+        details: { candidates: resolved.candidates },
+      });
+    }
+
+    try {
+      const c = new CanvasClient({ baseUrl: deps.client.baseUrl, room: resolved.room });
+      const resp = (await c.layoutSelection({
+        ids: ids ?? [],
+        mode,
+        spacing,
+      })) as {
+        ok?: boolean;
+        version?: number;
+        count?: number;
+        hint?: string;
+        affected?: string[];
+        unresolved?: string[];
+        error?: string;
+      };
+
+      if (resp.ok) {
+        deps.resolver.recordTouch(resolved.room);
+        return toolResult({
+          ok: true,
+          room: resolved.room,
+          roomSource: resolved.source,
+          version: resp.version,
+          count: resp.count ?? 0,
+          hint: resp.hint,
+          affected: resp.affected ?? [],
+          unresolved: resp.unresolved,
+        });
+      }
+
+      return toolResult({
+        ok: false,
+        code: "layout-failed",
+        message: resp.error ?? "layout-selection failed",
+        details: { room: resolved.room },
+      });
+    } catch (e) {
+      return toolResult({ ...mapFetchError(e) });
+    }
+  }
+
+  server.registerTool(
+    "shemma_layout_selection",
+    {
+      description:
+        "Tidy layout of the selected shapes only. Use after `shemma_import_mermaid` to clean up just-added group, OR after manual edits to a specific zone. Pinned shapes (`meta.pinned===true`) won't move. Empty `ids` = full-canvas noop (returns count:0 with hint). For full-canvas layout use `shemma_layout` instead.\n\nTip: after `shemma_import_mermaid`, pass `root_ids` from the import response as `ids` to tidy only the new diagram without disrupting existing shapes.",
+      inputSchema: LayoutSelectionArgs,
+    },
+    async (args) => layoutSelectionCall(args as LayoutSelectionInput),
+  );
+
   // ── shemma_import_mermaid ───────────────────────────────────────────────────
   // Append-only. The MCP layer never sends a mode flag — wiping the canvas is
   // a separate explicit action that requires user confirmation.
@@ -321,6 +391,7 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
     group: { call: groupCall },
     note: { call: noteCall },
     layout: { call: layoutCall },
+    layoutSelection: { call: layoutSelectionCall },
     delete: { call: deleteCall },
     apply: { call: applyCall },
     importMermaid: { call: importMermaidCall },

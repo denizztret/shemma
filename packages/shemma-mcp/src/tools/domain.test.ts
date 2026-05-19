@@ -478,3 +478,88 @@ describe("shemma_import_mermaid tool (DRW-083)", () => {
     expect((capturedBody as Record<string, unknown>).focus).toBeUndefined();
   });
 });
+
+describe("shemma_layout_selection tool (DRW-088)", () => {
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("registers shemma_layout_selection tool without throwing", () => {
+    expect(() => setup()).not.toThrow();
+  });
+
+  it("layoutSelection calls POST /api/agent/layout-selection with ids", async () => {
+    let capturedUrl = "";
+    let capturedBody: unknown;
+    mockFetch((url, init) => {
+      capturedUrl = url;
+      capturedBody = JSON.parse(init?.body as string);
+      return { body: { ok: true, version: 3, count: 2, affected: ["shape:a", "shape:b"] } };
+    });
+    const { handles } = setup({ mode: "direct", room: "r1" });
+    const r = await handles.layoutSelection.call({
+      ids: ["shape:a", "shape:b"],
+      mode: "layered-tb",
+    });
+    expect(capturedUrl).toContain("/api/agent/layout-selection");
+    expect(capturedUrl).toContain("room=r1");
+    expect((capturedBody as { ids: string[] }).ids).toEqual(["shape:a", "shape:b"]);
+    expect((capturedBody as { mode: string }).mode).toBe("layered-tb");
+    expect(r.structuredContent).toMatchObject({
+      ok: true,
+      room: "r1",
+      version: 3,
+      count: 2,
+    });
+    expect(r.isError).toBeUndefined();
+  });
+
+  it("layoutSelection with empty ids → ok:true, count:0, hint", async () => {
+    mockFetch(() => ({
+      body: { ok: true, count: 0, hint: "no shapes selected" },
+    }));
+    const { handles } = setup({ mode: "direct", room: "r" });
+    const r = await handles.layoutSelection.call({ ids: [] });
+    expect(r.structuredContent).toMatchObject({ ok: true, count: 0 });
+  });
+
+  it("layoutSelection delegates full canvas layout when ids omitted", async () => {
+    let capturedBody: unknown;
+    mockFetch((_, init) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return { body: { ok: true, count: 0, hint: "no shapes selected" } };
+    });
+    const { handles } = setup({ mode: "direct", room: "r" });
+    await handles.layoutSelection.call({});
+    // Empty ids when none provided
+    expect((capturedBody as { ids: unknown[] }).ids).toEqual([]);
+  });
+
+  it("layoutSelection with ambiguous resolver returns code:ambiguous-room", async () => {
+    const { handles } = setup({ mode: "ambiguous" });
+    const r = await handles.layoutSelection.call({ ids: ["a", "b"] });
+    expect(r.structuredContent).toMatchObject({ ok: false, code: "ambiguous-room" });
+    expect(r.isError).toBe(true);
+  });
+
+  it("layoutSelection network error returns daemon-unavailable", async () => {
+    globalThis.fetch = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as typeof fetch;
+    const { handles } = setup({ mode: "direct", room: "r" });
+    const r = await handles.layoutSelection.call({ ids: ["a", "b"] });
+    expect(r.structuredContent).toMatchObject({ ok: false, code: "daemon-unavailable" });
+    expect(r.isError).toBe(true);
+  });
+
+  it("layoutSelection forwards spacing param", async () => {
+    let capturedBody: unknown;
+    mockFetch((_, init) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return { body: { ok: true, count: 0 } };
+    });
+    const { handles } = setup({ mode: "direct", room: "r" });
+    await handles.layoutSelection.call({ ids: ["a", "b"], spacing: "compact" });
+    expect((capturedBody as { spacing: string }).spacing).toBe("compact");
+  });
+});

@@ -7,6 +7,7 @@
 - `shemma_group { name, label?, children: [...] }` — container that frames children.
 - `shemma_note { name, text }` — sticky note.
 - `shemma_layout { mode?, scope?, spacing? }` — explicit re-layout. `mode` ∈ `layered-lr|layered-tb|tree|pack|force`.
+- `shemma_layout_selection { ids?, mode?, spacing? }` — tidy layout for a subset of shapes only (DRW-088). See "Tidy selection" section below.
 - `shemma_delete { ids, cascade? }` — destructive. Containers with children require `cascade: true`.
 - `shemma_apply { actions: [...] }` — atomic batch of any of the above.
 
@@ -133,3 +134,46 @@ Dev-console fallback: `window.shemmaImportMermaid("flowchart LR\n  A --> B")` do
 3. Single `shemma_layout` at the end re-spaces both populations together.
 
 > Reference docs/decisions/0001-mermaid-import-location.md for the architectural rationale (mermaid lives frontend-side; the import path is `mermaid source → editor.createShape → store.put → WS → backend`).
+
+## Tidy selection (DRW-088)
+
+`shemma_layout_selection` runs ELK layout on **only the specified shapes**, leaving the rest of the canvas untouched. Pinned shapes (`meta.pinned: true`) are never moved even if included in `ids`.
+
+### Use case 1: post-import cleanup of a specific zone
+
+After `shemma_import_mermaid` returns `root_ids`, call `shemma_layout_selection` with those ids to tidy just the newly imported diagram without disturbing the manually arranged rest of the canvas:
+
+```
+// Step 1: import
+const result = await shemma_import_mermaid({ source: "flowchart LR\n  A --> B", room: "my-room" });
+// result.root_ids = ["shape:e_frame-1"]
+
+// Step 2: tidy only the new group
+await shemma_layout_selection({ ids: result.root_ids, mode: "layered-tb", room: "my-room" });
+```
+
+If the imported shapes carry `meta.mermaidSource` with a flowchart direction (`flowchart LR`, `graph TB`, etc.), the tool auto-detects the matching `mode` — you can omit `mode` and it will use the source's direction.
+
+### Use case 2: partial reorg of an existing zone
+
+When the user has manually added or moved several shapes in one area of the canvas and wants to re-arrange just that zone:
+
+1. User selects the shapes in the browser UI.
+2. User presses **⌘⇧L** (Mac) / **Ctrl+Shift+L** (Linux/Windows), or right-clicks and chooses **Tidy selection**.
+3. The selected shapes are re-laid out; everything else stays put.
+4. The viewport zooms to the tidied shapes' bounding box.
+
+From MCP (AI agent perspective):
+
+```
+// Use didrawNames from shemma_context
+await shemma_layout_selection({ ids: ["api-gateway", "auth-service", "users-db"], mode: "layered-tb" });
+```
+
+### Edge cases
+
+- **Empty `ids`** (or omitted) → returns `{ok:true, count:0, hint:"..."}` — equivalent to a no-op. Use `shemma_layout` for full-canvas layout instead.
+- **Single id** → same noop response — need ≥2 shapes to produce a meaningful layout.
+- **All ids unresolved** → `{ok:false, error:"no shapes found", unresolved:[...]}` 400.
+- **Mixed resolved/unresolved** → resolved shapes are laid out; `unresolved` list is returned in the response for debugging.
+- **Pinned shapes in selection** → pinned shapes are included in `ids` but their coordinates are restored after ELK, so they effectively stay in place.

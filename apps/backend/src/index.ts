@@ -10,6 +10,7 @@ import { domainRoutes } from "./routes/domain";
 import { importMermaidRoutes } from "./routes/import-mermaid";
 import { makeHealthRoutes } from "./routes/health";
 import { layoutRoutes } from "./routes/layout";
+import { layoutSelectionRoutes } from "./routes/layout-selection";
 import { sessionRoutes } from "./routes/session";
 import { promptRoutes } from "./routes/prompts";
 import { roomsRoutes } from "./routes/rooms";
@@ -48,6 +49,7 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", sessionRoutes);
   app.route("/", stateRoutes(rooms, { onDirty }));
   app.route("/", layoutRoutes(rooms, bus, { onDirty }));
+  app.route("/", layoutSelectionRoutes(rooms, bus, { onDirty }));
   app.route("/", promptRoutes(rooms, bus, { onDirty }));
   app.route("/", aiRoutes(rooms, bus));
   app.route("/", roomsRoutes(rooms, storageDir));

@@ -371,6 +371,25 @@ export class CanvasClient {
     return r.json();
   }
 
+  /**
+   * DRW-088: Tidy layout for a subset of selected shapes.
+   * Calls POST /api/agent/layout-selection — runs ELK only on the given ids,
+   * leaving all other shapes untouched.
+   * Empty ids → full-canvas noop (returns count:0 + hint).
+   */
+  async layoutSelection(body: {
+    ids: string[];
+    mode?: string;
+    spacing?: string;
+  }) {
+    const r = await fetch(`${this.base}/api/agent/layout-selection?${this.q()}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return r.json();
+  }
+
   async postViewport(vp: { x: number; y: number; w: number; h: number; zoom?: number }) {
     const r = await fetch(`${this.base}/api/viewport?${this.q()}`, {
       method: "POST",
