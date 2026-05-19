@@ -43,6 +43,12 @@ export const GroupArgs = {
   name: z.string().min(1),
   label: z.string().optional(),
   children: z.array(z.string().min(1)).min(1),
+  // DRW-072: domain validator требует as in {network, boundary} (container role).
+  // Раньше MCP wrapper не пробрасывал это поле, и любой shemma_group падал
+  // c "group.as must be network|boundary". Default 'boundary' = sealed container
+  // вокруг children; 'network' = виртуальная сеть (visual only). Default chosen
+  // как наиболее distinctive в большинстве архитектурных схем.
+  as: z.enum(["network", "boundary"]).optional(),
 };
 
 export const NoteArgs = {

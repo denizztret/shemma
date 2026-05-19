@@ -150,8 +150,11 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
 
   // ── shemma_group ────────────────────────────────────────────────────────────
   async function groupCall(input: GroupInput): Promise<ToolResult> {
-    const { room, clientOpId, dryRun, layoutHint, name, label, children } = input;
-    const action: Record<string, unknown> = { kind: "group", name, children };
+    const { room, clientOpId, dryRun, layoutHint, name, label, children, as } = input;
+    // DRW-072: domain validator требует as ∈ {network, boundary}. Если не пришло
+    // от MCP-клиента — default "boundary" (visible container, наиболее частый
+    // use-case для архитектурных диаграмм).
+    const action: Record<string, unknown> = { kind: "group", name, children, as: as ?? "boundary" };
     if (label !== undefined) action.label = label;
     return runActions(deps, room, [action], { clientOpId, dryRun, layoutHint });
   }
