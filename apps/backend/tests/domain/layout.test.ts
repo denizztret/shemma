@@ -286,4 +286,282 @@ describe("runLayout", () => {
       expect(renderY).toBeLessThan(fb.y + fb.props.h);
     }
   });
+
+  // =====================================================================
+  // DRW-099: Hierarchical multi-pass layout for nested compounds
+  // =====================================================================
+
+  // Test 1: Два контейнера с детьми + cross-compound edge.
+  // Select all children + both containers.
+  // Expected: children расставлены внутри своих контейнеров (parent-relative),
+  // контейнеры расставлены относительно друг друга в Pass B.
+  test("DRW-099 hierarchical: two containers with children + cross-compound edge — all selected", async () => {
+    // Container A: frame с 3 детьми
+    const frameA = makeShape("shape:e_fa", "fa", {
+      type: "frame", x: 0, y: 0, w: 400, h: 300,
+    });
+    const a1 = makeShape("shape:e_a1", "a1", { parentId: "shape:e_fa", x: 0, y: 0 });
+    const a2 = makeShape("shape:e_a2", "a2", { parentId: "shape:e_fa", x: 5, y: 0 });
+    const a3 = makeShape("shape:e_a3", "a3", { parentId: "shape:e_fa", x: 0, y: 5 });
+    // Container B: frame с 2 детьми
+    const frameB = makeShape("shape:e_fb", "fb", {
+      type: "frame", x: 500, y: 0, w: 400, h: 300,
+    });
+    const b1 = makeShape("shape:e_b1", "b1", { parentId: "shape:e_fb", x: 0, y: 0 });
+    const b2 = makeShape("shape:e_b2", "b2", { parentId: "shape:e_fb", x: 5, y: 0 });
+    // Cross-compound edge: a1 → b1
+    const { arrow, b1: ba, b2: bb } = makeArrow("shape:c_0", "shape:e_a1", "shape:e_b1");
+
+    const s = snapshotWith([frameA, a1, a2, a3, frameB, b1, b2, arrow, ba, bb]);
+    const idx = rebuildDidrawIndex(s);
+
+    // Select all children + both frames
+    const affectedIds = new Set([
+      "shape:e_fa", "shape:e_fb",
+      "shape:e_a1", "shape:e_a2", "shape:e_a3",
+      "shape:e_b1", "shape:e_b2",
+    ]);
+    const r = await runLayout(s, {
+      mode: "layered-tb",
+      scope: "affected",
+      spacing: "normal",
+      affectedIds,
+    }, idx);
+
+    expect(r.reason).toBeUndefined();
+    const ns = applyStoreChanges(s, r.batch);
+
+    // Children должны оставаться parent-relative внутри своих контейнеров
+    const fa = ns.store["shape:e_fa"] as { x: number; y: number; props: { w: number; h: number } };
+    const fb = ns.store["shape:e_fb"] as { x: number; y: number; props: { w: number; h: number } };
+
+    // Frames должны иметь корректные размеры (non-zero)
+    expect(fa.props.w).toBeGreaterThan(0);
+    expect(fa.props.h).toBeGreaterThan(0);
+    expect(fb.props.w).toBeGreaterThan(0);
+    expect(fb.props.h).toBeGreaterThan(0);
+
+    // Дети frameA parent-relative и внутри bounds
+    for (const cid of ["shape:e_a1", "shape:e_a2", "shape:e_a3"]) {
+      const c = ns.store[cid] as { x: number; y: number; parentId: string; props: { w: number; h: number } };
+      expect(c.parentId).toBe("shape:e_fa");
+      expect(c.x).toBeGreaterThanOrEqual(0);
+      expect(c.y).toBeGreaterThanOrEqual(0);
+      expect(c.x + (c.props?.w ?? 100)).toBeLessThanOrEqual(fa.props.w + 5);
+      expect(c.y + (c.props?.h ?? 60)).toBeLessThanOrEqual(fa.props.h + 5);
+    }
+
+    // Дети frameB parent-relative и внутри bounds
+    for (const cid of ["shape:e_b1", "shape:e_b2"]) {
+      const c = ns.store[cid] as { x: number; y: number; parentId: string; props: { w: number; h: number } };
+      expect(c.parentId).toBe("shape:e_fb");
+      expect(c.x).toBeGreaterThanOrEqual(0);
+      expect(c.y).toBeGreaterThanOrEqual(0);
+      expect(c.x + (c.props?.w ?? 100)).toBeLessThanOrEqual(fb.props.w + 5);
+      expect(c.y + (c.props?.h ?? 60)).toBeLessThanOrEqual(fb.props.h + 5);
+    }
+
+    // Frames должны быть расставлены (хотя бы один переместился от исходных coords)
+    // Обе frames в batch.updated
+    expect(r.batch.updated["shape:e_fa"]).toBeDefined();
+    expect(r.batch.updated["shape:e_fb"]).toBeDefined();
+  });
+
+  // Test 2: Mixed selection — 1 frame at root + 1 bare shape at root + edge between.
+  // Frame не имеет children в filterToIds — двигается как единица (unit move).
+  test("DRW-099 hierarchical: mixed root selection (frame + bare shape) — both laid out at top level", async () => {
+    const frame = makeShape("shape:e_frm", "frm", {
+      type: "frame", x: 500, y: 500, w: 300, h: 200,
+    });
+    // Child of frame — NOT in selection
+    const child = makeShape("shape:e_ch", "ch", { parentId: "shape:e_frm", x: 10, y: 10 });
+    // Bare shape at root — offset so it will need to move
+    const bare = makeShape("shape:e_bare", "bare", { x: 500, y: 500 });
+    // Edge: frame → bare
+    const { arrow, b1, b2 } = makeArrow("shape:c_0", "shape:e_frm", "shape:e_bare");
+
+    const s = snapshotWith([frame, child, bare, arrow, b1, b2]);
+    const idx = rebuildDidrawIndex(s);
+
+    // Select frame + bare (NOT child)
+    const affectedIds = new Set(["shape:e_frm", "shape:e_bare"]);
+    const r = await runLayout(s, {
+      mode: "layered-lr",
+      scope: "affected",
+      spacing: "normal",
+      affectedIds,
+    }, idx);
+
+    expect(r.reason).toBeUndefined();
+    const ns = applyStoreChanges(s, r.batch);
+
+    // Child НЕ должен быть в batch.updated (он не selected, frame двигался как unit)
+    expect(r.batch.updated["shape:e_ch"]).toBeUndefined();
+
+    // Хотя бы один из двух (frame или bare) должен быть laid out (оба в Pass B)
+    // ELK может сохранить один из них на старом месте если они уже оптимально расположены,
+    // но оба overlapping (500,500) — layout разделит их.
+    const anyMoved =
+      r.batch.updated["shape:e_frm"] !== undefined ||
+      r.batch.updated["shape:e_bare"] !== undefined;
+    expect(anyMoved).toBe(true);
+
+    // Результат не должен иметь overlapping (frame + bare не перекрываются)
+    const frmAfter = ns.store["shape:e_frm"] as { x: number; y: number; props: { w: number; h: number } };
+    const bareAfter = ns.store["shape:e_bare"] as { x: number; y: number; props: { w: number; h: number } };
+    const frmW = frmAfter.props?.w ?? 300;
+    const frmH = frmAfter.props?.h ?? 200;
+    const bareW = bareAfter.props?.w ?? 100;
+    const bareH = bareAfter.props?.h ?? 60;
+    const noOverlap =
+      frmAfter.x + frmW <= bareAfter.x + 5 ||
+      bareAfter.x + bareW <= frmAfter.x + 5 ||
+      frmAfter.y + frmH <= bareAfter.y + 5 ||
+      bareAfter.y + bareH <= frmAfter.y + 5;
+    expect(noOverlap).toBe(true);
+  });
+
+  // Test 3: Anchor frame nested — frame F1 содержит frame F2 содержит 2 детей.
+  // Select только 2 детей → Pass A recursive: F2 растёт, F1 растёт под F2.
+  test("DRW-099 hierarchical: nested anchor frames — inner frame grows, children stay inside", async () => {
+    // Outer frame F1 (not selected)
+    const f1 = makeShape("shape:e_f1", "f1", {
+      type: "frame", x: 100, y: 100, w: 600, h: 500,
+    });
+    // Inner frame F2, child of F1 (not selected)
+    const f2 = makeShape("shape:e_f2", "f2", {
+      type: "frame", x: 10, y: 10, w: 400, h: 300,
+      parentId: "shape:e_f1",
+    });
+    // Children of F2 (selected)
+    const c1 = makeShape("shape:e_c1", "c1", { parentId: "shape:e_f2", x: 0, y: 0 });
+    const c2 = makeShape("shape:e_c2", "c2", { parentId: "shape:e_f2", x: 5, y: 0 });
+    const { arrow, b1, b2 } = makeArrow("shape:c_0", "shape:e_c1", "shape:e_c2");
+
+    const s = snapshotWith([f1, f2, c1, c2, arrow, b1, b2]);
+    const idx = rebuildDidrawIndex(s);
+
+    // Только children в selection
+    const affectedIds = new Set(["shape:e_c1", "shape:e_c2"]);
+    const r = await runLayout(s, {
+      mode: "layered-lr",
+      scope: "affected",
+      spacing: "normal",
+      affectedIds,
+    }, idx);
+
+    expect(r.reason).toBeUndefined();
+    const ns = applyStoreChanges(s, r.batch);
+
+    // Children должны быть parent-relative внутри F2
+    const f2after = ns.store["shape:e_f2"] as { x: number; y: number; parentId: string; props: { w: number; h: number } };
+    expect(f2after.parentId).toBe("shape:e_f1");
+
+    for (const cid of ["shape:e_c1", "shape:e_c2"]) {
+      const c = ns.store[cid] as { x: number; y: number; parentId: string; props: { w: number; h: number } };
+      expect(c.parentId).toBe("shape:e_f2");
+      expect(c.x).toBeGreaterThanOrEqual(0);
+      expect(c.y).toBeGreaterThanOrEqual(0);
+    }
+
+    // F2 должен получить w/h под содержимое
+    expect(f2after.props.w).toBeGreaterThan(0);
+    expect(f2after.props.h).toBeGreaterThan(0);
+
+    // F1 остаётся на месте (anchor) — x/y не меняются
+    const f1after = ns.store["shape:e_f1"] as { x: number; y: number };
+    expect(f1after.x).toBe(100);
+    expect(f1after.y).toBe(100);
+  });
+
+  // Test 4: Cross-compound edges с оба containers в Pass B.
+  // Containers + children all selected. Edge child_A → child_B создаёт
+  // container-to-container edge в Pass B.
+  test("DRW-099 hierarchical: cross-compound edges create container-to-container edge in Pass B", async () => {
+    const fA = makeShape("shape:e_fA", "fA", {
+      type: "frame", x: 0, y: 0, w: 300, h: 200,
+    });
+    const fB = makeShape("shape:e_fB", "fB", {
+      type: "frame", x: 0, y: 0, w: 300, h: 200,
+    });
+    const cA = makeShape("shape:e_cA", "cA", { parentId: "shape:e_fA", x: 0, y: 0 });
+    const cB = makeShape("shape:e_cB", "cB", { parentId: "shape:e_fB", x: 0, y: 0 });
+    // Cross-compound edge: cA → cB (in layered-lr this should push fA left of fB)
+    const { arrow, b1, b2 } = makeArrow("shape:c_0", "shape:e_cA", "shape:e_cB");
+
+    const s = snapshotWith([fA, fB, cA, cB, arrow, b1, b2]);
+    const idx = rebuildDidrawIndex(s);
+
+    const affectedIds = new Set(["shape:e_fA", "shape:e_fB", "shape:e_cA", "shape:e_cB"]);
+    const r = await runLayout(s, {
+      mode: "layered-lr",
+      scope: "affected",
+      spacing: "normal",
+      affectedIds,
+    }, idx);
+
+    expect(r.reason).toBeUndefined();
+    const ns = applyStoreChanges(s, r.batch);
+
+    // Both frames should be laid out
+    expect(r.batch.updated["shape:e_fA"]).toBeDefined();
+    expect(r.batch.updated["shape:e_fB"]).toBeDefined();
+
+    // Frames should not overlap each other (with slack)
+    const faAfter = ns.store["shape:e_fA"] as { x: number; y: number; props: { w: number; h: number } };
+    const fbAfter = ns.store["shape:e_fB"] as { x: number; y: number; props: { w: number; h: number } };
+    const noOverlap =
+      faAfter.x + faAfter.props.w <= fbAfter.x + 5 ||
+      fbAfter.x + fbAfter.props.w <= faAfter.x + 5 ||
+      faAfter.y + faAfter.props.h <= fbAfter.y + 5 ||
+      fbAfter.y + fbAfter.props.h <= faAfter.y + 5;
+    expect(noOverlap).toBe(true);
+
+    // Children stay inside respective frames
+    const cAf = ns.store["shape:e_cA"] as { x: number; y: number; parentId: string; props: { w: number; h: number } };
+    const cBf = ns.store["shape:e_cB"] as { x: number; y: number; parentId: string; props: { w: number; h: number } };
+    expect(cAf.parentId).toBe("shape:e_fA");
+    expect(cBf.parentId).toBe("shape:e_fB");
+    expect(cAf.x + (cAf.props?.w ?? 100)).toBeLessThanOrEqual(faAfter.props.w + 5);
+    expect(cBf.x + (cBf.props?.w ?? 100)).toBeLessThanOrEqual(fbAfter.props.w + 5);
+  });
+
+  // Test 5: scope='all' path NOT broken — still single-pass, все shapes laid out.
+  test("DRW-099 hierarchical: scope=all still works as single-pass (regression)", async () => {
+    const frameA = makeShape("shape:e_fa", "fa", {
+      type: "frame", x: 0, y: 0, w: 300, h: 200,
+    });
+    const frameB = makeShape("shape:e_fb", "fb", {
+      type: "frame", x: 0, y: 0, w: 300, h: 200,
+    });
+    const a1 = makeShape("shape:e_a1", "a1", { parentId: "shape:e_fa", x: 0, y: 0 });
+    const b1 = makeShape("shape:e_b1", "b1", { parentId: "shape:e_fb", x: 0, y: 0 });
+    const { arrow, b1: ba, b2: bb } = makeArrow("shape:c_0", "shape:e_a1", "shape:e_b1");
+
+    const s = snapshotWith([frameA, frameB, a1, b1, arrow, ba, bb]);
+    const idx = rebuildDidrawIndex(s);
+
+    const r = await runLayout(s, {
+      mode: "layered-lr",
+      scope: "all",
+      spacing: "normal",
+    }, idx);
+
+    expect(r.reason).toBeUndefined();
+    // All nodes should appear in batch
+    const updatedKeys = Object.keys(r.batch.updated);
+    // At minimum frames should be updated (or all shapes)
+    expect(updatedKeys.length).toBeGreaterThan(0);
+
+    const ns = applyStoreChanges(s, r.batch);
+    // Children still have parent-relative coords
+    const fa = ns.store["shape:e_fa"] as { x: number; y: number; props: { w: number; h: number } };
+    const fb = ns.store["shape:e_fb"] as { x: number; y: number; props: { w: number; h: number } };
+    const a1ns = ns.store["shape:e_a1"] as { x: number; y: number; parentId: string };
+    const b1ns = ns.store["shape:e_b1"] as { x: number; y: number; parentId: string };
+    expect(a1ns.parentId).toBe("shape:e_fa");
+    expect(b1ns.parentId).toBe("shape:e_fb");
+    // layered-lr: frameA should be left of frameB
+    expect(fa.x).toBeLessThan(fb.x);
+  });
 });
