@@ -151,4 +151,51 @@ describe("runLayout", () => {
     expect(ns.store["shape:e_a"]).toBeDefined();
     expect(ns.store["shape:e_b"]).toBeDefined();
   });
+
+  // DRW-082: tldraw shape с parentId=frame хранит x/y RELATIVE к frame.
+  // ELK возвращает absolute page coords для всех shapes (collectPositions walks
+  // дерево с offset accumulator). Apply должен ВЫЧЕСТЬ frame's abs position из
+  // child's abs position перед записью. Иначе при render child уезжает в
+  // parent.x + child.x, удваивая offset (видно как off-screen children в 2+
+  // groups schemes вроде InlineAdLoader).
+  test("DRW-082: frame children stored with parent-relative coords", async () => {
+    // 2 frames чтобы поймать кейс где первый frame случайно покрывает диапазон
+    // child'а — нужен второй frame в стороне от origin.
+    const frameA = makeShape("shape:e_fa", "fa", { type: "frame", w: 300, h: 200, meta: { didrawIsGroup: true, role: "boundary" } });
+    const frameB = makeShape("shape:e_fb", "fb", { type: "frame", w: 300, h: 200, meta: { didrawIsGroup: true, role: "boundary" } });
+    const a1 = makeShape("shape:e_a1", "a1", { parentId: "shape:e_fa", meta: { role: "service" } });
+    const a2 = makeShape("shape:e_a2", "a2", { parentId: "shape:e_fa", meta: { role: "service" } });
+    const b1c = makeShape("shape:e_b1", "b1", { parentId: "shape:e_fb", meta: { role: "service" } });
+    const b2c = makeShape("shape:e_b2", "b2", { parentId: "shape:e_fb", meta: { role: "service" } });
+    // Edge между разными фреймами чтобы ELK раскинул их хорошо.
+    const { arrow, b1: ba, b2: bb } = makeArrow("shape:c_0", "shape:e_a1", "shape:e_b1");
+    const s = snapshotWith([frameA, frameB, a1, a2, b1c, b2c, arrow, ba, bb]);
+    const idx = rebuildDidrawIndex(s);
+    const r = await runLayout(s, { mode: "layered-lr", scope: "all", spacing: "normal" }, idx);
+    const ns = applyStoreChanges(s, r.batch);
+    const fa = ns.store["shape:e_fa"] as { x: number; y: number; props: { w: number; h: number } };
+    const fb = ns.store["shape:e_fb"] as { x: number; y: number; props: { w: number; h: number } };
+    for (const childId of ["shape:e_a1", "shape:e_a2"]) {
+      const c = ns.store[childId] as { x: number; y: number; parentId: string };
+      expect(c.parentId).toBe("shape:e_fa");
+      // Render position (parent abs + child relative) должна попасть внутрь
+      // frame's abs bounds [fa.x, fa.x + fa.props.w] × [fa.y, fa.y + fa.props.h].
+      const renderX = fa.x + c.x;
+      const renderY = fa.y + c.y;
+      expect(renderX).toBeGreaterThanOrEqual(fa.x);
+      expect(renderX).toBeLessThan(fa.x + fa.props.w);
+      expect(renderY).toBeGreaterThanOrEqual(fa.y);
+      expect(renderY).toBeLessThan(fa.y + fa.props.h);
+    }
+    for (const childId of ["shape:e_b1", "shape:e_b2"]) {
+      const c = ns.store[childId] as { x: number; y: number; parentId: string };
+      expect(c.parentId).toBe("shape:e_fb");
+      const renderX = fb.x + c.x;
+      const renderY = fb.y + c.y;
+      expect(renderX).toBeGreaterThanOrEqual(fb.x);
+      expect(renderX).toBeLessThan(fb.x + fb.props.w);
+      expect(renderY).toBeGreaterThanOrEqual(fb.y);
+      expect(renderY).toBeLessThan(fb.y + fb.props.h);
+    }
+  });
 });
