@@ -152,6 +152,95 @@ describe("runLayout", () => {
     expect(ns.store["shape:e_b"]).toBeDefined();
   });
 
+  // DRW-091: subgraph mode — только selected shapes в batch.updated, non-affected не трогаются.
+  test("DRW-091: subgraph mode — non-affected ids absent from batch.updated", async () => {
+    const a = makeShape("shape:e_a", "a", { x: 0, y: 0 });
+    const b = makeShape("shape:e_b", "b", { x: 50, y: 0 });
+    const c = makeShape("shape:e_c", "c", { x: 500, y: 500 });
+    const d = makeShape("shape:e_d", "d", { x: 550, y: 500 });
+    const s = snapshotWith([a, b, c, d]);
+    const idx = rebuildDidrawIndex(s);
+    // Only a and b are selected (affected)
+    const r = await runLayout(s, {
+      mode: "layered-tb",
+      scope: "affected",
+      spacing: "normal",
+      affectedIds: new Set(["shape:e_a", "shape:e_b"]),
+    }, idx);
+    expect(r.reason).toBeUndefined();
+    // c and d must NOT appear in batch.updated
+    expect(r.batch.updated["shape:e_c"]).toBeUndefined();
+    expect(r.batch.updated["shape:e_d"]).toBeUndefined();
+    // c and d must keep original coords
+    const ns = applyStoreChanges(s, r.batch);
+    expect(ns.store["shape:e_c"]!.x).toBe(500);
+    expect(ns.store["shape:e_c"]!.y).toBe(500);
+    expect(ns.store["shape:e_d"]!.x).toBe(550);
+    expect(ns.store["shape:e_d"]!.y).toBe(500);
+  });
+
+  // DRW-091: subgraph mode — selected shapes do not overlap non-selected after layout.
+  test("DRW-091: selected laid out independently, do not jump to non-selected territory", async () => {
+    const a = makeShape("shape:e_a", "a", { x: 0, y: 0 });
+    const b = makeShape("shape:e_b", "b", { x: 10, y: 0 });
+    // non-selected far right
+    const c = makeShape("shape:e_c", "c", { x: 800, y: 0 });
+    const d = makeShape("shape:e_d", "d", { x: 850, y: 0 });
+    const s = snapshotWith([a, b, c, d]);
+    const idx = rebuildDidrawIndex(s);
+    const r = await runLayout(s, {
+      mode: "layered-tb",
+      scope: "affected",
+      spacing: "normal",
+      affectedIds: new Set(["shape:e_a", "shape:e_b"]),
+    }, idx);
+    const ns = applyStoreChanges(s, r.batch);
+    const aAfter = ns.store["shape:e_a"] as { x: number; y: number };
+    const bAfter = ns.store["shape:e_b"] as { x: number; y: number };
+    // Selected should NOT end up at x >= 800 (non-selected zone)
+    expect(aAfter.x).toBeLessThan(700);
+    expect(bAfter.x).toBeLessThan(700);
+  });
+
+  // DRW-092: anchor frame — frame not in affectedIds but children are → frame not updated, children updated parent-relative.
+  test("DRW-092: anchor frame not updated, children stay inside frame bounds (parent-relative)", async () => {
+    const frame = makeShape("shape:e_frame", "fr", { type: "frame", x: 100, y: 200, w: 400, h: 300 });
+    // 4 children all clustered at (0,0) relative
+    const c1 = makeShape("shape:e_c1", "c1", { x: 0, y: 0, parentId: "shape:e_frame" });
+    const c2 = makeShape("shape:e_c2", "c2", { x: 5, y: 0, parentId: "shape:e_frame" });
+    const c3 = makeShape("shape:e_c3", "c3", { x: 0, y: 5, parentId: "shape:e_frame" });
+    const c4 = makeShape("shape:e_c4", "c4", { x: 5, y: 5, parentId: "shape:e_frame" });
+    const s = snapshotWith([frame, c1, c2, c3, c4]);
+    const idx = rebuildDidrawIndex(s);
+    // frame NOT in affectedIds — it's an anchor container
+    const r = await runLayout(s, {
+      mode: "layered-tb",
+      scope: "affected",
+      spacing: "normal",
+      affectedIds: new Set(["shape:e_c1", "shape:e_c2", "shape:e_c3", "shape:e_c4"]),
+    }, idx);
+    expect(r.reason).toBeUndefined();
+
+    // frame must NOT be in batch.updated (it's an anchor, not selected)
+    expect(r.batch.updated["shape:e_frame"]).toBeUndefined();
+
+    const ns = applyStoreChanges(s, r.batch);
+    const fr = ns.store["shape:e_frame"] as { x: number; y: number; props: { w: number; h: number } };
+    // Frame stays at original position
+    expect(fr.x).toBe(100);
+    expect(fr.y).toBe(200);
+
+    // All children should have parentId=frame and be within frame bounds (parent-relative)
+    for (const cid of ["shape:e_c1", "shape:e_c2", "shape:e_c3", "shape:e_c4"]) {
+      const c = ns.store[cid] as { x: number; y: number; parentId: string; props: { w: number; h: number } };
+      expect(c.parentId).toBe("shape:e_frame");
+      expect(c.x).toBeGreaterThanOrEqual(0);
+      expect(c.x + (c.props?.w ?? 100)).toBeLessThanOrEqual(fr.props.w + 1);
+      expect(c.y).toBeGreaterThanOrEqual(0);
+      expect(c.y + (c.props?.h ?? 60)).toBeLessThanOrEqual(fr.props.h + 1);
+    }
+  });
+
   // DRW-082: tldraw shape с parentId=frame хранит x/y RELATIVE к frame.
   // ELK возвращает absolute page coords для всех shapes (collectPositions walks
   // дерево с offset accumulator). Apply должен ВЫЧЕСТЬ frame's abs position из
