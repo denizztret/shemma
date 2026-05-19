@@ -78,7 +78,7 @@ describe("CanvasClient", () => {
 
   test("importMermaid sends POST to /api/agent/import-mermaid with correct body", async () => {
     // This test verifies the client method sends the right HTTP request.
-    // The backend endpoint does not yet exist — we mock fetch.
+    // Append-only — no `mode` field by design (DRW-083 follow-up).
     const originalFetch = globalThis.fetch;
     let capturedUrl = "";
     let capturedBody: unknown;
@@ -92,36 +92,17 @@ describe("CanvasClient", () => {
     }) as typeof fetch;
     try {
       const c = new CanvasClient({ baseUrl: `http://localhost:${srv.port}`, room: "mermaid-test" });
-      const result = await c.importMermaid({ source: "graph LR; A-->B", mode: "append", requestId: "req-123" }) as {
+      const result = await c.importMermaid({ source: "graph LR; A-->B", requestId: "req-123" }) as {
         ok: boolean; shape_ids: string[]; didraw_names: string[]; root_ids: string[];
       };
       expect(capturedUrl).toContain("/api/agent/import-mermaid");
       expect(capturedUrl).toContain("room=mermaid-test");
       expect((capturedBody as { source: string }).source).toBe("graph LR; A-->B");
-      expect((capturedBody as { mode: string }).mode).toBe("append");
       expect((capturedBody as { requestId: string }).requestId).toBe("req-123");
+      // No mode field — append-only.
+      expect((capturedBody as Record<string, unknown>).mode).toBeUndefined();
       expect(result.ok).toBe(true);
       expect(result.shape_ids).toEqual(["s1", "s2"]);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
-  test("importMermaid defaults mode to append when omitted", async () => {
-    const originalFetch = globalThis.fetch;
-    let capturedBody: unknown;
-    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-      capturedBody = JSON.parse(init?.body as string);
-      return new Response(JSON.stringify({ ok: true, shape_ids: [], didraw_names: [], root_ids: [] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
-    try {
-      const c = new CanvasClient({ baseUrl: `http://localhost:${srv.port}`, room: "r" });
-      await c.importMermaid({ source: "graph LR; A-->B" });
-      // mode not in body when undefined — backend defaults to append
-      expect((capturedBody as Record<string, unknown>).mode).toBeUndefined();
     } finally {
       globalThis.fetch = originalFetch;
     }

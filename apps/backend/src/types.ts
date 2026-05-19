@@ -77,7 +77,6 @@ export type WsMessage =
   | {
       kind: "import-mermaid";
       source: string;
-      mode: "append" | "replace";
       requestId: string;
     };
 

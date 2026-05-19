@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { makeApp } from "../src/index";
 import type { Sock } from "../src/ws";
 
@@ -32,7 +32,7 @@ describe("POST /api/agent/import-mermaid", () => {
     );
     expect(res.status).toBe(503);
     const body = await res.json() as { error: string };
-    expect(body.error).toContain("no client connected");
+    expect(body.error).toBe("no client connected");
   });
 
   it("returns 400 when source is missing", async () => {
@@ -47,86 +47,11 @@ describe("POST /api/agent/import-mermaid", () => {
     expect(res.status).toBe(400);
   });
 
-  it("broadcasts import-mermaid frame to connected WS client and returns result on success", async () => {
+  it("broadcasts import-mermaid frame (no mode field; append-only) to connected WS client", async () => {
     const { app, bus } = makeApp({ inMemory: true });
     const room = "test-mermaid-room";
 
-    // Simulate a connected frontend: attach mock socket that auto-responds.
-    let pendingRequestId = "";
-    const sock = makeMockSock({
-      onSend(data, self) {
-        const msg = JSON.parse(data) as { kind: string; requestId: string; source: string; mode: string };
-        if (msg.kind === "import-mermaid") {
-          pendingRequestId = msg.requestId;
-          // Simulate frontend sending back result after a short delay
-          setTimeout(() => {
-            // Find the pending request handler via a direct WS message simulation
-            // We'll use the bus's internal mechanism — inject the result message via
-            // the server's websocket handler. We do this by directly posting to the
-            // import-mermaid pending map through an exposed resolveImportMermaid.
-            // Since we can't hook the real WS handler, we'll use the HTTP approach:
-            // the endpoint exposes an internal resolution mechanism.
-            // For this test, we call the resolveImportMermaid directly if exported,
-            // or simulate via the mock having called back. Let's try the simpler
-            // approach: the endpoint must return with mock inject.
-            self.sent.push("__result_sent__"); // marker for test
-          }, 0);
-        }
-      },
-    });
-    bus.attach(room, sock);
-
-    // The test verifies:
-    // 1. The import-mermaid frame is sent to the socket
-    // 2. Without a real result response, it times out — but we can verify the frame was sent
-    // For integration without real WS, we can't easily test the happy path end-to-end
-    // without the server's WS handler being involved. We verify separately below.
-    const resPromise = app.fetch(
-      new Request(`http://x/api/agent/import-mermaid?room=${room}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ source: "graph LR; A-->B", mode: "append" }),
-      }),
-    );
-
-    // Give the request a moment to attach and send the frame
-    await new Promise((r) => setTimeout(r, 50));
-
-    // Verify the frame was broadcast to the socket
-    expect(sock.sent.length).toBeGreaterThan(0);
-    const frame = JSON.parse(sock.sent[0]!) as { kind: string; source: string; mode: string; requestId: string };
-    expect(frame.kind).toBe("import-mermaid");
-    expect(frame.source).toBe("graph LR; A-->B");
-    expect(frame.mode).toBe("append");
-    expect(typeof frame.requestId).toBe("string");
-    expect(frame.requestId.length).toBeGreaterThan(0);
-
-    // Let it timeout (10s) — we won't wait. Clean up by detaching.
-    bus.detach(room, sock);
-
-    // The request will eventually resolve with timeout error
-    const res = await resPromise;
-    expect(res.status).toBe(500);
-    const body = await res.json() as { error: string };
-    expect(body.error).toContain("did not respond");
-  }, 15000); // 15s timeout to cover the 10s backend timeout
-
-  it("returns 503 with correct error message format", async () => {
-    const { app } = makeApp({ inMemory: true });
-    const res = await app.fetch(
-      new Request("http://x/api/agent/import-mermaid?room=no-client", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ source: "graph LR; A-->B" }),
-      }),
-    );
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe("no client connected");
-  });
-
-  it("defaults mode to append when not provided", async () => {
-    const { app, bus } = makeApp({ inMemory: true });
-    const room = "test-default-mode";
+    // Simulate a connected frontend: attach mock socket that records frames.
     const sock = makeMockSock();
     bus.attach(room, sock);
 
@@ -138,12 +63,50 @@ describe("POST /api/agent/import-mermaid", () => {
       }),
     );
 
+    // Give the request a moment to attach and send the frame
     await new Promise((r) => setTimeout(r, 50));
 
-    // Should have sent a frame with mode "append" as default
+    // Verify the frame was broadcast to the socket
     expect(sock.sent.length).toBeGreaterThan(0);
-    const frame = JSON.parse(sock.sent[0]!) as { mode: string };
-    expect(frame.mode).toBe("append");
+    const frame = JSON.parse(sock.sent[0]!) as Record<string, unknown>;
+    expect(frame.kind).toBe("import-mermaid");
+    expect(frame.source).toBe("graph LR; A-->B");
+    // DRW-083 follow-up: no mode field — append-only by design.
+    expect("mode" in frame).toBe(false);
+    expect(typeof frame.requestId).toBe("string");
+    expect((frame.requestId as string).length).toBeGreaterThan(0);
+
+    // Let it timeout (10s) — we won't wait. Clean up by detaching.
+    bus.detach(room, sock);
+
+    // The request will eventually resolve with timeout error
+    const res = await resPromise;
+    expect(res.status).toBe(500);
+    const body = await res.json() as { error: string };
+    expect(body.error).toContain("did not respond");
+  }, 15000); // 15s timeout to cover the 10s backend timeout
+
+  it("ignores client-supplied mode field (append-only invariant)", async () => {
+    const { app, bus } = makeApp({ inMemory: true });
+    const room = "test-mode-ignored";
+    const sock = makeMockSock();
+    bus.attach(room, sock);
+
+    const resPromise = app.fetch(
+      new Request(`http://x/api/agent/import-mermaid?room=${room}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // Even if a caller smuggles `mode: "replace"`, the backend MUST NOT
+        // forward it. Backwards-incompat with the early draft was deliberate.
+        body: JSON.stringify({ source: "graph LR; A-->B", mode: "replace" }),
+      }),
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sock.sent.length).toBeGreaterThan(0);
+    const frame = JSON.parse(sock.sent[0]!) as Record<string, unknown>;
+    expect("mode" in frame).toBe(false);
 
     bus.detach(room, sock);
     await resPromise; // let it resolve (timeout)

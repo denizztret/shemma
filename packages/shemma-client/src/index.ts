@@ -351,9 +351,13 @@ export class CanvasClient {
     return r.json();
   }
 
+  /**
+   * Import a Mermaid diagram into the room. Append-only by design (DRW-083):
+   * never replaces or deletes existing shapes — preserving the user's manual
+   * layout edits is a hard product invariant.
+   */
   async importMermaid(body: {
     source: string;
-    mode?: "append" | "replace";
     clientOpId?: string;
     requestId?: string;
   }) {

@@ -81,12 +81,14 @@ export class WsHub implements StoreChangeBus {
    * Send an import-mermaid command to the first open subscriber in the room.
    * Returns a Promise that resolves with the frontend result or rejects on timeout.
    * Caller must check subscriberCount() > 0 first.
+   *
+   * Append-only by design (DRW-083): no mode parameter — frontend always
+   * appends. AI must never wipe existing canvas state.
    */
   sendImportMermaid(
     room: string,
     requestId: string,
     source: string,
-    mode: "append" | "replace",
   ): Promise<ImportMermaidResult> {
     return new Promise<ImportMermaidResult>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -107,7 +109,7 @@ export class WsHub implements StoreChangeBus {
       let sent = false;
       for (const s of set) {
         if (s.readyState === OPEN) {
-          s.send(JSON.stringify({ kind: "import-mermaid", source, mode, requestId }));
+          s.send(JSON.stringify({ kind: "import-mermaid", source, requestId }));
           sent = true;
           break;
         }

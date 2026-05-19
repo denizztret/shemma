@@ -73,21 +73,6 @@ describe("schemas — ImportMermaidArgs", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it("accepts mode='append'", () => {
-    const parsed = z.object(ImportMermaidArgs).safeParse({ source: "graph LR; A-->B", mode: "append" });
-    expect(parsed.success).toBe(true);
-  });
-
-  it("accepts mode='replace'", () => {
-    const parsed = z.object(ImportMermaidArgs).safeParse({ source: "graph LR; A-->B", mode: "replace" });
-    expect(parsed.success).toBe(true);
-  });
-
-  it("rejects invalid mode", () => {
-    const parsed = z.object(ImportMermaidArgs).safeParse({ source: "graph LR; A-->B", mode: "overwrite" });
-    expect(parsed.success).toBe(false);
-  });
-
   it("accepts optional room and clientOpId", () => {
     const parsed = z.object(ImportMermaidArgs).safeParse({
       source: "graph LR; A-->B",

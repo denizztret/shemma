@@ -8,13 +8,17 @@ import type { WsHub } from "../ws";
  * Sends an import-mermaid command to the first connected WS subscriber in the
  * room, waits up to 10s for the frontend result, returns shape ids / didraw names.
  *
- * Body: { source: string; mode?: "append" | "replace"; clientOpId?: string }
+ * Body: { source: string; clientOpId? }
  * Query: ?room=<room-id>
+ *
+ * Append-only: never replaces or deletes existing shapes. Wiping the canvas is
+ * a separate (not-yet-implemented) explicit `shemma_clear_room` operation.
  *
  * Responses:
  *  200 { shape_ids, didraw_names, root_ids }
  *  400 missing source
- *  503 no client connected
+ *  503 { error: "no client connected", room_url } — caller should open
+ *      `room_url` in a browser and retry once.
  *  500 timeout or frontend error
  */
 export function importMermaidRoutes(bus: WsHub) {
@@ -25,7 +29,6 @@ export function importMermaidRoutes(bus: WsHub) {
 
     const body = (await c.req.json().catch(() => null)) as {
       source?: unknown;
-      mode?: unknown;
       clientOpId?: unknown;
     } | null;
 
@@ -34,8 +37,6 @@ export function importMermaidRoutes(bus: WsHub) {
     }
 
     const source = body.source;
-    const mode: "append" | "replace" =
-      body.mode === "replace" ? "replace" : "append";
 
     if (bus.subscriberCount(room) === 0) {
       return c.json({ error: "no client connected" }, 503);
@@ -44,7 +45,7 @@ export function importMermaidRoutes(bus: WsHub) {
     const requestId = crypto.randomUUID();
 
     try {
-      const result = await bus.sendImportMermaid(room, requestId, source, mode);
+      const result = await bus.sendImportMermaid(room, requestId, source);
       if (!result.ok) {
         return c.json({ error: result.error ?? "import failed" }, 500);
       }

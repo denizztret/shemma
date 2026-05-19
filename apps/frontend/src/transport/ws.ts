@@ -74,7 +74,7 @@ type StoreSyncMessage =
   | { kind: "prompt-resolved"; id: string; response?: string }
   | { kind: "prompt-removed"; ids: string[] }
   | { kind: "ai-activity"; activity: AiActivity | null }
-  | { kind: "import-mermaid"; source: string; mode: "append" | "replace"; requestId: string };
+  | { kind: "import-mermaid"; source: string; requestId: string };
 
 // ---------------------------------------------------------------------------
 // BoardFocusBeacon — standalone factory for sending board-focus WS messages.
@@ -153,10 +153,12 @@ export type StoreSyncDeps = {
    * Called when the backend sends an import-mermaid command frame (DRW-083).
    * The handler should call importMermaid(editor, source) and return the result.
    * If not provided, the frame is silently ignored.
+   *
+   * Append-only by design: no mode parameter. AI must never wipe existing
+   * canvas state — preserving user's manual layout edits is a hard invariant.
    */
   onImportMermaid?: (
     source: string,
-    mode: "append" | "replace",
     requestId: string,
   ) => Promise<{
     ok: boolean;
@@ -347,8 +349,8 @@ export function startStoreSync(deps: StoreSyncDeps): {
         break;
       case "import-mermaid":
         if (deps.onImportMermaid) {
-          const { source, mode, requestId } = msg;
-          void deps.onImportMermaid(source, mode, requestId).then(
+          const { source, requestId } = msg;
+          void deps.onImportMermaid(source, requestId).then(
             (result) => {
               if (stopped) return;
               if (ws.readyState !== ws.OPEN) return;

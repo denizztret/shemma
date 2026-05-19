@@ -260,14 +260,8 @@ export function App({ room }: { room: string }) {
           scheduleAiZoom();
         },
         // DRW-083: MCP import-mermaid command — backend routes WS frame here.
-        onImportMermaid: async (source, mode, _requestId) => {
-          if (mode === "replace") {
-            // Stash current page shapes, delete them first.
-            const existing = editor.getCurrentPageShapes();
-            if (existing.length > 0) {
-              editor.deleteShapes(existing.map((s) => s.id));
-            }
-          }
+        // Append-only by design — AI must never wipe existing canvas state.
+        onImportMermaid: async (source, _requestId) => {
           const result = await importMermaid(editor, source);
           // Collect didrawNames from shape meta (set by importMermaid internally)
           const didrawNames = result.shapeIds.map((id) => {
@@ -306,13 +300,7 @@ export function App({ room }: { room: string }) {
                   triggerGrowY(editor, changedIds);
                   scheduleAiZoom();
                 },
-                onImportMermaid: async (source, mode, _requestId) => {
-                  if (mode === "replace") {
-                    const existing = editor.getCurrentPageShapes();
-                    if (existing.length > 0) {
-                      editor.deleteShapes(existing.map((s) => s.id));
-                    }
-                  }
+                onImportMermaid: async (source, _requestId) => {
                   const result = await importMermaid(editor, source);
                   const didrawNames = result.shapeIds.map((id) => {
                     const shape = editor.getShape(id);

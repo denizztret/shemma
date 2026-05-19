@@ -75,9 +75,12 @@ export const ApplyArgs = {
   actions: z.array(z.record(z.unknown())).min(1),
 };
 
+// DRW-083: append-only by design. AI must never wipe existing canvas state —
+// preserving user's manual layout edits is a hard product invariant. If a
+// full-replace flow is ever needed, it ships as a separate `shemma_clear_room`
+// tool that requires explicit user confirmation, not a hidden mode flag.
 export const ImportMermaidArgs = {
   source: z.string().min(1),
-  mode: z.enum(["append", "replace"]).optional(),
   room: z.string().optional(),
   clientOpId: z.string().optional(),
 };

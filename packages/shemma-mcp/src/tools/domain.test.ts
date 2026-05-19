@@ -374,7 +374,7 @@ describe("shemma_import_mermaid tool (DRW-083)", () => {
     expect(() => setup()).not.toThrow();
   });
 
-  it("importMermaid calls POST /api/agent/import-mermaid with source and mode", async () => {
+  it("importMermaid calls POST /api/agent/import-mermaid with source (no mode field)", async () => {
     let capturedUrl = "";
     let capturedBody: unknown;
     mockFetch((url, init) => {
@@ -383,11 +383,12 @@ describe("shemma_import_mermaid tool (DRW-083)", () => {
       return { body: { ok: true, shape_ids: ["s1", "s2"], didraw_names: ["a", "b"], root_ids: ["s1"] } };
     });
     const { handles } = setup({ mode: "direct", room: "test-room" });
-    const r = await handles.importMermaid.call({ source: "graph LR; A-->B", mode: "append" });
+    const r = await handles.importMermaid.call({ source: "graph LR; A-->B" });
     expect(capturedUrl).toContain("/api/agent/import-mermaid");
     expect(capturedUrl).toContain("room=test-room");
     expect((capturedBody as { source: string }).source).toBe("graph LR; A-->B");
-    expect((capturedBody as { mode: string }).mode).toBe("append");
+    // Append-only: no mode field sent.
+    expect((capturedBody as Record<string, unknown>).mode).toBeUndefined();
     expect(r.structuredContent).toMatchObject({
       ok: true,
       room: "test-room",
@@ -397,7 +398,7 @@ describe("shemma_import_mermaid tool (DRW-083)", () => {
     expect(r.isError).toBeUndefined();
   });
 
-  it("importMermaid returns no-client-connected error when backend returns 503", async () => {
+  it("importMermaid returns error when backend returns 503", async () => {
     mockFetch(() => ({ body: { error: "no client connected" }, status: 503 }));
     const { handles } = setup({ mode: "direct", room: "r" });
     const r = await handles.importMermaid.call({ source: "graph LR; A-->B" });

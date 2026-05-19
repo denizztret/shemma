@@ -490,7 +490,6 @@ describe("startStoreSync — import-mermaid callback (DRW-083)", () => {
   function makeDepsWithImport(
     onImportMermaid?: (
       source: string,
-      mode: "append" | "replace",
       requestId: string,
     ) => Promise<{
       ok: boolean;
@@ -517,22 +516,21 @@ describe("startStoreSync — import-mermaid callback (DRW-083)", () => {
   }
 
   test("import-mermaid frame calls onImportMermaid callback and sends result back", async () => {
-    const calls: Array<{ source: string; mode: string; requestId: string }> = [];
-    const { sock, stop } = makeDepsWithImport(async (source, mode, requestId) => {
-      calls.push({ source, mode, requestId });
+    const calls: Array<{ source: string; requestId: string }> = [];
+    const { sock, stop } = makeDepsWithImport(async (source, requestId) => {
+      calls.push({ source, requestId });
       return { ok: true, shapeIds: ["s1", "s2"], didrawNames: ["a", "b"], rootIds: ["s1"] };
     });
     sock.open();
     const beforeSent = sock.sent.length;
 
-    sock.message({ kind: "import-mermaid", source: "graph LR; A-->B", mode: "append", requestId: "req-xyz" });
+    sock.message({ kind: "import-mermaid", source: "graph LR; A-->B", requestId: "req-xyz" });
 
     // Wait for the async callback to complete
     await sleep(20);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]!.source).toBe("graph LR; A-->B");
-    expect(calls[0]!.mode).toBe("append");
     expect(calls[0]!.requestId).toBe("req-xyz");
 
     // Should have sent back import-mermaid-result
@@ -554,7 +552,7 @@ describe("startStoreSync — import-mermaid callback (DRW-083)", () => {
     sock.open();
     const beforeSent = sock.sent.length;
 
-    sock.message({ kind: "import-mermaid", source: "bad source", mode: "append", requestId: "req-err" });
+    sock.message({ kind: "import-mermaid", source: "bad source", requestId: "req-err" });
     await sleep(20);
 
     const resultFrames = sock.sent.slice(beforeSent).map((s) => JSON.parse(s));
@@ -572,7 +570,7 @@ describe("startStoreSync — import-mermaid callback (DRW-083)", () => {
     sock.open();
     const beforeSent = sock.sent.length;
 
-    sock.message({ kind: "import-mermaid", source: "graph LR; A-->B", mode: "append", requestId: "req-noop" });
+    sock.message({ kind: "import-mermaid", source: "graph LR; A-->B", requestId: "req-noop" });
     await sleep(20);
 
     // No extra frames sent (no callback → no result)
