@@ -144,4 +144,107 @@ describe("context view-builder", () => {
     expect(richTextToString({ content: [] })).toBe("");
     expect(richTextToString({ content: [{ content: [{ text: "hi" }] }] })).toBe("hi");
   });
+
+  // DRW-084: backend integration test — mermaid subgraphs imported as frames
+  // must appear in domain context as type:'group', role:'boundary', children:[ids].
+  // This validates the full pipeline: importMermaid sets meta.role + parentId,
+  // then context.ts buildContext reads frame → group with children.
+  it("DRW-084: mermaid subgraph snapshot → domain context type:group, role:boundary, children", () => {
+    // Simulate a snapshot that importMermaid would produce for:
+    //   graph TD
+    //   subgraph SG1["Layer A"]
+    //     api
+    //     db
+    //   end
+    //   subgraph SG2["Layer B"]
+    //     worker
+    //   end
+    // After DRW-084: subgraph shapes are frame type, meta.role="boundary",
+    // child nodes have parentId = subgraph frame shape id.
+    const s = baseStore();
+
+    // Subgraph 1 frame
+    s.store["shape:sg1"] = {
+      id: "shape:sg1",
+      typeName: "shape",
+      type: "frame",
+      x: 0, y: 0,
+      props: {
+        w: 300, h: 200,
+        richText: richText("Layer A"),
+      },
+      meta: { didrawName: "layer-a", role: "boundary" },
+    } as any;
+
+    // Subgraph 1 children
+    s.store["shape:api"] = {
+      id: "shape:api",
+      typeName: "shape",
+      type: "geo",
+      parentId: "shape:sg1",
+      x: 10, y: 50,
+      props: { w: 120, h: 60, richText: richText("api") },
+      meta: { didrawName: "api" },
+    } as any;
+    s.store["shape:db"] = {
+      id: "shape:db",
+      typeName: "shape",
+      type: "geo",
+      parentId: "shape:sg1",
+      x: 150, y: 50,
+      props: { w: 120, h: 60, richText: richText("db") },
+      meta: { didrawName: "db" },
+    } as any;
+
+    // Subgraph 2 frame
+    s.store["shape:sg2"] = {
+      id: "shape:sg2",
+      typeName: "shape",
+      type: "frame",
+      x: 400, y: 0,
+      props: {
+        w: 200, h: 150,
+        richText: richText("Layer B"),
+      },
+      meta: { didrawName: "layer-b", role: "boundary" },
+    } as any;
+
+    // Subgraph 2 child
+    s.store["shape:worker"] = {
+      id: "shape:worker",
+      typeName: "shape",
+      type: "geo",
+      parentId: "shape:sg2",
+      x: 10, y: 50,
+      props: { w: 120, h: 60, richText: richText("worker") },
+      meta: { didrawName: "worker" },
+    } as any;
+
+    const v = buildContext(s, {});
+
+    // Two subgraph frames must appear as type:group, role:boundary.
+    const sg1 = v.elements.find((e) => e.id === "layer-a")!;
+    const sg2 = v.elements.find((e) => e.id === "layer-b")!;
+
+    expect(sg1).toBeDefined();
+    expect(sg1.type).toBe("group");
+    expect(sg1.role).toBe("boundary");
+    expect(sg1.label).toBe("Layer A");
+    expect(sg1.children).toEqual(expect.arrayContaining(["api", "db"]));
+    expect(sg1.children!.length).toBe(2);
+
+    expect(sg2).toBeDefined();
+    expect(sg2.type).toBe("group");
+    expect(sg2.role).toBe("boundary");
+    expect(sg2.label).toBe("Layer B");
+    expect(sg2.children).toEqual(["worker"]);
+
+    // Inner nodes must NOT appear as groups.
+    const apiEl = v.elements.find((e) => e.id === "api")!;
+    expect(apiEl.type).toBe("shape");
+    expect(apiEl.children).toBeUndefined();
+
+    // Total 5 shapes: 2 frames + 3 children.
+    expect(v.elements.length).toBe(5);
+  });
 });
