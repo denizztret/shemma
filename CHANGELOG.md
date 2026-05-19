@@ -1,3 +1,28 @@
+## 0.16.0 — 2026-05-19 — Mermaid subgraphs как domain groups + auto-zoom на новый bbox
+
+Доработка `shemma_import_mermaid` после dogfood-сессии: Mermaid `subgraph` теперь корректно попадает в `shemma_context` как `type:"group", role:"boundary"`, а после import viewport анимированно зумится на bbox новых shapes. Закрывает DRW-084 + DRW-086. Дополнительный AC: автоматический preprend ELK frontmatter (`---\nconfig:\n  layout: elk\n---`) на источниках без frontmatter — компактнее baseline.
+
+### Added
+
+- **DRW-084 — Mermaid subgraphs ↔ domain groups.** Стратегия hybrid B: subgraph остаётся `geo` shape (tldraw frame не принимает `fill` props, которые `@tldraw/mermaid` baseProps мержит во все shapes — стратегия A через `mapNodeToRenderSpec`→frame архитектурно невозможна без monkeypatch lib). В `apps/frontend/src/canvas/mermaid-import.ts` post-process: shape с children (heuristic — `geo` + есть `c.parentId === s.id`) получает `meta.role = "boundary"`. В `apps/backend/src/domain/context.ts` `deriveType` теперь распознаёт `type === "geo" && meta.role === "boundary"` как `"group"`; `childrenByFrame` использует helper `isContainerShape`. Auto-prepend ELK frontmatter через `prependElkFrontmatter()`.
+- **DRW-086 — Auto-zoom после import-mermaid.** В `App.tsx onImportMermaid` после успешного `importMermaid` вычисляется union bbox новых shapes (`unionBoundsOf`) → `editor.zoomToBounds(bounds, { animation: { duration: 200 }, inset: 64 })`. DRW-075 guard: `userHasManuallyPanned` пропускает auto-zoom. Optional `focus: "new" | "fit-all" | "none"` parameter сквозной wire-up (MCP → backend → WS → frontend), default `"new"`.
+
+### Tests
+
+- 668+ tests pass (frontend +9, backend +1 integration + 5 route, MCP +6, transport +5).
+- TDD: frontend mock-tests caught wiring + edge cases; backend integration test verifies geo+role → group conversion; smoke test через chrome-devtools — verify visual + viewport.
+
+### Known compromises
+
+- **AC#3 визуальный** — subgraph рендерится как `geo` rectangle с label inside, а не как tldraw frame с heading сверху. Frame-стратегия (A) требует monkeypatch lib (frame schema не принимает fill/dash/size). Отложено до апстрима в `@tldraw/mermaid` либо custom shape util.
+
+### Internal
+
+- Регрессия DRW-084 v1 (frame ValidationError) поймана на dev-mode smoke через chrome-devtools — confirmed: фронт-моки `createMermaidDiagram` не покрывают валидацию реального lib. Hotfix через `hotfix/drw-084-frame-validation-fix` ветку → merge в main.
+- DRW-088 (Tidy command) теперь unblocked.
+
+---
+
 ## 0.15.0 — 2026-05-19 — shemma_import_mermaid MCP tool
 
 Feature: `shemma_import_mermaid` MCP tool — AI теперь может импортировать Mermaid-диаграммы прямо на canvas без участия пользователя. Реализована через WS command path (option b): backend пересылает frame в открытый browser tab, frontend вызывает `@tldraw/mermaid.createMermaidDiagram`, shapes возвращаются через store-change sync. **Append-only:** инструмент всегда дописывает shapes, никогда не стирает existing canvas state — preserve user's manual layout edits — это hard invariant. Закрывает DRW-083.
