@@ -491,6 +491,7 @@ describe("startStoreSync — import-mermaid callback (DRW-083)", () => {
     onImportMermaid?: (
       source: string,
       requestId: string,
+      focus?: "new" | "fit-all" | "none",
     ) => Promise<{
       ok: boolean;
       shapeIds?: string[];
@@ -577,6 +578,70 @@ describe("startStoreSync — import-mermaid callback (DRW-083)", () => {
     const newFrames = sock.sent.slice(beforeSent);
     expect(newFrames.length).toBe(0);
 
+    stop();
+  });
+});
+
+// DRW-086: focus parameter propagation through WS transport
+describe("startStoreSync — import-mermaid focus parameter (DRW-086)", () => {
+  function makeDepsWithFocusCapture() {
+    const sock = new MockSocket();
+    const store = new MockStore();
+    const editor = { store } as unknown as Parameters<typeof startStoreSync>[0]["editor"];
+    const captured: Array<{ source: string; requestId: string; focus?: string }> = [];
+    const sync = startStoreSync({
+      editor,
+      wsUrl: "ws://test/ws?room=t",
+      room: "test-room",
+      initialVersion: 0,
+      onTruncated: () => {},
+      debounceMs: 5,
+      socketFactory: () => sock as unknown as WebSocket,
+      onImportMermaid: async (source, requestId, focus) => {
+        captured.push({ source, requestId, focus });
+        return { ok: true, shapeIds: ["s1"], didrawNames: ["a"], rootIds: ["s1"] };
+      },
+    });
+    return { sock, captured, stop: sync.stop };
+  }
+
+  test("focus='new' is passed to onImportMermaid callback", async () => {
+    const { sock, captured, stop } = makeDepsWithFocusCapture();
+    sock.open();
+    sock.message({ kind: "import-mermaid", source: "graph LR; A-->B", requestId: "req-focus-new", focus: "new" });
+    await sleep(20);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.focus).toBe("new");
+    stop();
+  });
+
+  test("focus='fit-all' is passed to onImportMermaid callback", async () => {
+    const { sock, captured, stop } = makeDepsWithFocusCapture();
+    sock.open();
+    sock.message({ kind: "import-mermaid", source: "graph LR; A-->B", requestId: "req-focus-fit", focus: "fit-all" });
+    await sleep(20);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.focus).toBe("fit-all");
+    stop();
+  });
+
+  test("focus='none' is passed to onImportMermaid callback", async () => {
+    const { sock, captured, stop } = makeDepsWithFocusCapture();
+    sock.open();
+    sock.message({ kind: "import-mermaid", source: "graph LR; A-->B", requestId: "req-focus-none", focus: "none" });
+    await sleep(20);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.focus).toBe("none");
+    stop();
+  });
+
+  test("focus omitted → undefined passed to callback (defaults to 'new' in handler)", async () => {
+    const { sock, captured, stop } = makeDepsWithFocusCapture();
+    sock.open();
+    sock.message({ kind: "import-mermaid", source: "graph LR; A-->B", requestId: "req-no-focus" });
+    await sleep(20);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.focus).toBeUndefined();
     stop();
   });
 });

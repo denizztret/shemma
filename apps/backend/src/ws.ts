@@ -89,6 +89,7 @@ export class WsHub implements StoreChangeBus {
     room: string,
     requestId: string,
     source: string,
+    focus?: "new" | "fit-all" | "none",
   ): Promise<ImportMermaidResult> {
     return new Promise<ImportMermaidResult>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -109,7 +110,15 @@ export class WsHub implements StoreChangeBus {
       let sent = false;
       for (const s of set) {
         if (s.readyState === OPEN) {
-          s.send(JSON.stringify({ kind: "import-mermaid", source, requestId }));
+          // DRW-086: include focus only when explicitly provided (omit to preserve
+          // backward-compat: frontend defaults to "new" when field absent).
+          const frame: { kind: string; source: string; requestId: string; focus?: string } = {
+            kind: "import-mermaid",
+            source,
+            requestId,
+          };
+          if (focus !== undefined) frame.focus = focus;
+          s.send(JSON.stringify(frame));
           sent = true;
           break;
         }

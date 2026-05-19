@@ -432,4 +432,49 @@ describe("shemma_import_mermaid tool (DRW-083)", () => {
     expect(r.structuredContent).toMatchObject({ ok: false, code: "ambiguous-room" });
     expect(r.isError).toBe(true);
   });
+
+  // DRW-086: focus parameter wire-up through MCP → backend
+  it("importMermaid forwards focus='new' to POST body (DRW-086)", async () => {
+    let capturedBody: unknown;
+    mockFetch((_, init) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return { body: { ok: true, shape_ids: ["s1"], didraw_names: ["a"], root_ids: ["s1"] } };
+    });
+    const { handles } = setup({ mode: "direct", room: "test-room" });
+    await handles.importMermaid.call({ source: "graph LR; A-->B", focus: "new" });
+    expect((capturedBody as Record<string, unknown>).focus).toBe("new");
+  });
+
+  it("importMermaid forwards focus='fit-all' to POST body (DRW-086)", async () => {
+    let capturedBody: unknown;
+    mockFetch((_, init) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return { body: { ok: true, shape_ids: ["s1"], didraw_names: ["a"], root_ids: ["s1"] } };
+    });
+    const { handles } = setup({ mode: "direct", room: "test-room" });
+    await handles.importMermaid.call({ source: "graph LR; A-->B", focus: "fit-all" });
+    expect((capturedBody as Record<string, unknown>).focus).toBe("fit-all");
+  });
+
+  it("importMermaid forwards focus='none' to POST body (DRW-086)", async () => {
+    let capturedBody: unknown;
+    mockFetch((_, init) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return { body: { ok: true, shape_ids: ["s1"], didraw_names: ["a"], root_ids: ["s1"] } };
+    });
+    const { handles } = setup({ mode: "direct", room: "test-room" });
+    await handles.importMermaid.call({ source: "graph LR; A-->B", focus: "none" });
+    expect((capturedBody as Record<string, unknown>).focus).toBe("none");
+  });
+
+  it("importMermaid omits focus from body when not provided (DRW-086)", async () => {
+    let capturedBody: unknown;
+    mockFetch((_, init) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return { body: { ok: true, shape_ids: ["s1"], didraw_names: ["a"], root_ids: ["s1"] } };
+    });
+    const { handles } = setup({ mode: "direct", room: "test-room" });
+    await handles.importMermaid.call({ source: "graph LR; A-->B" });
+    expect((capturedBody as Record<string, unknown>).focus).toBeUndefined();
+  });
 });

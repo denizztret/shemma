@@ -114,4 +114,105 @@ describe("POST /api/agent/import-mermaid", () => {
     bus.detach(room, sock);
     await resPromise; // let it resolve (timeout)
   }, 15000);
+
+  // DRW-086: focus parameter wire-up
+  it("forwards focus='new' from body to WS frame (DRW-086)", async () => {
+    const { app, bus } = makeApp({ inMemory: true });
+    const room = "test-focus-new";
+    const sock = makeMockSock();
+    bus.attach(room, sock);
+
+    const resPromise = app.fetch(
+      new Request(`http://x/api/agent/import-mermaid?room=${room}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ source: "graph LR; A-->B", focus: "new" }),
+      }),
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sock.sent.length).toBeGreaterThan(0);
+    const frame = JSON.parse(sock.sent[0]!) as Record<string, unknown>;
+    expect(frame.kind).toBe("import-mermaid");
+    expect(frame.focus).toBe("new");
+
+    bus.detach(room, sock);
+    await resPromise;
+  }, 15000);
+
+  it("forwards focus='fit-all' from body to WS frame (DRW-086)", async () => {
+    const { app, bus } = makeApp({ inMemory: true });
+    const room = "test-focus-fit-all";
+    const sock = makeMockSock();
+    bus.attach(room, sock);
+
+    const resPromise = app.fetch(
+      new Request(`http://x/api/agent/import-mermaid?room=${room}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ source: "graph LR; A-->B", focus: "fit-all" }),
+      }),
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sock.sent.length).toBeGreaterThan(0);
+    const frame = JSON.parse(sock.sent[0]!) as Record<string, unknown>;
+    expect(frame.kind).toBe("import-mermaid");
+    expect(frame.focus).toBe("fit-all");
+
+    bus.detach(room, sock);
+    await resPromise;
+  }, 15000);
+
+  it("forwards focus='none' from body to WS frame (DRW-086)", async () => {
+    const { app, bus } = makeApp({ inMemory: true });
+    const room = "test-focus-none";
+    const sock = makeMockSock();
+    bus.attach(room, sock);
+
+    const resPromise = app.fetch(
+      new Request(`http://x/api/agent/import-mermaid?room=${room}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ source: "graph LR; A-->B", focus: "none" }),
+      }),
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sock.sent.length).toBeGreaterThan(0);
+    const frame = JSON.parse(sock.sent[0]!) as Record<string, unknown>;
+    expect(frame.kind).toBe("import-mermaid");
+    expect(frame.focus).toBe("none");
+
+    bus.detach(room, sock);
+    await resPromise;
+  }, 15000);
+
+  it("omits focus field from WS frame when not provided in body (DRW-086)", async () => {
+    const { app, bus } = makeApp({ inMemory: true });
+    const room = "test-focus-omitted";
+    const sock = makeMockSock();
+    bus.attach(room, sock);
+
+    const resPromise = app.fetch(
+      new Request(`http://x/api/agent/import-mermaid?room=${room}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ source: "graph LR; A-->B" }),
+      }),
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sock.sent.length).toBeGreaterThan(0);
+    const frame = JSON.parse(sock.sent[0]!) as Record<string, unknown>;
+    // When focus not provided — should not be present in frame (undefined/absent)
+    expect("focus" in frame).toBe(false);
+
+    bus.detach(room, sock);
+    await resPromise;
+  }, 15000);
 });

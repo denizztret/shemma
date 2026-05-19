@@ -3,7 +3,7 @@ import { type Editor, type TLGeoShape, Tldraw } from "tldraw";
 import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
-import { importMermaid } from "./canvas/mermaid-import";
+import { importMermaid, unionBoundsOf } from "./canvas/mermaid-import";
 import { backfillStoreRecords } from "./canvas/schema-placeholder";
 import { AiActivityBadge } from "./chrome/AiActivityBadge";
 import { AppChrome } from "./chrome/AppChrome";
@@ -261,7 +261,8 @@ export function App({ room }: { room: string }) {
         },
         // DRW-083: MCP import-mermaid command — backend routes WS frame here.
         // Append-only by design — AI must never wipe existing canvas state.
-        onImportMermaid: async (source, _requestId) => {
+        // DRW-086: focus param controls viewport behavior after import.
+        onImportMermaid: async (source, _requestId, focus = "new") => {
           const result = await importMermaid(editor, source);
           // Collect didrawNames from shape meta (set by importMermaid internally)
           const didrawNames = result.shapeIds.map((id) => {
@@ -269,6 +270,25 @@ export function App({ room }: { room: string }) {
             const name = (shape?.meta as Record<string, unknown> | undefined)?.didrawName;
             return typeof name === "string" ? name : "";
           });
+
+          // DRW-086: animate viewport to new shapes (or fit-all), unless user
+          // has manually panned (DRW-075 guard) or focus='none'.
+          if (focus !== "none" && !userHasManuallyPanned.current && result.shapeIds.length > 0) {
+            inProgrammaticCameraOp.current = true;
+            if (focus === "fit-all") {
+              editor.zoomToFit({ animation: { duration: 200 } });
+            } else {
+              // focus === "new" (default)
+              const bounds = unionBoundsOf(editor, result.shapeIds);
+              if (bounds) {
+                editor.zoomToBounds(bounds, { animation: { duration: 200 }, inset: 64 });
+              }
+            }
+            setTimeout(() => {
+              inProgrammaticCameraOp.current = false;
+            }, 300);
+          }
+
           return {
             ok: result.ok,
             shapeIds: result.shapeIds as unknown as string[],
@@ -300,13 +320,33 @@ export function App({ room }: { room: string }) {
                   triggerGrowY(editor, changedIds);
                   scheduleAiZoom();
                 },
-                onImportMermaid: async (source, _requestId) => {
+                // DRW-086: focus param controls viewport behavior after import.
+                onImportMermaid: async (source, _requestId, focus = "new") => {
                   const result = await importMermaid(editor, source);
                   const didrawNames = result.shapeIds.map((id) => {
                     const shape = editor.getShape(id);
                     const name = (shape?.meta as Record<string, unknown> | undefined)?.didrawName;
                     return typeof name === "string" ? name : "";
                   });
+
+                  // DRW-086: animate viewport to new shapes, unless user
+                  // has manually panned (DRW-075 guard) or focus='none'.
+                  if (focus !== "none" && !userHasManuallyPanned.current && result.shapeIds.length > 0) {
+                    inProgrammaticCameraOp.current = true;
+                    if (focus === "fit-all") {
+                      editor.zoomToFit({ animation: { duration: 200 } });
+                    } else {
+                      // focus === "new" (default)
+                      const bounds = unionBoundsOf(editor, result.shapeIds);
+                      if (bounds) {
+                        editor.zoomToBounds(bounds, { animation: { duration: 200 }, inset: 64 });
+                      }
+                    }
+                    setTimeout(() => {
+                      inProgrammaticCameraOp.current = false;
+                    }, 300);
+                  }
+
                   return {
                     ok: result.ok,
                     shapeIds: result.shapeIds as unknown as string[],
