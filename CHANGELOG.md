@@ -1,3 +1,22 @@
+## 0.14.4 — 2026-05-19 — Frame children parent-relative coords
+
+Bug-fix релиз: после 0.14.3 (containers с visible header) обнаружено что children в multi-frame схемах оказывались off-screen — tldraw хранит x/y child shape с parentId=frame как parent-relative, но ELK runLayout писал absolute page coords. Закрывает DRW-082.
+
+### Fixed
+
+- **DRW-082 — Frame children coords parent-relative.** В `apps/backend/src/domain/layout.ts:runLayout` — collectPositions через walk-with-offset возвращает абсолютные page coords для всех shapes (включая children внутри frame). Apply loop писал их as-is в `shape.x/y`, но tldraw для shape с `parentId=frame_id` интерпретирует `x/y` как **parent-relative** — при render положение становится `parent.x + child.x`, что давало double-offset. Integration frame случайно работал (frame достаточно широкий чтобы render-position попадал внутрь); UIView frame узкий — дети уезжали за границы. Fix: построен `frameIds` set из shapes с `type='frame'`; для shape с `s.parentId in frameIds` newX/newY вычисляются как `abs_position - parent_abs_position` (subtract frame's absolute position).
+
+### Tests
+
+- `apps/backend/tests/domain/layout.test.ts` — добавлен тест: 2 frames + 2 children каждый + cross-edge, для каждого child render-position `(parent.x + child.x, parent.y + child.y)` должна попадать в `[parent.x, parent.x + parent.props.w] × [parent.y, parent.y + parent.props.h]`. Покрывает случай multi-group схемы (типа InlineAdLoader с `integration` + `UIView`).
+- Итого: 288 backend (+1) + 66 frontend + 116 MCP.
+
+### Verification
+
+Manual в комнате `inline-ad-v2` (7 нод + 2 frame groups + 7 связей через layered-lr): оба контейнера `integration` и `UIView` отрисовываются с visible header labels и **детьми внутри** (StoriesView + BannersView корректно в UIView frame'е); ранее UIView был визуально пустой. 0 console errors.
+
+---
+
 ## 0.14.3 — 2026-05-19 — Layout spacing + containers + MCP group
 
 Bug-fix релиз: после 0.14.2 (camera + labels) тест на референсной диаграмме InlineAdLoader выявил три проблемы — tight arrow spacing, отсутствие container groups через MCP, frame schema mismatch. Закрывает DRW-079, DRW-080, DRW-072.
