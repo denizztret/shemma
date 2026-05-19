@@ -14,6 +14,20 @@ export type BoundsLike = { x: number; y: number; w: number; h: number };
  * Iterates `editor.getShapePageBounds(id)` and unions all results.
  * Returns null if shapeIds is empty or no shape has bounds.
  */
+/**
+ * DRW-096: true if `inner` is fully contained within `outer` (all 4 corners
+ * inside, slack=0). Используется чтобы skip auto-zoom после Tidy, когда
+ * affected shapes уже видны в текущем viewport.
+ */
+export function isBoundsContained(inner: BoundsLike, outer: BoundsLike): boolean {
+  return (
+    inner.x >= outer.x &&
+    inner.y >= outer.y &&
+    inner.x + inner.w <= outer.x + outer.w &&
+    inner.y + inner.h <= outer.y + outer.h
+  );
+}
+
 export function unionBoundsOf(editor: Editor, shapeIds: TLShapeId[]): BoundsLike | null {
   if (shapeIds.length === 0) return null;
   let minX = Infinity;

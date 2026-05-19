@@ -3,7 +3,7 @@ import { type Editor, type TLGeoShape, Tldraw } from "tldraw";
 import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
-import { importMermaid, unionBoundsOf } from "./canvas/mermaid-import";
+import { importMermaid, isBoundsContained, unionBoundsOf } from "./canvas/mermaid-import";
 import { backfillStoreRecords } from "./canvas/schema-placeholder";
 import { makeTidyHotkeyHandler, tidyLayout } from "./canvas/tidy-layout";
 import { AiActivityBadge } from "./chrome/AiActivityBadge";
@@ -114,10 +114,11 @@ export function App({ room }: { room: string }) {
         if (!editor) return;
         const result = await tidyLayout(ids, room);
         if (result.kind === "ok" && result.affected.length > 0 && !inProgrammaticCameraOp.current) {
-          // AC#6: zoom to the affected shapes' bounding box.
           const affectedIds = result.affected as unknown as Parameters<typeof unionBoundsOf>[1];
           const bounds = unionBoundsOf(editor, affectedIds);
-          if (bounds) {
+          // DRW-096: skip auto-zoom если affected уже целиком в viewport.
+          const viewport = editor.getViewportPageBounds();
+          if (bounds && !isBoundsContained(bounds, viewport)) {
             inProgrammaticCameraOp.current = true;
             editor.zoomToBounds(bounds, { animation: { duration: 200 }, inset: 64 });
             setTimeout(() => {
@@ -223,7 +224,8 @@ export function App({ room }: { room: string }) {
       if (result.kind === "ok" && result.affected.length > 0 && !inProgrammaticCameraOp.current) {
         const affectedIds = result.affected as unknown as Parameters<typeof unionBoundsOf>[1];
         const bounds = unionBoundsOf(editor, affectedIds);
-        if (bounds) {
+        const viewport = editor.getViewportPageBounds();
+        if (bounds && !isBoundsContained(bounds, viewport)) {
           inProgrammaticCameraOp.current = true;
           editor.zoomToBounds(bounds, { animation: { duration: 200 }, inset: 64 });
           setTimeout(() => {
