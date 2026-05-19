@@ -204,42 +204,34 @@ describe("importMermaid — meta.mermaidSource", () => {
   });
 });
 
-// --- DRW-084: subgraph → frame conversion -------------------------------------
+// --- DRW-084 hotfix: subgraph → geo+role='boundary' hybrid strategy -----------
+//
+// Strategy B (hybrid): mapNodeToRenderSpec is removed; subgraph nodes render as
+// default geo shapes (library default). importMermaid detects containers by
+// heuristic: geo shape with at least one new child (newShape.parentId === s.id).
+// Such containers get meta.role = 'boundary'. Children parentId is handled by
+// renderBlueprint automatically from blueprint node.parentId.
 
-describe("importMermaid — DRW-084: subgraph shapes become frames", () => {
-  // Simulate what @tldraw/mermaid does when mapNodeToRenderSpec hook is active:
-  // subgraph nodes are created as 'frame' shapes, children get parentId = frame.
-  // We test that importMermaid passes the hook to createMermaidDiagram and that
-  // after import the subgraph shape has type "frame" (not "geo") and children
-  // have the correct parentId.
-  test("subgraph created by hook has type 'frame'", async () => {
+describe("importMermaid — DRW-084: subgraph remains geo with meta.role='boundary'", () => {
+  // Simulate what @tldraw/mermaid does without mapNodeToRenderSpec hook:
+  // subgraph nodes are created as default 'geo' shapes, children get parentId = subgraph geo id.
+  // We test that importMermaid does NOT pass mapNodeToRenderSpec and that
+  // after import the subgraph shape has type "geo" + meta.role="boundary",
+  // and children have the correct parentId.
+  test("subgraph remains geo with meta.role='boundary'", async () => {
     const PAGE = "page:page";
     const editor = makeFakeEditor(PAGE);
 
-    // Mock createMermaidDiagram to simulate: hook causes subgraph → frame,
-    // children get parentId = subgraph frame id.
+    // Mock createMermaidDiagram — library creates subgraph as default geo (no hook).
     mock.module("@tldraw/mermaid", () => ({
       createMermaidDiagram: async (ed: any, _source: string, opts: any) => {
-        // Verify that options.blueprintRender.mapNodeToRenderSpec is passed.
+        // Verify that mapNodeToRenderSpec hook is NOT passed (no frame override).
         const mapper = opts?.blueprintRender?.mapNodeToRenderSpec;
-        if (!mapper) throw new Error("mapNodeToRenderSpec hook not passed");
+        if (mapper) throw new Error("mapNodeToRenderSpec hook must NOT be passed in hybrid strategy");
 
-        // Simulate what the hook returns for subgraph kind.
-        const subgraphResult = mapper({ kind: "subgraph", nodeId: "sg1", node: { kind: "subgraph" } as any, diagramKind: "flowchart" });
-        // Hook must return frame type for subgraph.
-        if (!subgraphResult || subgraphResult.type !== "frame") {
-          throw new Error(`Expected frame spec, got: ${JSON.stringify(subgraphResult)}`);
-        }
-
-        // Simulate non-subgraph kind → should return undefined (use defaults).
-        const rectResult = mapper({ kind: "rect", nodeId: "n1", node: { kind: "rect" } as any, diagramKind: "flowchart" });
-        if (rectResult !== undefined) {
-          throw new Error("Expected undefined for non-subgraph kind");
-        }
-
-        // Add shapes as if renderBlueprint created them: subgraph = frame, children with parentId = frame.
+        // Library default: subgraph → geo, children get parentId = subgraph geo id.
         ed._addShapes([
-          makeShape("sg1", "frame", PAGE, "Service Layer"),
+          makeShape("sg1", "geo", PAGE, "Service Layer"),
           makeShape("node1", "geo", "shape:sg1", "API"),
           makeShape("node2", "geo", "shape:sg1", "DB"),
           makeShape("arrow1", "arrow", PAGE),
@@ -254,18 +246,22 @@ describe("importMermaid — DRW-084: subgraph shapes become frames", () => {
     expect(res.ok).toBe(true);
     expect(res.shapeIds.length).toBe(4);
 
-    // Subgraph frame shape must exist.
-    const frame = editor._shapes().find((s) => s.id === "shape:sg1");
-    expect(frame?.type).toBe("frame");
+    // Subgraph shape must be geo (not frame).
+    const sg1 = editor._shapes().find((s) => s.id === "shape:sg1");
+    expect(sg1?.type).toBe("geo");
 
-    // Children must have parentId = frame id.
+    // Children must have parentId = subgraph geo id.
     const node1 = editor._shapes().find((s) => s.id === "shape:node1");
     const node2 = editor._shapes().find((s) => s.id === "shape:node2");
     expect(node1?.parentId).toBe("shape:sg1");
     expect(node2?.parentId).toBe("shape:sg1");
 
-    // Frame should have meta.role = "boundary".
-    expect(frame?.meta.role).toBe("boundary");
+    // Subgraph geo container must have meta.role = "boundary".
+    expect(sg1?.meta.role).toBe("boundary");
+
+    // Leaf nodes must NOT have role.
+    expect(node1?.meta.role).toBeUndefined();
+    expect(node2?.meta.role).toBeUndefined();
   });
 
   test("non-subgraph shapes do NOT get role='boundary'", async () => {
@@ -274,6 +270,7 @@ describe("importMermaid — DRW-084: subgraph shapes become frames", () => {
 
     mock.module("@tldraw/mermaid", () => ({
       createMermaidDiagram: async (ed: any, _source: string, _opts: any) => {
+        // Flat diagram — no parent-child relationships, all at page level.
         ed._addShapes([
           makeShape("n1", "geo", PAGE, "Alpha"),
           makeShape("n2", "geo", PAGE, "Beta"),
@@ -289,25 +286,16 @@ describe("importMermaid — DRW-084: subgraph shapes become frames", () => {
     }
   });
 
-  test("nested subgraph: inner subgraph also becomes frame", async () => {
+  test("nested subgraph: both inner and outer geo containers get role='boundary'", async () => {
     const PAGE = "page:page";
     const editor = makeFakeEditor(PAGE);
 
     mock.module("@tldraw/mermaid", () => ({
-      createMermaidDiagram: async (ed: any, _source: string, opts: any) => {
-        const mapper = opts?.blueprintRender?.mapNodeToRenderSpec;
-        if (!mapper) throw new Error("mapNodeToRenderSpec hook not passed");
-
-        // Both outer and inner subgraphs should be mapped to frame.
-        const outer = mapper({ kind: "subgraph", nodeId: "outer", node: { kind: "subgraph" } as any, diagramKind: "flowchart" });
-        const inner = mapper({ kind: "subgraph", nodeId: "inner", node: { kind: "subgraph" } as any, diagramKind: "flowchart" });
-        if (!outer || outer.type !== "frame") throw new Error("outer not frame");
-        if (!inner || inner.type !== "frame") throw new Error("inner not frame");
-
-        // Outer subgraph = frame at page level, inner = frame child of outer.
+      createMermaidDiagram: async (ed: any, _source: string, _opts: any) => {
+        // Nested: outer subgraph at page level, inner at outer level, leaf inside inner.
         ed._addShapes([
-          makeShape("outer", "frame", PAGE, "Outer"),
-          makeShape("inner", "frame", "shape:outer", "Inner"),
+          makeShape("outer", "geo", PAGE, "Outer"),
+          makeShape("inner", "geo", "shape:outer", "Inner"),
           makeShape("leaf", "geo", "shape:inner", "Leaf"),
         ]);
       },
@@ -319,10 +307,17 @@ describe("importMermaid — DRW-084: subgraph shapes become frames", () => {
     expect(res.ok).toBe(true);
     const outer = editor._shapes().find((s) => s.id === "shape:outer");
     const inner = editor._shapes().find((s) => s.id === "shape:inner");
-    expect(outer?.type).toBe("frame");
-    expect(inner?.type).toBe("frame");
+    const leaf = editor._shapes().find((s) => s.id === "shape:leaf");
+
+    // Both containers must be geo + role=boundary.
+    expect(outer?.type).toBe("geo");
+    expect(inner?.type).toBe("geo");
     expect(outer?.meta.role).toBe("boundary");
     expect(inner?.meta.role).toBe("boundary");
+
+    // Leaf has no children → no role.
+    expect(leaf?.meta.role).toBeUndefined();
+
     expect(inner?.parentId).toBe("shape:outer");
   });
 });
