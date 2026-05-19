@@ -11,6 +11,23 @@ import {
 // Нет промежуточного "build ops → sendPatch" — store сам и есть транспортный
 // слой.
 
+// DRW-084: ELK frontmatter constant.
+const ELK_FRONTMATTER = "---\nconfig:\n  layout: elk\n---\n";
+
+/**
+ * Prepend ELK layout frontmatter to a Mermaid source string if it has none.
+ * Mermaid frontmatter must start at position 0 with "---".
+ * If the source already starts with "---" (any frontmatter) — return as-is.
+ * @internal
+ */
+export function prependElkFrontmatter(source: string): string {
+  if (source.trimStart().startsWith("---")) {
+    // Already has frontmatter (or trimmed variant — preserve original).
+    return source;
+  }
+  return `${ELK_FRONTMATTER}${source}`;
+}
+
 // Lazy-load @tldraw/mermaid — pulls in mermaid + heavy deps; only paid когда
 // пользователь реально импортирует.
 async function loadMermaid() {
@@ -71,7 +88,25 @@ export async function importMermaid(
     editor.getCurrentPageShapes().map((s) => s.id as unknown as string),
   );
 
-  await mermaidMod.createMermaidDiagram(editor, source);
+  // DRW-084 AC#6: auto-prepend ELK frontmatter for more compact visual layout.
+  const processedSource = prependElkFrontmatter(source);
+
+  // DRW-084: mapNodeToRenderSpec hook — converts subgraph blueprint nodes to
+  // tldraw frame shapes. renderBlueprint will pass parentShapeId for children
+  // automatically (nodes with node.parentId set in blueprint).
+  // biome-ignore lint/suspicious/noExplicitAny: @tldraw/mermaid types
+  const mapNodeToRenderSpec = ({ kind }: { kind: string }): any => {
+    if (kind === "subgraph") {
+      // Return frame shape spec. Props will be merged by defaultCreateMermaidNodeFromBlueprint.
+      return { variant: "shape", type: "frame", props: {} };
+    }
+    // undefined → use library defaults for non-subgraph nodes.
+    return undefined;
+  };
+
+  await mermaidMod.createMermaidDiagram(editor, processedSource, {
+    blueprintRender: { mapNodeToRenderSpec },
+  });
 
   const after = editor.getCurrentPageShapes();
   const newShapes = after.filter(
@@ -121,6 +156,11 @@ export async function importMermaid(
       ...s.meta,
       didrawName: candidate,
     };
+    // DRW-084: frame shapes from subgraph import get role="boundary" so that
+    // domain context reader (context.ts) exposes them as type:"group", role:"boundary".
+    if (s.type === "frame") {
+      meta.role = "boundary";
+    }
     if (sourceTargetIds.has(s.id as unknown as string)) {
       meta.mermaidSource = source;
     }
