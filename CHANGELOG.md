@@ -1,3 +1,26 @@
+## 0.18.2 — 2026-05-19 — Daemon crash hotfix: conflicting WS user-change batches (DRW-094)
+
+PATCH critical: daemon крашился на normal user interaction. Frontend WS accumulator может склеить rapid create→delete (typically binding записи при быстром draw+undo arrow'а) в один user-change frame с одной и той же id в `added` И `removed`. `applyStoreChanges` Phase 3.0 sanity throw считал это logic bug → uncaught async exception → процесс daemon dies.
+
+### Fixed
+
+- **DRW-094 — Daemon crash on conflicting batch.** `apps/backend/src/store-ops.ts:applyStoreChanges` больше не throws при id одновременно в added и removed. Natural order операций (added → updated → removed) корректно даёт removed-wins → net-no-record (что соответствует "user сделал create затем delete за один tick"). `apps/backend/src/index.ts` WS user-change handler обёрнут в try/catch как defense-in-depth — любая будущая ошибка apply дропает frame с `console.warn`, daemon продолжает работать.
+
+### Tests
+
+- 315 backend pass / 0 fail (+1 net): тест "rejects batch with same id" заменён на "removed wins" + binding-specific сценарий.
+
+### Repro
+
+1. Открыть room с shapes.
+2. Быстро нарисовать arrow между двумя shapes (создаёт binding).
+3. Сразу undo / delete arrow.
+4. Frontend WS frame содержит binding в added+removed → backend крашится.
+
+После fix: batch применяется (binding remove'нут), daemon живёт.
+
+---
+
 ## 0.18.1 — 2026-05-19 — Mermaid import: remove placebo ELK frontmatter prepend (DRW-093)
 
 Honest-path PATCH: `prependElkFrontmatter` (DRW-084 AC#6) фактически не работал — `@tldraw/mermaid@5.0.0` не регистрирует `mermaid-layout-elk` loader, а `@mermaid-js/layout-elk` не bundled. Mermaid при отсутствии запрошенного loader'а silent degrade'ит на DAGRE, поэтому auto-prepend создавал ложное впечатление работающего ELK render. User dogfood 2026-05-19 (Image #4) показал DAGRE-style output — это и есть реальное поведение.
