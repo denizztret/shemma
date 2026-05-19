@@ -43,6 +43,30 @@ function triggerGrowY(editor: Editor, ids?: Set<string>): void {
   });
 }
 
+/**
+ * DRW-096: zoom to the union bounds of `affectedIds`, but only when those
+ * bounds are not already fully contained in the current viewport. Sets the
+ * programmatic-camera-op ref for the animation duration so the user-pan
+ * listener does not trip on synthetic camera events.
+ */
+function maybeZoomToAffected(
+  editor: Editor,
+  affectedIds: string[],
+  inProgrammaticCameraOp: { current: boolean },
+): void {
+  if (affectedIds.length === 0 || inProgrammaticCameraOp.current) return;
+  const ids = affectedIds as unknown as Parameters<typeof unionBoundsOf>[1];
+  const bounds = unionBoundsOf(editor, ids);
+  if (!bounds) return;
+  const viewport = editor.getViewportPageBounds();
+  if (isBoundsContained(bounds, viewport)) return;
+  inProgrammaticCameraOp.current = true;
+  editor.zoomToBounds(bounds, { animation: { duration: 200 }, inset: 64 });
+  setTimeout(() => {
+    inProgrammaticCameraOp.current = false;
+  }, 300);
+}
+
 export function App({ room }: { room: string }) {
   const [editor, setEditor] = useState<Editor | null>(null);
   const [selection, setSelection] = useState<string[]>([]);
@@ -113,18 +137,8 @@ export function App({ room }: { room: string }) {
       async (ids) => {
         if (!editor) return;
         const result = await tidyLayout(ids, room);
-        if (result.kind === "ok" && result.affected.length > 0 && !inProgrammaticCameraOp.current) {
-          const affectedIds = result.affected as unknown as Parameters<typeof unionBoundsOf>[1];
-          const bounds = unionBoundsOf(editor, affectedIds);
-          // DRW-096: skip auto-zoom если affected уже целиком в viewport.
-          const viewport = editor.getViewportPageBounds();
-          if (bounds && !isBoundsContained(bounds, viewport)) {
-            inProgrammaticCameraOp.current = true;
-            editor.zoomToBounds(bounds, { animation: { duration: 200 }, inset: 64 });
-            setTimeout(() => {
-              inProgrammaticCameraOp.current = false;
-            }, 300);
-          }
+        if (result.kind === "ok") {
+          maybeZoomToAffected(editor, result.affected, inProgrammaticCameraOp);
         }
       },
     );
@@ -221,17 +235,8 @@ export function App({ room }: { room: string }) {
     // TldrawComponents can call it without importing editor state.
     onTidySelection.current = async (ids: string[]) => {
       const result = await tidyLayout(ids, room);
-      if (result.kind === "ok" && result.affected.length > 0 && !inProgrammaticCameraOp.current) {
-        const affectedIds = result.affected as unknown as Parameters<typeof unionBoundsOf>[1];
-        const bounds = unionBoundsOf(editor, affectedIds);
-        const viewport = editor.getViewportPageBounds();
-        if (bounds && !isBoundsContained(bounds, viewport)) {
-          inProgrammaticCameraOp.current = true;
-          editor.zoomToBounds(bounds, { animation: { duration: 200 }, inset: 64 });
-          setTimeout(() => {
-            inProgrammaticCameraOp.current = false;
-          }, 300);
-        }
+      if (result.kind === "ok") {
+        maybeZoomToAffected(editor, result.affected, inProgrammaticCameraOp);
       }
     };
 
@@ -242,6 +247,46 @@ export function App({ room }: { room: string }) {
     // which would otherwise trip the user-pan listener below. Set this ref to
     // true around each programmatic fit so the listener can ignore those.
     inProgrammaticCameraOp.current = false;
+
+    // DRW-083/086: shared handler for backend-routed import-mermaid frames.
+    // Used by both the initial syncer and the post-truncation syncer.
+    const runMermaidImport = async (
+      source: string,
+      _requestId: string,
+      focus: "new" | "fit-all" | "none" = "new",
+    ) => {
+      const result = await importMermaid(editor, source);
+      const didrawNames = result.shapeIds.map((id) => {
+        const shape = editor.getShape(id);
+        const name = (shape?.meta as Record<string, unknown> | undefined)?.didrawName;
+        return typeof name === "string" ? name : "";
+      });
+
+      // DRW-086: animate viewport to new shapes (or fit-all), unless user
+      // has manually panned (DRW-075 guard) or focus='none'.
+      if (focus !== "none" && !userHasManuallyPanned.current && result.shapeIds.length > 0) {
+        inProgrammaticCameraOp.current = true;
+        if (focus === "fit-all") {
+          editor.zoomToFit({ animation: { duration: 200 } });
+        } else {
+          // focus === "new" (default)
+          const bounds = unionBoundsOf(editor, result.shapeIds);
+          if (bounds) {
+            editor.zoomToBounds(bounds, { animation: { duration: 200 }, inset: 64 });
+          }
+        }
+        setTimeout(() => {
+          inProgrammaticCameraOp.current = false;
+        }, 300);
+      }
+
+      return {
+        ok: result.ok,
+        shapeIds: result.shapeIds as unknown as string[],
+        didrawNames,
+        rootIds: result.sourceTargetIds as unknown as string[],
+      };
+    };
 
     // DRW-075: debounced zoomToFit after AI mutations; fires at most once per
     // 100ms burst of AI store-change frames. Cancelled on room change via the
@@ -316,40 +361,7 @@ export function App({ room }: { room: string }) {
         // DRW-083: MCP import-mermaid command — backend routes WS frame here.
         // Append-only by design — AI must never wipe existing canvas state.
         // DRW-086: focus param controls viewport behavior after import.
-        onImportMermaid: async (source, _requestId, focus = "new") => {
-          const result = await importMermaid(editor, source);
-          // Collect didrawNames from shape meta (set by importMermaid internally)
-          const didrawNames = result.shapeIds.map((id) => {
-            const shape = editor.getShape(id);
-            const name = (shape?.meta as Record<string, unknown> | undefined)?.didrawName;
-            return typeof name === "string" ? name : "";
-          });
-
-          // DRW-086: animate viewport to new shapes (or fit-all), unless user
-          // has manually panned (DRW-075 guard) or focus='none'.
-          if (focus !== "none" && !userHasManuallyPanned.current && result.shapeIds.length > 0) {
-            inProgrammaticCameraOp.current = true;
-            if (focus === "fit-all") {
-              editor.zoomToFit({ animation: { duration: 200 } });
-            } else {
-              // focus === "new" (default)
-              const bounds = unionBoundsOf(editor, result.shapeIds);
-              if (bounds) {
-                editor.zoomToBounds(bounds, { animation: { duration: 200 }, inset: 64 });
-              }
-            }
-            setTimeout(() => {
-              inProgrammaticCameraOp.current = false;
-            }, 300);
-          }
-
-          return {
-            ok: result.ok,
-            shapeIds: result.shapeIds as unknown as string[],
-            didrawNames,
-            rootIds: result.sourceTargetIds as unknown as string[],
-          };
-        },
+        onImportMermaid: runMermaidImport,
         onTruncated: () => {
           // DRW-018: pause the (now zombie) syncer immediately so any frames
           // that arrive between this callback and ws.close() — or any straggler
@@ -375,39 +387,7 @@ export function App({ room }: { room: string }) {
                   scheduleAiZoom();
                 },
                 // DRW-086: focus param controls viewport behavior after import.
-                onImportMermaid: async (source, _requestId, focus = "new") => {
-                  const result = await importMermaid(editor, source);
-                  const didrawNames = result.shapeIds.map((id) => {
-                    const shape = editor.getShape(id);
-                    const name = (shape?.meta as Record<string, unknown> | undefined)?.didrawName;
-                    return typeof name === "string" ? name : "";
-                  });
-
-                  // DRW-086: animate viewport to new shapes, unless user
-                  // has manually panned (DRW-075 guard) or focus='none'.
-                  if (focus !== "none" && !userHasManuallyPanned.current && result.shapeIds.length > 0) {
-                    inProgrammaticCameraOp.current = true;
-                    if (focus === "fit-all") {
-                      editor.zoomToFit({ animation: { duration: 200 } });
-                    } else {
-                      // focus === "new" (default)
-                      const bounds = unionBoundsOf(editor, result.shapeIds);
-                      if (bounds) {
-                        editor.zoomToBounds(bounds, { animation: { duration: 200 }, inset: 64 });
-                      }
-                    }
-                    setTimeout(() => {
-                      inProgrammaticCameraOp.current = false;
-                    }, 300);
-                  }
-
-                  return {
-                    ok: result.ok,
-                    shapeIds: result.shapeIds as unknown as string[],
-                    didrawNames,
-                    rootIds: result.sourceTargetIds as unknown as string[],
-                  };
-                },
+                onImportMermaid: runMermaidImport,
                 onTruncated: () => {
                   // Pathological loop — log and stop trying.
                   console.warn("[shemma] truncated recovery looped, giving up");
