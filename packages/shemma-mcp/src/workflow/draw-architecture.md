@@ -45,27 +45,48 @@ For these cases prefer **Mermaid import via MCP**, then fall back to `shemma_*` 
 ```
 shemma_import_mermaid {
   source: "graph LR\n  A-->B\n  B-->C",
-  mode?: "append" | "replace",   // default "append"
   room?: "my-room",
 }
 ```
 
 Returns: `{ shape_ids, didraw_names, root_ids }` — use `didraw_names` as element names for follow-up `shemma_connect` calls.
 
-**`mode: "replace"`** — deletes ALL existing shapes before importing. Use when you want to replace the entire diagram.
+**APPEND-only.** The tool never replaces or deletes existing shapes — preserving the user's manual layout edits is a hard product invariant. If you genuinely need to wipe the canvas, ask the user; a future `shemma_clear_room` tool will require explicit confirmation. Never try to "redraw" — see "Edit, don't redraw" below.
 
 **Flow:**
 1. AI calls `shemma_import_mermaid` with mermaid source.
-2. Backend sends WS frame `{kind:"import-mermaid", source, mode, requestId}` to the browser tab.
+2. Backend sends WS frame `{kind:"import-mermaid", source, requestId}` to the browser tab.
 3. Frontend calls `@tldraw/mermaid.createMermaidDiagram(editor, source)` → shapes appear in canvas.
 4. Frontend sends back `{kind:"import-mermaid-result", requestId, ok:true, shape_ids, didraw_names, root_ids}`.
 5. Backend resolves the pending promise → MCP tool returns result to AI.
 6. Normal store-change sync persists the shapes to backend.
 
 **Error cases:**
-- No browser tab open → `503 {error:"no client connected"}`.
+- No browser tab open → `503 {error:"no client connected", room_url:"http://…"}` — see "Handling no-client-connected error" below.
 - Frontend timed out (>10s, e.g. JS blocked) → `500 {error:"client did not respond"}`.
 - Invalid mermaid syntax → `500 {error:"<mermaid parser error>"}`.
+
+### Edit, don't redraw
+
+When iterating on a diagram, do **not** "wipe and re-import" — that destroys the user's manual layout work and is explicitly disallowed.
+
+Guidelines:
+- **Always call `shemma_context` first** to see what already exists (didraw_names, roles, connections). Plan additions/edits against that snapshot.
+- Use Mermaid-first for the **initial** diagram only. After that, prefer point edits via `shemma_define` / `shemma_connect` / `shemma_group`.
+- If the user has manually rearranged shapes, **do not call `shemma_layout`** unless they explicitly ask — it will reflow everything.
+- If a node is wrong, **rename or relabel** (`shemma_define { name, role, label }` is idempotent on `name`). Don't delete and recreate.
+- Never try to "delete everything and start over" to fix a layout. If the canvas is too cluttered, ask the user.
+
+### Handling no-client-connected error
+
+When `shemma_import_mermaid` returns `code: "no-client-connected"`, the 503 response includes a `room_url` field (also surfaced in the error message). Retry pattern:
+
+1. Read `room_url` from `structuredContent.details.room_url` (or parse it out of the message).
+2. Main agent: open the URL — either via `chrome-devtools` MCP `navigate_page` (if a tab is already open) or `new_page` (cold start).
+3. Wait for canvas ready — easiest signal is the toolbar **M** button or the tldraw canvas SVG mounting.
+4. Retry `shemma_import_mermaid` once with the same `source`.
+
+If the second call also returns `no-client-connected` (e.g. the browser isn't available), surface the URL to the user verbally and stop — don't retry in a loop.
 
 ### Fallback path: ⌘M / Ctrl+M modal (manual)
 

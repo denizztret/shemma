@@ -308,7 +308,7 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
     "shemma_import_mermaid",
     {
       description:
-        "Import a Mermaid diagram into the canvas. Browser tab must be open in the room. Returns shape ids and slugified names for downstream operations.",
+        "Imports a Mermaid diagram into the canvas room. APPEND-only — never replaces or deletes existing shapes; preserves user's manual layout edits.\n\nBefore calling: invoke `shemma_context` first to inspect existing element didraw_names — Mermaid node ids that collide with existing names will be auto-deduplicated (e.g. \"api-2\"), so avoid emitting Mermaid labels that already exist as nodes.\n\nRequires an open browser tab on the same room. On 503 \"no client connected\", caller should open the returned room_url (e.g. via a browser/devtools tool) and retry once.\n\nReturns: shape_ids, didraw_names, root_ids — usable for follow-up shemma_connect / shemma_group.",
       inputSchema: ImportMermaidArgs,
     },
     async (args) => importMermaidCall(args as ImportMermaidInput),
