@@ -142,4 +142,36 @@ describe("backfillStoreRecords", () => {
     const props = (out["binding:b2"] as { props: Record<string, unknown> }).props;
     expect(props.snap).toBe("edge");
   });
+
+  // DRW-080 — tldraw 5.x added required props.color to TLFrameShape
+  // (migration AddColorProp, default "black"). Frames persisted before this
+  // become invalid on loadSnapshot — backfill default.
+  it("adds color='black' on frame shapes missing color", () => {
+    const store = {
+      "shape:fr1": {
+        id: "shape:fr1",
+        typeName: "shape",
+        type: "frame",
+        props: { w: 400, h: 300, name: "integration" },
+      },
+    };
+    const out = backfillStoreRecords(store);
+    const props = (out["shape:fr1"] as { props: Record<string, unknown> }).props;
+    expect(props.color).toBe("black");
+    expect(props.name).toBe("integration");
+  });
+
+  it("does not overwrite existing color on frame shapes (idempotent)", () => {
+    const store = {
+      "shape:fr2": {
+        id: "shape:fr2",
+        typeName: "shape",
+        type: "frame",
+        props: { w: 400, h: 300, name: "UIView", color: "blue" },
+      },
+    };
+    const out = backfillStoreRecords(store);
+    const props = (out["shape:fr2"] as { props: Record<string, unknown> }).props;
+    expect(props.color).toBe("blue");
+  });
 });
