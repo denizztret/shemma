@@ -12,6 +12,7 @@ import {
   LayoutArgs,
   DeleteArgs,
   ApplyArgs,
+  ImportMermaidArgs,
 } from "../schemas";
 
 export type DomainDeps = {
@@ -28,6 +29,7 @@ type NoteInput = z.infer<z.ZodObject<typeof NoteArgs>>;
 type LayoutInput = z.infer<z.ZodObject<typeof LayoutArgs>>;
 type DeleteInput = z.infer<z.ZodObject<typeof DeleteArgs>>;
 type ApplyInput = z.infer<z.ZodObject<typeof ApplyArgs>>;
+type ImportMermaidInput = z.infer<z.ZodObject<typeof ImportMermaidArgs>>;
 
 export type DomainHandles = {
   define: { call: (input: DefineInput) => Promise<ToolResult> };
@@ -37,6 +39,7 @@ export type DomainHandles = {
   layout: { call: (input: LayoutInput) => Promise<ToolResult> };
   delete: { call: (input: DeleteInput) => Promise<ToolResult> };
   apply: { call: (input: ApplyInput) => Promise<ToolResult> };
+  importMermaid: { call: (input: ImportMermaidInput) => Promise<ToolResult> };
 };
 
 type CommonArgs = {
@@ -237,6 +240,65 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
     async (args) => applyCall(args as ApplyInput),
   );
 
+  // ── shemma_import_mermaid ───────────────────────────────────────────────────
+  async function importMermaidCall(input: ImportMermaidInput): Promise<ToolResult> {
+    const { room: argRoom, clientOpId, source, mode } = input;
+    const resolved = await deps.resolver.resolve({ argRoom });
+    if (!resolved.ok) {
+      return toolResult({
+        ok: false,
+        code: "ambiguous-room",
+        message: resolved.message,
+        details: { candidates: resolved.candidates },
+      });
+    }
+
+    try {
+      const c = new CanvasClient({ baseUrl: deps.client.baseUrl, room: resolved.room });
+      const resp = (await c.importMermaid({
+        source,
+        mode,
+        clientOpId,
+      })) as {
+        ok: boolean;
+        shape_ids?: string[];
+        didraw_names?: string[];
+        root_ids?: string[];
+        error?: string;
+      };
+
+      if (resp.ok) {
+        deps.resolver.recordTouch(resolved.room);
+        return toolResult({
+          ok: true,
+          room: resolved.room,
+          roomSource: resolved.source,
+          shape_ids: resp.shape_ids ?? [],
+          didraw_names: resp.didraw_names ?? [],
+          root_ids: resp.root_ids ?? [],
+        });
+      }
+      return toolResult({
+        ok: false,
+        code: "import-failed",
+        message: resp.error ?? "import failed",
+        details: { room: resolved.room },
+      });
+    } catch (e) {
+      return toolResult({ ...mapFetchError(e) });
+    }
+  }
+
+  server.registerTool(
+    "shemma_import_mermaid",
+    {
+      description:
+        "Import a Mermaid diagram into the canvas. Browser tab must be open in the room. Returns shape ids and slugified names for downstream operations.",
+      inputSchema: ImportMermaidArgs,
+    },
+    async (args) => importMermaidCall(args as ImportMermaidInput),
+  );
+
   return {
     define: { call: defineCall },
     connect: { call: connectCall },
@@ -245,5 +307,6 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
     layout: { call: layoutCall },
     delete: { call: deleteCall },
     apply: { call: applyCall },
+    importMermaid: { call: importMermaidCall },
   };
 }
