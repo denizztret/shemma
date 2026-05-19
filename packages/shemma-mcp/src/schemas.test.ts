@@ -4,6 +4,7 @@ import {
   ConnectionKindEnum, LayoutModeEnum, RoleEnum, SpacingEnum,
   DefineArgs, ConnectArgs, GroupArgs, NoteArgs,
   LayoutArgs, DeleteArgs, ApplyArgs,
+  ImportMermaidArgs,
 } from "./schemas";
 import { ALL_ROLES, ALL_KINDS, ALL_MODES } from "@shemma/domain";
 
@@ -53,5 +54,46 @@ describe("schemas — ApplyArgs", () => {
   it("requires non-empty actions array", () => {
     expect(z.object(ApplyArgs).safeParse({ actions: [] }).success).toBe(false);
     expect(z.object(ApplyArgs).safeParse({ actions: [{ kind: "define" }] }).success).toBe(true);
+  });
+});
+
+describe("schemas — ImportMermaidArgs", () => {
+  it("validates minimum ImportMermaidArgs (source only)", () => {
+    const parsed = z.object(ImportMermaidArgs).safeParse({ source: "graph LR; A-->B" });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects ImportMermaidArgs with empty source", () => {
+    const parsed = z.object(ImportMermaidArgs).safeParse({ source: "" });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects ImportMermaidArgs missing source", () => {
+    const parsed = z.object(ImportMermaidArgs).safeParse({});
+    expect(parsed.success).toBe(false);
+  });
+
+  it("accepts mode='append'", () => {
+    const parsed = z.object(ImportMermaidArgs).safeParse({ source: "graph LR; A-->B", mode: "append" });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("accepts mode='replace'", () => {
+    const parsed = z.object(ImportMermaidArgs).safeParse({ source: "graph LR; A-->B", mode: "replace" });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects invalid mode", () => {
+    const parsed = z.object(ImportMermaidArgs).safeParse({ source: "graph LR; A-->B", mode: "overwrite" });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("accepts optional room and clientOpId", () => {
+    const parsed = z.object(ImportMermaidArgs).safeParse({
+      source: "graph LR; A-->B",
+      room: "my-room",
+      clientOpId: "op-123",
+    });
+    expect(parsed.success).toBe(true);
   });
 });

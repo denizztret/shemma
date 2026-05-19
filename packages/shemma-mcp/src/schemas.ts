@@ -74,3 +74,10 @@ export const ApplyArgs = {
   ...CommonWriteArgs,
   actions: z.array(z.record(z.unknown())).min(1),
 };
+
+export const ImportMermaidArgs = {
+  source: z.string().min(1),
+  mode: z.enum(["append", "replace"]).optional(),
+  room: z.string().optional(),
+  clientOpId: z.string().optional(),
+};
