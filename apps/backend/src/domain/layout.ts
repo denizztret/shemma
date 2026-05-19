@@ -133,23 +133,35 @@ function bindingsForArrow(store: TLStoreSnapshot, arrowId: string): BindingRec[]
 
 type ElkEdge = { id: string; sources: string[]; targets: string[] };
 
+/**
+ * Resolve raw src/tgt shape ids for an arrow from its bindings.
+ * Returns null if arrow has !=2 bindings or either endpoint id missing.
+ */
+function resolveArrowEndpoints(
+  store: TLStoreSnapshot,
+  arrowId: string,
+): { src: string; tgt: string } | null {
+  const bs = bindingsForArrow(store, arrowId);
+  if (bs.length !== 2) return null;
+  const start = bs.find((b) => (b.props as { terminal?: string } | undefined)?.terminal === "start");
+  const end = bs.find((b) => (b.props as { terminal?: string } | undefined)?.terminal === "end");
+  const src = start?.toId ?? bs[0]?.toId;
+  const tgt = end?.toId ?? bs[1]?.toId;
+  if (!src || !tgt) return null;
+  return { src, tgt };
+}
+
 /** Collect ELK edges from arrow bindings. Only edges where both endpoints are in includedIds. */
 function buildEdges(
   store: TLStoreSnapshot,
   includedIds: Set<string>,
 ): ElkEdge[] {
-  const arrows = collectArrows(store);
   const edges: ElkEdge[] = [];
-  for (const a of arrows) {
-    const bs = bindingsForArrow(store, a.id);
-    if (bs.length !== 2) continue;
-    const start = bs.find((b) => (b.props as { terminal?: string } | undefined)?.terminal === "start");
-    const end = bs.find((b) => (b.props as { terminal?: string } | undefined)?.terminal === "end");
-    const src = start?.toId ?? bs[0]?.toId;
-    const tgt = end?.toId ?? bs[1]?.toId;
-    if (!src || !tgt) continue;
-    if (!includedIds.has(src) || !includedIds.has(tgt)) continue;
-    edges.push({ id: a.id, sources: [src], targets: [tgt] });
+  for (const a of collectArrows(store)) {
+    const ep = resolveArrowEndpoints(store, a.id);
+    if (!ep) continue;
+    if (!includedIds.has(ep.src) || !includedIds.has(ep.tgt)) continue;
+    edges.push({ id: a.id, sources: [ep.src], targets: [ep.tgt] });
   }
   return edges;
 }
@@ -274,56 +286,25 @@ function applyDisplacement(
 /**
  * Build ELK graph from shapes + arrow-bindings, treating frames as compound nodes.
  *
- * When `filterToIds` is provided (subgraph mode — DRW-091/092):
- *   - Leaves: only included if id ∈ filterToIds.
- *   - Frames:
- *     a) frame.id ∈ filterToIds → included as full compound node (selected frame).
- *     b) frame has ≥1 included child → included as anchor container with fixed
- *        size constraint; its position will NOT be written back in batch.
- *   - Edges: included only if both endpoints are in included shape ids.
- *
- * Returns the set of anchor frame ids (frames included as containers but NOT in filterToIds).
- *
- * NOTE: This is used for scope='all' path only. For subgraph mode (scope='affected'),
- * runLayoutSubgraph implements hierarchical multi-pass (DRW-099).
+ * Used for scope='all' single-pass layout (INCLUDE_CHILDREN). For subgraph mode
+ * (scope='affected'), runLayoutSubgraph implements hierarchical multi-pass (DRW-099).
  */
 function buildElkGraph(
   store: TLStoreSnapshot,
   shapes: ShapeRec[],
   hint: Required<LayoutHint>,
-  filterToIds?: Set<string>,
-): { graph: unknown; anchorFrameIds: Set<string> } {
+): unknown {
   const opts = modeToElkOptions(hint.mode, hint.spacing);
 
-  // Partition shapes: frames vs leaves.
+  // Partition shapes: frames (compound) vs leaves.
   const frames = shapes.filter(isContainerShape);
   const leaves = shapes.filter((s) => !isContainerShape(s));
 
-  const includedLeaves = filterToIds
-    ? leaves.filter((s) => filterToIds.has(s.id))
-    : leaves;
-
-  // Anchor frames: parent of ≥1 included leaf, but not themselves in filterToIds.
-  // Included as fixed-size containers in ELK; their position is NOT written back.
-  const anchorFrameIds = new Set<string>();
-  if (filterToIds) {
-    for (const f of frames) {
-      if (!filterToIds.has(f.id) && includedLeaves.some((s) => s.parentId === f.id)) {
-        anchorFrameIds.add(f.id);
-      }
-    }
-  }
-
-  // Include selected frames (in filterToIds) + anchor frames.
-  const includedFrames = filterToIds
-    ? frames.filter((f) => filterToIds.has(f.id) || anchorFrameIds.has(f.id))
-    : frames;
-
-  // Children of frame: shapes whose parentId === frame.id (layout candidates).
+  // Children of each frame; leaves whose parent is not a frame become top-level.
   const childrenByFrame = new Map<string, ShapeRec[]>();
-  for (const f of includedFrames) childrenByFrame.set(f.id, []);
+  for (const f of frames) childrenByFrame.set(f.id, []);
   const topLevel: ShapeRec[] = [];
-  for (const s of includedLeaves) {
+  for (const s of leaves) {
     if (s.parentId && childrenByFrame.has(s.parentId)) {
       childrenByFrame.get(s.parentId)!.push(s);
     } else {
@@ -331,66 +312,42 @@ function buildElkGraph(
     }
   }
 
-  const buildLeaf = (s: ShapeRec) => {
+  const buildLeaf = (s: ShapeRec): ElkNode => {
     const b = shapeBounds(s);
-    return {
-      id: s.id,
-      width: Math.max(20, b.w),
-      height: Math.max(20, b.h),
-      ports: [],
-    };
+    return { id: s.id, width: Math.max(20, b.w), height: Math.max(20, b.h), ports: [] };
   };
 
-  const buildFrame = (f: ShapeRec, _isAnchor: boolean) => {
+  // DRW-092 v3: frames используют тот же layered algorithm что и outer — сохраняем
+  // ranks + edge routing. Не зажимаем размер: ELK сам вычислит compound size под
+  // реальный children layout, мы это запишем в frame.props.w/h.
+  const buildFrame = (f: ShapeRec): ElkNode => {
     const b = shapeBounds(f);
-    const children = (childrenByFrame.get(f.id) ?? []).map(buildLeaf);
-    // DRW-092 v3: frames (anchor и selected) используют тот же layered algorithm
-    // что и outer — сохраняем ranks + edge routing. Не зажимаем размер: ELK сам
-    // вычислит compound size под реальный children layout, мы это запишем в
-    // frame.props.w/h (anchor frame растёт под содержимое, x/y остаётся).
     return {
       id: f.id,
       width: b.w,
       height: b.h,
       layoutOptions: { ...opts, "elk.padding": "[top=40,left=20,bottom=20,right=20]" },
-      children,
+      children: (childrenByFrame.get(f.id) ?? []).map(buildLeaf),
     };
   };
 
-  // All shape ids included in this graph (for edge filtering in subgraph mode).
-  const allIncludedIds = new Set([
-    ...includedLeaves.map((s) => s.id),
-    ...includedFrames.map((f) => f.id),
-  ]);
-
-  // Edges from bindings: per arrow, find 2 bindings (start/end), use their toId endpoints.
-  // In subgraph mode: only include edges where BOTH endpoints are in included ids.
-  const arrows = collectArrows(store);
-  const edges: Array<{ id: string; sources: string[]; targets: string[] }> = [];
-  for (const a of arrows) {
-    const bs = bindingsForArrow(store, a.id);
-    if (bs.length !== 2) continue;
-    const start = bs.find((b) => (b.props as { terminal?: string } | undefined)?.terminal === "start");
-    const end = bs.find((b) => (b.props as { terminal?: string } | undefined)?.terminal === "end");
-    const src = start?.toId ?? bs[0]?.toId;
-    const tgt = end?.toId ?? bs[1]?.toId;
-    if (!src || !tgt) continue;
-    // Subgraph filter: skip edges to non-included shapes.
-    if (filterToIds && (!allIncludedIds.has(src) || !allIncludedIds.has(tgt))) continue;
-    edges.push({ id: a.id, sources: [src], targets: [tgt] });
+  // Edges from bindings — без фильтра по присутствию endpoint'а в shapes.
+  // В scope='all' dangling bindings (toId на несуществующую запись) намеренно
+  // прокидываются в ELK: тот вернёт ошибку, runLayout вернёт reason='elk-error'
+  // (см. test: 'returns reason elk-error when ELK fails (edge references missing node)').
+  const edges: ElkEdge[] = [];
+  for (const a of collectArrows(store)) {
+    const ep = resolveArrowEndpoints(store, a.id);
+    if (!ep) continue;
+    edges.push({ id: a.id, sources: [ep.src], targets: [ep.tgt] });
   }
 
-  const graph = {
+  return {
     id: "root",
     layoutOptions: { ...opts, "elk.hierarchyHandling": "INCLUDE_CHILDREN" },
-    children: [
-      ...topLevel.map(buildLeaf),
-      ...includedFrames.map((f) => buildFrame(f, anchorFrameIds.has(f.id))),
-    ],
+    children: [...topLevel.map(buildLeaf), ...frames.map(buildFrame)],
     edges,
   };
-
-  return { graph, anchorFrameIds };
 }
 
 // =====================================================================
@@ -428,23 +385,17 @@ async function runPassA(
   const childContainers = filteredChildren.filter(isContainerShape);
   const childLeaves = filteredChildren.filter((s) => !isContainerShape(s));
 
-  // Сначала рекурсивно обработаем вложенные контейнеры (Pass A рекурсия)
-  // Для каждого child-контейнера найдём его отфильтрованных детей
+  // Сначала рекурсивно обработаем вложенные контейнеры (Pass A рекурсия).
+  // Для каждого child-контейнера соберём его direct selected non-container children
+  // и запустим Pass A рекурсивно. Container collectShapes уже отфильтровал arrows.
   const nestedResults = new Map<string, ContainerPassResult>();
   for (const cc of childContainers) {
-    // Дети этого вложенного контейнера, которые в filterToIds или которые anchor
-    const ccChildren = allShapes.filter(
-      (s) => s.parentId === cc.id && !isContainerShape(s) && !isLayoutCandidate(s) === false,
+    const ccSelectedChildren = allShapes.filter(
+      (s) => s.parentId === cc.id && !isContainerShape(s) && filterToIds.has(s.id),
     );
-    // Filtered children: только те что в filterToIds или являются anchor-детьми
-    const ccFiltered = ccChildren.filter(
-      (s) => filterToIds.has(s.id) || ccChildren.some((_) => filterToIds.has(s.id)),
-    );
-    const ccFilteredActual = ccChildren.filter((s) => filterToIds.has(s.id));
-    if (ccFilteredActual.length > 0) {
-      const nestedRes = await runPassA(store, cc, ccFilteredActual, opts, allShapes, filterToIds);
-      if (nestedRes) nestedResults.set(cc.id, nestedRes);
-    }
+    if (ccSelectedChildren.length === 0) continue;
+    const nestedRes = await runPassA(store, cc, ccSelectedChildren, opts, allShapes, filterToIds);
+    if (nestedRes) nestedResults.set(cc.id, nestedRes);
   }
 
   // Теперь собираем ELK leaf nodes для Pass A этого контейнера.
@@ -559,52 +510,18 @@ async function runLayoutSubgraph(
   const selectedLeaves = leaves.filter((s) => filterToIds.has(s.id));
   // Selected containers
   const selectedContainers = frames.filter((f) => filterToIds.has(f.id));
-  // Anchor containers: NOT selected, but have ≥1 selected child anywhere in subtree
-  const anchorFrameIds = new Set<string>();
-
-  // Find all shapes that are children of a container and their container is not selected
-  for (const f of frames) {
-    if (filterToIds.has(f.id)) continue;
-    // Check if any selected shape is a direct child of this frame
-    const hasSelectedChild = selectedLeaves.some((s) => s.parentId === f.id) ||
-      selectedContainers.some((c) => c.parentId === f.id);
-    if (hasSelectedChild) anchorFrameIds.add(f.id);
-  }
-
-  // Build ancestry map for anchor resolution: shape.id → ancestor frame ids chain
-  // For multi-level: if a leaf's parent is a nested anchor, we need its root anchor too
   const frameById = new Map(frames.map((f) => [f.id, f]));
 
-  // Get all ancestor containers for a shape (bottom-up order)
-  function getAncestorContainers(s: ShapeRec): ShapeRec[] {
-    const ancestors: ShapeRec[] = [];
-    let pid = s.parentId;
-    while (pid && pid !== "page:page") {
-      const p = frameById.get(pid);
-      if (!p) break;
-      ancestors.push(p);
-      pid = p.parentId;
-    }
-    return ancestors;
-  }
-
-  // Identify top-level anchor containers and all nested ones
-  // Re-scan: anchor = any frame NOT in filterToIds that has a filtered descendant
-  anchorFrameIds.clear();
+  // Anchor containers: NOT selected, but have ≥1 selected descendant (handles deep nesting).
+  // First pass: direct selected leaf/container child. Then iterate until stable to propagate
+  // anchor status up through nested anchor parents.
+  const anchorFrameIds = new Set<string>();
   for (const f of frames) {
     if (filterToIds.has(f.id)) continue;
-    // Direct selected leaf children
     const hasDirectSelectedLeaf = selectedLeaves.some((s) => s.parentId === f.id);
-    // Direct selected container children
     const hasDirectSelectedContainer = selectedContainers.some((c) => c.parentId === f.id);
-    // Direct anchor frame children (nested anchor)
-    const hasAnchorChild = frames.some((ff) => ff.parentId === f.id && anchorFrameIds.has(ff.id));
-    if (hasDirectSelectedLeaf || hasDirectSelectedContainer || hasAnchorChild) {
-      anchorFrameIds.add(f.id);
-    }
+    if (hasDirectSelectedLeaf || hasDirectSelectedContainer) anchorFrameIds.add(f.id);
   }
-
-  // Multi-pass anchor re-scan: iterate until stable (handles deep nesting)
   let changed = true;
   while (changed) {
     changed = false;
@@ -640,6 +557,14 @@ async function runLayoutSubgraph(
   const topLevelSelectedContainers = selectedContainers.filter((f) => !isInsideSelectedOrAnchor(f));
   const topLevelSelectedLeaves = selectedLeaves.filter((s) => !isInsideSelectedOrAnchor(s));
 
+  // Direct selected children (leaves + containers) of a given parent id.
+  const directSelectedChildrenOf = (parentId: string): ShapeRec[] => {
+    const out: ShapeRec[] = [];
+    for (const s of selectedLeaves) if (s.parentId === parentId) out.push(s);
+    for (const c of selectedContainers) if (c.parentId === parentId) out.push(c);
+    return out;
+  };
+
   // =====================================================================
   // Pass A: layout children of each anchor container and selected containers
   // that have selected children.
@@ -653,17 +578,11 @@ async function runLayoutSubgraph(
     const anchor = frameById.get(anchorId);
     if (!anchor) continue;
 
-    // Collect direct filtered children of this anchor
-    const directFilteredChildren = [...selectedLeaves, ...selectedContainers].filter(
-      (s) => s.parentId === anchorId,
-    );
-    // Also collect nested anchor frames that are direct children
+    // Direct filtered children + nested anchor frames as direct children.
     const directAnchorChildren = frames.filter(
       (f) => f.parentId === anchorId && anchorFrameIds.has(f.id),
     );
-    // All direct children to layout: filtered + nested anchors
-    const allDirectChildren = [...directFilteredChildren, ...directAnchorChildren];
-
+    const allDirectChildren = [...directSelectedChildrenOf(anchorId), ...directAnchorChildren];
     if (allDirectChildren.length === 0) continue;
 
     const res = await runPassA(store, anchor, allDirectChildren, opts, shapes, filterToIds);
@@ -672,10 +591,7 @@ async function runLayoutSubgraph(
 
   // Process selected containers that have selected children (not inside anchor/other selected)
   for (const sc of topLevelSelectedContainers) {
-    // Children of this selected container that are selected
-    const directFilteredChildren = [...selectedLeaves, ...selectedContainers].filter(
-      (s) => s.parentId === sc.id,
-    );
+    const directFilteredChildren = directSelectedChildrenOf(sc.id);
     if (directFilteredChildren.length === 0) continue;
 
     const res = await runPassA(store, sc, directFilteredChildren, opts, shapes, filterToIds);
@@ -687,19 +603,20 @@ async function runLayoutSubgraph(
   // Frames with Pass A results treated as leaf nodes with computed sizes.
   // =====================================================================
 
-  // Top-level ELK nodes
-  const elkChildren: ElkNode[] = [];
+  // Container size: Pass A computed size when available, original bounds otherwise.
+  const sizeFor = (s: ShapeRec): { w: number; h: number } => {
+    const passARes = passAResults.get(s.id);
+    if (passARes) return { w: passARes.newW, h: passARes.newH };
+    const b = shapeBounds(s);
+    return { w: b.w, h: b.h };
+  };
 
-  // Selected containers as leaf nodes (with Pass A computed sizes or original sizes)
+  // Top-level ELK nodes: selected containers (as leaves with Pass A size) + selected bare leaves.
+  const elkChildren: ElkNode[] = [];
   for (const sc of topLevelSelectedContainers) {
-    const passARes = passAResults.get(sc.id);
-    const origB = shapeBounds(sc);
-    const w = passARes ? passARes.newW : origB.w;
-    const h = passARes ? passARes.newH : origB.h;
+    const { w, h } = sizeFor(sc);
     elkChildren.push({ id: sc.id, width: Math.max(20, w), height: Math.max(20, h) });
   }
-
-  // Top-level selected leaves
   for (const s of topLevelSelectedLeaves) {
     const b = shapeBounds(s);
     elkChildren.push({ id: s.id, width: Math.max(20, b.w), height: Math.max(20, b.h) });
@@ -742,20 +659,16 @@ async function runLayoutSubgraph(
   // Build edges remapping child endpoints to their top-level container
   const passBEdgeIds = new Set<string>();
   const passBEdges: ElkEdge[] = [];
-  const arrows = collectArrows(store);
-  for (const a of arrows) {
-    const bs = bindingsForArrow(store, a.id);
-    if (bs.length !== 2) continue;
-    const start = bs.find((b) => (b.props as { terminal?: string } | undefined)?.terminal === "start");
-    const end = bs.find((b) => (b.props as { terminal?: string } | undefined)?.terminal === "end");
-    const rawSrc = start?.toId ?? bs[0]?.toId;
-    const rawTgt = end?.toId ?? bs[1]?.toId;
-    if (!rawSrc || !rawTgt) continue;
+  const liftToTopLevel = (rawId: string): string | null =>
+    topLevelNodeIds.has(rawId) ? rawId : (childToTopContainer.get(rawId) ?? null);
+
+  for (const a of collectArrows(store)) {
+    const ep = resolveArrowEndpoints(store, a.id);
+    if (!ep) continue;
 
     // Resolve endpoints to top-level nodes
-    const src = topLevelNodeIds.has(rawSrc) ? rawSrc : (childToTopContainer.get(rawSrc) ?? null);
-    const tgt = topLevelNodeIds.has(rawTgt) ? rawTgt : (childToTopContainer.get(rawTgt) ?? null);
-
+    const src = liftToTopLevel(ep.src);
+    const tgt = liftToTopLevel(ep.tgt);
     if (!src || !tgt || src === tgt) continue;
     if (!topLevelNodeIds.has(src) || !topLevelNodeIds.has(tgt)) continue;
 
@@ -771,7 +684,7 @@ async function runLayoutSubgraph(
     const positions: Positions = {};
     const node = elkChildren[0];
     if (node) {
-      const origShape = shapes.find((s) => s.id === node.id);
+      const origShape = shapeById.get(node.id);
       if (origShape) {
         const b = shapeBounds(origShape);
         positions[node.id] = { x: b.x, y: b.y, w: node.width, h: node.height };
@@ -827,14 +740,12 @@ async function runLayoutSubgraph(
     }
   }
 
-  // Anchor containers: original x/y stays, w/h from Pass A
+  // Anchor containers: original x/y stays, w/h from Pass A (if computed) or original.
   for (const anchorId of anchorFrameIds) {
     const anchor = frameById.get(anchorId);
     if (!anchor) continue;
     const origB = shapeBounds(anchor);
-    const passARes = passAResults.get(anchorId);
-    const w = passARes ? passARes.newW : origB.w;
-    const h = passARes ? passARes.newH : origB.h;
+    const { w, h } = sizeFor(anchor);
     positions[anchorId] = { x: origB.x, y: origB.y, w, h };
   }
 
@@ -875,8 +786,14 @@ export async function runLayout(
 
   // Pin set: only meta.pinned === true shapes (DRW-003).
   const pinnedSet = new Set<string>();
+  // Container ids (frame OR geo+role=boundary) — used both for parent-relative conversion
+  // (DRW-082) and origin-preservation top-level filter below.
+  const containerIds = new Set<string>();
+  const shapeById = new Map<string, ShapeRec>();
   for (const s of shapes) {
     if (isPinned(s)) pinnedSet.add(s.id);
+    if (isContainerShape(s)) containerIds.add(s.id);
+    shapeById.set(s.id, s);
   }
 
   let positions: Positions;
@@ -893,8 +810,9 @@ export async function runLayout(
     anchorFrameIds = result.anchorFrameIds;
   } else {
     // scope='all': single-pass through INCLUDE_CHILDREN (unchanged behavior).
-    const { graph, anchorFrameIds: aFI } = buildElkGraph(store, shapes, fullHint, undefined);
-    anchorFrameIds = aFI;
+    // No anchor frames in scope='all' — every shape participates.
+    anchorFrameIds = new Set();
+    const graph = buildElkGraph(store, shapes, fullHint);
 
     let res: { children?: unknown[]; edges?: unknown[] };
     try {
@@ -954,12 +872,10 @@ export async function runLayout(
         // В subgraph mode children контейнеров хранятся parent-relative,
         // их трогать нельзя. Сдвигаем только top-level (parentId=page) shapes
         // и сами containers, кроме anchor (anchor stays put через override).
-        const containerIds = new Set<string>();
-        for (const s of shapes) if (isContainerShape(s)) containerIds.add(s.id);
         for (const id in positions) {
           if (pinnedSet.has(id)) continue;
           if (anchorFrameIds.has(id)) continue;
-          const shape = shapes.find((s) => s.id === id);
+          const shape = shapeById.get(id);
           const isTopLevel =
             !shape ||
             !shape.parentId ||
@@ -990,11 +906,6 @@ export async function runLayout(
   // DRW-099: В subgraph mode positions для children от Pass A уже parent-relative
   // (ELK layout на детях относительно root=0,0 контейнера).
   // В scope='all' mode positions абсолютные (collectPositions с offset walk).
-  const frameIds = new Set<string>();
-  for (const s of shapes) {
-    if (isContainerShape(s)) frameIds.add(s.id);
-  }
-
   for (const s of shapes) {
     const p = positions[s.id];
     if (!p) continue;
@@ -1002,9 +913,9 @@ export async function runLayout(
     // In subgraph mode: только shapes из filterToIds или anchor-frames попадают в batch.
     if (isSubgraphMode && !isAnchor && affectedIds && !affectedIds.has(s.id)) continue;
     const oldB = shapeBounds(s);
-    const isFrame = isContainerShape(s);
+    const isFrame = containerIds.has(s.id);
     const parentIsFrame =
-      typeof s.parentId === "string" && frameIds.has(s.parentId);
+      typeof s.parentId === "string" && containerIds.has(s.parentId);
 
     let newX: number;
     let newY: number;
