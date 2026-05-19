@@ -1,3 +1,29 @@
+## 0.15.0 — TBD — shemma_import_mermaid MCP tool
+
+Feature: `shemma_import_mermaid` MCP tool — AI теперь может импортировать Mermaid-диаграммы прямо на canvas без участия пользователя. Реализована через WS command path (option b): backend пересылает frame в открытый browser tab, frontend вызывает `@tldraw/mermaid.createMermaidDiagram`, shapes возвращаются через store-change sync. Закрывает DRW-083.
+
+### Added
+
+- **DRW-083 — `shemma_import_mermaid` MCP tool.** Новый инструмент с параметрами `source` (mermaid source, обязательный), `mode?` ("append"|"replace", default "append"), `room?`, `clientOpId?`. Возвращает `{shape_ids, didraw_names, root_ids}` для downstream `shemma_connect` вызовов.
+- **Backend `POST /api/agent/import-mermaid`.** Endpoint принимает `{room, source, mode?, clientOpId?}`, проверяет наличие WS-subscriber в room (503 если нет), генерирует `requestId` (UUID), отправляет WS frame первому открытому subscriber'у, ждёт результат до 10s (timeout → `500 {error:"client did not respond"}`).
+- **WS message kinds `import-mermaid` + `import-mermaid-result`.** Добавлены в `WsMessage` (backend→client) и `WsClientMessage` (client→backend) union типы. `WsHub.sendImportMermaid()` + `WsHub.resolveImportMermaid()` для управления pending promises.
+- **Frontend `onImportMermaid` callback** в `startStoreSync`. При получении `import-mermaid` frame вызывает callback (App.tsx → `importMermaid(editor, source)`), отправляет обратно `import-mermaid-result`. `mode:"replace"` стирает существующие shapes перед импортом.
+- **`CanvasClient.importMermaid({source, mode?, clientOpId?, requestId?})`.** HTTP-метод для MCP layer через `POST /api/agent/import-mermaid`.
+- **`ImportMermaidArgs` Zod-схема** в `packages/shemma-mcp/src/schemas.ts`.
+- Workflow docs обновлены: `shemma_import_mermaid` теперь primary path; ⌘M modal — manual fallback.
+
+### Tests
+
+- `packages/shemma-mcp/src/schemas.test.ts` — +7 тестов для `ImportMermaidArgs`.
+- `packages/shemma-client/tests/index.test.ts` — +2 теста для `CanvasClient.importMermaid`.
+- `apps/backend/tests/ws-protocol.test.ts` — +4 теста для `parseClientMessage import-mermaid-result`.
+- `apps/backend/tests/routes-import-mermaid.test.ts` — +5 integration тестов для endpoint (503/400/timeout/broadcast/default-mode).
+- `apps/frontend/src/transport/ws.test.ts` — +3 теста для `onImportMermaid` callback.
+- `packages/shemma-mcp/src/tools/domain.test.ts` — +4 теста для `shemma_import_mermaid` tool.
+- Итого новых тестов: +25. Общий count: 297 backend + 69 frontend + 128 MCP.
+
+---
+
 ## 0.14.4 — 2026-05-19 — Frame children parent-relative coords
 
 Bug-fix релиз: после 0.14.3 (containers с visible header) обнаружено что children в multi-frame схемах оказывались off-screen — tldraw хранит x/y child shape с parentId=frame как parent-relative, но ELK runLayout писал absolute page coords. Закрывает DRW-082.

@@ -36,15 +36,53 @@ For complex diagrams with **many nodes** (≥10) and **long multi-line labels**,
 - `geo` shape labels don't shrink-to-fit programmatically (no public auto-resize API in tldraw 5.x; mitigated by 220×80 defaults).
 - ELK layered routing crowds parallel edges in dense graphs.
 
-For these cases prefer **Mermaid import**, then fall back to `shemma_*` calls for incremental tweaks.
+For these cases prefer **Mermaid import via MCP**, then fall back to `shemma_*` calls for incremental tweaks.
 
-### How import works
+### Primary path: `shemma_import_mermaid` MCP tool (DRW-083)
 
-1. User (or AI, via "type this mermaid into the canvas") opens the room and presses **⌘M / Ctrl+M** (or clicks the toolbar button) — modal appears. Paste mermaid source, confirm.
-2. `@tldraw/mermaid.createMermaidDiagram(editor, source)` parses + lays out via its own engine and writes shapes to the tldraw store via `editor.createShape` (which triggers `onBeforeCreate` / `onBeforeUpdate` hooks → correct `growY`, no overflow).
-3. Each imported node gets `meta.didrawName` (slugified label) so it becomes **domain-aware** — `shemma_define`/`shemma_connect`/`shemma_layout` find it by that name.
-4. WS sync streams the new shapes back to backend; persistence is automatic.
-5. Dev-console fallback: `window.shemmaImportMermaid("flowchart LR\n  A --> B")` does the same thing programmatically.
+**Requires:** browser tab open in the target room (the tool sends a WS command to the frontend).
+
+```
+shemma_import_mermaid {
+  source: "graph LR\n  A-->B\n  B-->C",
+  mode?: "append" | "replace",   // default "append"
+  room?: "my-room",
+}
+```
+
+Returns: `{ shape_ids, didraw_names, root_ids }` — use `didraw_names` as element names for follow-up `shemma_connect` calls.
+
+**`mode: "replace"`** — deletes ALL existing shapes before importing. Use when you want to replace the entire diagram.
+
+**Flow:**
+1. AI calls `shemma_import_mermaid` with mermaid source.
+2. Backend sends WS frame `{kind:"import-mermaid", source, mode, requestId}` to the browser tab.
+3. Frontend calls `@tldraw/mermaid.createMermaidDiagram(editor, source)` → shapes appear in canvas.
+4. Frontend sends back `{kind:"import-mermaid-result", requestId, ok:true, shape_ids, didraw_names, root_ids}`.
+5. Backend resolves the pending promise → MCP tool returns result to AI.
+6. Normal store-change sync persists the shapes to backend.
+
+**Error cases:**
+- No browser tab open → `503 {error:"no client connected"}`.
+- Frontend timed out (>10s, e.g. JS blocked) → `500 {error:"client did not respond"}`.
+- Invalid mermaid syntax → `500 {error:"<mermaid parser error>"}`.
+
+### Fallback path: ⌘M / Ctrl+M modal (manual)
+
+When no browser tab is available, or when the user wants to manually edit mermaid source:
+1. Open the room in a browser.
+2. Press **⌘M / Ctrl+M** (or click the toolbar mermaid button) — modal appears.
+3. Paste mermaid source, confirm.
+
+This path bypasses the MCP layer entirely and is useful for human-driven iterative editing.
+
+### How import works internally
+
+`@tldraw/mermaid.createMermaidDiagram(editor, source)` parses + lays out via its own engine and writes shapes to the tldraw store via `editor.createShape` (which triggers `onBeforeCreate` / `onBeforeUpdate` hooks → correct `growY`, no overflow).
+
+Each imported node gets `meta.didrawName` (slugified label) so it becomes **domain-aware** — `shemma_define`/`shemma_connect`/`shemma_layout` find it by that name.
+
+Dev-console fallback: `window.shemmaImportMermaid("flowchart LR\n  A --> B")` does the same thing programmatically.
 
 ### Post-import interactivity
 
@@ -65,10 +103,11 @@ For these cases prefer **Mermaid import**, then fall back to `shemma_*` calls fo
 - Iterative diagram building (≤5 nodes, additive design).
 - AI doesn't have a mermaid representation of the target in context.
 - Need explicit control over each element's role/kind during creation.
+- No browser tab is open (MCP tool requires an active tab).
 
 ### Hybrid pattern (recommended)
 
-1. AI writes mermaid for the initial structure → paste via ⌘M.
+1. AI calls `shemma_import_mermaid` with initial mermaid structure.
 2. AI follows up with `shemma_define`/`shemma_connect` for any later additions.
 3. Single `shemma_layout` at the end re-spaces both populations together.
 
