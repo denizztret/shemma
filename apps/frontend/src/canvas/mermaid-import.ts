@@ -5,6 +5,35 @@ import {
   renderPlaintextFromRichText,
 } from "tldraw";
 
+// DRW-086: BoxLike type for union bounds result. We use a plain object to avoid
+// importing `Box` class (tldraw re-exports it but we want to stay test-friendly).
+export type BoundsLike = { x: number; y: number; w: number; h: number };
+
+/**
+ * DRW-086: Compute the union bounding box of the given shape ids.
+ * Iterates `editor.getShapePageBounds(id)` and unions all results.
+ * Returns null if shapeIds is empty or no shape has bounds.
+ */
+export function unionBoundsOf(editor: Editor, shapeIds: TLShapeId[]): BoundsLike | null {
+  if (shapeIds.length === 0) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let found = false;
+  for (const id of shapeIds) {
+    const b = editor.getShapePageBounds(id);
+    if (!b) continue;
+    found = true;
+    if (b.x < minX) minX = b.x;
+    if (b.y < minY) minY = b.y;
+    if (b.x + b.w > maxX) maxX = b.x + b.w;
+    if (b.y + b.h > maxY) maxY = b.y + b.h;
+  }
+  if (!found) return null;
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
 // Phase 3.0: mermaid import пишет shapes напрямую в tldraw store через
 // createMermaidDiagram(editor, source). Эти мутации идут как source:'user' →
 // startStoreSync (transport/ws.ts) автоматически шлёт их батчем в backend.
