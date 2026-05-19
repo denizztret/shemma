@@ -1,3 +1,27 @@
+## 0.17.0 — 2026-05-19 — Tidy selection: localized ELK на subgraph (UI + MCP twin)
+
+Selection-aware версия layout: правый клик / ⌘⇧L на выделение → ELK прогоняется через `runLayout(scope='affected', affectedIds=selection)` — pinned shapes защищены, non-selected не двигаются. MCP twin `shemma_layout_selection` для AI workflows (post-import tidying, partial reorg). Закрывает DRW-088.
+
+### Added
+
+- **Backend `POST /api/agent/layout-selection`** (`apps/backend/src/routes/layout-selection.ts`). Body `{ids: string[], mode?, spacing?}`. Принимает оба формата ids: `shape:xxx` (tldraw raw) и `didrawName` (через `r.didrawIndex` lookup). Резолвит к `affectedIds: Set<TLShapeId>`, передаёт в существующий `runLayout` с `scope='affected'` — pin discipline (`isPinned()`) автоматом защищает `meta.pinned===true` shapes. **AC#8 auto-mode detect:** если у всех selected shapes `meta.mermaidSource` и source содержит `flowchart/graph TB|LR|RL|BT` директиву — derive mode (`layered-tb|lr|rl|bt`). Edge cases: empty ids → 200 noop hint; single id → 200 noop hint; all unresolved → 400. `unresolved: [...]` field в response для debug.
+- **MCP tool `shemma_layout_selection`** (`packages/shemma-mcp/src/tools/domain.ts`). Args: `{ids?: string[], mode?, spacing?, room?}`. Empty `ids` = full-canvas layout (equivalent `shemma_layout`). Tool description явно инструктирует AI: "use after `shemma_import_mermaid` to tidy just-added group without disturbing existing user layout".
+- **`CanvasClient.layoutSelection({ids, mode?, spacing?, room?})`** в `packages/shemma-client/src/index.ts`.
+- **Frontend Tidy UI:** context menu item "Tidy selection" в `TldrawComponents.tsx` (виден при `selectedShapeIds.length >= 2`), ⌘⇧L / Ctrl+Shift+L hotkey через `makeTidyHotkeyHandler` factory (`apps/frontend/src/canvas/tidy-layout.ts`). Auto-zoom через `unionBoundsOf(editor, affectedIds)` → `editor.zoomToBounds(..., {animation:{duration:200}, inset:64})`, DRW-075 `userHasManuallyPanned` guard.
+- **Atomic apply:** mutations идут через WS `store-change` frame → `editor.store.mergeRemoteChanges` (existing path) — одна tldraw history step.
+- **Workflow docs:** новая секция "Tidy selection" в `packages/shemma-mcp/src/workflow/draw-architecture.md` с use cases.
+
+### Tests
+
+- 673+ tests pass: +6 backend integration (`routes-layout-selection.test.ts`: pinned не двигается, non-selected не двигается, empty ids → noop, single id → noop, unresolved → 400, mermaidSource → mode detect), +7 MCP tool (`domain.test.ts`: schema, endpoint URL, body shape, empty ids delegation), +8 frontend unit (`tidy-layout.test.ts`: fetch + hotkey factory + edge cases).
+- TDD discipline: test-first per логический step, 7 atomic commits.
+
+### Visual smoke
+
+End-to-end через chrome-devtools на dev-profile (room `drw-088-smoke`): Mermaid import → ⌘⇧L → POST /api/agent/layout-selection → 200 → zoomToBounds. Скриншоты в `docs/screenshots/drw-088-*.png`.
+
+---
+
 ## 0.16.0 — 2026-05-19 — Mermaid subgraphs как domain groups + auto-zoom на новый bbox
 
 Доработка `shemma_import_mermaid` после dogfood-сессии: Mermaid `subgraph` теперь корректно попадает в `shemma_context` как `type:"group", role:"boundary"`, а после import viewport анимированно зумится на bbox новых shapes. Закрывает DRW-084 + DRW-086. Дополнительный AC: автоматический preprend ELK frontmatter (`---\nconfig:\n  layout: elk\n---`) на источниках без frontmatter — компактнее baseline.
