@@ -333,13 +333,26 @@ export async function runLayout(
   const affected: string[] = [];
   const EPS = 1e-6;
 
+  // DRW-082: collectPositions возвращает absolute page coords (через walk c
+  // offsetX/Y накопителем). Но в tldraw shape с parentId=frame хранит x/y
+  // RELATIVE к parent'у — иначе при render абсолютные координаты добавляются
+  // к parent.x повторно и shape уезжает за границы frame. Конвертируем abs
+  // обратно в parent-relative для children frame'ов.
+  const frameIds = new Set<string>();
+  for (const s of shapes) {
+    if (s.type === "frame") frameIds.add(s.id);
+  }
+
   for (const s of shapes) {
     const p = positions[s.id];
     if (!p) continue;
     const oldB = shapeBounds(s);
     const isFrame = s.type === "frame";
-    const newX = p.x;
-    const newY = p.y;
+    const parentIsFrame =
+      typeof s.parentId === "string" && frameIds.has(s.parentId);
+    const parentPos = parentIsFrame ? positions[s.parentId as string] : undefined;
+    const newX = parentPos ? p.x - parentPos.x : p.x;
+    const newY = parentPos ? p.y - parentPos.y : p.y;
     // DRW-004: для frame пишем bbox обратно в props.w/props.h.
     const newW = isFrame && typeof p.w === "number" ? p.w : undefined;
     const newH = isFrame && typeof p.h === "number" ? p.h : undefined;
