@@ -259,6 +259,29 @@ export function App({ room }: { room: string }) {
           triggerGrowY(editor, changedIds);
           scheduleAiZoom();
         },
+        // DRW-083: MCP import-mermaid command — backend routes WS frame here.
+        onImportMermaid: async (source, mode, _requestId) => {
+          if (mode === "replace") {
+            // Stash current page shapes, delete them first.
+            const existing = editor.getCurrentPageShapes();
+            if (existing.length > 0) {
+              editor.deleteShapes(existing.map((s) => s.id));
+            }
+          }
+          const result = await importMermaid(editor, source);
+          // Collect didrawNames from shape meta (set by importMermaid internally)
+          const didrawNames = result.shapeIds.map((id) => {
+            const shape = editor.getShape(id);
+            const name = (shape?.meta as Record<string, unknown> | undefined)?.didrawName;
+            return typeof name === "string" ? name : "";
+          });
+          return {
+            ok: result.ok,
+            shapeIds: result.shapeIds as unknown as string[],
+            didrawNames,
+            rootIds: result.sourceTargetIds as unknown as string[],
+          };
+        },
         onTruncated: () => {
           // DRW-018: pause the (now zombie) syncer immediately so any frames
           // that arrive between this callback and ws.close() — or any straggler
@@ -282,6 +305,26 @@ export function App({ room }: { room: string }) {
                   if (!active) return;
                   triggerGrowY(editor, changedIds);
                   scheduleAiZoom();
+                },
+                onImportMermaid: async (source, mode, _requestId) => {
+                  if (mode === "replace") {
+                    const existing = editor.getCurrentPageShapes();
+                    if (existing.length > 0) {
+                      editor.deleteShapes(existing.map((s) => s.id));
+                    }
+                  }
+                  const result = await importMermaid(editor, source);
+                  const didrawNames = result.shapeIds.map((id) => {
+                    const shape = editor.getShape(id);
+                    const name = (shape?.meta as Record<string, unknown> | undefined)?.didrawName;
+                    return typeof name === "string" ? name : "";
+                  });
+                  return {
+                    ok: result.ok,
+                    shapeIds: result.shapeIds as unknown as string[],
+                    didrawNames,
+                    rootIds: result.sourceTargetIds as unknown as string[],
+                  };
                 },
                 onTruncated: () => {
                   // Pathological loop — log and stop trying.
