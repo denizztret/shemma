@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
-import { registerResources } from "./resources";
+import { registerResources, loadWorkflowMarkdown, WORKFLOW_TOPICS } from "./resources";
 
 /** Minimal stub that overrides getHealth/getActiveRooms without real network calls. */
 function makeClientStub(
@@ -123,5 +123,13 @@ describe("registerResources", () => {
     const parsed = JSON.parse(raw);
     expect(typeof parsed.serverVersion).toBe("string");
     expect(parsed.serverVersion).toBe(SHEMMA_MCP_VERSION);
+  });
+});
+
+describe("loadWorkflowMarkdown", () => {
+  it.each(WORKFLOW_TOPICS)("reads %s and returns non-empty markdown", async (topic) => {
+    const content = await loadWorkflowMarkdown(topic);
+    expect(typeof content).toBe("string");
+    expect(content.length).toBeGreaterThan(0);
   });
 });

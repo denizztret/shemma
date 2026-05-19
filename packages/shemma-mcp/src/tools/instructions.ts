@@ -27,13 +27,12 @@ export function registerInstructionsTool(
       };
     }
     try {
-      const text = loadWorkflowMarkdown(topic);
+      const text = await loadWorkflowMarkdown(topic);
       return { content: [{ type: "text" as const, text }] };
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+    } catch {
       return {
         isError: true as const,
-        content: [{ type: "text" as const, text: JSON.stringify({ ok: false, code: "read-error", message: msg }) }],
+        content: [{ type: "text" as const, text: JSON.stringify({ ok: false, code: "instructions-unavailable", message: "workflow asset not bundled — please file an issue" }) }],
       };
     }
   }

@@ -1,12 +1,15 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
 import type { Profile } from "./server";
 import { SHEMMA_MCP_VERSION } from "./version";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
+// Static imports with { type: "file" } allow bun build --compile to embed
+// these markdown files into the SFE binary (virtual $bunfs FS).
+import overviewMd from "./workflow/overview.md" with { type: "file" };
+import readContextMd from "./workflow/read-context.md" with { type: "file" };
+import drawArchitectureMd from "./workflow/draw-architecture.md" with { type: "file" };
+import resolvePromptsMd from "./workflow/resolve-prompts.md" with { type: "file" };
+import trustModelMd from "./workflow/trust-model.md" with { type: "file" };
 
 export const WORKFLOW_TOPICS = [
   "overview",
@@ -18,8 +21,16 @@ export const WORKFLOW_TOPICS = [
 
 export type WorkflowTopic = (typeof WORKFLOW_TOPICS)[number];
 
-export function loadWorkflowMarkdown(topic: WorkflowTopic): string {
-  return readFileSync(join(HERE, "workflow", `${topic}.md`), "utf8");
+const WORKFLOW_FILES: Record<WorkflowTopic, string> = {
+  "overview": overviewMd,
+  "read-context": readContextMd,
+  "draw-architecture": drawArchitectureMd,
+  "resolve-prompts": resolvePromptsMd,
+  "trust-model": trustModelMd,
+};
+
+export async function loadWorkflowMarkdown(topic: WorkflowTopic): Promise<string> {
+  return Bun.file(WORKFLOW_FILES[topic]).text();
 }
 
 export type RegisterResourcesOpts = {
@@ -66,9 +77,14 @@ export function registerResources(
         try {
           const text = await read();
           return { contents: [{ uri, mimeType: "text/markdown", text }] };
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          return { contents: [{ uri, mimeType: "text/plain", text: `error loading ${topic}: ${msg}` }] };
+        } catch {
+          return {
+            contents: [{
+              uri,
+              mimeType: "text/plain",
+              text: JSON.stringify({ ok: false, code: "instructions-unavailable", message: "workflow asset not bundled — please file an issue" }),
+            }],
+          };
         }
       },
     );
