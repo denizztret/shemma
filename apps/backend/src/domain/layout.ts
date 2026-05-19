@@ -108,23 +108,67 @@ function bindingsForArrow(store: TLStoreSnapshot, arrowId: string): BindingRec[]
   return out;
 }
 
-/** Build ELK graph from shapes + arrow-bindings, treating frames as compound nodes. */
+/**
+ * Build ELK graph from shapes + arrow-bindings, treating frames as compound nodes.
+ *
+ * When `filterToIds` is provided (subgraph mode — DRW-091/092):
+ *   - Leaves: only included if id ∈ filterToIds.
+ *   - Frames:
+ *     a) frame.id ∈ filterToIds → included as full compound node (selected frame).
+ *     b) frame has ≥1 included child → included as anchor container with fixed
+ *        size constraint; its position will NOT be written back in batch.
+ *   - Edges: included only if both endpoints are in included shape ids.
+ *
+ * Returns the set of anchor frame ids (frames included as containers but NOT in filterToIds).
+ */
 function buildElkGraph(
   store: TLStoreSnapshot,
   shapes: ShapeRec[],
   hint: Required<LayoutHint>,
-): unknown {
+  filterToIds?: Set<string>,
+): { graph: unknown; anchorFrameIds: Set<string> } {
   const opts = modeToElkOptions(hint.mode, hint.spacing);
 
   // Partition shapes: frames vs leaves.
   const frames = shapes.filter((s) => s.type === "frame");
   const leaves = shapes.filter((s) => s.type !== "frame");
 
-  // Children of frame: shapes whose parentId === frame.id (and which are layout candidates).
+  // Subgraph filter: determine which leaves/frames are included.
+  const includedLeaves = filterToIds
+    ? leaves.filter((s) => filterToIds.has(s.id))
+    : leaves;
+
+  // Included leaf ids set for edge filtering and anchor detection.
+  const includedLeafIds = new Set(includedLeaves.map((s) => s.id));
+
+  // Determine anchor frames: frame NOT in filterToIds but has ≥1 included child.
+  // Also included selected frames: frame.id ∈ filterToIds.
+  const anchorFrameIds = new Set<string>();
+  const selectedFrameIds = new Set<string>();
+  if (filterToIds) {
+    for (const f of frames) {
+      if (filterToIds.has(f.id)) {
+        selectedFrameIds.add(f.id);
+      } else {
+        // Check if any included leaf has this frame as parent
+        const hasIncludedChild = includedLeaves.some((s) => s.parentId === f.id);
+        if (hasIncludedChild) {
+          anchorFrameIds.add(f.id);
+        }
+      }
+    }
+  }
+
+  // When filtering: include only selected frames + anchor frames (as containers).
+  const includedFrames = filterToIds
+    ? frames.filter((f) => selectedFrameIds.has(f.id) || anchorFrameIds.has(f.id))
+    : frames;
+
+  // Children of frame: shapes whose parentId === frame.id (layout candidates).
   const childrenByFrame = new Map<string, ShapeRec[]>();
-  for (const f of frames) childrenByFrame.set(f.id, []);
+  for (const f of includedFrames) childrenByFrame.set(f.id, []);
   const topLevel: ShapeRec[] = [];
-  for (const s of leaves) {
+  for (const s of includedLeaves) {
     if (s.parentId && childrenByFrame.has(s.parentId)) {
       childrenByFrame.get(s.parentId)!.push(s);
     } else {
@@ -142,18 +186,44 @@ function buildElkGraph(
     };
   };
 
-  const buildFrame = (f: ShapeRec) => {
+  const buildFrame = (f: ShapeRec, isAnchor: boolean) => {
     const b = shapeBounds(f);
+    const children = (childrenByFrame.get(f.id) ?? []).map(buildLeaf);
+    if (isAnchor) {
+      // Anchor frame (DRW-092): children layout inside using rectpacking to ensure
+      // they fill within frame.props.w/h. The frame itself won't be written to batch.
+      return {
+        id: f.id,
+        width: b.w,
+        height: b.h,
+        layoutOptions: {
+          "elk.algorithm": "rectpacking",
+          "elk.padding": "[top=40,left=20,bottom=20,right=20]",
+          "elk.spacing.nodeNode": String(hint.spacing === "compact" ? 10 : hint.spacing === "loose" ? 30 : 20),
+          "elk.nodeSize.constraints": "FIXED_SIZE",
+          "elk.nodeSize.fixedGraphSize": "true",
+        },
+        children,
+      };
+    }
+    // Normal frame (selected frame, or full-canvas mode): use inherited layered layout opts.
     return {
       id: f.id,
       width: b.w,
       height: b.h,
       layoutOptions: { ...opts, "elk.padding": "[top=40,left=20,bottom=20,right=20]" },
-      children: (childrenByFrame.get(f.id) ?? []).map(buildLeaf),
+      children,
     };
   };
 
+  // All shape ids included in this graph (for edge filtering).
+  const allIncludedIds = new Set([
+    ...includedLeafIds,
+    ...includedFrames.map((f) => f.id),
+  ]);
+
   // Edges from bindings: per arrow, find 2 bindings (start/end), use their toId endpoints.
+  // In subgraph mode: only include edges where BOTH endpoints are in included ids.
   const arrows = collectArrows(store);
   const edges: Array<{ id: string; sources: string[]; targets: string[] }> = [];
   for (const a of arrows) {
@@ -164,15 +234,22 @@ function buildElkGraph(
     const src = start?.toId ?? bs[0]?.toId;
     const tgt = end?.toId ?? bs[1]?.toId;
     if (!src || !tgt) continue;
+    // Subgraph filter: skip edges to non-included shapes.
+    if (filterToIds && (!allIncludedIds.has(src) || !allIncludedIds.has(tgt))) continue;
     edges.push({ id: a.id, sources: [src], targets: [tgt] });
   }
 
-  return {
+  const graph = {
     id: "root",
     layoutOptions: { ...opts, "elk.hierarchyHandling": "INCLUDE_CHILDREN" },
-    children: [...topLevel.map(buildLeaf), ...frames.map(buildFrame)],
+    children: [
+      ...topLevel.map(buildLeaf),
+      ...includedFrames.map((f) => buildFrame(f, anchorFrameIds.has(f.id))),
+    ],
     edges,
   };
+
+  return { graph, anchorFrameIds };
 }
 
 type Positions = Record<string, { x: number; y: number; w?: number; h?: number }>;
@@ -291,22 +368,24 @@ export async function runLayout(
     return { batch: emptyBatch, affected: [] };
   }
 
-  // Pin set: meta.pinned === true ИЛИ (scope='affected' AND shape ∉ affectedIds).
-  // Второе условие — DRW-003 equivalent для Phase 3.0: при scope=affected мы
-  // фиксируем все non-affected user shapes, чтобы AI define/connect/group не
-  // перекладывал freehand draws / images / user-drawn rectangles.
-  const pinnedSet = new Set<string>();
+  // Subgraph mode: scope="affected" with affectedIds provided → DRW-091/092 fix.
+  // Non-affected shapes are EXCLUDED from ELK graph entirely (not pinned).
+  // Anchor frames (parent of selected children, not selected themselves) are
+  // included as fixed-size containers but NOT written back in batch.
   const affectedIds = hint.affectedIds;
-  const scopedToAffected = fullHint.scope === "affected" && affectedIds && affectedIds.size > 0;
+  const isSubgraphMode = fullHint.scope === "affected" && affectedIds && affectedIds.size > 0;
+
+  // Pin set: only meta.pinned === true shapes (DRW-003).
+  // In subgraph mode the old "pin non-affected" trick is replaced by exclusion from ELK input.
+  const pinnedSet = new Set<string>();
   for (const s of shapes) {
     if (isPinned(s)) {
-      pinnedSet.add(s.id);
-    } else if (scopedToAffected && !affectedIds.has(s.id)) {
       pinnedSet.add(s.id);
     }
   }
 
-  const graph = buildElkGraph(store, shapes, fullHint);
+  const filterToIds = isSubgraphMode ? affectedIds : undefined;
+  const { graph, anchorFrameIds } = buildElkGraph(store, shapes, fullHint, filterToIds);
 
   let res: { children?: unknown[]; edges?: unknown[] };
   try {
@@ -325,10 +404,119 @@ export async function runLayout(
     }
   }
 
+  // DRW-091 AC#2: origin preservation for subgraph mode (no anchor frame case).
+  // When selected shapes are top-level (no anchor frame containing them), translate
+  // the ELK output so that the centroid of selected shapes stays near original centroid.
+  // This prevents selected cluster from jumping to (0,0) or the non-selected territory.
+  // Only non-pinned positions are translated; pinned shapes keep their original coords.
+  if (isSubgraphMode && anchorFrameIds.size === 0 && filterToIds && filterToIds.size > 0) {
+    // Collect original positions of selected shapes (only non-pinned, non-frame for centroid).
+    const selectedShapes = shapes.filter(
+      (s) => filterToIds.has(s.id) && !pinnedSet.has(s.id) && s.type !== "frame",
+    );
+    if (selectedShapes.length > 0) {
+      let origCX = 0;
+      let origCY = 0;
+      let elkCX = 0;
+      let elkCY = 0;
+      let count = 0;
+      for (const s of selectedShapes) {
+        const ob = shapeBounds(s);
+        origCX += ob.x + ob.w / 2;
+        origCY += ob.y + ob.h / 2;
+        const ep = positions[s.id];
+        if (ep) {
+          elkCX += ep.x + (ep.w ?? ob.w) / 2;
+          elkCY += ep.y + (ep.h ?? ob.h) / 2;
+          count++;
+        }
+      }
+      if (count > 0) {
+        origCX /= selectedShapes.length;
+        origCY /= selectedShapes.length;
+        elkCX /= count;
+        elkCY /= count;
+        const dx = origCX - elkCX;
+        const dy = origCY - elkCY;
+        // Translate all non-pinned positions in the ELK output by (dx, dy).
+        for (const id in positions) {
+          if (pinnedSet.has(id)) continue; // pinned shapes keep their original coords
+          const p = positions[id];
+          positions[id] = { ...p, x: p.x + dx, y: p.y + dy };
+        }
+      }
+    }
+  }
+
+  // DRW-092: clamp children of anchor frames to fit within frame bounds (parent-relative).
+  // ELK may lay out children exceeding frame.props.w/h (especially with 4+ nodes, no edges).
+  // We scale+translate the ELK layout to fit within [padding_left, frame.w - padding_right]
+  // × [padding_top, frame.h - padding_bottom].
+  if (isSubgraphMode && anchorFrameIds.size > 0) {
+    const PAD_TOP = 40;
+    const PAD_SIDE = 20;
+    const shapeById = new Map(shapes.map((s) => [s.id, s]));
+    for (const frameId of anchorFrameIds) {
+      const frameShape = shapeById.get(frameId);
+      if (!frameShape) continue;
+      const frameBounds = shapeBounds(frameShape);
+      const availW = frameBounds.w - PAD_SIDE * 2;
+      const availH = frameBounds.h - PAD_TOP - PAD_SIDE;
+      // Find children of this anchor frame that have positions.
+      const frameElkPos = positions[frameId];
+      if (!frameElkPos) continue;
+      const childIds = shapes
+        .filter((s) => s.parentId === frameId && filterToIds?.has(s.id))
+        .map((s) => s.id);
+      if (childIds.length === 0) continue;
+      // Compute bbox of children in ELK output (relative to anchor frame ELK position).
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const cid of childIds) {
+        const cp = positions[cid];
+        if (!cp) continue;
+        const cs = shapeById.get(cid);
+        const cw = cp.w ?? (cs ? shapeBounds(cs).w : DEFAULT_W);
+        const ch = cp.h ?? (cs ? shapeBounds(cs).h : DEFAULT_H);
+        const relX = cp.x - frameElkPos.x;
+        const relY = cp.y - frameElkPos.y;
+        minX = Math.min(minX, relX);
+        minY = Math.min(minY, relY);
+        maxX = Math.max(maxX, relX + cw);
+        maxY = Math.max(maxY, relY + ch);
+      }
+      if (!Number.isFinite(minX)) continue;
+      const contentW = maxX - minX;
+      const contentH = maxY - minY;
+      // Scale factors: if content exceeds available space, scale down uniformly.
+      const scaleX = contentW > availW ? availW / contentW : 1;
+      const scaleY = contentH > availH ? availH / contentH : 1;
+      const scale = Math.min(scaleX, scaleY);
+      // Translation: move top-left of content to (PAD_SIDE, PAD_TOP) within frame.
+      const offsetX = PAD_SIDE - minX * scale;
+      const offsetY = PAD_TOP - minY * scale;
+      for (const cid of childIds) {
+        const cp = positions[cid];
+        if (!cp) continue;
+        const relX = cp.x - frameElkPos.x;
+        const relY = cp.y - frameElkPos.y;
+        // New relative position (after scale + translate).
+        const newRelX = relX * scale + offsetX;
+        const newRelY = relY * scale + offsetY;
+        // Store back as absolute ELK (frame ELK pos + new relative).
+        positions[cid] = { ...cp, x: frameElkPos.x + newRelX, y: frameElkPos.y + newRelY };
+      }
+    }
+  }
+
   // DRW-003 displacement.
   applyDisplacement(positions, shapes, pinnedSet);
 
   // Build updated batch — only записи, у которых реально поменялись x/y/w/h.
+  // In subgraph mode: anchor frames are EXCLUDED from batch even if ELK moved them.
+  // They serve as fixed containers and their coords must not change.
   const updated: Record<string, [TLRecord, TLRecord]> = {};
   const affected: string[] = [];
   const EPS = 1e-6;
@@ -343,16 +531,43 @@ export async function runLayout(
     if (s.type === "frame") frameIds.add(s.id);
   }
 
+  // Build a lookup for original (pre-ELK) frame positions to correctly compute
+  // parent-relative coords for anchor frame children (DRW-092).
+  // Anchor frames stay at original coords, so children's relative = ELK_abs - frame_orig.
+  const frameOrigPos = new Map<string, { x: number; y: number }>();
+  for (const s of shapes) {
+    if (s.type === "frame") {
+      frameOrigPos.set(s.id, { x: s.x ?? 0, y: s.y ?? 0 });
+    }
+  }
+
   for (const s of shapes) {
     const p = positions[s.id];
     if (!p) continue;
+    // Anchor frames: excluded from batch — they stay at original position.
+    if (anchorFrameIds.has(s.id)) continue;
+    // In subgraph mode: only shapes in filterToIds are allowed in batch.
+    if (filterToIds && !filterToIds.has(s.id)) continue;
     const oldB = shapeBounds(s);
     const isFrame = s.type === "frame";
     const parentIsFrame =
       typeof s.parentId === "string" && frameIds.has(s.parentId);
-    const parentPos = parentIsFrame ? positions[s.parentId as string] : undefined;
-    const newX = parentPos ? p.x - parentPos.x : p.x;
-    const newY = parentPos ? p.y - parentPos.y : p.y;
+
+    let newX: number;
+    let newY: number;
+    if (parentIsFrame) {
+      const parentId = s.parentId as string;
+      // Use ELK output position of parent frame to convert abs ELK → relative.
+      // For anchor frames: ELK places them at some position (often 0,0 in subgraph
+      // since they're the root container). Child abs ELK - frame abs ELK = child
+      // relative inside frame, which is what tldraw expects.
+      const parentPos = positions[parentId];
+      newX = parentPos ? p.x - parentPos.x : p.x;
+      newY = parentPos ? p.y - parentPos.y : p.y;
+    } else {
+      newX = p.x;
+      newY = p.y;
+    }
     // DRW-004: для frame пишем bbox обратно в props.w/props.h.
     const newW = isFrame && typeof p.w === "number" ? p.w : undefined;
     const newH = isFrame && typeof p.h === "number" ? p.h : undefined;
