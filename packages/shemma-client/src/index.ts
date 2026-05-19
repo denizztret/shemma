@@ -360,6 +360,8 @@ export class CanvasClient {
     source: string;
     clientOpId?: string;
     requestId?: string;
+    /** DRW-086: viewport behavior after import. */
+    focus?: "new" | "fit-all" | "none";
   }) {
     const r = await fetch(`${this.base}/api/agent/import-mermaid?${this.q()}`, {
       method: "POST",

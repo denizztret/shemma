@@ -83,4 +83,11 @@ export const ImportMermaidArgs = {
   source: z.string().min(1),
   room: z.string().optional(),
   clientOpId: z.string().optional(),
+  /**
+   * DRW-086: Viewport behavior after a successful import.
+   * - "new"     — zoom to the bounding box of the newly created shapes (default).
+   * - "fit-all" — zoom to fit all shapes on the canvas.
+   * - "none"    — do not change the viewport.
+   */
+  focus: z.enum(["new", "fit-all", "none"]).optional(),
 };

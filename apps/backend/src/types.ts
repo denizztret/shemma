@@ -78,6 +78,8 @@ export type WsMessage =
       kind: "import-mermaid";
       source: string;
       requestId: string;
+      /** DRW-086: viewport behavior after import. Default 'new'. */
+      focus?: "new" | "fit-all" | "none";
     };
 
 export type StoreChangeBus = {

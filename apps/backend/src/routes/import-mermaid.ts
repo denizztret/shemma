@@ -30,6 +30,7 @@ export function importMermaidRoutes(bus: WsHub) {
     const body = (await c.req.json().catch(() => null)) as {
       source?: unknown;
       clientOpId?: unknown;
+      focus?: unknown;
     } | null;
 
     if (!body || typeof body.source !== "string" || body.source.trim() === "") {
@@ -37,6 +38,13 @@ export function importMermaidRoutes(bus: WsHub) {
     }
 
     const source = body.source;
+    // DRW-086: optional viewport behavior after import. Validate and pass through.
+    const VALID_FOCUS = ["new", "fit-all", "none"] as const;
+    type FocusMode = (typeof VALID_FOCUS)[number];
+    const focus: FocusMode | undefined =
+      typeof body.focus === "string" && (VALID_FOCUS as readonly string[]).includes(body.focus)
+        ? (body.focus as FocusMode)
+        : undefined;
 
     if (bus.subscriberCount(room) === 0) {
       // Build canonical room URL so AI can open the tab and retry. We surface
@@ -49,7 +57,7 @@ export function importMermaidRoutes(bus: WsHub) {
     const requestId = crypto.randomUUID();
 
     try {
-      const result = await bus.sendImportMermaid(room, requestId, source);
+      const result = await bus.sendImportMermaid(room, requestId, source, focus);
       if (!result.ok) {
         return c.json({ error: result.error ?? "import failed" }, 500);
       }

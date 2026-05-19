@@ -244,7 +244,7 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
   // Append-only. The MCP layer never sends a mode flag — wiping the canvas is
   // a separate explicit action that requires user confirmation.
   async function importMermaidCall(input: ImportMermaidInput): Promise<ToolResult> {
-    const { room: argRoom, clientOpId, source } = input;
+    const { room: argRoom, clientOpId, source, focus } = input;
     const resolved = await deps.resolver.resolve({ argRoom });
     if (!resolved.ok) {
       return toolResult({
@@ -260,6 +260,7 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
       const resp = (await c.importMermaid({
         source,
         clientOpId,
+        focus,
       })) as {
         ok?: boolean;
         shape_ids?: string[];
