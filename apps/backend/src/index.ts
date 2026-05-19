@@ -7,6 +7,7 @@ import { activeRoomsRoutes } from "./routes/active-rooms";
 import { aiRoutes } from "./routes/ai";
 import { contextRoutes } from "./routes/context";
 import { domainRoutes } from "./routes/domain";
+import { importMermaidRoutes } from "./routes/import-mermaid";
 import { makeHealthRoutes } from "./routes/health";
 import { layoutRoutes } from "./routes/layout";
 import { sessionRoutes } from "./routes/session";
@@ -53,6 +54,7 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", viewportRoutes(rooms));
   app.route("/", domainRoutes(rooms, bus, { onDirty }));
   app.route("/", contextRoutes(rooms));
+  app.route("/", importMermaidRoutes(bus));
   app.route("/", activeRoomsRoutes(bus.getActiveRooms()));
   return { app, rooms, bus, persistence };
 }
@@ -156,6 +158,16 @@ export async function startServer(opts: AppOpts = {}) {
           } else {
             bus.getActiveRooms().onBlur(room, clientId);
           }
+          return;
+        }
+        if (msg.kind === "import-mermaid-result") {
+          bus.resolveImportMermaid(msg.requestId, {
+            ok: msg.ok,
+            shape_ids: msg.shape_ids,
+            didraw_names: msg.didraw_names,
+            root_ids: msg.root_ids,
+            error: msg.error,
+          });
           return;
         }
       },

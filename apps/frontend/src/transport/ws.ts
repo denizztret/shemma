@@ -73,7 +73,8 @@ type StoreSyncMessage =
   | { kind: "prompt-created"; prompt: unknown }
   | { kind: "prompt-resolved"; id: string; response?: string }
   | { kind: "prompt-removed"; ids: string[] }
-  | { kind: "ai-activity"; activity: AiActivity | null };
+  | { kind: "ai-activity"; activity: AiActivity | null }
+  | { kind: "import-mermaid"; source: string; mode: "append" | "replace"; requestId: string };
 
 // ---------------------------------------------------------------------------
 // BoardFocusBeacon — standalone factory for sending board-focus WS messages.
