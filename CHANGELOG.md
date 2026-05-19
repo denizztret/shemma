@@ -1,3 +1,23 @@
+## 0.18.1 — 2026-05-19 — Mermaid import: remove placebo ELK frontmatter prepend (DRW-093)
+
+Honest-path PATCH: `prependElkFrontmatter` (DRW-084 AC#6) фактически не работал — `@tldraw/mermaid@5.0.0` не регистрирует `mermaid-layout-elk` loader, а `@mermaid-js/layout-elk` не bundled. Mermaid при отсутствии запрошенного loader'а silent degrade'ит на DAGRE, поэтому auto-prepend создавал ложное впечатление работающего ELK render. User dogfood 2026-05-19 (Image #4) показал DAGRE-style output — это и есть реальное поведение.
+
+### Removed
+
+- `prependElkFrontmatter()` + `ELK_FRONTMATTER` константа в `apps/frontend/src/canvas/mermaid-import.ts`. Source теперь проходит в `@tldraw/mermaid.createMermaidDiagram` as-is.
+- Соответствующие тесты в `mermaid-import.test.ts` (3 теста на auto-prepend сценарии заменены 1 регрессионным тестом "source passes through unchanged").
+
+### Docs
+
+- `packages/shemma-mcp/src/workflow/draw-architecture.md` — новая секция "Layout engine: DAGRE only (DRW-093)" с явным указанием что Mermaid import = DAGRE, для ELK output после import — `shemma_layout` / `shemma_layout_selection` (наш elkjs pipeline).
+
+### Tests
+
+- 89 frontend pass / 0 fail (−3 placebo tests, +1 регрессионный).
+- 314 backend + 136 MCP без изменений.
+
+---
+
 ## 0.18.0 — 2026-05-19 — Tidy selection: настоящий subgraph mode + frame anchor container
 
 Hot-fix следующий после 0.17.0 dogfood-сессии. Tidy в 0.17.0 был сломан в primary use case (partial reorg): ELK строил graph на ВСЕХ shapes и потом pin'ил non-selected, поэтому selected перекрывали non-selected; shapes внутри tldraw `frame` вылетали из него. Теперь — true subgraph filter + anchor-frame compound в одном fix-пакете. Закрывает DRW-091 + DRW-092.
