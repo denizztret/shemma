@@ -49,11 +49,21 @@ export function richTextToString(rt: unknown): string {
   return parts.join("");
 }
 
+/**
+ * Returns true if the shape acts as a container (group) in domain context.
+ * Covers: tldraw frame shapes, and geo shapes with meta.role="boundary"
+ * (DRW-084 hotfix: mermaid subgraphs rendered as geo+role=boundary).
+ */
+function isContainerShape(shape: TLRecord): boolean {
+  if (shape.type === "frame") return true;
+  if (shape.type === "geo" && shape.meta?.role === "boundary") return true;
+  return false;
+}
+
 function deriveType(shape: TLRecord): DomainElementType {
-  const t = shape.type;
-  if (t === "frame") return "group";
-  if (t === "arrow") return "connection";
-  if (t === "note") return "note";
+  if (isContainerShape(shape)) return "group";
+  if (shape.type === "arrow") return "connection";
+  if (shape.type === "note") return "note";
   return "shape";
 }
 
@@ -88,13 +98,14 @@ export function buildContext(
   const idToElementId = new Map<string, string>();
   for (const s of shapes) idToElementId.set(s.id, elementIdOf(s));
 
-  // children index: frameId → [elementId, ...]
+  // children index: containerId → [elementId, ...]
+  // Recognises both frame shapes and geo+role=boundary shapes as containers.
   const childrenByFrame = new Map<string, string[]>();
   for (const s of shapes) {
     const pid = s.parentId;
     if (typeof pid !== "string") continue;
     const parent = records[pid];
-    if (!parent || parent.type !== "frame") continue;
+    if (!parent || !isContainerShape(parent as TLRecord)) continue;
     const child = idToElementId.get(s.id);
     if (!child) continue;
     const arr = childrenByFrame.get(pid);

@@ -145,11 +145,13 @@ describe("context view-builder", () => {
     expect(richTextToString({ content: [{ content: [{ text: "hi" }] }] })).toBe("hi");
   });
 
-  // DRW-084: backend integration test — mermaid subgraphs imported as frames
-  // must appear in domain context as type:'group', role:'boundary', children:[ids].
-  // This validates the full pipeline: importMermaid sets meta.role + parentId,
-  // then context.ts buildContext reads frame → group with children.
-  it("DRW-084: mermaid subgraph snapshot → domain context type:group, role:boundary, children", () => {
+  // DRW-084 hotfix: backend integration test — mermaid subgraphs imported as
+  // geo shapes with meta.role="boundary" must appear in domain context as
+  // type:'group', role:'boundary', children:[ids].
+  // Hybrid strategy B: no frame shapes for subgraphs — geo + role=boundary instead.
+  // This validates the full pipeline: importMermaid sets meta.role + parentId on
+  // geo shapes, then context.ts buildContext recognises geo+role=boundary as group.
+  it("DRW-084: mermaid subgraph (geo+role=boundary) → domain context type:group, role:boundary, children", () => {
     // Simulate a snapshot that importMermaid would produce for:
     //   graph TD
     //   subgraph SG1["Layer A"]
@@ -159,15 +161,15 @@ describe("context view-builder", () => {
     //   subgraph SG2["Layer B"]
     //     worker
     //   end
-    // After DRW-084: subgraph shapes are frame type, meta.role="boundary",
-    // child nodes have parentId = subgraph frame shape id.
+    // After DRW-084 hotfix: subgraph shapes are geo type + meta.role="boundary",
+    // child nodes have parentId = subgraph geo shape id.
     const s = baseStore();
 
-    // Subgraph 1 frame
+    // Subgraph 1 — geo + role=boundary
     s.store["shape:sg1"] = {
       id: "shape:sg1",
       typeName: "shape",
-      type: "frame",
+      type: "geo",
       x: 0, y: 0,
       props: {
         w: 300, h: 200,
@@ -176,7 +178,7 @@ describe("context view-builder", () => {
       meta: { didrawName: "layer-a", role: "boundary" },
     } as any;
 
-    // Subgraph 1 children
+    // Subgraph 1 children (parentId = subgraph geo shape id)
     s.store["shape:api"] = {
       id: "shape:api",
       typeName: "shape",
@@ -196,11 +198,11 @@ describe("context view-builder", () => {
       meta: { didrawName: "db" },
     } as any;
 
-    // Subgraph 2 frame
+    // Subgraph 2 — geo + role=boundary
     s.store["shape:sg2"] = {
       id: "shape:sg2",
       typeName: "shape",
-      type: "frame",
+      type: "geo",
       x: 400, y: 0,
       props: {
         w: 200, h: 150,
@@ -222,7 +224,7 @@ describe("context view-builder", () => {
 
     const v = buildContext(s, {});
 
-    // Two subgraph frames must appear as type:group, role:boundary.
+    // Two subgraph geo+boundary shapes must appear as type:group, role:boundary.
     const sg1 = v.elements.find((e) => e.id === "layer-a")!;
     const sg2 = v.elements.find((e) => e.id === "layer-b")!;
 
@@ -244,7 +246,7 @@ describe("context view-builder", () => {
     expect(apiEl.type).toBe("shape");
     expect(apiEl.children).toBeUndefined();
 
-    // Total 5 shapes: 2 frames + 3 children.
+    // Total 5 shapes: 2 geo-containers + 3 children.
     expect(v.elements.length).toBe(5);
   });
 });
