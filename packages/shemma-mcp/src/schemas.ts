@@ -79,6 +79,16 @@ export const ApplyArgs = {
 // preserving user's manual layout edits is a hard product invariant. If a
 // full-replace flow is ever needed, it ships as a separate `shemma_clear_room`
 // tool that requires explicit user confirmation, not a hidden mode flag.
+// DRW-088: selection-aware layout tool.
+// ids — список tldraw shape id'ов ("shape:xxx") или didrawNames.
+// Пустой ids === все shapes → полный layout (эквивалент shemma_layout).
+export const LayoutSelectionArgs = {
+  ids: z.array(z.string()).optional(),
+  mode: LayoutModeEnum.optional(),
+  spacing: SpacingEnum.optional(),
+  room: z.string().optional(),
+};
+
 export const ImportMermaidArgs = {
   source: z.string().min(1),
   room: z.string().optional(),
