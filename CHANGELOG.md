@@ -1,4 +1,4 @@
-## 0.15.0 — TBD — shemma_import_mermaid MCP tool
+## 0.15.0 — 2026-05-19 — shemma_import_mermaid MCP tool
 
 Feature: `shemma_import_mermaid` MCP tool — AI теперь может импортировать Mermaid-диаграммы прямо на canvas без участия пользователя. Реализована через WS command path (option b): backend пересылает frame в открытый browser tab, frontend вызывает `@tldraw/mermaid.createMermaidDiagram`, shapes возвращаются через store-change sync. **Append-only:** инструмент всегда дописывает shapes, никогда не стирает existing canvas state — preserve user's manual layout edits — это hard invariant. Закрывает DRW-083.
 
