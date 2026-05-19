@@ -1,3 +1,36 @@
+## 0.14.3 — 2026-05-19 — Layout spacing + containers + MCP group
+
+Bug-fix релиз: после 0.14.2 (camera + labels) тест на референсной диаграмме InlineAdLoader выявил три проблемы — tight arrow spacing, отсутствие container groups через MCP, frame schema mismatch. Закрывает DRW-079, DRW-080, DRW-072.
+
+### Fixed
+
+- **DRW-079 — Layout spacing.** `packages/shemma-domain/src/layout-modes.ts`: пересмотрены `SPACING_PRESETS` (compact 30/15/50, **normal 60/30/100** — было 40/20/80, loose 100/50/180) под 220x80 default shapes. Добавлены layered-specific опции в `modeToElkOptions` для `layered-lr` / `layered-tb`: `elk.layered.spacing.nodeNodeBetweenLayers` (60/120/200), `edgeNodeBetweenLayers`, `edgeEdgeBetweenLayers` (12/20/32). Plus base `elk.spacing.edgeEdge` и `elk.spacing.edgeLabel` (6/10/14). Не применяется к non-layered modes (mrtree/rectpacking/force).
+- **DRW-080 — Container groups с visible label.** `apps/backend/src/domain/compile.ts:makeFrameShape` — добавлен `color: "black"` в props (tldraw 5.x `TLFrameShapeProps` требует `color` через migration `AddColorProp`; без него `loadSnapshot` падал с `ValidationError`). `apps/frontend/src/canvas/schema-placeholder.ts:backfillStoreRecords` — backfill `color="black"` для legacy frame shapes. Frames с `props.name` отрисовываются как контейнер с заголовком сверху (нативный tldraw frame UI).
+- **DRW-072 — MCP `shemma_group` теперь поддерживает `as`.** `packages/shemma-mcp/src/schemas.ts:GroupArgs` — добавлено optional `as: z.enum(["network", "boundary"])`. `packages/shemma-mcp/src/tools/domain.ts:groupCall` — пробрасывает `as` в action, default `"boundary"` если caller не указал. Раньше любой `shemma_group` падал с `group.as must be network|boundary`.
+
+### Tests
+
+- `packages/shemma-domain/tests/layout-modes.test.ts` — +4 теста (between-layers presence для layered, отсутствие у non-layered, edgeLabel scaling, normal ≥50).
+- `apps/frontend/src/canvas/schema-placeholder.test.ts` — +2 теста (backfill color для frame + idempotent).
+- `packages/shemma-mcp/src/tools/domain.test.ts` — +2 теста (default `as`, passthrough explicit).
+- Итого: 631 backend (+5) + 66 frontend (+2) + 116 MCP (+2).
+
+### Research (DRW-081 / DRW-067)
+
+- **Auto-resize geo shape.** Public API для shrink-to-text в tldraw 5.x **отсутствует**. `editor.shrinkToFit` / `autoSizeShape` не существуют. `onBeforeUpdate` early-exits если richText/font/size unchanged. Текущий `triggerGrowY` (0.14.2 part D) фактически no-op из-за reference-equal props. Работоспособный hack — double-`updateShape` с искусственным изменением size — kludgy. **Mitigated** через увеличенные defaults (DRW-077 220x80). Для длинных multi-line labels рекомендуется Mermaid-first path (DRW-067).
+- **Mermaid-first viable.** Существующий import (`window.shemmaImportMermaid`, ⌘M hotkey) использует `editor.createShape` корректно — tldraw hooks (включая growY) срабатывают. Imported shapes имеют `meta.didrawName` → domain-aware, `shemma_define/connect/layout` работают на mixed схеме. Hybrid workflow (Mermaid bulk + manual incremental) готов к документированию.
+
+### Open issues
+
+- **DRW-082** — Layout не respects группы при ELK pass: в схеме с 2+ frames, дочерние shapes одного из frames оказываются off-screen после `shemma_layout`. Воспроизведено в `inline-ad-final` с `integration` + `UIView`.
+- **Note про MCP cache:** клиенты, открытые до релиза 0.14.3 (Claude Code, Codex), кэшируют MCP schemas от старой версии бинаря — `shemma_group` `as` field появится только после restart MCP session.
+
+### Verification
+
+Manual в комнате `inline-ad-final` (7 нод + 7 связей + 2 frame groups): containers `integration` и `UIView` рендерятся с visible header. Children integration внутри. Children UIView — backend coords корректные внутри frame, render position off-screen (DRW-082). 0 console errors.
+
+---
+
 ## 0.14.2 — 2026-05-19 — UX: camera fit + label sizing
 
 Bug-fix релиз: после 0.14.1 (arrow rendering восстановлен) выяснилось, что viewport не вписывает контент после AI-mutations и длинные labels вылезают за границы shape. Закрывает DRW-075 (camera fit) и DRW-077 (label overflow).
