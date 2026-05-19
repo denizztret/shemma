@@ -125,7 +125,17 @@ export async function startServer(opts: AppOpts = {}) {
           const r = await rooms.get(room);
           // Skip empty batches — keep version monotonic only on real mutations.
           if (isEmptyBatch(msg.changes)) return;
-          r.store = applyStoreChanges(r.store, msg.changes);
+          // DRW-094: defense-in-depth — WS path принимает untrusted client batches;
+          // никакая ошибка в apply не должна ронять daemon, дропаем frame и идём дальше.
+          try {
+            r.store = applyStoreChanges(r.store, msg.changes);
+          } catch (e) {
+            console.warn(
+              `[shemma] dropping malformed user-change batch in room "${room}":`,
+              (e as Error).message,
+            );
+            return;
+          }
           r.didrawIndex = rebuildDidrawIndex(r.store);
           r.version += 1;
           pushOpLog(
