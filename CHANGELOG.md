@@ -1,3 +1,20 @@
+## 0.18.8 — 2026-05-19 — Bundle workflow/*.md в SFE (DRW-063)
+
+PATCH: `shemma_get_instructions` падал с `{"ok":false,"code":"read-error","message":"ENOENT: no such file or directory, open '/$bunfs/root/workflow/overview.md'"}` в released binary. Root cause — `readFileSync(join(HERE, "workflow/..."))` работал в dev (файлы рядом с исходниками), но в SFE `bun build --compile` делает виртуальную ФС `$bunfs/root/...` и workflow/*.md не были embed'нуты.
+
+### Fixed
+
+- **DRW-063 — embed workflow markdown в SFE.** `packages/shemma-mcp/src/resources.ts`: удалён `readFileSync` + `dirname/fileURLToPath`. Добавлены 5 статических `import X from "./workflow/X.md" with { type: "file" }` — Bun-native pattern, позволяет `bun build --compile` embed'ить файлы в virtual FS. `loadWorkflowMarkdown` рефакторена в `async function` с `Bun.file(pointer).text()`.
+- **Error path hardening.** Оба catch-блока (resource callback и tool handler) больше не leak'ают `$bunfs` путь. Ошибка теперь: `{ok:false, code:"instructions-unavailable", message:"workflow asset not bundled — please file an issue"}`.
+- `tools/instructions.ts`: `loadWorkflowMarkdown(topic)` → `await loadWorkflowMarkdown(topic)`.
+
+### Tests
+
+- 142 shemma-mcp pass / 0 fail. Добавлен `describe("loadWorkflowMarkdown")` с `.each(WORKFLOW_TOPICS)` — все 5 топиков читаются и возвращают непустой markdown. Добавлен тест на error path (не leak'ает `$bunfs`).
+- Smoke-test SFE binary: `initialize` + `tools/call shemma_get_instructions` → non-empty markdown (`# Shemma — agent overview\n\n...`), без ENOENT.
+
+---
+
 ## 0.18.7 — 2026-05-19 — Hierarchical layout: childToTopContainer over all shapes (DRW-099 v3)
 
 PATCH: после 0.18.6 user dogfood показал что при Tidy на полной диаграмме (5+ containers + cross-compound edges) layering продолжает идти в случайном порядке (Внешний consumer at top вместо bottom, Оркестрация at bottom вместо top).
