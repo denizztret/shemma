@@ -53,6 +53,12 @@ export function parseClientMessage(
     changes?: unknown;
     clientOpId?: unknown;
     schema?: unknown;
+    requestId?: unknown;
+    ok?: unknown;
+    shape_ids?: unknown;
+    didraw_names?: unknown;
+    root_ids?: unknown;
+    error?: unknown;
   };
   if (
     obj.kind === "hello" &&
@@ -80,6 +86,15 @@ export function parseClientMessage(
     if (typeof o.room !== "string" || o.room === "") return null;
     if (typeof o.focused !== "boolean") return null;
     return { kind: "board-focus", room: o.room, focused: o.focused };
+  }
+  if (obj.kind === "import-mermaid-result") {
+    if (typeof obj.requestId !== "string" || obj.requestId === "") return null;
+    if (typeof obj.ok !== "boolean") return null;
+    const shape_ids = Array.isArray(obj.shape_ids) ? (obj.shape_ids as string[]) : undefined;
+    const didraw_names = Array.isArray(obj.didraw_names) ? (obj.didraw_names as string[]) : undefined;
+    const root_ids = Array.isArray(obj.root_ids) ? (obj.root_ids as string[]) : undefined;
+    const error = typeof obj.error === "string" ? obj.error : undefined;
+    return { kind: "import-mermaid-result", requestId: obj.requestId, ok: obj.ok, shape_ids, didraw_names, root_ids, error } as WsClientMessage;
   }
   return null;
 }

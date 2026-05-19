@@ -47,7 +47,16 @@ export type RoomState = {
 export type WsClientMessage =
   | { kind: "hello"; lastVersion: number; schema?: unknown }
   | { kind: "user-change"; changes: StoreChangeBatch; clientOpId?: string }
-  | { kind: "board-focus"; room: string; focused: boolean };
+  | { kind: "board-focus"; room: string; focused: boolean }
+  | {
+      kind: "import-mermaid-result";
+      requestId: string;
+      ok: boolean;
+      shape_ids?: string[];
+      didraw_names?: string[];
+      root_ids?: string[];
+      error?: string;
+    };
 
 export type WsMessage =
   | { kind: "hello"; version: number }
@@ -64,7 +73,13 @@ export type WsMessage =
   | { kind: "prompt-created"; prompt: Prompt }
   | { kind: "prompt-resolved"; id: string; response?: string }
   | { kind: "prompt-removed"; ids: string[] }
-  | { kind: "ai-activity"; activity: AiActivity | null };
+  | { kind: "ai-activity"; activity: AiActivity | null }
+  | {
+      kind: "import-mermaid";
+      source: string;
+      mode: "append" | "replace";
+      requestId: string;
+    };
 
 export type StoreChangeBus = {
   publish: (
