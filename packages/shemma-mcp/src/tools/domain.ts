@@ -261,11 +261,12 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
         source,
         clientOpId,
       })) as {
-        ok: boolean;
+        ok?: boolean;
         shape_ids?: string[];
         didraw_names?: string[];
         root_ids?: string[];
         error?: string;
+        room_url?: string;
       };
 
       if (resp.ok) {
@@ -279,6 +280,19 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
           root_ids: resp.root_ids ?? [],
         });
       }
+
+      // 503 "no client connected" path: backend ships `room_url` so AI can
+      // open the tab and retry. Surface it both in the structured message
+      // (so AI can read the URL from the text content) and in details.
+      if (resp.room_url) {
+        return toolResult({
+          ok: false,
+          code: "no-client-connected",
+          message: `${resp.error ?? "no client connected"}. Open ${resp.room_url} in a browser, then retry.`,
+          details: { room: resolved.room, room_url: resp.room_url },
+        });
+      }
+
       return toolResult({
         ok: false,
         code: "import-failed",

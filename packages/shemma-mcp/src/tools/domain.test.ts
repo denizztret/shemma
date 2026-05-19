@@ -398,11 +398,21 @@ describe("shemma_import_mermaid tool (DRW-083)", () => {
     expect(r.isError).toBeUndefined();
   });
 
-  it("importMermaid returns error when backend returns 503", async () => {
-    mockFetch(() => ({ body: { error: "no client connected" }, status: 503 }));
+  it("importMermaid surfaces room_url on 503 no-client-connected", async () => {
+    mockFetch(() => ({
+      body: { error: "no client connected", room_url: "http://127.0.0.1:8787/?room=r" },
+      status: 503,
+    }));
     const { handles } = setup({ mode: "direct", room: "r" });
     const r = await handles.importMermaid.call({ source: "graph LR; A-->B" });
-    expect(r.structuredContent).toMatchObject({ ok: false });
+    expect(r.structuredContent).toMatchObject({
+      ok: false,
+      code: "no-client-connected",
+      details: { room_url: "http://127.0.0.1:8787/?room=r" },
+    });
+    // The user-visible message should include the URL so the AI agent can act on it.
+    const sc = r.structuredContent as { message: string };
+    expect(sc.message).toContain("http://127.0.0.1:8787/?room=r");
     expect(r.isError).toBe(true);
   });
 

@@ -4,7 +4,9 @@ export type ShemmaMcpErrorCode =
   | "domain-error"
   | "http-error"
   | "unexpected-error"
-  | "ambiguous-room";
+  | "ambiguous-room"
+  | "no-client-connected"
+  | "import-failed";
 
 export type ShemmaMcpError = {
   ok: false;

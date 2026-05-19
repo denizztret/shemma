@@ -39,7 +39,11 @@ export function importMermaidRoutes(bus: WsHub) {
     const source = body.source;
 
     if (bus.subscriberCount(room) === 0) {
-      return c.json({ error: "no client connected" }, 503);
+      // Build canonical room URL so AI can open the tab and retry. We surface
+      // the request's host (works across profiles/ports) rather than hard-coding.
+      const reqUrl = new URL(c.req.url);
+      const roomUrl = `${reqUrl.protocol}//${reqUrl.host}/?room=${encodeURIComponent(room)}`;
+      return c.json({ error: "no client connected", room_url: roomUrl }, 503);
     }
 
     const requestId = crypto.randomUUID();

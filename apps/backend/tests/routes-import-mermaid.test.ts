@@ -21,18 +21,21 @@ function makeMockSock(opts: {
 type MockSock = Sock & { sent: string[] };
 
 describe("POST /api/agent/import-mermaid", () => {
-  it("returns 503 when no client connected to room", async () => {
+  it("returns 503 with error and room_url when no client connected to room", async () => {
     const { app } = makeApp({ inMemory: true });
     const res = await app.fetch(
-      new Request("http://x/api/agent/import-mermaid?room=empty-room", {
+      new Request("http://127.0.0.1:8787/api/agent/import-mermaid?room=empty-room", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ source: "graph LR; A-->B" }),
       }),
     );
     expect(res.status).toBe(503);
-    const body = await res.json() as { error: string };
+    const body = await res.json() as { error: string; room_url: string };
     expect(body.error).toBe("no client connected");
+    // room_url should reflect the request's host and encoded room name so AI
+    // agents can open the tab and retry.
+    expect(body.room_url).toBe("http://127.0.0.1:8787/?room=empty-room");
   });
 
   it("returns 400 when source is missing", async () => {
