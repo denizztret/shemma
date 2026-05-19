@@ -904,43 +904,59 @@ export async function runLayout(
     }
   }
 
-  // DRW-091 AC#2: when selected shapes are top-level (no anchor frame and no selected containers),
-  // translate ELK output to preserve original centroid. Prevents cluster from jumping to (0,0).
-  // Only applies to subgraph mode. Disabled when selected containers are present (hierarchical pass
-  // computes positions relative to containers which manage their own placement).
-  const selectedContainerCount = isSubgraphMode && affectedIds
-    ? shapes.filter((s) => isContainerShape(s) && affectedIds.has(s.id)).length
-    : 0;
-  if (isSubgraphMode && anchorFrameIds.size === 0 && selectedContainerCount === 0 && affectedIds && affectedIds.size > 0) {
-    const selectedShapes = shapes.filter(
-      (s) => affectedIds.has(s.id) && !pinnedSet.has(s.id) && !isContainerShape(s),
+  // DRW-091 AC#2 / DRW-099 v2: origin preservation для subgraph mode.
+  // Анчоры (centroid baseline) — top-level selected shapes (containers + bare leaves at root).
+  // Anchor frames (children selected, frame НЕ в selection) исключены — они уже stay-put через
+  // override в Pass C. Pinned shapes тоже исключены — у них своя анкоринг.
+  if (isSubgraphMode && affectedIds && affectedIds.size > 0) {
+    const anchorShapes = shapes.filter(
+      (s) =>
+        affectedIds.has(s.id) &&
+        !pinnedSet.has(s.id) &&
+        !anchorFrameIds.has(s.id) &&
+        (s.parentId === "page:page" || !s.parentId),
     );
-    if (selectedShapes.length > 0) {
+    if (anchorShapes.length > 0) {
       let origCX = 0;
       let origCY = 0;
       let elkCX = 0;
       let elkCY = 0;
       let count = 0;
-      for (const s of selectedShapes) {
+      for (const s of anchorShapes) {
         const ob = shapeBounds(s);
         origCX += ob.x + ob.w / 2;
         origCY += ob.y + ob.h / 2;
         const ep = positions[s.id];
         if (ep) {
-          elkCX += ep.x + (ep.w ?? ob.w) / 2;
-          elkCY += ep.y + (ep.h ?? ob.h) / 2;
+          const w = ep.w ?? ob.w;
+          const h = ep.h ?? ob.h;
+          elkCX += ep.x + w / 2;
+          elkCY += ep.y + h / 2;
           count++;
         }
       }
       if (count > 0) {
-        origCX /= selectedShapes.length;
-        origCY /= selectedShapes.length;
+        origCX /= anchorShapes.length;
+        origCY /= anchorShapes.length;
         elkCX /= count;
         elkCY /= count;
         const dx = origCX - elkCX;
         const dy = origCY - elkCY;
+        // В subgraph mode children контейнеров хранятся parent-relative,
+        // их трогать нельзя. Сдвигаем только top-level (parentId=page) shapes
+        // и сами containers, кроме anchor (anchor stays put через override).
+        const containerIds = new Set<string>();
+        for (const s of shapes) if (isContainerShape(s)) containerIds.add(s.id);
         for (const id in positions) {
           if (pinnedSet.has(id)) continue;
+          if (anchorFrameIds.has(id)) continue;
+          const shape = shapes.find((s) => s.id === id);
+          const isTopLevel =
+            !shape ||
+            !shape.parentId ||
+            shape.parentId === "page:page" ||
+            !containerIds.has(shape.parentId);
+          if (!isTopLevel) continue;
           const p = positions[id];
           positions[id] = { ...p, x: p.x + dx, y: p.y + dy };
         }

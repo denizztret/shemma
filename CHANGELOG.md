@@ -1,3 +1,20 @@
+## 0.18.6 — 2026-05-19 — Hierarchical layout: origin preservation (DRW-099 v2)
+
+PATCH: после 0.18.5 hierarchical multi-pass user feedback показал что Tidy "центрирует схему на доске с zoom" — диаграмма прыгает в (0,0) после layout, smart-zoom fire'ил т.к. affected уехали из viewport. Корень — origin preservation была отключена в DRW-099 v1 при наличии selected containers (известное ограничение).
+
+### Fixed
+
+- **DRW-099 v2 — origin preservation для hierarchical layout.** В `apps/backend/src/domain/layout.ts`:
+  - Centroid считается по top-level selected anchor shapes: containers с `parentId=page` + bare leaves at root level (исключая pinned и anchor frames).
+  - Translation `(centroid_orig - centroid_elk)` применяется ТОЛЬКО к top-level positions — children parent-relative coords не трогаются (они уже относительно своего parent'а, translation бы их сломала).
+  - Anchor frames из translation исключены (их позиции override'ятся к original в Pass C).
+
+### Tests
+
+- 321 backend pass / 0 fail. Existing DRW-099 hierarchical тесты остались зелёными (frame.props.h checks, children bounds в parent-relative coords).
+
+---
+
 ## 0.18.5 — 2026-05-19 — Hierarchical multi-pass layout (DRW-099)
 
 PATCH: closes последний dogfood-обнаруженный layout-bug сессии 2026-05-19. После 0.18.3 (DRW-092 v3 anchor-frame-grow) + 0.18.4 (DRW-098 geo+role=boundary recognition) — base case nested compounds лучше, но на сложных диаграммах (Mermaid с 5+ subgraphs + cross-edges + smart-select-all) single-pass ELK с `INCLUDE_CHILDREN` всё ещё линеаризовал всю цепочку leaves через cross-compound edges (user Image #16).
