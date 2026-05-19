@@ -1,3 +1,17 @@
+## 0.18.7 — 2026-05-19 — Hierarchical layout: childToTopContainer over all shapes (DRW-099 v3)
+
+PATCH: после 0.18.6 user dogfood показал что при Tidy на полной диаграмме (5+ containers + cross-compound edges) layering продолжает идти в случайном порядке (Внешний consumer at top вместо bottom, Оркестрация at bottom вместо top).
+
+### Fixed
+
+- **DRW-099 v3 — cross-compound edge remap over all shapes.** При tldraw selection mutex (user селектит frame → его children НЕ в filterToIds), `selectedLeaves` пустой → `childToTopContainer` map пустой → cross-compound edges от child одного frame к child другого дропались в Pass B remap (`rawSrc` и `rawTgt` оба `null` после lookup). ELK layered получал граф БЕЗ edges между containers → arbitrary order disconnected nodes. Fix: `childToTopContainer` теперь строится walk'ом по ВСЕМ shapes; `ascendToTopContainer(id)` поднимается по `parentId` chain до встречи с одним из `topLevelSelectedContainers`. Cross-compound edges корректно remap'ятся → ELK layered даёт правильный порядок (sources at top, sinks at bottom для TD).
+
+### Tests
+
+- 321 backend pass / 0 fail (нет regression). Existing DRW-099 hierarchical тесты уже покрывают cross-compound edge remap — фикс работает для всех existing cases.
+
+---
+
 ## 0.18.6 — 2026-05-19 — Hierarchical layout: origin preservation (DRW-099 v2)
 
 PATCH: после 0.18.5 hierarchical multi-pass user feedback показал что Tidy "центрирует схему на доске с zoom" — диаграмма прыгает в (0,0) после layout, smart-zoom fire'ил т.к. affected уехали из viewport. Корень — origin preservation была отключена в DRW-099 v1 при наличии selected containers (известное ограничение).
