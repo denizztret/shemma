@@ -28,15 +28,37 @@ describe("applyStoreChanges", () => {
     expect(ns.store["shape:a"]).toBeUndefined();
   });
 
-  it("rejects batch with same id in added and removed", () => {
+  // DRW-094: conflicting batch (id одновременно в added и removed) больше не
+  // throws — daemon крашился на normal user interaction (rapid create→delete
+  // arrow → frontend accumulator склеивает события). Natural order operations
+  // (added → updated → removed) даёт removed-wins → net-no-record.
+  it("handles batch with same id in added and removed (removed wins)", () => {
     const s = emptyStore();
-    expect(() =>
-      applyStoreChanges(s, {
-        added: { "shape:a": { id: "shape:a", typeName: "shape" } },
-        updated: {},
-        removed: { "shape:a": { id: "shape:a", typeName: "shape" } },
-      }),
-    ).toThrow(/conflicting/);
+    const ns = applyStoreChanges(s, {
+      added: { "shape:a": { id: "shape:a", typeName: "shape" } },
+      updated: {},
+      removed: { "shape:a": { id: "shape:a", typeName: "shape" } },
+    });
+    expect(ns.store["shape:a"]).toBeUndefined();
+  });
+
+  it("handles binding-style conflicting batch without throwing (DRW-094)", () => {
+    const s = emptyStore();
+    s.store["shape:src"] = { id: "shape:src", typeName: "shape" };
+    s.store["shape:dst"] = { id: "shape:dst", typeName: "shape" };
+    const bindingId = "binding:transient-arrow";
+    const ns = applyStoreChanges(s, {
+      added: {
+        [bindingId]: { id: bindingId, typeName: "binding", fromId: "shape:src", toId: "shape:dst" },
+      },
+      updated: {},
+      removed: {
+        [bindingId]: { id: bindingId, typeName: "binding", fromId: "shape:src", toId: "shape:dst" },
+      },
+    });
+    expect(ns.store[bindingId]).toBeUndefined();
+    expect(ns.store["shape:src"]).toBeDefined();
+    expect(ns.store["shape:dst"]).toBeDefined();
   });
 
   it("is pure — does not mutate input snapshot", () => {

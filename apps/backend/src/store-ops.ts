@@ -20,10 +20,10 @@ export function isEmptyBatch(b: StoreChangeBatch): boolean {
 }
 
 export function applyStoreChanges(s: TLStoreSnapshot, batch: StoreChangeBatch): TLStoreSnapshot {
-  // Sanity: id не может быть одновременно added и removed в одном батче.
-  for (const id in batch.added) {
-    if (id in batch.removed) throw new Error(`conflicting batch: id "${id}" both added and removed`);
-  }
+  // DRW-094: id может встретиться одновременно в added и removed (frontend
+  // accumulator склеивает rapid create→delete события в один WS frame). Раньше
+  // здесь был throw, который ронял daemon на normal user interaction. Natural
+  // order (added → updated → removed) корректно даёт removed-wins → net-no-record.
   const out: Record<string, TLRecord> = { ...s.store };
   for (const id in batch.added) {
     const rec = batch.added[id];
