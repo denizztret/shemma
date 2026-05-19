@@ -761,10 +761,12 @@ async function runLayoutSubgraph(
   if (elkChildren.length === 1) {
     const positions: Positions = {};
     const node = elkChildren[0];
-    const origShape = shapes.find((s) => s.id === node!.id);
-    if (origShape) {
-      const b = shapeBounds(origShape);
-      positions[node!.id] = { x: b.x, y: b.y, w: node!.width, h: node!.height };
+    if (node) {
+      const origShape = shapes.find((s) => s.id === node.id);
+      if (origShape) {
+        const b = shapeBounds(origShape);
+        positions[node.id] = { x: b.x, y: b.y, w: node.width, h: node.height };
+      }
     }
     // Merge Pass A child positions
     for (const [, passARes] of passAResults) {
@@ -873,6 +875,7 @@ export async function runLayout(
 
   if (isSubgraphMode) {
     // DRW-099: hierarchical multi-pass layout
+    // biome-ignore lint/style/noNonNullAssertion: isSubgraphMode guarantees affectedIds is defined
     const result = await runLayoutSubgraph(store, shapes, fullHint, affectedIds!);
     if (!result) {
       return { batch: emptyBatch, affected: [], reason: "elk-error" };
