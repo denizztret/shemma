@@ -77,6 +77,15 @@ function isLayoutCandidate(r: ShapeRec): boolean {
   return r.type !== "arrow";
 }
 
+// DRW-098: container = tldraw frame ИЛИ geo+role=boundary (DRW-084 Mermaid
+// subgraphs рендерятся как geo с meta.role="boundary" а не как frame —
+// layout должен трактовать их как compound contаiner identical to frame).
+function isContainerShape(r: ShapeRec): boolean {
+  if (r.type === "frame") return true;
+  if (r.type === "geo" && r.meta?.role === "boundary") return true;
+  return false;
+}
+
 function isPinned(r: ShapeRec): boolean {
   return r.meta?.pinned === true;
 }
@@ -130,8 +139,8 @@ function buildElkGraph(
   const opts = modeToElkOptions(hint.mode, hint.spacing);
 
   // Partition shapes: frames vs leaves.
-  const frames = shapes.filter((s) => s.type === "frame");
-  const leaves = shapes.filter((s) => s.type !== "frame");
+  const frames = shapes.filter(isContainerShape);
+  const leaves = shapes.filter((s) => !isContainerShape(s));
 
   const includedLeaves = filterToIds
     ? leaves.filter((s) => filterToIds.has(s.id))
@@ -383,7 +392,7 @@ export async function runLayout(
   // output to preserve original centroid. Prevents cluster from jumping to (0,0).
   if (isSubgraphMode && anchorFrameIds.size === 0 && filterToIds && filterToIds.size > 0) {
     const selectedShapes = shapes.filter(
-      (s) => filterToIds.has(s.id) && !pinnedSet.has(s.id) && s.type !== "frame",
+      (s) => filterToIds.has(s.id) && !pinnedSet.has(s.id) && !isContainerShape(s),
     );
     if (selectedShapes.length > 0) {
       let origCX = 0;
@@ -435,7 +444,7 @@ export async function runLayout(
   // обратно в parent-relative для children frame'ов.
   const frameIds = new Set<string>();
   for (const s of shapes) {
-    if (s.type === "frame") frameIds.add(s.id);
+    if (isContainerShape(s)) frameIds.add(s.id);
   }
 
   for (const s of shapes) {
@@ -445,7 +454,7 @@ export async function runLayout(
     // In subgraph mode: только shapes из filterToIds или anchor-frames попадают в batch.
     if (!isAnchor && filterToIds && !filterToIds.has(s.id)) continue;
     const oldB = shapeBounds(s);
-    const isFrame = s.type === "frame";
+    const isFrame = isContainerShape(s);
     const parentIsFrame =
       typeof s.parentId === "string" && frameIds.has(s.parentId);
 
