@@ -716,18 +716,27 @@ async function runLayoutSubgraph(
   const topLevelNodeIds = new Set(elkChildren.map((c) => c.id));
 
   // Map child → its top-level container (if applicable)
+  // DRW-099 v3: populate childToTopContainer из ВСЕХ shapes (не только selected).
+  // Раньше использовали [...selectedLeaves, ...selectedContainers] — но при tldraw
+  // mutex (user селектит frame → его children НЕ в selection) selectedLeaves пустой,
+  // map пустой, cross-compound edges дропаются → ELK получает граф без рёбер →
+  // arbitrary layered order.
   const childToTopContainer = new Map<string, string>();
-  for (const sc of topLevelSelectedContainers) {
-    for (const s of [...selectedLeaves, ...selectedContainers]) {
-      if (s.parentId === sc.id) childToTopContainer.set(s.id, sc.id);
+  const topContainerIds = new Set(topLevelSelectedContainers.map((c) => c.id));
+  const shapeById = new Map(shapes.map((s) => [s.id, s]));
+  const ascendToTopContainer = (shapeId: string): string | null => {
+    let current = shapeById.get(shapeId);
+    let safety = 32;
+    while (current && current.parentId && safety-- > 0) {
+      if (topContainerIds.has(current.parentId)) return current.parentId;
+      current = shapeById.get(current.parentId);
     }
-    // Also nested children through passA results
-    const passARes = passAResults.get(sc.id);
-    if (passARes) {
-      for (const childId of passARes.childPositions.keys()) {
-        childToTopContainer.set(childId, sc.id);
-      }
-    }
+    return null;
+  };
+  for (const s of shapes) {
+    if (topContainerIds.has(s.id)) continue;
+    const top = ascendToTopContainer(s.id);
+    if (top) childToTopContainer.set(s.id, top);
   }
 
   // Build edges remapping child endpoints to their top-level container
