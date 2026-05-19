@@ -6,7 +6,7 @@
 //   - meta.mermaidSource is set on sourceTargetIds, NOT on child shapes.
 //   - meta.didrawName uniquely assigned per-shape across the import.
 //   - DRW-084: subgraph nodes → frame shapes with parentId set on children.
-//   - DRW-084: auto-prepend ELK frontmatter when absent.
+//   - DRW-093: source passes through to createMermaidDiagram unchanged.
 //
 // We mock createMermaidDiagram через monkey-patching the @tldraw/mermaid module
 // доступа в runtime. Editor — минимальный fake без tldraw — только нужный
@@ -388,62 +388,24 @@ describe("unionBoundsOf (DRW-086)", () => {
   });
 });
 
-// --- DRW-084: ELK frontmatter auto-prepend ------------------------------------
+// --- DRW-093: source passes through unchanged ---------------------------------
 
-describe("importMermaid — DRW-084: ELK frontmatter auto-prepend", () => {
-  let capturedSource: string | undefined;
-
-  beforeEach(() => {
-    capturedSource = undefined;
-  });
-
-  function mockMermaidCapture() {
+describe("importMermaid — DRW-093: source passes through unchanged", () => {
+  test("source is not modified before reaching createMermaidDiagram", async () => {
+    const PAGE = "page:page";
+    const editor = makeFakeEditor(PAGE);
+    let capturedSource: string | undefined;
     mock.module("@tldraw/mermaid", () => ({
       createMermaidDiagram: async (ed: any, source: string, _opts: any) => {
         capturedSource = source;
         ed._addShapes([makeShape("n1", "geo", "page:page", "A")]);
       },
     }));
-  }
-
-  test("prepends ELK frontmatter when source has no frontmatter", async () => {
-    const PAGE = "page:page";
-    const editor = makeFakeEditor(PAGE);
-    mockMermaidCapture();
 
     const { importMermaid } = await import("./mermaid-import");
     const bare = "graph TD\nA-->B";
     await importMermaid(editor as never, bare);
 
-    expect(capturedSource).toBeDefined();
-    expect(capturedSource!.startsWith("---\n")).toBe(true);
-    expect(capturedSource!).toContain("layout: elk");
-    expect(capturedSource!).toContain("graph TD\nA-->B");
-  });
-
-  test("does NOT prepend frontmatter when source already has frontmatter", async () => {
-    const PAGE = "page:page";
-    const editor = makeFakeEditor(PAGE);
-    mockMermaidCapture();
-
-    const { importMermaid } = await import("./mermaid-import");
-    const withFm = "---\nconfig:\n  theme: dark\n---\ngraph TD\nA-->B";
-    await importMermaid(editor as never, withFm);
-
-    // Source passed to createMermaidDiagram must be identical (not modified).
-    expect(capturedSource).toBe(withFm);
-  });
-
-  test("does NOT add frontmatter when source starts with whitespace before ---", async () => {
-    const PAGE = "page:page";
-    const editor = makeFakeEditor(PAGE);
-    mockMermaidCapture();
-
-    const { importMermaid } = await import("./mermaid-import");
-    // Mermaid frontmatter must be at line 0, but if user passes `---` at start it's already there.
-    const alreadyHasFm = "---\nconfig:\n  layout: elk\n---\ngraph LR\nA-->B";
-    await importMermaid(editor as never, alreadyHasFm);
-
-    expect(capturedSource).toBe(alreadyHasFm);
+    expect(capturedSource).toBe(bare);
   });
 });
