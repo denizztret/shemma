@@ -91,22 +91,11 @@ export async function importMermaid(
   // DRW-084 AC#6: auto-prepend ELK frontmatter for more compact visual layout.
   const processedSource = prependElkFrontmatter(source);
 
-  // DRW-084: mapNodeToRenderSpec hook — converts subgraph blueprint nodes to
-  // tldraw frame shapes. renderBlueprint will pass parentShapeId for children
-  // automatically (nodes with node.parentId set in blueprint).
-  // biome-ignore lint/suspicious/noExplicitAny: @tldraw/mermaid types
-  const mapNodeToRenderSpec = ({ kind }: { kind: string }): any => {
-    if (kind === "subgraph") {
-      // Return frame shape spec. Props will be merged by defaultCreateMermaidNodeFromBlueprint.
-      return { variant: "shape", type: "frame", props: {} };
-    }
-    // undefined → use library defaults for non-subgraph nodes.
-    return undefined;
-  };
-
-  await mermaidMod.createMermaidDiagram(editor, processedSource, {
-    blueprintRender: { mapNodeToRenderSpec },
-  });
+  // DRW-084 hotfix (hybrid strategy B): no mapNodeToRenderSpec override.
+  // Subgraph nodes render as default geo shapes (library default). The library
+  // sets parentId on children automatically via blueprint node.parentId.
+  // Post-process below detects geo containers by heuristic and tags them.
+  await mermaidMod.createMermaidDiagram(editor, processedSource);
 
   const after = editor.getCurrentPageShapes();
   const newShapes = after.filter(
@@ -135,6 +124,21 @@ export async function importMermaid(
   // переподцепил всё к чему-то pre-existing), не запишем mermaidSource нигде —
   // и это лучше, чем дублировать его на все 50 child-нод.
 
+  // DRW-084 hotfix: detect geo container shapes (subgraphs) by heuristic.
+  // A geo shape is a container if at least one new shape has parentId === this shape's id.
+  // Such shapes get meta.role = "boundary" so that domain context.ts exposes them
+  // as type:"group", role:"boundary". Frame shapes retain same logic for backward compat.
+  const newShapeIds = new Set<string>(
+    newShapes.map((s) => s.id as unknown as string),
+  );
+  const isContainer = (s: TLShape): boolean => {
+    if (s.type !== "geo") return false;
+    return newShapes.some(
+      // biome-ignore lint/suspicious/noExplicitAny: tldraw shape parentId not typed publicly
+      (c) => (c as any).parentId === s.id && newShapeIds.has(c.id as unknown as string),
+    );
+  };
+
   // Назначим meta.didrawName для добавленных shapes. Берём label / shape.type,
   // дедуплицируем суффиксами -2, -3, … per-import. Параллельно — meta.mermaidSource
   // на root frame'ах.
@@ -156,9 +160,9 @@ export async function importMermaid(
       ...s.meta,
       didrawName: candidate,
     };
-    // DRW-084: frame shapes from subgraph import get role="boundary" so that
-    // domain context reader (context.ts) exposes them as type:"group", role:"boundary".
-    if (s.type === "frame") {
+    // DRW-084 hotfix: geo containers (subgraphs) detected by heuristic get role="boundary".
+    // Also handles legacy frame shapes for backward compatibility.
+    if (isContainer(s) || s.type === "frame") {
       meta.role = "boundary";
     }
     if (sourceTargetIds.has(s.id as unknown as string)) {
