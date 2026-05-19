@@ -1,3 +1,21 @@
+## 0.18.4 — 2026-05-19 — Layout: geo+role=boundary распознаются как container (DRW-098)
+
+PATCH следующий за 0.18.3. User dogfood (Image #15): Mermaid-imported диаграмма с nested `subgraph` блоками после Tidy раскладывается в одну горизонтальную линию вместо layered tree.
+
+### Fixed
+
+- **DRW-098 (partial) — layout распознаёт geo+role=boundary как container.** DRW-084 hybrid B рендерит Mermaid subgraphs как `geo + meta.role="boundary"` shapes с children через `parentId` — это semantic containers, но НЕ tldraw `frame`. До этого fix'а `apps/backend/src/domain/layout.ts` проверял только `s.type === "frame"` для container detection → boundary geos и их дети оказывались на одном root level → ELK раскладывал всё линейно. Добавлен helper `isContainerShape` (matches `context.ts` DRW-084 logic): `frame OR (geo + role=boundary)`. Все frame-type checks в layout.ts заменены: frames partition, frameIds set, anchor detection, parent-relative conversion, group bbox writeback. Mermaid subgraphs теперь корректно работают как anchor frames в Tidy selection — children flow inside layered, boundary растёт под содержимое (v3 grow logic).
+
+### Known limitations
+
+- Cases где user удаляет boundary shape с детьми (stale parentId) — отдельная задача DRW-098 AC#1-#4 (ungroup path).
+
+### Tests
+
+- 315 backend pass / 0 fail. Existing frame tests cover behavior (помечены `type:"frame"` в fixtures — те же тесты now also exercise `geo+role=boundary` path implicitly через `isContainerShape`).
+
+---
+
 ## 0.18.3 — 2026-05-19 — Tidy UX: smart zoom + frame anchor grows layered (DRW-096, DRW-092 v3)
 
 Dogfood feedback PATCH из той же сессии что и 0.18.2. Два фикса по UX Tidy:
