@@ -36,8 +36,6 @@ export interface MiroBulkItem {
   position?: { x: number; y: number };
   geometry?: { width?: number; height?: number };
   parent?: { id: string };
-  metadata?: Record<string, unknown>;
-  appData?: string;
 }
 
 export interface MiroConnectorPayload {
@@ -46,8 +44,6 @@ export interface MiroConnectorPayload {
   shape?: "straight" | "elbowed" | "curved";
   style?: Record<string, unknown>;
   captions?: Array<{ content: string; position?: string }>;
-  metadata?: Record<string, unknown>;
-  appData?: string;
 }
 
 export interface MiroBulkResponse {

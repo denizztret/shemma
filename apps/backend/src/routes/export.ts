@@ -5,7 +5,6 @@ import type { Rooms } from "../rooms";
 import { resolveRoomId } from "../rooms";
 import { MiroAuthError, MiroClient, type MiroBoard } from "../export/miro/client";
 import { runMiroExport } from "../export/miro/upload";
-import { VERSION } from "../version";
 
 interface BoardsCacheEntry {
   expiresAt: number;
@@ -18,7 +17,6 @@ const boardsCache = new Map<string, BoardsCacheEntry>();
 export interface ExportRoutesOpts {
   /** Override Miro base URL for tests. Defaults to https://api.miro.com. */
   miroBaseUrl?: string;
-  trackingField?: "metadata" | "appData";
   /** Called per-chunk and after the full export; route caller wires this to persistence. */
   onDirty?: (room: string, state: import("../types").RoomState) => void;
 }
@@ -84,9 +82,6 @@ export function exportRoutes(rooms: Rooms, opts: ExportRoutesOpts = {}) {
           boardId: body.boardId,
           boardName: body.boardName,
           selection,
-          trackingField: opts.trackingField ?? "metadata",
-          shemmaRoom: rv.id,
-          shemmaVersion: VERSION.version,
           onCommit: (r) => {
             r.dirty = true;
             opts.onDirty?.(rv.id, r);

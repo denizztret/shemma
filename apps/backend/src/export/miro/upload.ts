@@ -7,7 +7,6 @@ import {
   buildStickyNotePayload,
   buildTextPayload,
   expandGroups,
-  type TrackingField,
 } from "./builder";
 import { MiroAuthError, MiroNotFoundError, MiroRateLimitError } from "./client";
 import type { MiroBulkItem, MiroClient, MiroConnectorPayload } from "./client";
@@ -24,9 +23,6 @@ export interface RunExportParams {
   boardName?: string;
   /** Element ids selected for export. Groups will be expanded. */
   selection: string[];
-  trackingField: TrackingField;
-  shemmaRoom: string;
-  shemmaVersion: string;
   /** Called after each commitBoardExport. Flush persistence here for partial-commit safety. */
   onCommit?: (room: RoomState) => void;
 }
@@ -125,10 +121,6 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
         const item = buildFramePayload(s, {
           miroX: pos.x,
           miroY: pos.y,
-          trackingField: p.trackingField,
-          elementId: id,
-          shemmaRoom: p.shemmaRoom,
-          shemmaVersion: p.shemmaVersion,
         });
         item.geometry = { width: pos.w, height: pos.h };
         return { id, item };
@@ -184,10 +176,6 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
         const ctx = {
           miroX, miroY,
           parentMiroId,
-          trackingField: p.trackingField,
-          elementId: id,
-          shemmaRoom: p.shemmaRoom,
-          shemmaVersion: p.shemmaVersion,
         };
         let item: MiroBulkItem;
         if (s.type === "note") item = buildStickyNotePayload(s, ctx);
@@ -254,9 +242,6 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
     const r = buildConnectorPayload(s, {
       store,
       passAMap,
-      trackingField: p.trackingField,
-      shemmaRoom: p.shemmaRoom,
-      shemmaVersion: p.shemmaVersion,
     });
     if (r.kind === "skip") {
       skipped.push({ elementId: id, reason: r.reason });

@@ -4,46 +4,10 @@ import { nearestShapeColor, nearestStickyColor } from "./color-mapping";
 import type { RawShape } from "./coords";
 import { richTextToPlain } from "./rich-text";
 
-export type TrackingField = "metadata" | "appData";
-
-export interface TrackingMeta {
-  shemmaId: string;
-  shemmaRoom: string;
-  exportedAt: string;
-  shemmaVersion: string;
-}
-
 export interface BuilderCtx {
   miroX: number;
   miroY: number;
   parentMiroId?: string;
-  trackingField: TrackingField;
-  elementId: string;
-  shemmaRoom: string;
-  shemmaVersion: string;
-}
-
-// NOTE: Miro REST v2 ignores unknown fields on shape/connector create.
-// We still populate metadata/appData for shemma's own tracking state.
-function attachTracking(
-  item: { metadata?: Record<string, unknown>; appData?: string },
-  field: TrackingField,
-  meta: TrackingMeta,
-): void {
-  if (field === "metadata") {
-    item.metadata = { ...meta };
-  } else {
-    item.appData = JSON.stringify(meta);
-  }
-}
-
-function buildTracking(ctx: BuilderCtx): TrackingMeta {
-  return {
-    shemmaId: ctx.elementId,
-    shemmaRoom: ctx.shemmaRoom,
-    exportedAt: new Date().toISOString(),
-    shemmaVersion: ctx.shemmaVersion,
-  };
 }
 
 const GEO_TO_MIRO: Record<string, string> = {
@@ -101,7 +65,6 @@ export function buildShapePayload(shape: RawShape, ctx: BuilderCtx): MiroBulkIte
     geometry: { width: w, height: h },
   };
   if (ctx.parentMiroId) item.parent = { id: ctx.parentMiroId };
-  attachTracking(item, ctx.trackingField, buildTracking(ctx));
   return item;
 }
 
@@ -125,7 +88,6 @@ export function buildStickyNotePayload(shape: RawShape, ctx: BuilderCtx): MiroBu
     geometry: { width: w, height: h },
   };
   if (ctx.parentMiroId) item.parent = { id: ctx.parentMiroId };
-  attachTracking(item, ctx.trackingField, buildTracking(ctx));
   return item;
 }
 
@@ -142,7 +104,6 @@ export function buildTextPayload(shape: RawShape, ctx: BuilderCtx): MiroBulkItem
     geometry: { width: w },
   };
   if (ctx.parentMiroId) item.parent = { id: ctx.parentMiroId };
-  attachTracking(item, ctx.trackingField, buildTracking(ctx));
   return item;
 }
 
@@ -163,7 +124,6 @@ export function buildFramePayload(shape: RawShape, ctx: BuilderCtx): MiroBulkIte
     position: { x: ctx.miroX, y: ctx.miroY },
     geometry: { width: w, height: h },
   };
-  attachTracking(item, ctx.trackingField, buildTracking(ctx));
   return item;
 }
 
@@ -247,9 +207,6 @@ export function expandGroups(
 export interface ConnectorBuilderCtx {
   store: Record<string, RawShape>;
   passAMap: Map<string, string>;
-  trackingField: TrackingField;
-  shemmaRoom: string;
-  shemmaVersion: string;
 }
 
 export type ConnectorBuildResult =
@@ -287,11 +244,5 @@ export function buildConnectorPayload(
     style: {},
     ...(captions ? { captions } : {}),
   };
-  attachTracking(payload, ctx.trackingField, {
-    shemmaId: arrow.id,
-    shemmaRoom: ctx.shemmaRoom,
-    exportedAt: new Date().toISOString(),
-    shemmaVersion: ctx.shemmaVersion,
-  });
   return { kind: "ok", payload };
 }

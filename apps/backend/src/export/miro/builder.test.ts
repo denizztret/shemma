@@ -12,8 +12,6 @@ import {
 } from "./builder";
 import type { RawShape } from "./coords";
 
-const TRACKING_FIELD = "metadata"; // toggled by Task 1 probe
-
 function makeShape(props: Partial<RawShape>): RawShape {
   return {
     id: "shape:default",
@@ -63,10 +61,6 @@ describe("buildShapePayload — geo rectangle", () => {
     const payload = buildShapePayload(s, {
       miroX: -50,
       miroY: -25,
-      trackingField: TRACKING_FIELD,
-      elementId: "shape:a",
-      shemmaRoom: "default",
-      shemmaVersion: "0.19.0",
     });
     expect(payload.type).toBe("shape");
     expect(payload.data?.shape).toBe("rectangle");
@@ -75,40 +69,12 @@ describe("buildShapePayload — geo rectangle", () => {
     expect(payload.geometry).toEqual({ width: 100, height: 50 });
   });
 
-  it("attaches tracking via configured field (metadata or appData)", () => {
-    const s = makeShape({ id: "shape:track" });
-    const p = buildShapePayload(s, {
-      miroX: 0,
-      miroY: 0,
-      trackingField: "metadata",
-      elementId: "shape:track",
-      shemmaRoom: "default",
-      shemmaVersion: "0.19.0",
-    });
-    expect(p.metadata?.shemmaId).toBe("shape:track");
-
-    const p2 = buildShapePayload(s, {
-      miroX: 0,
-      miroY: 0,
-      trackingField: "appData",
-      elementId: "shape:track",
-      shemmaRoom: "default",
-      shemmaVersion: "0.19.0",
-    });
-    expect(typeof p2.appData).toBe("string");
-    expect(JSON.parse(p2.appData!).shemmaId).toBe("shape:track");
-  });
-
   it("when parent.id set: position is interpreted as frame-relative by caller (builder passes through)", () => {
     const s = makeShape({ id: "shape:child", parentId: "shape:frame" });
     const p = buildShapePayload(s, {
       miroX: 10,
       miroY: 10,
       parentMiroId: "miro-frame-1",
-      trackingField: TRACKING_FIELD,
-      elementId: "shape:child",
-      shemmaRoom: "default",
-      shemmaVersion: "0.19.0",
     });
     expect(p.parent?.id).toBe("miro-frame-1");
   });
@@ -129,10 +95,6 @@ describe("buildStickyNotePayload", () => {
     const p = buildStickyNotePayload(s, {
       miroX: 0,
       miroY: 0,
-      trackingField: TRACKING_FIELD,
-      elementId: "shape:n",
-      shemmaRoom: "default",
-      shemmaVersion: "0.19.0",
     });
     expect(p.type).toBe("sticky_note");
     expect(p.data?.content).toBe("Note");
@@ -154,10 +116,6 @@ describe("buildTextPayload", () => {
     const p = buildTextPayload(s, {
       miroX: 0,
       miroY: 0,
-      trackingField: TRACKING_FIELD,
-      elementId: "shape:t",
-      shemmaRoom: "default",
-      shemmaVersion: "0.19.0",
     });
     expect(p.type).toBe("text");
     expect(p.data?.content).toBe("Hi");
@@ -174,10 +132,6 @@ describe("buildFramePayload", () => {
     const p = buildFramePayload(s, {
       miroX: 0,
       miroY: 0,
-      trackingField: TRACKING_FIELD,
-      elementId: "shape:f",
-      shemmaRoom: "default",
-      shemmaVersion: "0.19.0",
     });
     expect(p.type).toBe("frame");
     expect(p.data?.title).toBe("Boundary A");
@@ -316,9 +270,6 @@ describe("buildConnectorPayload", () => {
     const result = buildConnectorPayload(arrow, {
       store,
       passAMap,
-      trackingField: TRACKING_FIELD,
-      shemmaRoom: "default",
-      shemmaVersion: "0.19.0",
     });
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
@@ -334,9 +285,6 @@ describe("buildConnectorPayload", () => {
     const result = buildConnectorPayload(arrow, {
       store: { [arrow.id]: arrow },
       passAMap: new Map(),
-      trackingField: TRACKING_FIELD,
-      shemmaRoom: "default",
-      shemmaVersion: "0.19.0",
     });
     expect(result.kind).toBe("skip");
     if (result.kind === "skip") {
@@ -360,7 +308,7 @@ describe("buildConnectorPayload", () => {
     // passAMap has only shape:A — shape:C is outside selection
     const passAMap = new Map([["shape:A", "miro-A"]]);
     const result = buildConnectorPayload(arrow, {
-      store, passAMap, trackingField: TRACKING_FIELD, shemmaRoom: "default", shemmaVersion: "0.19.0",
+      store, passAMap,
     });
     expect(result.kind).toBe("skip");
     if (result.kind === "skip") {

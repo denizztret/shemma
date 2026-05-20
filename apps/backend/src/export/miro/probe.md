@@ -4,6 +4,12 @@
 
 ---
 
+## DECISIONS APPLIED
+
+> 2026-05-20 review: attachTracking removed from builder per spec §10.2 — Miro payloads no longer carry metadata/appData. Tracking remains client-side via room.meta.miroExports.
+
+---
+
 ## STATUS
 
 Live API probe (scripts/probe-miro.sh) is **deferred** — user did not provide a Miro developer token during this session. All findings below are derived from **static analysis** of:

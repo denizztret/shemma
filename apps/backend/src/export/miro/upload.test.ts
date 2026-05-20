@@ -85,9 +85,6 @@ describe("runMiroExport — happy path (5 shapes + 3 connectors, no frame)", () 
         room,
         boardId: "B1",
         selection: ["shape:a", "shape:b", "shape:c", "shape:d", "shape:e", "shape:ab", "shape:cd", "shape:de"],
-        trackingField: "metadata",
-        shemmaRoom: "default",
-        shemmaVersion: "0.19.0",
       });
 
       expect(result.itemsCreated).toBe(5);
@@ -118,7 +115,6 @@ describe("runMiroExport — Pass A1 / A2 split with frame + children", () => {
       const result = await runMiroExport({
         client, room, boardId: "B1",
         selection: ["shape:F", "shape:child1", "shape:child2"],
-        trackingField: "metadata", shemmaRoom: "default", shemmaVersion: "0.19.0",
       });
 
       const bulkCalls = mock.requests.filter((r) => r.path.endsWith("/items/bulk"));
@@ -150,7 +146,6 @@ describe("runMiroExport — connector skipping", () => {
       const result = await runMiroExport({
         client, room, boardId: "B1",
         selection: ["shape:a", "shape:lone"],
-        trackingField: "metadata", shemmaRoom: "default", shemmaVersion: "0.19.0",
       });
       expect(result.skipped).toEqual([{ elementId: "shape:lone", reason: "unsupported-type" }]);
       expect(result.connectorsCreated).toBe(0);
@@ -172,7 +167,6 @@ describe("runMiroExport — connector skipping", () => {
       const result = await runMiroExport({
         client, room, boardId: "B1",
         selection: ["shape:a", "shape:arr"], // shape:b excluded
-        trackingField: "metadata", shemmaRoom: "default", shemmaVersion: "0.19.0",
       });
       expect(result.skipped).toContainEqual({ elementId: "shape:arr", reason: "cross-selection-connector" });
     } finally {
@@ -194,7 +188,6 @@ describe("runMiroExport — group selection expansion", () => {
       const result = await runMiroExport({
         client, room, boardId: "B1",
         selection: ["shape:g"],
-        trackingField: "metadata", shemmaRoom: "default", shemmaVersion: "0.19.0",
       });
       expect(result.itemsCreated).toBe(3);
     } finally {
@@ -218,7 +211,6 @@ describe("runMiroExport — tracking persistence", () => {
       await runMiroExport({
         client, room, boardId: "B1", boardName: "B One",
         selection: ["shape:a", "shape:b", "shape:ab"],
-        trackingField: "metadata", shemmaRoom: "default", shemmaVersion: "0.19.0",
         onCommit: () => commitCalls.push(Date.now()),
       });
       const tracking = room.meta?.miroExports?.["B1"];
@@ -248,7 +240,6 @@ describe("runMiroExport — tracking persistence", () => {
       await runMiroExport({
         client, room, boardId: "B1",
         selection: ["shape:F", "shape:c1", "shape:c2", "shape:arr"],
-        trackingField: "metadata", shemmaRoom: "default", shemmaVersion: "0.19.0",
         onCommit: () => { commitCount += 1; },
       });
       // A1 (1) + A2 chunk (1) + Pass B (1) = 3.
@@ -297,7 +288,6 @@ describe("runMiroExport — Pass A2 validation errors → per-chunk skip", () =>
       const result = await runMiroExport({
         client, room, boardId: "B1",
         selection: ids,
-        trackingField: "metadata", shemmaRoom: "default", shemmaVersion: "0.19.0",
       });
 
       // First chunk: 50 items skipped with validation-error.
@@ -343,7 +333,6 @@ describe("runMiroExport — partial commit when Pass A2 fatally aborts", () => {
       const result = await runMiroExport({
         client, room, boardId: "B1",
         selection: ["shape:F", "shape:c"],
-        trackingField: "metadata", shemmaRoom: "default", shemmaVersion: "0.19.0",
         onCommit: (r) => {
           // Snapshot how many items are tracked at each commit point.
           commitSnapshots.push(Object.keys(r.meta?.miroExports?.["B1"]?.items ?? {}).length);
