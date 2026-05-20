@@ -166,11 +166,12 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
         let miroX = pos.x;
         let miroY = pos.y;
         if (parentMiroId && s.parentId) {
-          // Subtract parent's miro center from absolute centroid-translated coords.
-          const parentPos = miroPos(s.parentId);
-          if (parentPos) {
-            miroX = pos.x - parentPos.x;
-            miroY = pos.y - parentPos.y;
+          // Miro: child position is `relativeTo: "parent_top_left"`. We compute
+          // child page-center − parent page-top-left = child offset inside frame.
+          const parentBounds = resolvePageBounds(s.parentId, store);
+          if (parentBounds) {
+            miroX = (pos.x + centroid.x) - parentBounds.x;
+            miroY = (pos.y + centroid.y) - parentBounds.y;
           }
         }
         const ctx = {
