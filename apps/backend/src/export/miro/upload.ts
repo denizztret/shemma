@@ -84,11 +84,38 @@ function classify(
   return { frames, items, arrows, unsupported };
 }
 
+function expandFrameDescendants(
+  ids: string[],
+  store: Record<string, RawShape>,
+): string[] {
+  const out = new Set(ids);
+  function walk(parentId: string): void {
+    for (const cid in store) {
+      const c = store[cid];
+      if (c?.typeName !== "shape") continue;
+      if (c.parentId !== parentId) continue;
+      if (out.has(cid)) continue;
+      out.add(cid);
+      walk(cid);
+    }
+  }
+  for (const id of ids) {
+    const s = store[id];
+    if (!s) continue;
+    const isFrame = s.type === "frame" || s.meta?.role === "boundary";
+    if (isFrame) walk(id);
+  }
+  return Array.from(out);
+}
+
 export async function runMiroExport(p: RunExportParams): Promise<RunExportResult> {
   const skipped: SkippedItem[] = [];
   const store = p.room.store.store as Record<string, RawShape>;
 
-  const expanded = expandGroups(p.selection, store);
+  // Tldraw Cmd+A excludes frame children due to selection mutex. We bring them
+  // back so the user's exported frame isn't an empty container in Miro.
+  const withFrameChildren = expandFrameDescendants(p.selection, store);
+  const expanded = expandGroups(withFrameChildren, store);
   const { frames, items, arrows, unsupported } = classify(expanded, store);
   for (const u of unsupported) skipped.push({ elementId: u, reason: "unsupported-type" });
 
