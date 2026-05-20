@@ -122,8 +122,8 @@ describe("POST /api/export/miro — happy path", () => {
       if (u.pathname.endsWith("/items/bulk")) {
         bulkCount += 1;
         if (bulkCount === 1) {
-          const body = (await req.json()) as { data: unknown[] };
-          return new Response(JSON.stringify({ data: body.data.map((_, i) => ({ id: `f-${i}` })) }), { status: 201 });
+          const items = (await req.json()) as unknown[];
+          return new Response(JSON.stringify({ data: items.map((_, i) => ({ id: `f-${i}` })) }), { status: 201 });
         }
         return new Response("{\"message\":\"unauthorized\"}", { status: 401 });
       }

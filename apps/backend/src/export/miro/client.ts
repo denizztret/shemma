@@ -134,7 +134,7 @@ export class MiroClient {
     return this.request<MiroBulkResponse>(
       "POST",
       `/v2/boards/${encoded}/items/bulk`,
-      { data: items },
+      items,
     );
   }
 

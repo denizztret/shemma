@@ -9,7 +9,7 @@ import type { RawShape } from "./coords";
  * Returns the recorded request log + ephemeral baseUrl.
  */
 function startMockMiro(opts: {
-  bulkResponder?: (body: { data: unknown[] }) => unknown[];
+  bulkResponder?: (items: unknown[]) => unknown[];
   connectorResponder?: (body: unknown) => unknown;
   rateLimitFirstN?: number;
 } = {}) {
@@ -26,9 +26,9 @@ function startMockMiro(opts: {
         return new Response("{}", { status: 429 });
       }
       if (url.pathname.endsWith("/items/bulk")) {
-        const data = (body as { data: unknown[] }).data;
-        const responder = opts.bulkResponder ?? ((b) => b.data.map((_, i) => ({ id: `m-${requests.length}-${i}` })));
-        return new Response(JSON.stringify({ data: responder({ data }) }), { status: 201 });
+        const items = body as unknown[];
+        const responder = opts.bulkResponder ?? ((arr) => arr.map((_, i) => ({ id: `m-${requests.length}-${i}` })));
+        return new Response(JSON.stringify({ data: responder(items) }), { status: 201 });
       }
       if (url.pathname.endsWith("/connectors")) {
         const responder = opts.connectorResponder ?? ((_b) => ({ id: `c-${requests.length}` }));
@@ -120,9 +120,9 @@ describe("runMiroExport — Pass A1 / A2 split with frame + children", () => {
       const bulkCalls = mock.requests.filter((r) => r.path.endsWith("/items/bulk"));
       expect(bulkCalls).toHaveLength(2); // A1 (frame) + A2 (children)
 
-      const a1Body = (bulkCalls[0].body as { data: Array<{ type: string }> }).data;
+      const a1Body = bulkCalls[0].body as Array<{ type: string }>;
       expect(a1Body.every((it) => it.type === "frame")).toBe(true);
-      const a2Body = (bulkCalls[1].body as { data: Array<{ type: string; parent?: { id: string } }> }).data;
+      const a2Body = bulkCalls[1].body as Array<{ type: string; parent?: { id: string } }>;
       expect(a2Body.every((it) => it.type !== "frame")).toBe(true);
       expect(a2Body.every((it) => it.parent?.id !== undefined)).toBe(true);
 
@@ -261,12 +261,12 @@ describe("runMiroExport — Pass A2 validation errors → per-chunk skip", () =>
         const url = new URL(req.url);
         if (url.pathname.endsWith("/items/bulk")) {
           bulkCount += 1;
-          const body = (await req.json()) as { data: Array<{ type: string }> };
+          const items = (await req.json()) as Array<{ type: string }>;
           if (bulkCount === 1) {
             return new Response("{\"message\":\"validation\"}", { status: 422 });
           }
           return new Response(
-            JSON.stringify({ data: body.data.map((_, i) => ({ id: `m-${bulkCount}-${i}` })) }),
+            JSON.stringify({ data: items.map((_, i) => ({ id: `m-${bulkCount}-${i}` })) }),
             { status: 201 },
           );
         }
@@ -277,8 +277,8 @@ describe("runMiroExport — Pass A2 validation errors → per-chunk skip", () =>
       const room = makeRoomState();
       const store = room.store.store as Record<string, RawShape>;
       const ids: string[] = [];
-      // 51 leaf shapes → 2 chunks (50 + 1) when BULK_CHUNK_SIZE = 50.
-      for (let i = 0; i < 51; i += 1) {
+      // 21 leaf shapes → 2 chunks (20 + 1) when BULK_CHUNK_SIZE = 20.
+      for (let i = 0; i < 21; i += 1) {
         const id = `shape:i${i}`;
         store[id] = geoShape(id, i * 10, 0);
         ids.push(id);
@@ -290,9 +290,9 @@ describe("runMiroExport — Pass A2 validation errors → per-chunk skip", () =>
         selection: ids,
       });
 
-      // First chunk: 50 items skipped with validation-error.
+      // First chunk: 20 items skipped with validation-error.
       const skippedValidation = result.skipped.filter((s) => s.reason === "validation-error");
-      expect(skippedValidation.length).toBe(50);
+      expect(skippedValidation.length).toBe(20);
       // Second chunk: 1 item created.
       expect(result.itemsCreated).toBe(1);
       expect(result.error).toMatch(/pass-a2 validation errors/);
@@ -311,12 +311,10 @@ describe("runMiroExport — partial commit when Pass A2 fatally aborts", () => {
         const url = new URL(req.url);
         if (url.pathname.endsWith("/items/bulk")) {
           bulkCount += 1;
-          const body = (await req.json()) as { data: Array<{ type: string }> };
+          const items = (await req.json()) as Array<{ type: string }>;
           if (bulkCount === 1) {
-            // A1 succeeds
-            return new Response(JSON.stringify({ data: body.data.map((_, i) => ({ id: `f-${i}` })) }), { status: 201 });
+            return new Response(JSON.stringify({ data: items.map((_, i) => ({ id: `f-${i}` })) }), { status: 201 });
           }
-          // A2 hits auth error → fatal, abort pass
           return new Response("{\"message\":\"unauthorized\"}", { status: 401 });
         }
         return new Response("{}", { status: 200 });

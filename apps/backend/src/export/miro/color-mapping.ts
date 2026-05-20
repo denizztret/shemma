@@ -1,8 +1,9 @@
 export type RGB = [number, number, number];
 
 /**
- * 17 Miro shape fillColor preset hex values.
- * Source: Miro Node.js SDK shapeStyleForCreate.ts, captured 2026-05-20.
+ * Miro shape palette — UI swatch colors. Documentary only.
+ * Live probe (2026-05-20) confirmed Miro REST v2 accepts arbitrary hex
+ * for shape style.fillColor; `nearestShapeColor` is therefore identity.
  */
 export const SHAPE_PRESETS: Array<{ hex: string; rgb: RGB }> = [
   { hex: "#ffffff", rgb: [255, 255, 255] }, // White (default)
@@ -74,17 +75,8 @@ function euclidean(a: RGB, b: RGB): number {
 }
 
 export function nearestShapeColor(hex: string): string {
-  const rgb = parseHex(hex);
-  let best = SHAPE_PRESETS[0];
-  let bestDist = euclidean(rgb, best.rgb);
-  for (let i = 1; i < SHAPE_PRESETS.length; i++) {
-    const d = euclidean(rgb, SHAPE_PRESETS[i].rgb);
-    if (d < bestDist) {
-      bestDist = d;
-      best = SHAPE_PRESETS[i];
-    }
-  }
-  return best.hex;
+  const [r, g, b] = parseHex(hex);
+  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
 }
 
 export function nearestStickyColor(hex: string): string {

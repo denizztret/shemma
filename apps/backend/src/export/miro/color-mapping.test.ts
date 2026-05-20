@@ -75,18 +75,15 @@ describe("nearestShapeColor — edge cases", () => {
     expect(() => nearestShapeColor("#ffff")).toThrow();
   });
 
-  it("property: 200 random hex inputs always return ∈ SHAPE_PRESETS", () => {
-    if (SHAPE_PRESETS.length === 0) {
-      return;
-    }
-    const presetHexes = new Set(SHAPE_PRESETS.map((p) => p.hex));
+  it("property: 200 random hex inputs return normalized lowercase #rrggbb", () => {
     for (let i = 0; i < 200; i++) {
       const r = Math.floor(Math.random() * 256);
       const g = Math.floor(Math.random() * 256);
       const b = Math.floor(Math.random() * 256);
       const hex = `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
       const out = nearestShapeColor(hex);
-      expect(presetHexes.has(out)).toBe(true);
+      expect(out).toMatch(/^#[0-9a-f]{6}$/);
+      expect(out).toBe(hex);
     }
   });
 });

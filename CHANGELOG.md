@@ -1,3 +1,31 @@
+## 0.19.1 — 2026-05-20 — Miro export hot-patch (live probe findings)
+
+PATCH: live probe против реального Miro API (board `uXjVHQqmFVo=`) обнаружил 3 расхождения с SDK-derived assumptions в 0.19.0. Без этих fix'ов Miro export feature НЕ работает в production.
+
+### Fixed (post-probe)
+
+- **`/items/bulk` request body format** — endpoint ожидает raw JSON array `[...]`, а не `{data: [...]}` wrapper (`apps/backend/src/export/miro/client.ts:bulkItems`). Без fix: 400 на каждый bulk POST с error `"Unexpected type of value, expected of type [Object]"`. Response shape `{data: [...], type: "bulk-list"}` остаётся parsed correctly.
+- **`BULK_CHUNK_SIZE` 50 → 20** (`apps/backend/src/export/miro/upload.ts`). Miro вернул `400: At most 20 items could be created with a single request` на bulk с 60 items. Все chunks > 20 fail'ились. Test fixture updated (51 shapes → 21 shapes, expect 20 skipped + 1 created).
+- **`nearestShapeColor` упрощён до identity** (`apps/backend/src/export/miro/color-mapping.ts`). Live probe принял arbitrary hex `#abcdef` без enum-error — Miro REST v2 не ограничивает `style.fillColor` 17 preset'ами (initial SDK-source analysis был overconservative). Pass-through сохраняет original user colors instead of snap'а к ближайшему swatch. Sticky notes остаются limited 16 named enum (`nearestStickyColor` без изменений).
+
+### Confirmed (без изменений)
+
+- `metadata` / `appData` fields rejected by Miro REST v2 with 400 (`"Field [metadata] is not supported"`). Уже было исправлено в 0.19.0 post-review fix — tracking client-side only в `room.meta.miroExports`.
+
+### Verified
+
+- Probe file: `apps/backend/src/export/miro/probe.md` содержит full raw Miro responses + DECISIONS APPLIED section.
+- Backend suite: **444 pass / 0 fail** (тесты адаптированы для нового bulk format + chunk size = 20).
+
+### Files
+
+- Modified: `apps/backend/src/export/miro/{client,upload,color-mapping,probe.md}.ts`
+- Modified: `apps/backend/src/export/miro/{client,upload,integration}.test.ts` + `apps/backend/src/routes/export.test.ts` + `apps/backend/src/export/miro/color-mapping.test.ts` (property test rewritten — now asserts normalized `#rrggbb` format вместо ∈ `SHAPE_PRESETS`).
+- Modified: spec §4.2 + §6.2 inline.
+- Modified: `package.json`, `packages/shemma-cli/package.json`, `packages/shemma-mcp/package.json` → `0.19.1`.
+
+---
+
 ## 0.19.0 — 2026-05-20 — Export selection → Miro (DRW-103)
 
 MINOR feature: structural export выбранных shapes из tldraw canvas в Miro board через REST API v2. Hotkey, context menu, MCP tool, CLI config subcommand. Backend-proxy architecture (token остаётся в daemon, не в browser).
