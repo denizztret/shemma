@@ -1,8 +1,11 @@
 // apps/backend/src/envelope.ts
 import { config } from "./config";
 import type { StoreOpLogEntry, TLStoreSnapshot } from "./store-types";
-import type { Prompt, RoomState } from "./types";
+import type { Prompt, RoomMeta, RoomState } from "./types";
 
+// Schema v3 extension policy (since 0.19.0, DRW-103):
+// - Additive optional fields (например `meta?: RoomMeta`) НЕ бампят SCHEMA_VERSION.
+// - Required fields / shape changes к existing fields — bump до v4 + migrate-v3.ts.
 export const ENVELOPE_SCHEMA_VERSION = 3;
 export const SUPPORTED_SCHEMA_VERSIONS = [2, 3] as const; // 2 для migrator; runtime читает 3.
 
@@ -25,6 +28,8 @@ export type EnvelopeV3 = EnvelopeHeader & {
   linkedSession?: string;
   // DRW-033: workspace directory, stored optionally (additive, doesn't break existing v3).
   projectDir?: string;
+  // DRW-103: room metadata extension (additive optional, no schema bump).
+  meta?: RoomMeta;
 };
 
 export type ExportEnvelope = EnvelopeV3 & { exportedAt: string };
@@ -49,6 +54,7 @@ function buildV3(roomId: string, s: RoomState): EnvelopeV3 {
   };
   if (s.linkedSession !== undefined) env.linkedSession = s.linkedSession;
   if (s.projectDir !== undefined) env.projectDir = s.projectDir;
+  if (s.meta !== undefined) env.meta = s.meta;
   return env;
 }
 
@@ -132,6 +138,9 @@ export function parseFull(raw: string): EnvelopeV3 {
   };
   if (typeof j.linkedSession === "string") parsed.linkedSession = j.linkedSession;
   if (typeof j.projectDir === "string") parsed.projectDir = j.projectDir;
+  if (j.meta !== undefined && typeof j.meta === "object" && j.meta !== null) {
+    parsed.meta = j.meta as RoomMeta;
+  }
   return parsed;
 }
 
