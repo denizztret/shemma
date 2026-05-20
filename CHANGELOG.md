@@ -1,3 +1,31 @@
+## 0.20.0 — 2026-05-20 — Frame children auto-expansion (DRW-105)
+
+MINOR: при export'е, если frame в selection — все его descendants автоматически включаются. Раньше tldraw Cmd+A frame-mutex исключал children → exported frame был пустым контейнером в Miro, а arrows с endpoints внутри frame skipped как cross-selection. Теперь frame export "just works" по intuitive expectations.
+
+### Added
+
+- **`expandFrameDescendants` helper** (`apps/backend/src/export/miro/upload.ts`) — recursive walk store для всех shapes с `parentId` chain leading к selected frame (`type === "frame"` или `meta.role === "boundary"`).
+- Применяется в `runMiroExport` ДО `expandGroups` — first expand frame → leaves, then expand groups → individuals.
+- Nested frames поддерживаются (frame-in-frame → recursively walks).
+
+### Behavior change
+
+- **Before 0.20.0:** `selection = ["shape:F"]` → exports только frame (Miro frame пустая); arrows c endpoints в frame children → `cross-selection-connector` skip.
+- **After 0.20.0:** `selection = ["shape:F"]` → exports frame + all descendants; arrows resolve correctly.
+- Backward compat: `selection` уже содержащий frame children — no double-count (Set-based dedup).
+
+### Tests
+
+- **2 new tests** в `upload.test.ts`: (1) single frame selection → 3 items (frame + 2 children); (2) nested frame → 3 items recursive walk. Backend total: **446 pass / 0 fail**.
+
+### Affects
+
+- Frontend Cmd+A in room с frame: теперь frame's children в export автоматом.
+- MCP `shemma_export_miro` с selection включающим frame ID: same behavior.
+- Curl с raw selection: same.
+
+---
+
 ## 0.19.4 — 2026-05-20 — didrawName → shape id resolution в export route
 
 PATCH: frontend визуальный тест exposed что `App.tsx` маппит `editor.getSelectedShapeIds()` через `getDidrawName` → отправляет `selection: ["api-gateway", "shape:xxx", ...]` (смесь didrawName + raw ids). Backend lookup `store[id]` fail'ил для имён → `itemsCreated: 0` несмотря на правильный selection в UI.
