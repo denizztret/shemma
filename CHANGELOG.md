@@ -1,3 +1,18 @@
+## 0.19.4 — 2026-05-20 — didrawName → shape id resolution в export route
+
+PATCH: frontend визуальный тест exposed что `App.tsx` маппит `editor.getSelectedShapeIds()` через `getDidrawName` → отправляет `selection: ["api-gateway", "shape:xxx", ...]` (смесь didrawName + raw ids). Backend lookup `store[id]` fail'ил для имён → `itemsCreated: 0` несмотря на правильный selection в UI.
+
+### Fixed
+
+- **`routes/export.ts`** — resolve `didrawName → shape id` через `rebuildDidrawIndex(room.store)` перед передачей в `runMiroExport`. Pass-through если value уже shape id. Имена и raw ids принимаются одинаково (consistent с domain endpoint contract).
+
+### Verified
+
+- Live frontend test через chrome-devtools MCP: `Cmd+A` → `⌘⇧E` → modal flow loading → pick (M.Shemma default) → confirm → exporting → result.
+- Result: ✓ Exported 3 items + 1 connectors, 1 skipped (cross-selection arrow с endpoint вне Cmd+A selection — tldraw frame-children-mutex).
+
+---
+
 ## 0.19.3 — 2026-05-20 — Visible default borders на shapes
 
 PATCH: после 0.19.2 visual verify в Miro показал что shapes импортируются без видимых границ — только labels на пустом фоне. Root cause: Miro REST v2 defaults `borderOpacity: 0` + `fillOpacity: 0` → визуально пустые элементы.
