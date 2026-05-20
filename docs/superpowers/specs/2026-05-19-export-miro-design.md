@@ -384,21 +384,11 @@ function expandGroups(
 
 **Shapes (`style.fillColor`):**
 
-Miro shapes принимают `fillColor` только из фиксированного набора 16 preset hex-значений. Точные значения этого набора необходимо проверить через enum в ответе Miro API (или OpenAPI spec).
+Miro shapes принимают `fillColor` только из фиксированного набора 16 preset hex-значений.
 
-> **Critical (revision v0.2):** 16 preset hex values — **blocker for color-mapping.ts implementation**. Без них nearest-neighbour алгоритм не имеет targets. Implementation phase task #1: пробить Miro API одним из путей:
-> 1. `POST /v2/boards/<test_board>/shapes` с произвольным `style.fillColor` — Miro вернёт validation error со списком допустимых значений.
-> 2. `GET /v2/boards/<id>/shapes` после ручного создания shapes разных цветов в UI — извлечь `style.fillColor` enum.
-> 3. Miro OpenAPI spec download (`https://api.miro.com/openapi/v2.json` или аналог).
+> **Resolved (Task 1 probe, 2026-05-20):** 16 preset hex values извлечены из официального Miro Node.js SDK (`packages/miro-api/model/shapeStyleForCreate.ts` JSDoc, источник: `https://github.com/miroapp/api-clients`). Blocker снят — `color-mapping.ts` можно имплементировать. Fallback path (borderColor-only) не нужен.
 >
-> **Fallback path (graceful degradation, _не_ default):** если probe затруднён к моменту implementation start —
-> ship **borderColor-only mapping** в 0.19.0: `style.fillColor` остаётся undefined (Miro default — white или transparent fill), `style.borderColor` принимает произвольный hex и передаётся pass-through. Документировать как "Phase 1 color fidelity"; defer fillColor preset support в 0.19.1 follow-up. Это позволяет shipать 0.19.0 без blocker'а.
-
-```
-TODO(implementation phase task #1): verify exact 16 hex values for style.fillColor
-via Miro OpenAPI spec / probe response / enum. Embed values in
-SHAPE_PRESETS array в color-mapping.ts. Update color-mapping.test.ts fixtures.
-```
+> **Pending live verification:** значения должны быть подтверждены `scripts/probe-miro.sh` (секция A — validation error response) при наличии developer token. Confidence HIGH на основе официального SDK.
 
 Алгоритм маппинга:
 
@@ -408,10 +398,25 @@ SHAPE_PRESETS array в color-mapping.ts. Update color-mapping.test.ts fixtures.
 type RGB = [number, number, number];
 
 const SHAPE_PRESETS: Array<{ hex: string; rgb: RGB }> = [
-  // TODO(implementation): заполнить из Miro OpenAPI spec
-  { hex: "#ffffff", rgb: [255, 255, 255] },
-  { hex: "#f5f6f8", rgb: [245, 246, 248] },
-  // ... 14 остальных
+  // Source: Miro SDK shapeStyleForCreate.ts JSDoc (2026-05-20).
+  // 16 explicitly enumerated presets + default white (#ffffff).
+  { hex: "#ffffff", rgb: [255, 255, 255] }, // white (default)
+  { hex: "#f5f6f8", rgb: [245, 246, 248] }, // light grey
+  { hex: "#d5f692", rgb: [213, 246, 146] }, // light lime green
+  { hex: "#d0e17a", rgb: [208, 225, 122] }, // yellow-green
+  { hex: "#93d275", rgb: [147, 210, 117] }, // medium green
+  { hex: "#67c6c0", rgb: [103, 198, 192] }, // teal
+  { hex: "#23bfe7", rgb: [35,  191, 231] }, // cyan/light blue
+  { hex: "#a6ccf5", rgb: [166, 204, 245] }, // light blue
+  { hex: "#7b92ff", rgb: [123, 146, 255] }, // blue-violet
+  { hex: "#fff9b1", rgb: [255, 249, 177] }, // light yellow (Post-it)
+  { hex: "#f5d128", rgb: [245, 209,  40] }, // yellow
+  { hex: "#ff9d48", rgb: [255, 157,  72] }, // orange
+  { hex: "#f16c7f", rgb: [241, 108, 127] }, // salmon/red-pink
+  { hex: "#ea94bb", rgb: [234, 148, 187] }, // pink
+  { hex: "#ffcee0", rgb: [255, 206, 224] }, // light pink
+  { hex: "#b384bb", rgb: [179, 132, 187] }, // purple
+  { hex: "#000000", rgb: [  0,   0,   0] }, // black
 ];
 
 function parseHex(hex: string): RGB {
@@ -765,7 +770,7 @@ interface MiroTextItem {
 }
 ```
 
-**Batch size limit:** документально не указан в Miro API; emпирическое значение ≤50 items per request (community practice). Реализация: split на chunks по 50, **последовательные** запросы (не параллельные — Pass A2 chunks внутри себя последовательны, чтобы rate limit credits не выгорал на параллелизме). Probe-script для batch limit определения — cheap testable во время implementation, не блокирует spec (см. §13 OQ#2).
+**Batch size limit:** документально не указан в Miro API (подтверждено Task 1 probe, 2026-05-20 — docs не содержат max items constraint). Значение `BULK_CHUNK_SIZE = 50` сохраняется как консервативный эмпирический default (community practice). Реализация: split на chunks по 50, **последовательные** запросы (не параллельные — Pass A2 chunks внутри себя последовательны, чтобы rate limit credits не выгорал на параллелизме). Live verification через `scripts/probe-miro.sh` секция E (60 items) рекомендована перед shipping.
 
 ```typescript
 const itemMap = new Map<string, string>();
@@ -1409,34 +1414,30 @@ export type MiroExportsMap = Record<
 
 ### 10.2 Miro item metadata
 
-Каждый Miro item создаётся с custom-полем, привязывающим Miro item к shemma element:
+**Resolved (Task 1 probe, 2026-05-20):** Miro REST API v2 `ShapeCreateRequest` **не имеет** ни `metadata`, ни `appData` поля. Оба варианта из §13 OQ#2 неприменимы для inline metadata в CREATE-запросе.
+
+**Basis:** официальный Miro Node.js SDK `shapeCreateRequest.ts` (auto-generated из OpenAPI spec) содержит только: `data`, `style`, `position`, `geometry`, `parent`. Ни `GenericItem` (response), ни `ShapeCreateRequest` (request) не имеют custom data поля. Источник: `https://github.com/miroapp/api-clients/blob/main/packages/miro-api/model/shapeCreateRequest.ts`.
+
+**Architectural decision:** Miro item tracking (shemma elementId ↔ Miro item ID) ведётся **исключительно на стороне клиента** в `room.meta.miroExports[boardId].items[elementId] = miroItemId`. Miro item не содержит back-reference к shemma. Это приемлемо для 0.19.0 (update path out of scope §2.2).
+
+**Builder.ts impact:** убрать `metadata: { ... }` поле из `MiroShapeCreate` interface и payload. Никакого inline custom-поля в Miro API нет.
+
+**Примечание про Web SDK:** Miro Web SDK предоставляет `item.setMetadata(key, value)` / `item.getMetadata(key)` для shapes (6KB limit per item, per `https://developers.miro.com/docs/websdk-reference-board`). Это Web SDK-only абстракция, не доступная через REST API v2 shape CREATE endpoint. Future update path мог бы использовать Web SDK если shemma когда-либо станет browser-side Miro app, но для текущего backend-only export это неприменимо.
+
+**Pending live verification:** `scripts/probe-miro.sh` секции B/C/D подтвердят, что `metadata`/`appData` поля в CREATE-payload возвращают 400 или игнорируются.
+
+Пример JSON payload в `builder.ts` (без metadata):
 
 ```json
 {
-  "metadata": {
-    "shemmaId": "shape:e_backend",
-    "shemmaRoom": "default",
-    "exportedAt": "2026-05-19T14:30:00.000Z",
-    "shemmaVersion": "0.19.0"
-  }
+  "data": { "shape": "rectangle", "content": "API Gateway" },
+  "style": { "fillColor": "#a6ccf5", "borderColor": "#3d5a9e" },
+  "position": { "x": -125.0, "y": -75.0 },
+  "geometry": { "width": 200.0, "height": 100.0 }
 }
 ```
 
-`shemmaVersion` value читается из `VERSION.version` (см. `apps/backend/src/version.ts`), не hardcode. Это даёт history-traceability — при analysis Miro board можно отделить items от разных версий shemma.
-
-> **Critical (revision v0.2, blocks idempotency story):** field name `metadata` **not verified** в research report. Возможные альтернативы:
-> - `metadata` — общий custom-fields контейнер (если поддерживается на v2).
-> - `appData` — per-app scratchpad с quota constraints (~32KB per app per item, **доступно только для items созданных тем же приложением** что и Bearer token).
->
-> **Implementation phase task #1: probe Miro API** до начала builder.ts implementation:
-> 1. POST a sample shape с `metadata: { shemmaId: "test" }` — check response.
-> 2. POST с `appData: '{"shemmaId":"test"}'` (note: appData — string, не object).
-> 3. GET the created item — verify which field round-trips.
-> 4. Update §10.2 + builder.ts payload accordingly.
->
-> Если **только `appData` доступен**: payload должен быть `appData: JSON.stringify({ shemmaId, shemmaRoom, exportedAt, shemmaVersion })` (string format). Document `appData` quota constraints (~32KB per item — наша structure ~150 байт, comfortable margin).
->
-> **Until verified, payload format отмечен в `builder.ts` как TODO.**
+`shemmaVersion` из `VERSION.version` теперь используется только для `room.meta.miroExports` server-side tracking record (не в Miro payload).
 
 ### 10.3 Persistence semantics
 
@@ -1744,21 +1745,13 @@ describe("readConfig / writeConfig / readMiroToken", () => {
 
 **Critical (blocks implementation):**
 
-1. **Точные hex-значения 16 Miro shape presets** — `style.fillColor` принимает только enum hex values. Без них `color-mapping.ts` имплементировать нельзя. **Blocks `color-mapping.ts` implementation.** Probe paths (см. §5.3):
-   - `POST /v2/boards/<test>/shapes` с произвольным fillColor → 4xx error со списком допустимых.
-   - `GET /v2/boards/<id>/shapes` после ручного создания shapes разных цветов.
-   - Miro OpenAPI spec.
-   - **Fallback path** (graceful degradation): ship borderColor-only mapping в 0.19.0, defer fillColor preset в 0.19.1.
+1. **Точные hex-значения 16 Miro shape presets** — **RESOLVED (Task 1, 2026-05-20):** 17 значений (16 явно перечисленных + `#ffffff` default) извлечены из официального Miro SDK `shapeStyleForCreate.ts`. Все значения заполнены в `SHAPE_PRESETS` в §5.3. Fallback borderColor-only **не нужен**. Live confirmation через `scripts/probe-miro.sh` секция A — рекомендована. `color-mapping.ts` implementation разблокирована.
 
-2. **Miro item `metadata` vs `appData` field name verification** — research report не подтверждает имя поля. От field-name зависит whole idempotency story (§4.4, §10.2). **Blocks `builder.ts` payload format.** Probe (см. §10.2):
-   - POST с `metadata: { shemmaId: "test" }` → check response shape.
-   - POST с `appData: '{"shemmaId":"test"}'` (note: appData — string).
-   - GET item → verify which round-trips.
-   - Если только `appData` доступен — document quota constraints (~32KB per app per item).
+2. **Miro item `metadata` vs `appData` field name** — **RESOLVED (Task 1, 2026-05-20):** Miro REST API v2 `ShapeCreateRequest` **не имеет ни `metadata`, ни `appData` поля** (confirmed via official SDK `shapeCreateRequest.ts`). Inline custom tracking в Miro CREATE-payload невозможен. Decision: tracking ведётся только client-side в `room.meta.miroExports`. `builder.ts` payload format разблокирован (см. §10.2). Live confirmation через `scripts/probe-miro.sh` секции B/C/D — рекомендована.
 
 **Non-blocking (можно verify во время implementation):**
 
-3. **Batch size limit для `/v2/boards/{id}/items/bulk`** — документально не указан; выбрано 50 (community practice). Probe-script (POST batch с 60+ items, check response 413/422) **cheaply testable во время implementation, не блокирует spec**. Если лимит окажется ниже 50 — уменьшить chunk size в `upload.ts`.
+3. **Batch size limit для `/v2/boards/{id}/items/bulk`** — документально не указан (подтверждено Task 1). Оставляем 50 как conservative default. Live confirmation через `scripts/probe-miro.sh` секция E (60 items) — рекомендована перед shipping.
 
 **Resolved (in this revision):**
 
