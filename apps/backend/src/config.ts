@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import * as fs from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import * as path from "node:path";
 
 const VALID_PROFILES = ["dev", "release", "debug"] as const;
 export type Profile = (typeof VALID_PROFILES)[number];
@@ -146,4 +148,76 @@ export const config = new Proxy({} as ReturnType<typeof getConfig>, {
 export function __resetConfigForTests(): void {
   _cache = null;
   _deprecationWarned.clear();
+}
+
+// ---------------------------------------------------------------------------
+// DRW-103: file-based config I/O (separate from env-var driven `getConfig`).
+// Used by export/miro/* + CLI `shemma config set/get/unset miro.token`.
+// ---------------------------------------------------------------------------
+
+/** XDG-aware config file path resolver. */
+export function configFilePath(): string {
+  const configHome = process.env.XDG_CONFIG_HOME ?? path.join(homedir(), ".config");
+  return path.join(configHome, "shemma", "config.json");
+}
+
+/** Full file schema (union). Future services добавляются как top-level keys. */
+export interface ConfigFile {
+  miro?: {
+    token?: string;
+    createdAt?: string;
+  };
+  // Future: drawio?: {...}, excalidraw?: {...}
+}
+
+/**
+ * Read full config; returns `null` when file does not exist (ENOENT).
+ * Throws Error with hint on EACCES or invalid JSON.
+ */
+export function readConfig(): ConfigFile | null {
+  const p = configFilePath();
+  try {
+    const raw = fs.readFileSync(p, "utf8");
+    return JSON.parse(raw) as ConfigFile;
+  } catch (e: unknown) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") return null;
+    if (err.code === "EACCES") {
+      throw new Error(`Cannot read ${p}: permission denied. Try: chmod 600 ${p}`);
+    }
+    if (e instanceof SyntaxError) {
+      throw new Error(`Invalid JSON in ${p}: ${e.message}`);
+    }
+    throw e;
+  }
+}
+
+/** Write full config; creates directory if needed, chmod 600 on create. */
+export function writeConfig(cfg: ConfigFile): void {
+  const p = configFilePath();
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  // Ensure permissions are 600 even if file existed with different perms.
+  fs.chmodSync(p, 0o600);
+}
+
+/** Convenience: read Miro token. `null` если файл/ключ отсутствует. */
+export function readMiroToken(): string | null {
+  const cfg = readConfig();
+  return cfg?.miro?.token ?? null;
+}
+
+/** Convenience: write Miro token, merging with existing config. */
+export function writeMiroToken(token: string): void {
+  const cfg: ConfigFile = readConfig() ?? {};
+  cfg.miro = { ...cfg.miro, token, createdAt: new Date().toISOString() };
+  writeConfig(cfg);
+}
+
+/** Convenience: remove Miro token; keeps other keys. */
+export function unsetMiroToken(): void {
+  const cfg = readConfig();
+  if (!cfg?.miro?.token) return;
+  delete cfg.miro.token;
+  writeConfig(cfg);
 }
