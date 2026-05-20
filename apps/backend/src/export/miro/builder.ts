@@ -26,6 +26,21 @@ const GEO_TO_MIRO: Record<string, string> = {
   "arrow-left": "left_arrow",
 };
 
+const TEXT_ALIGN: Record<string, string> = { start: "left", middle: "center", end: "right" };
+const TEXT_VALIGN: Record<string, string> = { start: "top", middle: "middle", end: "bottom" };
+const ARROW_DASH: Record<string, string> = {
+  dashed: "dashed",
+  dotted: "dotted",
+  draw: "normal",
+  solid: "normal",
+};
+
+function applyPositionAndParent(item: MiroBulkItem, ctx: BuilderCtx): MiroBulkItem {
+  item.position = { x: ctx.miroX, y: ctx.miroY };
+  if (ctx.parentMiroId) item.parent = { id: ctx.parentMiroId };
+  return item;
+}
+
 export function mapGeoToMiroShape(geo: string | undefined): string {
   if (!geo) return "rectangle";
   return GEO_TO_MIRO[geo] ?? "rectangle";
@@ -46,37 +61,32 @@ export function buildShapePayload(shape: RawShape, ctx: BuilderCtx): MiroBulkIte
 
   // Miro defaults `borderOpacity: 0` + `fillOpacity: 0` → invisible shapes.
   // Set visible defaults; user-provided meta.fillHex / meta.borderHex override.
-  const metaFillHex = (shape.meta?.fillHex as string | undefined) ?? undefined;
+  const metaFillHex = shape.meta?.fillHex as string | undefined;
   const metaBorderHex = shape.meta?.borderHex as string | undefined;
   const align = (props.align as string | undefined) ?? "middle";
   const valign = (props.verticalAlign as string | undefined) ?? "middle";
-  const textAlignMap: Record<string, string> = { start: "left", middle: "center", end: "right" };
-  const textVAlignMap: Record<string, string> = { start: "top", middle: "middle", end: "bottom" };
   const style: Record<string, unknown> = {
     borderColor: metaBorderHex ?? "#1a1a1a",
     borderWidth: "2.0",
     borderOpacity: "1.0",
     borderStyle: "normal",
     fillOpacity: metaFillHex ? "1.0" : "0.0",
-    textAlign: textAlignMap[align] ?? "center",
-    textAlignVertical: textVAlignMap[valign] ?? "middle",
+    textAlign: TEXT_ALIGN[align] ?? "center",
+    textAlignVertical: TEXT_VALIGN[valign] ?? "middle",
   };
   if (metaFillHex && metaFillHex.startsWith("#")) {
     style.fillColor = nearestShapeColor(metaFillHex);
   }
 
-  const item: MiroBulkItem = {
+  return applyPositionAndParent({
     type: "shape",
     data: {
       shape: mapGeoToMiroShape(geo),
       ...(content ? { content } : {}),
     },
     style,
-    position: { x: ctx.miroX, y: ctx.miroY },
     geometry: { width: w, height: h },
-  };
-  if (ctx.parentMiroId) item.parent = { id: ctx.parentMiroId };
-  return item;
+  }, ctx);
 }
 
 /** Build payload for a tldraw note shape → Miro sticky_note. */
@@ -91,15 +101,12 @@ export function buildStickyNotePayload(shape: RawShape, ctx: BuilderCtx): MiroBu
   const metaFillHex = shape.meta?.fillHex as string | undefined;
   style.fillColor = metaFillHex ? nearestStickyColor(metaFillHex) : "yellow";
 
-  const item: MiroBulkItem = {
+  return applyPositionAndParent({
     type: "sticky_note",
     data: { ...(content ? { content } : {}), shape: "square" },
     style,
-    position: { x: ctx.miroX, y: ctx.miroY },
     geometry: { width: w, height: h },
-  };
-  if (ctx.parentMiroId) item.parent = { id: ctx.parentMiroId };
-  return item;
+  }, ctx);
 }
 
 /** Build payload for a tldraw text shape → Miro text. */
@@ -107,15 +114,12 @@ export function buildTextPayload(shape: RawShape, ctx: BuilderCtx): MiroBulkItem
   const props = shape.props ?? {};
   const w = (props.w as number | undefined) ?? 100;
   const content = pickRichText(props);
-  const item: MiroBulkItem = {
+  return applyPositionAndParent({
     type: "text",
     data: { content },
     style: {},
-    position: { x: ctx.miroX, y: ctx.miroY },
     geometry: { width: w },
-  };
-  if (ctx.parentMiroId) item.parent = { id: ctx.parentMiroId };
-  return item;
+  }, ctx);
 }
 
 /** Build payload for a tldraw frame shape (or geo with meta.role='boundary') → Miro frame. */
@@ -128,14 +132,12 @@ export function buildFramePayload(shape: RawShape, ctx: BuilderCtx): MiroBulkIte
     (shape.meta?.name as string | undefined) ??
     (shape.meta?.didrawName as string | undefined) ??
     "";
-  const item: MiroBulkItem = {
+  return applyPositionAndParent({
     type: "frame",
     data: { title, type: "freeform" },
     style: {},
-    position: { x: ctx.miroX, y: ctx.miroY },
     geometry: { width: w, height: h },
-  };
-  return item;
+  }, ctx);
 }
 
 export interface ArrowEndpoint {
@@ -148,12 +150,11 @@ export interface ArrowEndpoints {
   end?: ArrowEndpoint;
 }
 
-/** Walk store bindings (typeName='binding', type='arrow') to find arrow endpoints. */
-export function collectArrowEndpointsFromStore(
-  arrowId: string,
+/** Single-pass scan of all binding records → Map<arrowId, endpoints>. */
+export function buildArrowEndpointsIndex(
   store: Record<string, RawShape>,
-): ArrowEndpoints {
-  const result: ArrowEndpoints = {};
+): Map<string, ArrowEndpoints> {
+  const out = new Map<string, ArrowEndpoints>();
   for (const id in store) {
     const r = store[id] as unknown as {
       typeName?: string;
@@ -162,18 +163,25 @@ export function collectArrowEndpointsFromStore(
       toId?: string;
       props?: { terminal?: string; normalizedAnchor?: { x: number; y: number } };
     };
-    if (r.typeName !== "binding") continue;
-    if (r.type !== "arrow") continue;
-    if (r.fromId !== arrowId) continue;
-    if (!r.toId || !r.props?.normalizedAnchor) continue;
+    if (r.typeName !== "binding" || r.type !== "arrow") continue;
+    if (!r.fromId || !r.toId || !r.props?.normalizedAnchor) continue;
+    const ep = out.get(r.fromId) ?? {};
     const endpoint: ArrowEndpoint = {
       toId: r.toId,
       normalizedAnchor: r.props.normalizedAnchor,
     };
-    if (r.props.terminal === "start") result.start = endpoint;
-    else if (r.props.terminal === "end") result.end = endpoint;
+    if (r.props.terminal === "start") ep.start = endpoint;
+    else if (r.props.terminal === "end") ep.end = endpoint;
+    out.set(r.fromId, ep);
   }
-  return result;
+  return out;
+}
+
+export function collectArrowEndpointsFromStore(
+  arrowId: string,
+  store: Record<string, RawShape>,
+): ArrowEndpoints {
+  return buildArrowEndpointsIndex(store).get(arrowId) ?? {};
 }
 
 /**
@@ -218,6 +226,7 @@ export function expandGroups(
 export interface ConnectorBuilderCtx {
   store: Record<string, RawShape>;
   passAMap: Map<string, string>;
+  endpointsIndex?: Map<string, ArrowEndpoints>;
 }
 
 export type ConnectorBuildResult =
@@ -228,7 +237,8 @@ export function buildConnectorPayload(
   arrow: RawShape,
   ctx: ConnectorBuilderCtx,
 ): ConnectorBuildResult {
-  const endpoints = collectArrowEndpointsFromStore(arrow.id, ctx.store);
+  const endpoints = ctx.endpointsIndex?.get(arrow.id)
+    ?? collectArrowEndpointsFromStore(arrow.id, ctx.store);
   if (!endpoints.start || !endpoints.end) {
     return { kind: "skip", reason: "unsupported-type" };
   }
@@ -243,12 +253,6 @@ export function buildConnectorPayload(
   const captions = labelText ? [{ content: labelText }] : undefined;
 
   const dash = (arrow.props?.dash as string | undefined) ?? "draw";
-  const dashMap: Record<string, string> = {
-    dashed: "dashed",
-    dotted: "dotted",
-    draw: "normal",
-    solid: "normal",
-  };
   const payload: MiroConnectorPayload = {
     startItem: {
       id: startMiroId,
@@ -260,7 +264,7 @@ export function buildConnectorPayload(
     },
     shape,
     style: {
-      strokeStyle: dashMap[dash] ?? "normal",
+      strokeStyle: ARROW_DASH[dash] ?? "normal",
       strokeColor: "#1a1a1a",
       strokeWidth: "2.0",
     },

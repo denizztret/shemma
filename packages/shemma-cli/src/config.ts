@@ -13,6 +13,12 @@ function dieUsage(msg: string): never {
   process.exit(1);
 }
 
+function assertSupportedKey(key: string): void {
+  if (!SUPPORTED_KEYS.has(key)) {
+    dieUsage(`unknown config key: ${key} (supported: ${[...SUPPORTED_KEYS].join(", ")})`);
+  }
+}
+
 async function validateMiroToken(token: string): Promise<"ok" | "invalid" | "offline"> {
   const base = process.env.SHEMMA_MIRO_BASE_URL ?? "https://api.miro.com";
   try {
@@ -29,9 +35,7 @@ async function validateMiroToken(token: string): Promise<"ok" | "invalid" | "off
 }
 
 export async function cmdConfigSet(key: string, value: string): Promise<void> {
-  if (!SUPPORTED_KEYS.has(key)) {
-    dieUsage(`unknown config key: ${key} (supported: ${[...SUPPORTED_KEYS].join(", ")})`);
-  }
+  assertSupportedKey(key);
   if (key === "miro.token") {
     const status = await validateMiroToken(value);
     if (status === "invalid") {
@@ -52,9 +56,7 @@ export async function cmdConfigSet(key: string, value: string): Promise<void> {
 }
 
 export async function cmdConfigGet(key: string): Promise<void> {
-  if (!SUPPORTED_KEYS.has(key)) {
-    dieUsage(`unknown config key: ${key} (supported: ${[...SUPPORTED_KEYS].join(", ")})`);
-  }
+  assertSupportedKey(key);
   if (key === "miro.token") {
     const t = readMiroToken();
     const ui = getOutput();
@@ -74,9 +76,7 @@ export async function cmdConfigGet(key: string): Promise<void> {
 }
 
 export async function cmdConfigUnset(key: string): Promise<void> {
-  if (!SUPPORTED_KEYS.has(key)) {
-    dieUsage(`unknown config key: ${key} (supported: ${[...SUPPORTED_KEYS].join(", ")})`);
-  }
+  assertSupportedKey(key);
   if (key === "miro.token") {
     unsetMiroToken();
     uiInfo("miro.token removed");

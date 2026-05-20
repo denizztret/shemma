@@ -87,14 +87,11 @@ export function App({ room }: { room: string }) {
   // Mermaid import modal toggled by ⌘M (Ctrl+M on non-Mac). Closed by
   // Render/Cancel/Esc — управление внутри MermaidImportModal.
   const [mermaidOpen, setMermaidOpen] = useState(false);
-  // DRW-103: Export to Miro modal — toggled by ⌘⇧E / context menu item.
   const [exportOpen, setExportOpen] = useState(false);
   const [aiActivity, setAiActivity] = useState<AiActivity | null>(null);
 
   // tldraw requires `components` prop to be memoized (or defined outside the
   // component) to avoid re-mounting the editor on every render.
-  // DRW-088: onTidySelection is passed so the context menu can call tidyLayout.
-  // DRW-103: onExportSelection is passed so the context menu can open the export modal.
   const onTidySelection = useRef<((ids: string[]) => void) | null>(null);
   const onExportSelection = useRef<((ids: string[]) => void) | null>(null);
   onExportSelection.current = (ids: string[]) => {
@@ -139,9 +136,9 @@ export function App({ room }: { room: string }) {
     if (selection.length === 0) setPromptOpen(false);
   }, [selection.length]);
 
-  // DRW-088: ⌘⇧L / Ctrl+Shift+L — tidy layout for current selection.
-  // Wired here (not in the editor useEffect) so it activates even before
-  // the editor is fully mounted (handler is a no-op before editor is ready).
+  // ⌘⇧L / Ctrl+Shift+L — tidy layout for current selection. Hotkeys are wired
+  // at component level (not inside editor useEffect) so they activate before the
+  // editor mounts (handler is a no-op while editor is null).
   useEffect(() => {
     const handler = makeTidyHotkeyHandler(
       () => (editor ? (editor.getSelectedShapeIds() as unknown as string[]) : []),
@@ -157,8 +154,7 @@ export function App({ room }: { room: string }) {
     return () => window.removeEventListener("keydown", handler);
   }, [editor, room]);
 
-  // DRW-103: ⌘⇧E / Ctrl+Shift+E — open Export to Miro modal for current selection.
-  // Wired at component level (not inside editor useEffect) to activate before editor mounts.
+  // ⌘⇧E / Ctrl+Shift+E — open Export to Miro modal for current selection.
   useEffect(() => {
     const handler = makeExportHotkeyHandler(
       () => (editor ? (editor.getSelectedShapeIds() as unknown as string[]) : []),
@@ -255,9 +251,9 @@ export function App({ room }: { room: string }) {
       return { version: s.version };
     };
 
-    // DRW-088: wire tidy callback used by context menu. Uses the same logic
-    // as the keyboard shortcut handler above, but accessed via the ref so
-    // TldrawComponents can call it without importing editor state.
+    // Tidy callback for the context menu. Same logic as the keyboard shortcut
+    // handler above, accessed via ref so TldrawComponents can invoke it without
+    // importing editor state.
     onTidySelection.current = async (ids: string[]) => {
       const result = await tidyLayout(ids, room);
       if (result.kind === "ok") {

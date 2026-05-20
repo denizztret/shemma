@@ -65,23 +65,21 @@ export function exportRoutes(rooms: Rooms, opts: ExportRoutesOpts = {}) {
         return c.json({ ok: false, error: "empty-selection" }, 400);
       }
 
-      // Frontend sends a mix: didrawName for AI-created shapes, raw shape ids
-      // for user-drawn ones (e.g., arrows). Resolve names → real shape ids.
-      const nameIndex = rebuildDidrawIndex(room.store);
-      const selection = rawSelection.map((s) => nameIndex.get(s) ?? s);
-
       const client = new MiroClient({ token, baseUrl: opts.miroBaseUrl });
 
       try {
         if (body.dryRun) {
-          // Cheap preview without making Miro calls.
           return c.json({
             ok: true,
             dryRun: true,
-            itemCount: selection.length,
-            sampleSelection: selection.slice(0, 3),
+            itemCount: rawSelection.length,
+            sampleSelection: rawSelection.slice(0, 3),
           });
         }
+        // Frontend sends a mix: didrawName for AI-created shapes, raw shape ids
+        // for user-drawn ones (e.g., arrows). Resolve names → real shape ids.
+        const nameIndex = rebuildDidrawIndex(room.store);
+        const selection = rawSelection.map((s) => nameIndex.get(s) ?? s);
         const result = await runMiroExport({
           client,
           room,
