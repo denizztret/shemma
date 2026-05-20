@@ -44,15 +44,20 @@ export function buildShapePayload(shape: RawShape, ctx: BuilderCtx): MiroBulkIte
   const geo = props.geo as string | undefined;
   const content = pickRichText(props);
 
-  const style: Record<string, unknown> = {};
-  // meta.fillHex is set by Mermaid import; tldraw named colors (props.color) are
-  // not translated — we leave fillColor unset (Miro default = white) for those.
+  // Miro defaults `borderOpacity: 0` + `fillOpacity: 0` → invisible shapes.
+  // Set visible defaults; user-provided meta.fillHex / meta.borderHex override.
   const metaFillHex = (shape.meta?.fillHex as string | undefined) ?? undefined;
+  const metaBorderHex = shape.meta?.borderHex as string | undefined;
+  const style: Record<string, unknown> = {
+    borderColor: metaBorderHex ?? "#1a1a1a",
+    borderWidth: "2.0",
+    borderOpacity: "1.0",
+    borderStyle: "normal",
+    fillOpacity: metaFillHex ? "1.0" : "0.0",
+  };
   if (metaFillHex && metaFillHex.startsWith("#")) {
     style.fillColor = nearestShapeColor(metaFillHex);
   }
-  const metaBorderHex = shape.meta?.borderHex as string | undefined;
-  if (metaBorderHex) style.borderColor = metaBorderHex;
 
   const item: MiroBulkItem = {
     type: "shape",

@@ -1,3 +1,19 @@
+## 0.19.3 — 2026-05-20 — Visible default borders на shapes
+
+PATCH: после 0.19.2 visual verify в Miro показал что shapes импортируются без видимых границ — только labels на пустом фоне. Root cause: Miro REST v2 defaults `borderOpacity: 0` + `fillOpacity: 0` → визуально пустые элементы.
+
+### Fixed
+
+- **`buildShapePayload` defensive defaults** (`apps/backend/src/export/miro/builder.ts`): для geo shapes теперь устанавливаются `borderColor: "#1a1a1a"`, `borderWidth: "2.0"`, `borderOpacity: "1.0"`, `borderStyle: "normal"` по умолчанию. `fillOpacity: "1.0"` если `meta.fillHex` задан, иначе `"0.0"` (preserves shemma `fill: "none"` default).
+- User-provided `meta.fillHex` / `meta.borderHex` остаются source of truth — overriding defaults.
+
+### Verified
+
+- Live re-export room "export-smoke" → board "M.Shemma": все 5 shapes сейчас visible (borderColor #1a1a1a, width 2, opacity 1).
+- 42 affected tests pass (builder/upload/routes/integration).
+
+---
+
 ## 0.19.2 — 2026-05-20 — Frame-child positioning hot-patch
 
 PATCH: post-0.19.1 live export вернул `400: "new position is outside of parent boundaries"` для frame children. Root cause — Miro REST v2 child position уэз `relativeTo: "parent_top_left"`, не `parent_center` как предполагалось в `upload.ts` math.
