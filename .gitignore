@@ -23,3 +23,9 @@ backlog/
 
 # obsidian
 docs/.obsidian/
+
+# Claude Code runtime artifacts
+.claude/scheduled_tasks.lock
+
+# Manual-test / dogfood screenshots — local-only history, не пушим
+docs/screenshots/
