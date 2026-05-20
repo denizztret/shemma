@@ -79,9 +79,8 @@ export const ApplyArgs = {
 // preserving user's manual layout edits is a hard product invariant. If a
 // full-replace flow is ever needed, it ships as a separate `shemma_clear_room`
 // tool that requires explicit user confirmation, not a hidden mode flag.
-// DRW-088: selection-aware layout tool.
-// ids — список tldraw shape id'ов ("shape:xxx") или didrawNames.
-// Пустой ids === все shapes → полный layout (эквивалент shemma_layout).
+// Selection-aware layout tool. ids — список tldraw shape id'ов ("shape:xxx")
+// или didrawNames. Пустой ids === все shapes → эквивалент shemma_layout.
 export const LayoutSelectionArgs = {
   ids: z.array(z.string()).optional(),
   mode: LayoutModeEnum.optional(),
@@ -102,7 +101,6 @@ export const ImportMermaidArgs = {
   focus: z.enum(["new", "fit-all", "none"]).optional(),
 };
 
-// DRW-103: Miro export MCP tool args.
 export const ExportMiroArgs = {
   boardId: z
     .string()

@@ -19,26 +19,21 @@ import { RoomBadge } from "./RoomBadge";
  *   button that invokes the provided callback (used by App.tsx to open the
  *   MermaidImportModal). Hotkey ⌘M остаётся primary trigger; кнопка —
  *   discoverability.
- * - `ContextMenu` (DRW-088) extends default context menu with "Tidy" item
- *   when 2+ shapes are selected. Hotkey ⌘⇧L остаётся primary trigger;
- *   пункт меню — discoverability для пользователей.
+ * - `ContextMenu` extends default context menu with "Tidy" + "Export to Miro"
+ *   items when selection is non-empty. Hotkeys remain primary triggers.
  */
 export function buildTldrawComponents(
   room: string,
   opts: {
     onMermaidImport?: () => void;
-    /** DRW-088: called with selected shape ids when user chooses "Tidy" */
     onTidySelection?: (ids: string[]) => void;
-    /** DRW-103: called with selected shape ids when user chooses "Export to Miro" */
     onExportSelection?: (ids: string[]) => void;
   } = {},
 ): TLComponents {
   const { onMermaidImport, onTidySelection, onExportSelection } = opts;
 
-  // DRW-088 AC#1: ContextMenu wrapper — extends DefaultContextMenu with "Tidy"
-  // group when 2+ shapes are selected. We wrap DefaultContextMenu with custom
-  // children content (DefaultContextMenu accepts children to override its inner
-  // content while keeping the Radix context-menu shell + canvas rendering).
+  // We wrap DefaultContextMenu and append items as children — DefaultContextMenu
+  // overrides its inner content while keeping the Radix shell + canvas rendering.
   function TidyContextMenu() {
     const editor = useEditor();
     const selectedCount = useValue(
@@ -51,9 +46,8 @@ export function buildTldrawComponents(
       <DefaultContextMenu>
         <DefaultContextMenuContent />
         {selectedCount >= 2 && onTidySelection && (
-          // DRW-088: "Tidy" item using plain tlui CSS classes.
-          // Avoids TldrawUiMenuGroup/TldrawUiMenuItem which have bigint in return
-          // type union (TypeScript ReactNode incompatibility in strict mode).
+          // Plain tlui CSS classes — avoids TldrawUiMenuGroup/TldrawUiMenuItem
+          // which have bigint in return type union (ReactNode incompatibility in strict mode).
           <div className="tlui-menu__group">
             <button
               type="button"
@@ -73,7 +67,6 @@ export function buildTldrawComponents(
           </div>
         )}
         {selectedCount >= 1 && onExportSelection && (
-          // DRW-103: "Export to Miro" item — visible when 1+ shapes selected.
           <div className="tlui-menu__group">
             <button
               type="button"
@@ -143,8 +136,6 @@ export function buildTldrawComponents(
         ) : null}
       </DefaultToolbar>
     ),
-    // DRW-088/DRW-103: custom context menu — "Tidy" (2+ shapes) + "Export to Miro" (1+ shapes).
-    // TidyContextMenu wraps DefaultContextMenu with custom children content.
     ContextMenu: (onTidySelection || onExportSelection) ? TidyContextMenu : undefined,
   };
 }

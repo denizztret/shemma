@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import * as path from "node:path";
 
 const VALID_PROFILES = ["dev", "release", "debug"] as const;
 export type Profile = (typeof VALID_PROFILES)[number];
@@ -152,8 +151,8 @@ export function __resetConfigForTests(): void {
 
 /** XDG-aware config file path resolver. */
 export function configFilePath(): string {
-  const configHome = process.env.XDG_CONFIG_HOME ?? path.join(homedir(), ".config");
-  return path.join(configHome, "shemma", "config.json");
+  const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
+  return join(configHome, "shemma", "config.json");
 }
 
 export interface ConfigFile {
@@ -188,7 +187,7 @@ export function readConfig(): ConfigFile | null {
 /** Write full config; creates directory if needed, enforces 0o600 permissions. */
 export function writeConfig(cfg: ConfigFile): void {
   const p = configFilePath();
-  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.mkdirSync(dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(cfg, null, 2), { mode: 0o600 });
   fs.chmodSync(p, 0o600);
 }

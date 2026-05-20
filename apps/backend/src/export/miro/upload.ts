@@ -1,6 +1,8 @@
 
 import type { RoomState } from "../../types";
 import {
+  type ArrowEndpoints,
+  buildArrowEndpointsIndex,
   buildConnectorPayload,
   buildFramePayload,
   buildShapePayload,
@@ -84,16 +86,28 @@ function classify(
   return { frames, items, arrows, unsupported };
 }
 
+function buildChildrenIndex(
+  store: Record<string, RawShape>,
+): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const id in store) {
+    const r = store[id];
+    if (r?.typeName !== "shape" || !r.parentId) continue;
+    const list = out.get(r.parentId) ?? [];
+    list.push(id);
+    out.set(r.parentId, list);
+  }
+  return out;
+}
+
 function expandFrameDescendants(
   ids: string[],
   store: Record<string, RawShape>,
+  childrenByParent: Map<string, string[]>,
 ): string[] {
   const out = new Set(ids);
   function walk(parentId: string): void {
-    for (const cid in store) {
-      const c = store[cid];
-      if (c?.typeName !== "shape") continue;
-      if (c.parentId !== parentId) continue;
+    for (const cid of childrenByParent.get(parentId) ?? []) {
       if (out.has(cid)) continue;
       out.add(cid);
       walk(cid);
@@ -101,36 +115,18 @@ function expandFrameDescendants(
   }
   for (const id of ids) {
     const s = store[id];
-    if (!s) continue;
-    const isFrame = s.type === "frame" || s.meta?.role === "boundary";
-    if (isFrame) walk(id);
+    if (s && isFrameLike(s)) walk(id);
   }
   return Array.from(out);
 }
 
 function expandImplicitArrows(
   ids: string[],
-  store: Record<string, RawShape>,
+  endpointsIndex: Map<string, ArrowEndpoints>,
 ): string[] {
   const set = new Set(ids);
-  const endpoints = new Map<string, { start?: string; end?: string }>();
-  for (const id in store) {
-    const r = store[id] as unknown as {
-      typeName?: string;
-      type?: string;
-      fromId?: string;
-      toId?: string;
-      props?: { terminal?: string };
-    };
-    if (r.typeName !== "binding" || r.type !== "arrow") continue;
-    if (!r.fromId || !r.toId) continue;
-    const ep = endpoints.get(r.fromId) ?? {};
-    if (r.props?.terminal === "start") ep.start = r.toId;
-    else if (r.props?.terminal === "end") ep.end = r.toId;
-    endpoints.set(r.fromId, ep);
-  }
-  for (const [arrowId, ep] of endpoints) {
-    if (ep.start && ep.end && set.has(ep.start) && set.has(ep.end)) {
+  for (const [arrowId, ep] of endpointsIndex) {
+    if (ep.start && ep.end && set.has(ep.start.toId) && set.has(ep.end.toId)) {
       set.add(arrowId);
     }
   }
@@ -141,23 +137,34 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
   const skipped: SkippedItem[] = [];
   const store = p.room.store.store as Record<string, RawShape>;
 
+  const childrenByParent = buildChildrenIndex(store);
+  const endpointsIndex = buildArrowEndpointsIndex(store);
+
   // Tldraw Cmd+A excludes frame children due to selection mutex. We bring them
   // back so the user's exported frame isn't an empty container in Miro.
-  const withFrameChildren = expandFrameDescendants(p.selection, store);
+  // Then pick up arrows whose both endpoints are now in the expanded selection
+  // but were excluded by the same mutex (e.g. arrow between frame children).
+  const withFrameChildren = expandFrameDescendants(p.selection, store, childrenByParent);
   const expanded = expandGroups(withFrameChildren, store);
-  // Pick up arrows whose both endpoints are now in the expanded selection but
-  // were excluded by tldraw's selection mutex (e.g. arrow between frame children).
-  const expandedWithArrows = expandImplicitArrows(expanded, store);
+  const expandedWithArrows = expandImplicitArrows(expanded, endpointsIndex);
   const { frames, items, arrows, unsupported } = classify(expandedWithArrows, store);
   for (const u of unsupported) skipped.push({ elementId: u, reason: "unsupported-type" });
 
+  const boundsCache = new Map<string, NonNullable<ReturnType<typeof resolvePageBounds>>>();
+  function bounds(id: string): ReturnType<typeof resolvePageBounds> {
+    const cached = boundsCache.get(id);
+    if (cached) return cached;
+    const b = resolvePageBounds(id, store);
+    if (b) boundsCache.set(id, b);
+    return b;
+  }
   const allBounds = [...frames, ...items, ...arrows]
-    .map((id) => resolvePageBounds(id, store))
+    .map((id) => bounds(id))
     .filter((b): b is NonNullable<typeof b> => b !== null);
   const centroid = computeCentroid(allBounds);
 
   function miroPos(id: string): { x: number; y: number; w: number; h: number } | null {
-    const b = resolvePageBounds(id, store);
+    const b = bounds(id);
     if (!b) return null;
     return {
       x: b.x + b.w / 2 - centroid.x,
@@ -227,7 +234,7 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
         if (parentMiroId && s.parentId) {
           // Miro: child position is `relativeTo: "parent_top_left"`. We compute
           // child page-center − parent page-top-left = child offset inside frame.
-          const parentBounds = resolvePageBounds(s.parentId, store);
+          const parentBounds = bounds(s.parentId);
           if (parentBounds) {
             miroX = (pos.x + centroid.x) - parentBounds.x;
             miroY = (pos.y + centroid.y) - parentBounds.y;
@@ -289,9 +296,7 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
     }
   }
 
-  const passAMap = new Map<string, string>();
-  for (const [k, v] of frameMap) passAMap.set(k, v);
-  for (const [k, v] of itemMap) passAMap.set(k, v);
+  const passAMap = new Map<string, string>([...frameMap, ...itemMap]);
 
   const connectorMappings: Array<{ elementId: string; miroConnectorId: string }> = [];
 
@@ -302,6 +307,7 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
     const r = buildConnectorPayload(s, {
       store,
       passAMap,
+      endpointsIndex,
     });
     if (r.kind === "skip") {
       skipped.push({ elementId: id, reason: r.reason });
