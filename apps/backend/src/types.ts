@@ -24,6 +24,20 @@ export type AiActivity = {
   startedAt: number;
 };
 
+export interface RoomMeta {
+  miroExports?: MiroExportsMap;
+}
+
+export type MiroExportsMap = Record<
+  string,
+  {
+    boardName?: string;
+    lastExportedAt: string;
+    items: Record<string, string>;
+    connectors?: Record<string, string>;
+  }
+>;
+
 export type RoomState = {
   store: TLStoreSnapshot;
   opLog: StoreOpLogEntry[];
@@ -42,6 +56,7 @@ export type RoomState = {
   // группировки комнат в Gallery (DRW-033). Опционально — старые файлы
   // его не имеют и получают его при первом обращении.
   projectDir?: string;
+  meta?: RoomMeta;
 };
 
 export type WsClientMessage =

@@ -29,9 +29,11 @@ export function buildTldrawComponents(
     onMermaidImport?: () => void;
     /** DRW-088: called with selected shape ids when user chooses "Tidy" */
     onTidySelection?: (ids: string[]) => void;
+    /** DRW-103: called with selected shape ids when user chooses "Export to Miro" */
+    onExportSelection?: (ids: string[]) => void;
   } = {},
 ): TLComponents {
-  const { onMermaidImport, onTidySelection } = opts;
+  const { onMermaidImport, onTidySelection, onExportSelection } = opts;
 
   // DRW-088 AC#1: ContextMenu wrapper — extends DefaultContextMenu with "Tidy"
   // group when 2+ shapes are selected. We wrap DefaultContextMenu with custom
@@ -48,7 +50,7 @@ export function buildTldrawComponents(
     return (
       <DefaultContextMenu>
         <DefaultContextMenuContent />
-        {selectedCount >= 2 && (
+        {selectedCount >= 2 && onTidySelection && (
           // DRW-088: "Tidy" item using plain tlui CSS classes.
           // Avoids TldrawUiMenuGroup/TldrawUiMenuItem which have bigint in return
           // type union (TypeScript ReactNode incompatibility in strict mode).
@@ -62,11 +64,30 @@ export function buildTldrawComponents(
               }}
               onClick={() => {
                 const ids = editor.getSelectedShapeIds() as unknown as string[];
-                onTidySelection!(ids);
+                onTidySelection(ids);
               }}
             >
               <span className="tlui-button__label">Tidy selection</span>
               <kbd className="tlui-kbd">⌘⇧L</kbd>
+            </button>
+          </div>
+        )}
+        {selectedCount >= 1 && onExportSelection && (
+          // DRW-103: "Export to Miro" item — visible when 1+ shapes selected.
+          <div className="tlui-menu__group">
+            <button
+              type="button"
+              className="tlui-button tlui-button__menu"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+              }}
+              onClick={() => {
+                const ids = editor.getSelectedShapeIds() as unknown as string[];
+                onExportSelection(ids);
+              }}
+            >
+              <span className="tlui-button__label">Export to Miro</span>
+              <kbd className="tlui-kbd">⌘⇧E</kbd>
             </button>
           </div>
         )}
@@ -122,8 +143,8 @@ export function buildTldrawComponents(
         ) : null}
       </DefaultToolbar>
     ),
-    // DRW-088: AC#1 — context menu "Tidy" item.
+    // DRW-088/DRW-103: custom context menu — "Tidy" (2+ shapes) + "Export to Miro" (1+ shapes).
     // TidyContextMenu wraps DefaultContextMenu with custom children content.
-    ContextMenu: onTidySelection ? TidyContextMenu : undefined,
+    ContextMenu: (onTidySelection || onExportSelection) ? TidyContextMenu : undefined,
   };
 }

@@ -219,6 +219,26 @@ async function main() {
     process.exit(1);
   }
 
+  if (cmd === "config") {
+    const sub = argv[1]; // "set" | "get" | "unset"
+    const key = argv[2]; // "miro.token"
+    const value = argv[3]; // только для set
+    const { cmdConfigSet, cmdConfigGet, cmdConfigUnset } = await import("./config");
+    if (sub === "set") {
+      if (!key || value === undefined) die("usage: shemma config set <key> <value>");
+      return cmdConfigSet(key, value);
+    }
+    if (sub === "get") {
+      if (!key) die("usage: shemma config get <key>");
+      return cmdConfigGet(key);
+    }
+    if (sub === "unset") {
+      if (!key) die("usage: shemma config unset <key>");
+      return cmdConfigUnset(key);
+    }
+    die(`unknown config subcommand: ${sub}; expected set | get | unset`);
+  }
+
   // Zero-arg `shemma` === `shemma open` (no room → "default").
   // `shemma open <room>` overrides room. Also matches when user passes only
   // flags (e.g. `shemma --storage /foo`) — first token starts with `--`,
@@ -456,6 +476,12 @@ Data:
 Diagnostics:
   logs     [--tail N] [--follow] [--all | --profile p]  # read daemon log
   doctor   [--all | --profile p] [--json]               # read-only health checks
+
+Config:
+  config set <key> <value>                    # store credential / setting in ~/.config/shemma/config.json
+  config get <key>                            # read setting (token values masked: "[set] (N chars)")
+  config unset <key>                          # remove setting
+                                              # Supported keys (0.19.0): miro.token
 
 MCP integration:
   mcp start [--profile <p>] [--room <id>] [--base-url <url>]

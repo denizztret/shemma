@@ -17,6 +17,7 @@ import { roomsRoutes } from "./routes/rooms";
 import { stateRoutes } from "./routes/state";
 import { versionRoutes } from "./routes/version";
 import { viewportRoutes } from "./routes/viewport";
+import { exportRoutes } from "./routes/export";
 import { applyStoreChanges, isEmptyBatch, rebuildDidrawIndex } from "./store-ops";
 import { DEFAULT_ROOM, type RoomState } from "./types";
 import { type Sock, WsHub } from "./ws";
@@ -58,6 +59,7 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", contextRoutes(rooms));
   app.route("/", importMermaidRoutes(bus));
   app.route("/", activeRoomsRoutes(bus.getActiveRooms()));
+  app.route("/", exportRoutes(rooms, { onDirty }));
   return { app, rooms, bus, persistence };
 }
 

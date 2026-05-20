@@ -5,12 +5,14 @@ import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
 import { importMermaid, isBoundsContained, unionBoundsOf } from "./canvas/mermaid-import";
 import { backfillStoreRecords } from "./canvas/schema-placeholder";
+import { makeExportHotkeyHandler } from "./canvas/export-hotkey";
 import { makeTidyHotkeyHandler, tidyLayout } from "./canvas/tidy-layout";
 import { AiActivityBadge } from "./chrome/AiActivityBadge";
 import { AppChrome } from "./chrome/AppChrome";
 import { ErrorBanner } from "./chrome/ErrorBanner";
 import { buildTldrawComponents } from "./chrome/TldrawComponents";
 import { UpdateBanner } from "./chrome/UpdateBanner";
+import { ExportMiroModal } from "./canvas/export-miro-modal";
 import { MermaidImportModal } from "./mermaid/MermaidImportModal";
 import { PromptDrawer } from "./prompts/PromptDrawer";
 import { PromptInput } from "./prompts/PromptInput";
@@ -85,17 +87,26 @@ export function App({ room }: { room: string }) {
   // Mermaid import modal toggled by ⌘M (Ctrl+M on non-Mac). Closed by
   // Render/Cancel/Esc — управление внутри MermaidImportModal.
   const [mermaidOpen, setMermaidOpen] = useState(false);
+  // DRW-103: Export to Miro modal — toggled by ⌘⇧E / context menu item.
+  const [exportOpen, setExportOpen] = useState(false);
   const [aiActivity, setAiActivity] = useState<AiActivity | null>(null);
 
   // tldraw requires `components` prop to be memoized (or defined outside the
   // component) to avoid re-mounting the editor on every render.
   // DRW-088: onTidySelection is passed so the context menu can call tidyLayout.
+  // DRW-103: onExportSelection is passed so the context menu can open the export modal.
   const onTidySelection = useRef<((ids: string[]) => void) | null>(null);
+  const onExportSelection = useRef<((ids: string[]) => void) | null>(null);
+  onExportSelection.current = (ids: string[]) => {
+    if (ids.length === 0) return;
+    setExportOpen(true);
+  };
   const tldrawComponents = useMemo(
     () =>
       buildTldrawComponents(room, {
         onMermaidImport: () => setMermaidOpen(true),
         onTidySelection: (ids) => onTidySelection.current?.(ids),
+        onExportSelection: (ids) => onExportSelection.current?.(ids),
       }),
     [room],
   );
@@ -145,6 +156,20 @@ export function App({ room }: { room: string }) {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [editor, room]);
+
+  // DRW-103: ⌘⇧E / Ctrl+Shift+E — open Export to Miro modal for current selection.
+  // Wired at component level (not inside editor useEffect) to activate before editor mounts.
+  useEffect(() => {
+    const handler = makeExportHotkeyHandler(
+      () => (editor ? (editor.getSelectedShapeIds() as unknown as string[]) : []),
+      (ids) => {
+        if (ids.length === 0) return;
+        setExportOpen(true);
+      },
+    );
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [editor]);
 
   // Periodic re-fetch of AI activity (10s). Cheap insurance against WS drops
   // that leave the badge in a stale state; also re-fires on tab focus.
@@ -511,6 +536,14 @@ export function App({ room }: { room: string }) {
                   return { ok: false, error: String(e) };
                 }
               }}
+            />
+          )}
+          {editor && (
+            <ExportMiroModal
+              open={exportOpen}
+              room={room}
+              selectedIds={selection}
+              onClose={() => setExportOpen(false)}
             />
           )}
           <PromptDrawer tick={promptsTick} />

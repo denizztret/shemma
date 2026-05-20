@@ -8,6 +8,7 @@ import { registerMcpPrompts } from "./prompts-templates";
 import { registerDomainTools } from "./tools/domain";
 import { registerInstructionsTool } from "./tools/instructions";
 import { registerOpenTool } from "./tools/open";
+import { registerExportMiroTool } from "./tools/export-miro";
 import { registerPromptAndActivityTools } from "./tools/prompts";
 import { registerReadOnlyTools } from "./tools/read-only";
 import { SHEMMA_MCP_VERSION } from "./version";
@@ -72,6 +73,11 @@ export function createShemmaMcpServer(opts: ShemmaMcpServerOpts): ShemmaMcpServe
   });
   registerPromptAndActivityTools(server, { client: opts.client, defaultRoom: opts.defaultRoom });
   registerOpenTool(server, { autoOpen, defaultRoom: opts.defaultRoom });
+  registerExportMiroTool(server, {
+    client: opts.client,
+    resolver,
+    defaultRoom: opts.defaultRoom,
+  });
   registerMcpPrompts(server);
 
   return { server, meta, resolver, autoOpen, opts };

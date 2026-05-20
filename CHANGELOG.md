@@ -1,3 +1,73 @@
+## 0.19.0 — 2026-05-20 — Export selection → Miro (DRW-103)
+
+MINOR feature: structural export выбранных shapes из tldraw canvas в Miro board через REST API v2. Hotkey, context menu, MCP tool, CLI config subcommand. Backend-proxy architecture (token остаётся в daemon, не в browser).
+
+### Added (DRW-103)
+
+- **Export selection → Miro:** structural export of shapes, sticky notes, text, frames, and connectors from tldraw canvas to a Miro board via Miro REST API v2.
+  - Triggers: `⌘⇧E` (Ctrl+Shift+E) hotkey, "Export to Miro" context menu item (visible when selection ≥ 1), MCP tool `shemma_export_miro` for AI agents.
+  - Auth: developer non-expiring token via new `shemma config set miro.token <token>` subcommand. Stored chmod-600 в `~/.config/shemma/config.json`. Token validates on set (GET /v2/boards 401 → reject; offline → warn + save).
+  - Three-phase upload: Pass A1 (frames bulk) → A2 (non-frame items with `parent.id` from A1) → Pass B (connectors, throttled 10 concurrent). Partial-commit semantics: `room.meta.miroExports` writes after each phase + each A2 chunk, survives mid-flight failures.
+  - Coordinate translation: page-space resolution (frame children walked bottom-up via parentId chain) → centroid normalised to Miro `(0, 0)`. Frame-children carry parent-relative positions in Pass A2.
+  - Color mapping: nearest Miro preset (Euclidean RGB) для shape `fillColor` — 16 hex enum + `#ffffff` default. Sticky-note `fillColor` — 16 named colors (`yellow`, `cyan`, etc.). `borderColor` принимает произвольный hex.
+  - Group expansion: `expandGroups` recursively drops `type: "group"` records и возвращает leaf descendants.
+  - Connector anchoring: tldraw 5.x binding records (`typeName: "binding"`, `props.terminal`, `props.normalizedAnchor`) → Miro `startItem.snapTo` через 0.25/0.75 thresholds.
+  - Tracking: `room.meta.miroExports[boardId]` records `elementId → miroItemId` mapping for future update/diff flows. Envelope schema extension `meta?: RoomMeta` — additive optional, **no `ENVELOPE_SCHEMA_VERSION` bump** (stays at 3).
+  - Per-chunk Pass A2 error handling: validation errors (4xx other than auth/404/429) skip whole chunk with `reason: "validation-error"`, остальные chunks продолжают. Fatal errors (`MiroAuthError` / `MiroNotFoundError` / `MiroRateLimitError`) abort pass; tracking из preceding chunks сохраняется.
+
+### Files (new)
+
+- Backend export module: `apps/backend/src/export/miro/{client,builder,color-mapping,coords,rich-text,tracking,upload,probe.md}.ts`
+- Backend routes: `apps/backend/src/routes/export.ts` (POST `/api/export/miro` + GET `/api/export/miro/boards` с 5-min TTL cache).
+- CLI: `packages/shemma-cli/src/config.ts` — `shemma config set/get/unset miro.token`.
+- MCP: `packages/shemma-mcp/src/tools/export-miro.ts` — `shemma_export_miro` tool.
+- Frontend: `apps/frontend/src/canvas/{export-miro-modal.tsx,export-hotkey.ts}` — 5-phase modal (loading→pick→confirm→exporting→result/error) + ⌘⇧E hotkey.
+- Manual E2E: `docs/manual-tests/drw-103-miro-export.md` — 9-section checklist (CLI lifecycle / boards endpoint / modal flow / Miro visual / tracking persistence / context menu / MCP / edge cases / probe verification).
+- Spec + plan: `docs/superpowers/specs/2026-05-19-export-miro-design.md` v0.2 (1829 lines, 15 sections) + `docs/superpowers/plans/2026-05-20-export-miro-plan.md` v0.2 (5782 lines, 18 tasks).
+
+### Files (edited)
+
+- `apps/backend/src/{types,envelope,config,index}.ts` — `RoomMeta` / `MiroExportsMap` types, envelope `meta?` plumbing, config file I/O (`configFilePath`, `readConfig`, `writeConfig`, `readMiroToken`, `writeMiroToken`, `unsetMiroToken`), route registration.
+- `apps/frontend/src/{App.tsx,chrome/TldrawComponents.tsx}` — hotkey wiring + modal state + context menu item.
+- `packages/shemma-cli/src/index.ts` — `config` subcommand routing + help text.
+- `packages/shemma-mcp/src/{server.ts,schemas.ts}` — tool registration + `ExportMiroArgs` zod schema.
+
+### Known limitations
+
+- **Miro `metadata`/`appData` payload fields:** Task 1 probe (SDK source analysis) showed Miro REST v2 `ShapeCreateRequest` does NOT accept these. Tracking lives exclusively client-side in `room.meta.miroExports`. Live verification deferred — see `scripts/probe-miro.sh` + manual checklist §9.
+- **Miro frame nesting:** Miro frames cannot nest (1-level cap). Inner frames in shemma selection become regular Miro shapes.
+- **Rich text → plain only:** ProseMirror richText flattens to plain text on Miro side (bold/italic/links lost in MVP).
+- **Append-only:** re-export creates fresh Miro items; tracking entries overwrite with new `miroItemId` (old items remain orphaned in Miro). Rollback / update via PATCH out of scope.
+- **Color fidelity:** shape `fillColor` snaps to nearest of 16 Miro presets; sticky-note `fillColor` to nearest of 16 named colors. `borderColor` accepts arbitrary hex (no snap).
+- **Free-floating arrows:** arrows without bindings → skipped with `reason: "unsupported-type"`.
+- **Cross-selection connectors:** arrow with endpoint outside selection → skipped with `reason: "cross-selection-connector"`.
+
+### Tests
+
+- 445 backend pass / 0 fail (was 321 baseline → +124 DRW-103 tests across 11 new modules + 1 integration test).
+- 67 domain pass / 0 fail.
+- 164 cli pass / 0 fail (+9 config tests).
+- 145 mcp pass / 0 fail (+3 export-miro tests).
+- 8 root pass / 0 fail.
+- **Total: 829 pass / 0 fail** across 5 packages.
+
+### Code-simplifier pass
+
+Post-implementation simplification (-201 LOC across 15 implementation files): removed file-header comments, forward-looking notes, task-reference comments, dead branches; consolidated `attachTracking` helpers. Behavior preserved.
+
+### Phase-end review fix
+
+Review identified `attachTracking` in `builder.ts` populated Miro-unsupported `metadata`/`appData` fields contradicting spec §10.2 + probe finding. Fix: removed `attachTracking` + `TrackingField` / `TrackingMeta` / `buildTracking` + 4 builder ctx fields + `metadata`/`appData` from `MiroBulkItem`/`MiroConnectorPayload`. -130 LOC. Tracking now lives solely in `room.meta.miroExports`.
+
+### Followups
+
+- DRW-104 (proposed) — live Miro API probe verification (`scripts/probe-miro.sh`).
+- DRW-105 (proposed) — streaming progress in export modal.
+- DRW-106 (proposed) — reverse-lookup index for tracking (miroItemId → elementId).
+- DRW-107 (proposed) — connector concurrency rewrite with clean semaphore.
+
+---
+
 ## 0.18.9 — 2026-05-19 — Code simplifier pass на stabilization diff (-109 LOC)
 
 PATCH chore: упрощение кода stabilization-серии 0.18.0..0.18.8 без изменения наблюдаемого поведения. Никаких behavior changes, никаких bug fixes — только дедупликация и dead-code removal.

@@ -101,3 +101,38 @@ export const ImportMermaidArgs = {
    */
   focus: z.enum(["new", "fit-all", "none"]).optional(),
 };
+
+// DRW-103: Miro export MCP tool args.
+export const ExportMiroArgs = {
+  boardId: z
+    .string()
+    .min(1)
+    .describe(
+      "Miro board id. If omitted, the last-used board (from room.meta.miroExports) " +
+      "is used. If no tracking — returns error asking to specify boardId.",
+    )
+    .optional(),
+  boardName: z.string().optional().describe("Display name cached for tracking."),
+  selection: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Explicit list of element ids ('shape:...') to export. Empty/omitted with " +
+      "scope='selection' returns an error (call this with the user's visual " +
+      "selection from the canvas).",
+    ),
+  scope: z
+    .enum(["selection", "room"])
+    .default("selection")
+    .describe(
+      "'selection' (default) — uses the `selection` array. " +
+      "'room' — exports all shapes in the room (ignores `selection`).",
+    ),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe(
+      "If true — returns preview JSON without making Miro API calls.",
+    ),
+  room: z.string().optional().describe("Room id (resolved via resolver chain when omitted)."),
+};
