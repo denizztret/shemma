@@ -1,3 +1,23 @@
+## 0.20.1 — 2026-05-20 — Visual fidelity: text-align, arrow dash, implicit arrows
+
+PATCH: live verify в Miro показал 3 разрыва visual fidelity vs shemma canvas (4-й — Miro caption position — fundamental limitation, документирован):
+
+### Fixed
+
+- **Text alignment** (`buildShapePayload`): экспорт читает `props.align` / `props.verticalAlign` и маппит в Miro `textAlign` + `textAlignVertical`. tldraw default `middle`/`middle` → Miro `center`/`middle`. Раньше Miro default `left`/`top` → текст в shapes съезжал в угол.
+- **Arrow dash style** (`buildConnectorPayload`): экспорт читает arrow `props.dash` и маппит в Miro `strokeStyle`. `dashed → dashed`, `dotted → dotted`, `draw/solid → normal`. Также установлены `strokeColor: #1a1a1a` + `strokeWidth: 2.0` (Miro default opacity 0). Раньше dashed arrows импортировались как solid.
+- **Implicit arrows** (`upload.ts` — `expandImplicitArrows`): после frame-children expansion, walk store bindings: для arrow где BOTH endpoint'а в expanded selection → добавляется в selection даже если tldraw mutex его исключил. Раньше: arrow внутри frame (соединяющий 2 frame children) пропадал из export — frame создавался с двумя disconnected shapes.
+
+### Tests
+
+- 1 new test "frame in selection without arrow between children → arrow auto-included" — verifies expanded arrow appears as connector. Backend total: **447 pass / 0 fail**.
+
+### Known limitation (not fixed)
+
+- **Miro caption position** — captions на connector в Miro inline (along the line). В shemma label рендерится поперёк (perpendicular). Miro REST API не поддерживает perpendicular caption orientation — fundamental SDK limitation, accept as-is.
+
+---
+
 ## 0.20.0 — 2026-05-20 — Frame children auto-expansion (DRW-105)
 
 MINOR: при export'е, если frame в selection — все его descendants автоматически включаются. Раньше tldraw Cmd+A frame-mutex исключал children → exported frame был пустым контейнером в Miro, а arrows с endpoints внутри frame skipped как cross-selection. Теперь frame export "just works" по intuitive expectations.

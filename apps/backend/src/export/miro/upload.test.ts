@@ -156,6 +156,30 @@ describe("runMiroExport — frame children auto-expansion (DRW-105)", () => {
     }
   });
 
+  it("frame in selection without arrow between children → arrow auto-included", async () => {
+    const mock = startMockMiro();
+    try {
+      const room = makeRoomState();
+      const store = room.store.store as Record<string, RawShape>;
+      store["shape:F"] = frameShape("shape:F", 100, 100, 400, 300, "Frame");
+      store["shape:c1"] = { ...geoShape("shape:c1", 10, 10), parentId: "shape:F" };
+      store["shape:c2"] = { ...geoShape("shape:c2", 60, 60), parentId: "shape:F" };
+      arrowShape("shape:arr", "shape:c1", "shape:c2").forEach((r) => { store[r.id] = r; });
+
+      const client = new MiroClient({ token: "t", baseUrl: mock.url });
+      const result = await runMiroExport({
+        client, room, boardId: "B1",
+        selection: ["shape:F"], // frame only — children + arrow excluded by tldraw mutex
+      });
+
+      expect(result.itemsCreated).toBe(3); // frame + 2 children
+      expect(result.connectorsCreated).toBe(1); // arrow between children auto-included
+      expect(result.skipped).toEqual([]);
+    } finally {
+      mock.stop();
+    }
+  });
+
   it("nested frames: descendants walked recursively", async () => {
     const mock = startMockMiro();
     try {

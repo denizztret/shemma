@@ -48,12 +48,18 @@ export function buildShapePayload(shape: RawShape, ctx: BuilderCtx): MiroBulkIte
   // Set visible defaults; user-provided meta.fillHex / meta.borderHex override.
   const metaFillHex = (shape.meta?.fillHex as string | undefined) ?? undefined;
   const metaBorderHex = shape.meta?.borderHex as string | undefined;
+  const align = (props.align as string | undefined) ?? "middle";
+  const valign = (props.verticalAlign as string | undefined) ?? "middle";
+  const textAlignMap: Record<string, string> = { start: "left", middle: "center", end: "right" };
+  const textVAlignMap: Record<string, string> = { start: "top", middle: "middle", end: "bottom" };
   const style: Record<string, unknown> = {
     borderColor: metaBorderHex ?? "#1a1a1a",
     borderWidth: "2.0",
     borderOpacity: "1.0",
     borderStyle: "normal",
     fillOpacity: metaFillHex ? "1.0" : "0.0",
+    textAlign: textAlignMap[align] ?? "center",
+    textAlignVertical: textVAlignMap[valign] ?? "middle",
   };
   if (metaFillHex && metaFillHex.startsWith("#")) {
     style.fillColor = nearestShapeColor(metaFillHex);
@@ -236,6 +242,13 @@ export function buildConnectorPayload(
   const labelText = richTextToPlain(arrow.props?.richText);
   const captions = labelText ? [{ content: labelText }] : undefined;
 
+  const dash = (arrow.props?.dash as string | undefined) ?? "draw";
+  const dashMap: Record<string, string> = {
+    dashed: "dashed",
+    dotted: "dotted",
+    draw: "normal",
+    solid: "normal",
+  };
   const payload: MiroConnectorPayload = {
     startItem: {
       id: startMiroId,
@@ -246,7 +259,11 @@ export function buildConnectorPayload(
       snapTo: anchorToSnapTo(endpoints.end.normalizedAnchor),
     },
     shape,
-    style: {},
+    style: {
+      strokeStyle: dashMap[dash] ?? "normal",
+      strokeColor: "#1a1a1a",
+      strokeWidth: "2.0",
+    },
     ...(captions ? { captions } : {}),
   };
   return { kind: "ok", payload };

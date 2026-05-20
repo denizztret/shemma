@@ -108,6 +108,35 @@ function expandFrameDescendants(
   return Array.from(out);
 }
 
+function expandImplicitArrows(
+  ids: string[],
+  store: Record<string, RawShape>,
+): string[] {
+  const set = new Set(ids);
+  const endpoints = new Map<string, { start?: string; end?: string }>();
+  for (const id in store) {
+    const r = store[id] as unknown as {
+      typeName?: string;
+      type?: string;
+      fromId?: string;
+      toId?: string;
+      props?: { terminal?: string };
+    };
+    if (r.typeName !== "binding" || r.type !== "arrow") continue;
+    if (!r.fromId || !r.toId) continue;
+    const ep = endpoints.get(r.fromId) ?? {};
+    if (r.props?.terminal === "start") ep.start = r.toId;
+    else if (r.props?.terminal === "end") ep.end = r.toId;
+    endpoints.set(r.fromId, ep);
+  }
+  for (const [arrowId, ep] of endpoints) {
+    if (ep.start && ep.end && set.has(ep.start) && set.has(ep.end)) {
+      set.add(arrowId);
+    }
+  }
+  return Array.from(set);
+}
+
 export async function runMiroExport(p: RunExportParams): Promise<RunExportResult> {
   const skipped: SkippedItem[] = [];
   const store = p.room.store.store as Record<string, RawShape>;
@@ -116,7 +145,10 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
   // back so the user's exported frame isn't an empty container in Miro.
   const withFrameChildren = expandFrameDescendants(p.selection, store);
   const expanded = expandGroups(withFrameChildren, store);
-  const { frames, items, arrows, unsupported } = classify(expanded, store);
+  // Pick up arrows whose both endpoints are now in the expanded selection but
+  // were excluded by tldraw's selection mutex (e.g. arrow between frame children).
+  const expandedWithArrows = expandImplicitArrows(expanded, store);
+  const { frames, items, arrows, unsupported } = classify(expandedWithArrows, store);
   for (const u of unsupported) skipped.push({ elementId: u, reason: "unsupported-type" });
 
   const allBounds = [...frames, ...items, ...arrows]
