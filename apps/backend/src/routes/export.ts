@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { readMiroToken } from "../config";
 import type { Rooms } from "../rooms";
 import { resolveRoomId } from "../rooms";
+import { rebuildDidrawIndex } from "../store-ops";
 import { MiroAuthError, MiroClient, type MiroBoard } from "../export/miro/client";
 import { runMiroExport } from "../export/miro/upload";
 
@@ -54,15 +55,20 @@ export function exportRoutes(rooms: Rooms, opts: ExportRoutesOpts = {}) {
 
       const room = await rooms.get(rv.id);
 
-      const selection = Array.isArray(body.selection) && body.selection.length > 0
+      const rawSelection = Array.isArray(body.selection) && body.selection.length > 0
         ? body.selection
         : body.scope === "room"
           ? Object.keys(room.store.store).filter((id) => id.startsWith("shape:"))
           : [];
 
-      if (selection.length === 0) {
+      if (rawSelection.length === 0) {
         return c.json({ ok: false, error: "empty-selection" }, 400);
       }
+
+      // Frontend sends a mix: didrawName for AI-created shapes, raw shape ids
+      // for user-drawn ones (e.g., arrows). Resolve names → real shape ids.
+      const nameIndex = rebuildDidrawIndex(room.store);
+      const selection = rawSelection.map((s) => nameIndex.get(s) ?? s);
 
       const client = new MiroClient({ token, baseUrl: opts.miroBaseUrl });
 
