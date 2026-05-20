@@ -1,3 +1,43 @@
+## 0.20.2 — 2026-05-20 — DRW-103 phase code-simplifier pass (-8 LOC)
+
+PATCH chore: 3-agent /simplify review (reuse, quality, efficiency) на DRW-103 phase diff (0.19.0..0.20.1). Без изменений observable behavior.
+
+### Refactored
+
+- **Efficiency:**
+  - `apps/backend/src/export/miro/builder.ts` O(A×N) → O(N+A): `buildArrowEndpointsIndex` строит endpoints map одним проходом, переиспользуется через `ConnectorBuilderCtx.endpointsIndex` вместо per-arrow store scan.
+  - `apps/backend/src/export/miro/upload.ts`: `resolvePageBounds` cached в `Map<id, bounds>` (двойной вызов на shape устранён).
+  - `expandFrameDescendants` O(N×depth) → O(subtree) через `buildChildrenIndex` (one-pass parent→children map).
+  - `expandImplicitArrows` reuses `buildArrowEndpointsIndex` вместо собственного binding-scan.
+  - `routes/export.ts`: `rebuildDidrawIndex` перемещён после dryRun guard (skip O(N) walk на preview-запросах).
+- **Quality:**
+  - Module-level constants: `TEXT_ALIGN`, `TEXT_VALIGN`, `ARROW_DASH` (вместо per-call object allocation в `buildShapePayload` / `buildConnectorPayload`).
+  - `applyPositionAndParent` helper устраняет copy-paste из 4 `buildXxxPayload` return blocks.
+  - `passAMap` manual merge → `new Map([...frameMap, ...itemMap])` spread.
+  - `expandFrameDescendants` uses existing `isFrameLike` helper (inline duplicate check removed).
+  - `shemma-cli/src/config.ts`: `assertSupportedKey` extracted из 3 copy-pastes.
+  - Удалён redundant `?? undefined` на optional cast.
+  - `apps/backend/src/config.ts`: убран duplicate `import * as path` (named imports `dirname`/`join`/`basename` уже доступны).
+- **Comment hygiene:**
+  - Удалены 9 task-ref комментариев (`DRW-088`, `DRW-103`, `§X.Y` spec refs) из `App.tsx`, `chrome/TldrawComponents.tsx`, `schemas.ts`. Task references принадлежат git log + CHANGELOG, не source.
+
+### Не применено (judgement)
+
+- `richTextToPlain` consolidation с `richTextToString` (domain/context.ts) — разная semantics (newline separator critical для Miro multiline).
+- `mapHttpResponse` в MCP `export-miro.ts` — works as-is.
+- `pass-a1/a2/b` stringly-typed phase prefix в `RunExportResult.error` — deferred (low impact).
+- `nearestShapeColor` rename → `normalizeHex` — judgement call.
+
+### Tests
+
+- **756 pass / 0 fail** across 5 packages (backend 447 + cli 164 + mcp 145 + domain 67 + root 8). Frontend tsc clean.
+
+### LOC
+
+- **8 files changed**, +123 / -131 lines (−8 net).
+
+---
+
 ## 0.20.1 — 2026-05-20 — Visual fidelity: text-align, arrow dash, implicit arrows
 
 PATCH: live verify в Miro показал 3 разрыва visual fidelity vs shemma canvas (4-й — Miro caption position — fundamental limitation, документирован):
