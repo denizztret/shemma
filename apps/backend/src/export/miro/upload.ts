@@ -13,7 +13,7 @@ import type { MiroBulkItem, MiroClient, MiroConnectorPayload } from "./client";
 import { computeCentroid, resolvePageBounds, type RawShape } from "./coords";
 import { commitBoardExport } from "./tracking";
 
-const BULK_CHUNK_SIZE = 50;
+const BULK_CHUNK_SIZE = 20;
 const CONNECTOR_CONCURRENCY = 10;
 
 export interface RunExportParams {

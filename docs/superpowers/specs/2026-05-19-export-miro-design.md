@@ -175,11 +175,13 @@ PACKAGES/FILES:
 - OAuth full flow: ≥200 LOC (HTTP server для redirect callback, token store, refresh scheduler) — избыточен.
 - Non-expiring developer token: ~30 LOC (file read + bearer header) — достаточен.
 
-### 4.2 Color mapping: nearest-color по Euclidean RGB distance
+### 4.2 Color mapping: shapes accept arbitrary hex, sticky_notes named-enum
 
-**Решение:** автоматический mapping shemma hex → ближайший Miro preset через Euclidean distance по RGB. 16 hex presets для `shapes`, 16 named-color enums для `sticky_notes`. Helper `nearestShapeColor(hex)` / `nearestStickyColor(hex)` (~30 LOC) в `apps/backend/src/export/miro/color-mapping.ts`.
+**Решение (revised post-probe 0.19.1):** для `shapes` — pass-through `fillColor` (any `#rrggbb`), для `sticky_notes` — nearest named enum через Euclidean RGB distance. Helper `nearestShapeColor(hex)` (identity normaliser) / `nearestStickyColor(hex)` (16-enum snap) в `apps/backend/src/export/miro/color-mapping.ts`.
 
-**Rationale:** Miro REST API принимает `style.fillColor` только из фиксированного набора preset hex-значений (для shapes) и named enum (для sticky notes). Произвольный hex невозможен. Альтернативы:
+**Rationale:** Live probe (2026-05-20 — `apps/backend/src/export/miro/probe.md` Section A) показал что Miro REST v2 принимает arbitrary hex для shape `style.fillColor` (изначальный SDK-source анализ был overconservative). Sticky notes остаются limited 16 named colors. `borderColor` принимает arbitrary hex.
+
+Pre-probe (0.19.0) rationale (kept для history):
 - **Показывать preview маппинга перед export** — UX overhead, тормозит workflow; цвета в Miro — не primary value export'а.
 - **Использовать borderColor + прозрачный fill** — не передаёт fill intent пользователя.
 - **Nearest-color auto-mapping** — минимальный friction, разумная fidelity для типичных palette (синие, зелёные, красные оттенки находят близкие аналоги).
@@ -770,7 +772,7 @@ interface MiroTextItem {
 }
 ```
 
-**Batch size limit:** документально не указан в Miro API (подтверждено Task 1 probe, 2026-05-20 — docs не содержат max items constraint). Значение `BULK_CHUNK_SIZE = 50` сохраняется как консервативный эмпирический default (community practice). Реализация: split на chunks по 50, **последовательные** запросы (не параллельные — Pass A2 chunks внутри себя последовательны, чтобы rate limit credits не выгорал на параллелизме). Live verification через `scripts/probe-miro.sh` секция E (60 items) рекомендована перед shipping.
+**Batch size limit (revised 0.19.1):** Live probe (2026-05-20, Section E с 60 items) вернул `400: At most 20 items could be created with a single request`. `BULK_CHUNK_SIZE = 20`. Request body — raw array `[...]`, НЕ `{data: [...]}` (response shape остаётся `{data: [...], type: "bulk-list"}`). Реализация: split на chunks по 20, **последовательные** запросы (не параллельные — Pass A2 chunks внутри себя последовательны).
 
 ```typescript
 const itemMap = new Map<string, string>();

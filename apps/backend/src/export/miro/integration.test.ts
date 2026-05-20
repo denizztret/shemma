@@ -43,9 +43,8 @@ function startMiroMock() {
       const body = req.body ? await req.json().catch(() => null) : null;
       requests.push({ path: u.pathname, body });
       if (u.pathname.endsWith("/items/bulk")) {
-        const data = (body as { data: unknown[] }).data.map(() => ({
-          id: `miro-item-${nextId++}`,
-        }));
+        const items = body as unknown[];
+        const data = items.map(() => ({ id: `miro-item-${nextId++}` }));
         return new Response(JSON.stringify({ data }), { status: 201, headers: { "content-type": "application/json" } });
       }
       if (u.pathname.endsWith("/connectors")) {
@@ -162,9 +161,9 @@ describe("E2E backend: full export — 5 shapes + 3 connectors + 1 frame", () =>
     const conns = miroServer.requests.filter((r) => r.path.endsWith("/connectors"));
     expect(bulks).toHaveLength(2);
     expect(conns).toHaveLength(3);
-    const a1Items = (bulks[0].body as { data: Array<{ type: string }> }).data;
+    const a1Items = bulks[0].body as Array<{ type: string }>;
     expect(a1Items.every((it) => it.type === "frame")).toBe(true);
-    const a2Items = (bulks[1].body as { data: Array<{ type: string; parent?: { id: string } }> }).data;
+    const a2Items = bulks[1].body as Array<{ type: string; parent?: { id: string } }>;
     expect(a2Items.some((it) => it.parent?.id !== undefined)).toBe(true);
 
     // Tracking written to room.meta.miroExports
