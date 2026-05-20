@@ -293,18 +293,21 @@ Centroid selection → `(0, 0)` на Miro board.
 
 **Known limitation: Miro не auto-pans.** При создании items через API Miro **не центрирует viewport** на области created items. User увидит export в `(0, 0)` board area; для навигации в Miro UI — `Cmd+A` → `Frame It`, либо открыть board через `boardUrl` из result (опционально query-параметр `viewport=` если Miro поддерживает; на момент v0.2 spec — не verified). Это accept-as-known, не вынесено в Open Questions.
 
-**Frame children в Miro payload.** Поскольку шаг 0 даёт нам абсолютные page-space координаты для **всех** shapes (включая frame children), centroid-translation применяется одинаково. Miro принимает `position` в координатах parent (если `parent.id` указан) — для frame children необходимо дополнительно **обратное преобразование** в frame-relative space:
+**Frame children в Miro payload (revised 0.19.2):** Miro отдаёт child position с `relativeTo: "parent_top_left"` (verified live probe 2026-05-20). Math:
 
 ```typescript
 // Для shape с parent.id (frame child в Miro):
-const miroFrameX = framePosition.x;          // уже translated к Miro centroid
-const miroFrameY = framePosition.y;
-const childAbsMiroX = (shape.pageX + shape.w / 2) - centroidX;
-const childAbsMiroY = (shape.pageY + shape.h / 2) - centroidY;
-const childRelX = childAbsMiroX - miroFrameX;
-const childRelY = childAbsMiroY - miroFrameY;
+// Position = child page-center − parent page-top-left.
+const parentTopLeftX = parentPageX;             // НЕ centroid-translated
+const parentTopLeftY = parentPageY;
+const childPageCenterX = shape.pageX + shape.w / 2;
+const childPageCenterY = shape.pageY + shape.h / 2;
+const childRelX = childPageCenterX - parentTopLeftX;
+const childRelY = childPageCenterY - parentTopLeftY;
 // payload: parent.id = <miro_frame_id>, position = { x: childRelX, y: childRelY }
 ```
+
+Centroid translation НЕ применяется для child position — она применяется только к top-level items (включая parent frame). Origin (0,0) для child = parent frame top-left, не centroid.
 
 Pre-condition: `miro_frame_id` доступен **после Pass A1** (см. §6 two-pass split). Дети попадают в Pass A2 с уже resolved `parent.id`.
 

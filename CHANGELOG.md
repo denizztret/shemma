@@ -1,3 +1,22 @@
+## 0.19.2 — 2026-05-20 — Frame-child positioning hot-patch
+
+PATCH: post-0.19.1 live export вернул `400: "new position is outside of parent boundaries"` для frame children. Root cause — Miro REST v2 child position уэз `relativeTo: "parent_top_left"`, не `parent_center` как предполагалось в `upload.ts` math.
+
+### Fixed
+
+- **Frame-child coord math** (`apps/backend/src/export/miro/upload.ts`): для shapes с `parentId` указывающим на frame в `frameMap`, `miroX/miroY` теперь = `childPageCenter − parentPageTopLeft` (не `childPageCenter − parentPageCenter`). Centroid translation НЕ применяется к child position — только к top-level items.
+
+### Verified
+
+- Live export room "export-smoke" → board "M.Shemma" (`uXjVHQqmFVo=`): 5 items (1 frame + 4 shapes inc. 2 frame children) + 3 connectors created, 0 skipped. Tracking persisted в `room.meta.miroExports`.
+- 9 upload tests still pass (existing tests only assert `parent.id !== undefined`, not exact positions — coord-math test gap для followup).
+
+### Spec
+
+- §5.1 + probe.md updated: Miro child position `relativeTo: "parent_top_left"` documented с math reference.
+
+---
+
 ## 0.19.1 — 2026-05-20 — Miro export hot-patch (live probe findings)
 
 PATCH: live probe против реального Miro API (board `uXjVHQqmFVo=`) обнаружил 3 расхождения с SDK-derived assumptions в 0.19.0. Без этих fix'ов Miro export feature НЕ работает в production.

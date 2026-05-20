@@ -14,6 +14,14 @@ Live probe (2026-05-20) обнаружил 3 расхождения с SDK-deriv
 
 Также confirmed (без изменений): `metadata`/`appData` fields rejected with 400 (Sections B/C). Уже было исправлено в post-review fix 0.19.0 → tracking client-side only.
 
+### Post-0.19.1 follow-up probe (frame-child positioning, 0.19.2)
+
+Live test показал что Miro child position = `relativeTo: "parent_top_left"`, не `parent_center` как предполагалось. Initial export после 0.19.1 fix вернул `400: "new position is outside of parent boundaries"`.
+
+Manual verify: shape с `parent.id` + `position: {x: 0, y: 0}` → Miro reports `relativeTo: "parent_top_left"` в response. Child at frame center требует `position: { x: frame.w/2, y: frame.h/2 }`.
+
+Применено в `upload.ts`: для frame children — `miroX = (childPageCenter.x) - parentPageTopLeft.x` (не parent-center). Centroid translation НЕ применяется к child position.
+
 ---
 
 ## Raw probe output
