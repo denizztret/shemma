@@ -1,24 +1,8 @@
-// apps/backend/src/export/miro/color-mapping.ts
-//
-// DRW-103: maps arbitrary hex colors → nearest Miro preset.
-// Miro shapes accept style.fillColor only from a fixed set (17 hex values).
-// Miro sticky notes accept named-color enum (16 values).
-// Algorithm: Euclidean distance in RGB space. First-match-wins on ties
-// → deterministic output.
-//
-// SHAPE_PRESETS values pulled from official Miro Node.js SDK (Task 1 probe,
-// see probe.md and spec §5.3). Source:
-// https://github.com/miroapp/api-clients/blob/main/packages/miro-api/model/shapeStyleForCreate.ts
-
 export type RGB = [number, number, number];
 
 /**
- * 17 Miro shape fillColor preset hex values (16 enum + #ffffff default).
- * Source: Miro Node.js SDK shapeStyleForCreate.ts JSDoc, captured 2026-05-20.
- * fillColor JSDoc: `#f5f6f8` `#d5f692` `#d0e17a` `#93d275` `#67c6c0` `#23bfe7`
- *                  `#a6ccf5` `#7b92ff` `#fff9b1` `#f5d128` `#ff9d48` `#f16c7f`
- *                  `#ea94bb` `#ffcee0` `#b384bb` `#000000`
- * Default: #ffffff.
+ * 17 Miro shape fillColor preset hex values.
+ * Source: Miro Node.js SDK shapeStyleForCreate.ts, captured 2026-05-20.
  */
 export const SHAPE_PRESETS: Array<{ hex: string; rgb: RGB }> = [
   { hex: "#ffffff", rgb: [255, 255, 255] }, // White (default)
@@ -40,9 +24,7 @@ export const SHAPE_PRESETS: Array<{ hex: string; rgb: RGB }> = [
   { hex: "#000000", rgb: [0, 0, 0] },       // Black
 ];
 
-/**
- * Miro sticky-note named color → approximate RGB (16 entries).
- */
+/** Miro sticky-note named color → approximate RGB. */
 export const STICKY_COLOR_RGB: Record<string, RGB> = {
   gray: [200, 200, 200],
   light_yellow: [255, 244, 178],
@@ -93,9 +75,6 @@ function euclidean(a: RGB, b: RGB): number {
 
 export function nearestShapeColor(hex: string): string {
   const rgb = parseHex(hex);
-  if (SHAPE_PRESETS.length === 0) {
-    return `#${rgb[0].toString(16).padStart(2, "0")}${rgb[1].toString(16).padStart(2, "0")}${rgb[2].toString(16).padStart(2, "0")}`;
-  }
   let best = SHAPE_PRESETS[0];
   let bestDist = euclidean(rgb, best.rgb);
   for (let i = 1; i < SHAPE_PRESETS.length; i++) {

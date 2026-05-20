@@ -1,8 +1,3 @@
-// apps/backend/src/export/miro/coords.ts
-//
-// DRW-103: page-space coordinate resolution + centroid translation.
-// tldraw 5.x stores frame children parent-relative; we walk parentId chain
-// to compute absolute page-space x/y. See §5.1.
 
 export interface RawShape {
   id: string;
@@ -23,9 +18,8 @@ export interface PageBounds {
 }
 
 /**
- * Resolve shape's absolute page-space bounds by walking parentId chain.
- * Returns null when shape itself is not in store. Walks parent IDs while
- * they have the "shape:" prefix; stops at "page:..." or missing parent.
+ * Resolve shape's absolute page-space bounds by walking the parentId chain.
+ * Stops at "page:..." parents or missing parents. Returns null when the shape is absent.
  */
 export function resolvePageBounds(
   shapeId: string,
@@ -48,10 +42,7 @@ export function resolvePageBounds(
   return { x: ax, y: ay, w, h };
 }
 
-/**
- * Compute centroid of a list of page-space bounds.
- * centroid = center of the bounding box that encloses all.
- */
+/** Center of the axis-aligned bounding box that encloses all bounds. */
 export function computeCentroid(bounds: PageBounds[]): { x: number; y: number } {
   if (bounds.length === 0) return { x: 0, y: 0 };
   let minX = Infinity;

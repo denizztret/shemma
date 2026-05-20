@@ -1,8 +1,3 @@
-// packages/shemma-mcp/src/tools/export-miro.ts
-//
-// DRW-103: MCP tool `shemma_export_miro` — thin adapter over the daemon's
-// POST /api/export/miro. Uses RoomResolver for room resolution; no Miro
-// API logic here (daemon owns token + client).
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -65,8 +60,6 @@ export function registerExportMiroTool(
         itemCount?: number;
       };
       if (!res.ok || json.ok === false) {
-        // Preserve the backend `error` field at top level so MCP consumers can
-        // inspect the exact backend error code (e.g. "miro-token-missing").
         const errPayload = {
           ok: false as const,
           code: "http-error" as const,
@@ -82,8 +75,6 @@ export function registerExportMiroTool(
         };
       }
       deps.resolver.recordTouch(resolved.room);
-      // Spread backend fields at top level so consumers can read itemsCreated,
-      // boardUrl etc. directly (e.g. in MCP tool response inspection).
       const successPayload = {
         ok: true as const,
         room: resolved.room,

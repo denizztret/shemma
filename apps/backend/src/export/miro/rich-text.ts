@@ -1,13 +1,7 @@
-// apps/backend/src/export/miro/rich-text.ts
-//
-// DRW-103: extract plain text from a tldraw ProseMirror richText document.
-// Miro accepts plain `data.content: string`; rich formatting (bold, links)
-// is documented MVP loss in §5.4.
-
 /**
  * Flatten a ProseMirror doc → plain string.
- * Each top-level block (paragraph, heading, ...) becomes one line.
- * Returns "" on null/undefined/malformed input (never throws).
+ * Each top-level block becomes one line. Returns "" on malformed input (never throws).
+ * Rich formatting (bold, links) is intentionally lost — Miro accepts plain text only.
  */
 export function richTextToPlain(doc: unknown): string {
   if (!doc || typeof doc !== "object") return "";

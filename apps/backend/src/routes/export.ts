@@ -1,8 +1,3 @@
-// apps/backend/src/routes/export.ts
-//
-// DRW-103: HTTP routes for Miro export.
-// POST /api/export/miro?room=<id>           — run export
-// GET  /api/export/miro/boards              — list user's Miro boards (TTL cache)
 
 import { Hono } from "hono";
 import { readMiroToken } from "../config";
@@ -17,21 +12,14 @@ interface BoardsCacheEntry {
   boards: MiroBoard[];
 }
 
-const BOARDS_TTL_MS = 5 * 60 * 1000; // 5 min
-// Per-token cache (token used as key).
+const BOARDS_TTL_MS = 5 * 60 * 1000;
 const boardsCache = new Map<string, BoardsCacheEntry>();
 
 export interface ExportRoutesOpts {
   /** Override Miro base URL for tests. Defaults to https://api.miro.com. */
   miroBaseUrl?: string;
-  /** Override tracking field (Task 1 probe outcome). Default "metadata". */
   trackingField?: "metadata" | "appData";
-  /** Persistence write hook. Called synchronously inside onCommit (per-chunk)
-   *  and once after the full export completes.
-   *
-   *  NOTE: onCommit fires synchronously for every chunk committed by
-   *  runMiroExport — no debouncing here. The persistence layer's scheduling
-   *  handles dedup downstream (see FilePersistence.scheduleSave). */
+  /** Called per-chunk and after the full export; route caller wires this to persistence. */
   onDirty?: (room: string, state: import("../types").RoomState) => void;
 }
 
@@ -68,7 +56,6 @@ export function exportRoutes(rooms: Rooms, opts: ExportRoutesOpts = {}) {
 
       const room = await rooms.get(rv.id);
 
-      // Resolve selection — explicit list or full room ('room' scope).
       const selection = Array.isArray(body.selection) && body.selection.length > 0
         ? body.selection
         : body.scope === "room"
@@ -100,14 +87,11 @@ export function exportRoutes(rooms: Rooms, opts: ExportRoutesOpts = {}) {
           trackingField: opts.trackingField ?? "metadata",
           shemmaRoom: rv.id,
           shemmaVersion: VERSION.version,
-          // Flush persistence after each commitBoardExport so partial tracking
-          // survives mid-flight crashes (§6 partial-commit semantics).
           onCommit: (r) => {
             r.dirty = true;
             opts.onDirty?.(rv.id, r);
           },
         });
-        // Final safety flush (no-op if onCommit already fired for last chunk).
         room.dirty = true;
         opts.onDirty?.(rv.id, room);
 
@@ -134,7 +118,6 @@ export function exportRoutes(rooms: Rooms, opts: ExportRoutesOpts = {}) {
     .get("/api/export/miro/boards", async (c) => {
       const token = readMiroToken();
       if (!token) return c.json(tokenMissingResponse(), 412);
-
       const now = Date.now();
       const cached = boardsCache.get(token);
       if (cached && cached.expiresAt > now) {

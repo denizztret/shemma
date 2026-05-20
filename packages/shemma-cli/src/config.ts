@@ -1,9 +1,3 @@
-// packages/shemma-cli/src/config.ts
-//
-// DRW-103: `shemma config set/get/unset <key> <value?>` subcommand.
-// For 0.19.0 — supports only `miro.token`. Token storage delegated to
-// backend `apps/backend/src/config.ts` (single source of truth for schema).
-// Token validation: GET https://api.miro.com/v2/boards?limit=1 with bearer.
 
 import {
   readMiroToken,

@@ -1,9 +1,3 @@
-// apps/backend/src/export/miro/upload.ts
-//
-// DRW-103: three-phase upload orchestrator.
-// Pass A1 (frames only) → frameMap → Pass A2 (non-frame items with parent.id)
-// → passAMap → Pass B (connectors). Tracking committed after each pass for
-// partial-commit semantics (see §6).
 
 import type { RoomState } from "../../types";
 import {
@@ -20,8 +14,8 @@ import type { MiroBulkItem, MiroClient, MiroConnectorPayload } from "./client";
 import { computeCentroid, resolvePageBounds, type RawShape } from "./coords";
 import { commitBoardExport } from "./tracking";
 
-const BULK_CHUNK_SIZE = 50; // §6.2 conservative; refine after Task 1 probe
-const CONNECTOR_CONCURRENCY = 10; // §6.4
+const BULK_CHUNK_SIZE = 50;
+const CONNECTOR_CONCURRENCY = 10;
 
 export interface RunExportParams {
   client: MiroClient;
@@ -33,12 +27,7 @@ export interface RunExportParams {
   trackingField: TrackingField;
   shemmaRoom: string;
   shemmaVersion: string;
-  /**
-   * Called immediately after each `commitBoardExport` mutation (Pass A1
-   * complete, every A2 chunk, Pass B aggregate). Routes wire this to
-   * persistence flush so partial-committed tracking survives mid-flight
-   * crashes / aborts (see §6 partial-commit semantics).
-   */
+  /** Called after each commitBoardExport. Flush persistence here for partial-commit safety. */
   onCommit?: (room: RoomState) => void;
 }
 
@@ -66,7 +55,7 @@ function isFrameLike(shape: RawShape): boolean {
   return false;
 }
 
-/** Classify selection into frames / leaf-items / arrows + drop unsupported. */
+/** Partition selection into frames, leaf items, arrows, and unsupported shapes. */
 function classify(
   selection: string[],
   store: Record<string, RawShape>,
@@ -91,10 +80,9 @@ function classify(
       continue;
     }
     if (s.type === "group") {
-      // Expanded by caller; if it leaked here — skip.
+      // Groups are pre-expanded by the caller; skip any that leak through.
       continue;
     }
-    // draw, line, image, video, highlight — explicitly unsupported (§5.2)
     unsupported.push(id);
   }
   return { frames, items, arrows, unsupported };
@@ -104,20 +92,15 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
   const skipped: SkippedItem[] = [];
   const store = p.room.store.store as Record<string, RawShape>;
 
-  // Step 1: expand groups → leaf list. Drops group itself.
   const expanded = expandGroups(p.selection, store);
-
-  // Step 2: classify into frames / non-frame items / arrows.
   const { frames, items, arrows, unsupported } = classify(expanded, store);
   for (const u of unsupported) skipped.push({ elementId: u, reason: "unsupported-type" });
 
-  // Step 3: resolve page-space bounds and compute centroid.
   const allBounds = [...frames, ...items, ...arrows]
     .map((id) => resolvePageBounds(id, store))
     .filter((b): b is NonNullable<typeof b> => b !== null);
   const centroid = computeCentroid(allBounds);
 
-  // Helper to compute Miro position for a shape (centroid-translated).
   function miroPos(id: string): { x: number; y: number; w: number; h: number } | null {
     const b = resolvePageBounds(id, store);
     if (!b) return null;
@@ -133,7 +116,6 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
   const itemMap = new Map<string, string>();
   let runError: string | undefined;
 
-  // ---- Pass A1: frames ----
   if (frames.length > 0) {
     const payload: Array<{ id: string; item: MiroBulkItem }> = frames
       .map((id) => {
@@ -148,8 +130,6 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
           shemmaRoom: p.shemmaRoom,
           shemmaVersion: p.shemmaVersion,
         });
-        // Frame geometry is set inside buildFramePayload from props.w/h, but
-        // confirm width/height from resolved bounds (defensive).
         item.geometry = { width: pos.w, height: pos.h };
         return { id, item };
       })
@@ -163,7 +143,6 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
           if (got) frameMap.set(r.id, got);
         });
       }
-      // Commit tracking after Pass A1.
       commitBoardExport(p.room, {
         boardId: p.boardId,
         boardName: p.boardName,
@@ -182,7 +161,6 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
     }
   }
 
-  // ---- Pass A2: non-frame items ----
   if (items.length > 0) {
     const payload: Array<{ id: string; item: MiroBulkItem }> = items
       .map((id) => {
@@ -190,7 +168,6 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
         const pos = miroPos(id);
         if (!s || !pos) return null;
 
-        // If parent is a frame in our A1 set, compute frame-relative position.
         const parentMiroId = s.parentId && frameMap.has(s.parentId)
           ? frameMap.get(s.parentId)
           : undefined;
@@ -221,10 +198,7 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
       })
       .filter((r): r is { id: string; item: MiroBulkItem } => r !== null);
 
-    // Per-chunk error handling: validation errors (generic 4xx/422) → skip
-    // entire chunk with reason="validation-error" and continue with the next.
-    // Auth / not-found / rate-limit are fatal and abort the pass (consistent
-    // with route-level error mapping in Task 11).
+    // Auth/not-found/rate-limit errors abort the pass; validation (4xx/422) skips the chunk.
     const a2Errors: string[] = [];
     for (const ch of chunk(payload, BULK_CHUNK_SIZE)) {
       try {
@@ -233,7 +207,6 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
           const got = resp.data[i]?.id;
           if (got) itemMap.set(r.id, got);
         });
-        // Partial commit after each chunk.
         commitBoardExport(p.room, {
           boardId: p.boardId,
           boardName: p.boardName,
@@ -257,7 +230,6 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
             error: runError,
           };
         }
-        // Validation / other 4xx: skip whole chunk, continue with remaining.
         a2Errors.push(`chunk(${ch.map((r) => r.id).join(",")}): ${(e as Error).message}`);
         for (const r of ch) {
           skipped.push({ elementId: r.id, reason: "validation-error" });
@@ -269,14 +241,12 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
     }
   }
 
-  // ---- Pass B: connectors (throttled, per-item POST) ----
   const passAMap = new Map<string, string>();
   for (const [k, v] of frameMap) passAMap.set(k, v);
   for (const [k, v] of itemMap) passAMap.set(k, v);
 
   const connectorMappings: Array<{ elementId: string; miroConnectorId: string }> = [];
 
-  // Build all payloads up-front; skip unbindable ones.
   const connectorTasks: Array<{ id: string; payload: MiroConnectorPayload }> = [];
   for (const id of arrows) {
     const s = store[id];
@@ -295,7 +265,6 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
     connectorTasks.push({ id, payload: r.payload });
   }
 
-  // Throttle with simple semaphore loop.
   let inFlight = 0;
   let nextIdx = 0;
   const errors: string[] = [];

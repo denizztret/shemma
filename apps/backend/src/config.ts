@@ -150,24 +150,17 @@ export function __resetConfigForTests(): void {
   _deprecationWarned.clear();
 }
 
-// ---------------------------------------------------------------------------
-// DRW-103: file-based config I/O (separate from env-var driven `getConfig`).
-// Used by export/miro/* + CLI `shemma config set/get/unset miro.token`.
-// ---------------------------------------------------------------------------
-
 /** XDG-aware config file path resolver. */
 export function configFilePath(): string {
   const configHome = process.env.XDG_CONFIG_HOME ?? path.join(homedir(), ".config");
   return path.join(configHome, "shemma", "config.json");
 }
 
-/** Full file schema (union). Future services добавляются как top-level keys. */
 export interface ConfigFile {
   miro?: {
     token?: string;
     createdAt?: string;
   };
-  // Future: drawio?: {...}, excalidraw?: {...}
 }
 
 /**
@@ -192,29 +185,28 @@ export function readConfig(): ConfigFile | null {
   }
 }
 
-/** Write full config; creates directory if needed, chmod 600 on create. */
+/** Write full config; creates directory if needed, enforces 0o600 permissions. */
 export function writeConfig(cfg: ConfigFile): void {
   const p = configFilePath();
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(cfg, null, 2), { mode: 0o600 });
-  // Ensure permissions are 600 even if file existed with different perms.
   fs.chmodSync(p, 0o600);
 }
 
-/** Convenience: read Miro token. `null` если файл/ключ отсутствует. */
+/** Read Miro token, or null if unset. */
 export function readMiroToken(): string | null {
   const cfg = readConfig();
   return cfg?.miro?.token ?? null;
 }
 
-/** Convenience: write Miro token, merging with existing config. */
+/** Write Miro token, merging with existing config. */
 export function writeMiroToken(token: string): void {
   const cfg: ConfigFile = readConfig() ?? {};
   cfg.miro = { ...cfg.miro, token, createdAt: new Date().toISOString() };
   writeConfig(cfg);
 }
 
-/** Convenience: remove Miro token; keeps other keys. */
+/** Remove Miro token; keeps other config keys. */
 export function unsetMiroToken(): void {
   const cfg = readConfig();
   if (!cfg?.miro?.token) return;

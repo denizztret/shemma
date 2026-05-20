@@ -1,8 +1,3 @@
-// apps/backend/src/export/miro/tracking.ts
-//
-// DRW-103: room.meta.miroExports CRUD for per-board export tracking.
-// All ops mutate `RoomState.meta` in place; persistence handled by daemon
-// via scheduleSave (caller responsibility).
 
 import type { MiroExportsMap, RoomState } from "../../types";
 
@@ -19,7 +14,7 @@ function ensureMap(room: RoomState): MiroExportsMap {
   return room.meta.miroExports;
 }
 
-/** Read full tracking entry for a board, or undefined if none. */
+/** Full tracking entry for a board, or undefined. */
 export function readBoardTracking(
   room: RoomState,
   boardId: string,
@@ -27,7 +22,7 @@ export function readBoardTracking(
   return room.meta?.miroExports?.[boardId];
 }
 
-/** Read just the items map for a board (empty {} when absent). */
+/** Items map for a board, or {} when absent. */
 export function readBoardItems(
   room: RoomState,
   boardId: string,
@@ -35,7 +30,7 @@ export function readBoardItems(
   return room.meta?.miroExports?.[boardId]?.items ?? {};
 }
 
-/** Read connectors map for a board (empty {} when absent). */
+/** Connectors map for a board, or {} when absent. */
 export function readBoardConnectors(
   room: RoomState,
   boardId: string,
@@ -43,10 +38,7 @@ export function readBoardConnectors(
   return room.meta?.miroExports?.[boardId]?.connectors ?? {};
 }
 
-/**
- * Merge new mappings into tracking. Updates lastExportedAt to now().
- * Idempotent: re-running with the same mappings overwrites entries.
- */
+/** Merge new mappings into tracking; updates lastExportedAt. Idempotent. */
 export function commitBoardExport(room: RoomState, p: CommitParams): void {
   const map = ensureMap(room);
   const existing = map[p.boardId] ?? {
@@ -67,7 +59,7 @@ export function commitBoardExport(room: RoomState, p: CommitParams): void {
   map[p.boardId] = existing;
 }
 
-/** Return boardId with the most recent export, or undefined. */
+/** boardId with the most recent export, or undefined. */
 export function getLastUsedBoardId(room: RoomState): string | undefined {
   const map = room.meta?.miroExports;
   if (!map) return undefined;

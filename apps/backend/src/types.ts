@@ -24,20 +24,17 @@ export type AiActivity = {
   startedAt: number;
 };
 
-// DRW-103 (0.19.0): room-level metadata container. Additive optional —
-// envelope schema version stays at 3 (см. envelope.ts comment).
 export interface RoomMeta {
   miroExports?: MiroExportsMap;
-  // Future: drawioExports, excalidrawExports, ...
 }
 
 export type MiroExportsMap = Record<
-  string, // boardId (Miro board id)
+  string,
   {
-    boardName?: string; // cache for UI без round-trip к Miro
-    lastExportedAt: string; // ISO timestamp последнего export
-    items: Record<string, string>; // elementId → miroItemId
-    connectors?: Record<string, string>; // arrowId → miroConnectorId
+    boardName?: string;
+    lastExportedAt: string;
+    items: Record<string, string>;
+    connectors?: Record<string, string>;
   }
 >;
 
@@ -59,8 +56,6 @@ export type RoomState = {
   // группировки комнат в Gallery (DRW-033). Опционально — старые файлы
   // его не имеют и получают его при первом обращении.
   projectDir?: string;
-  // DRW-103: per-board export tracking + future drawio/excalidraw.
-  // Persisted via EnvelopeV3.meta plumbing in envelope.ts.
   meta?: RoomMeta;
 };
 

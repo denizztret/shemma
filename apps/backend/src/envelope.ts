@@ -3,9 +3,8 @@ import { config } from "./config";
 import type { StoreOpLogEntry, TLStoreSnapshot } from "./store-types";
 import type { Prompt, RoomMeta, RoomState } from "./types";
 
-// Schema v3 extension policy (since 0.19.0, DRW-103):
-// - Additive optional fields (например `meta?: RoomMeta`) НЕ бампят SCHEMA_VERSION.
-// - Required fields / shape changes к existing fields — bump до v4 + migrate-v3.ts.
+// Schema v3 extension policy: additive optional fields do not bump SCHEMA_VERSION.
+// Required field additions or shape changes → bump to v4 + add migrate-v3.ts.
 export const ENVELOPE_SCHEMA_VERSION = 3;
 export const SUPPORTED_SCHEMA_VERSIONS = [2, 3] as const; // 2 для migrator; runtime читает 3.
 
@@ -26,9 +25,7 @@ export type EnvelopeV3 = EnvelopeHeader & {
   prompts: Prompt[];
   opLog: StoreOpLogEntry[];
   linkedSession?: string;
-  // DRW-033: workspace directory, stored optionally (additive, doesn't break existing v3).
   projectDir?: string;
-  // DRW-103: room metadata extension (additive optional, no schema bump).
   meta?: RoomMeta;
 };
 

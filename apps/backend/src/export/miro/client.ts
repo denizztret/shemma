@@ -1,11 +1,3 @@
-// apps/backend/src/export/miro/client.ts
-//
-// DRW-103: Miro REST v2 HTTP wrapper.
-// - Bearer auth (token DI'd; backend reads via readMiroToken()).
-// - URL encoding for board ids (= → %3D, §5.6 quirk).
-// - 429 exponential backoff: 1s/2s/4s, max 3 retries (§6.4).
-// - Error mapping: 401 → MiroAuthError, 404 → MiroNotFoundError,
-//   429 (exhausted) → MiroRateLimitError, others → Error with status.
 
 export class MiroAuthError extends Error {
   readonly code = "miro-auth-failed" as const;
@@ -44,8 +36,6 @@ export interface MiroBulkItem {
   position?: { x: number; y: number };
   geometry?: { width?: number; height?: number };
   parent?: { id: string };
-  // metadata/appData reserved (Miro probe Task 1 showed these are not accepted
-  // by shape create — but kept optional in case Miro adds them later).
   metadata?: Record<string, unknown>;
   appData?: string;
 }
@@ -138,13 +128,11 @@ export class MiroClient {
     );
   }
 
-  /** GET /v2/boards?limit=50 — returns list of accessible boards. */
   async listBoards(): Promise<MiroBoard[]> {
     const res = await this.request<{ data?: MiroBoard[] }>("GET", "/v2/boards?limit=50");
     return Array.isArray(res.data) ? res.data : [];
   }
 
-  /** POST /v2/boards/<id>/items/bulk — batch create shapes/notes/text/frames. */
   async bulkItems(boardId: string, items: MiroBulkItem[]): Promise<MiroBulkResponse> {
     const encoded = this.encodeBoardId(boardId);
     return this.request<MiroBulkResponse>(
@@ -154,7 +142,6 @@ export class MiroClient {
     );
   }
 
-  /** POST /v2/boards/<id>/connectors — single connector create. */
   async postConnector(
     boardId: string,
     payload: MiroConnectorPayload,

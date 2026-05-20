@@ -1,9 +1,3 @@
-// apps/frontend/src/canvas/export-miro-modal.tsx
-//
-// DRW-103: Export to Miro modal — three steps (board picker → confirm → result).
-// Rendered as a child of tldraw's component slot (App.tsx hosts it in
-// OverlayUi alongside PromptInput/MermaidImportModal). No position:fixed —
-// follows §3.8 service-layer pattern.
 
 import { useEffect, useState } from "react";
 import { tokens } from "../design-tokens";
@@ -28,7 +22,6 @@ interface ExportResult {
 export interface ExportMiroModalProps {
   open: boolean;
   room: string;
-  /** Selection ids from the editor (raw "shape:..." ids). */
   selectedIds: string[];
   onClose: () => void;
 }
@@ -49,7 +42,6 @@ export function ExportMiroModal({
   const [errorHint, setErrorHint] = useState<string | null>(null);
   const [result, setResult] = useState<ExportResult | null>(null);
 
-  // Fetch boards on open
   useEffect(() => {
     if (!open) return;
     setPhase("loading");

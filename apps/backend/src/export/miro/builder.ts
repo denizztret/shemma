@@ -1,11 +1,3 @@
-// apps/backend/src/export/miro/builder.ts
-//
-// DRW-103: domain shape → Miro REST v2 payload mapping.
-// Caller (upload.ts) decides which builder to invoke based on shape type;
-// builders themselves are pure (no I/O, no state).
-//
-// Tracking field resolved by Task 1 probe ("metadata" or "appData").
-// Builders accept a `trackingField` parameter — caller resolves once.
 
 import type { MiroBulkItem, MiroConnectorPayload } from "./client";
 import { nearestShapeColor, nearestStickyColor } from "./color-mapping";
@@ -31,24 +23,10 @@ export interface BuilderCtx {
   shemmaVersion: string;
 }
 
-// NOTE (Task 1 probe): Miro REST v2 does not accept `metadata` or `appData`
-// fields on shape/connector create. We still populate them on the in-memory
-// payload for shemma's own tracking state; Miro will ignore unknown fields
-// (verified in Task 16 mock integration / Task 17 manual E2E).
+// NOTE: Miro REST v2 ignores unknown fields on shape/connector create.
+// We still populate metadata/appData for shemma's own tracking state.
 function attachTracking(
-  item: MiroBulkItem,
-  field: TrackingField,
-  meta: TrackingMeta,
-): void {
-  if (field === "metadata") {
-    item.metadata = { ...meta };
-  } else {
-    item.appData = JSON.stringify(meta);
-  }
-}
-
-function attachConnectorTracking(
-  item: MiroConnectorPayload,
+  item: { metadata?: Record<string, unknown>; appData?: string },
   field: TrackingField,
   meta: TrackingMeta,
 ): void {
@@ -91,7 +69,6 @@ export function mapGeoToMiroShape(geo: string | undefined): string {
 
 function pickRichText(props: Record<string, unknown> | undefined): string {
   if (!props) return "";
-  // tldraw 5.x stores text in props.richText (ProseMirror doc).
   return richTextToPlain(props.richText);
 }
 
@@ -104,17 +81,13 @@ export function buildShapePayload(shape: RawShape, ctx: BuilderCtx): MiroBulkIte
   const content = pickRichText(props);
 
   const style: Record<string, unknown> = {};
-  // tldraw stores `props.fill` as named token ("solid"/"semi"/"none"); the
-  // actual color comes from `props.color` (named tldraw color: blue/red/...).
-  // For 0.19.0 we don't translate tldraw named colors → custom hex; instead
-  // we leave style.fillColor unset (Miro default = white) unless the shape
-  // carries a meta.fillHex (e.g. set by Mermaid import). This is the §5.3
-  // graceful-degradation path.
+  // meta.fillHex is set by Mermaid import; tldraw named colors (props.color) are
+  // not translated — we leave fillColor unset (Miro default = white) for those.
   const metaFillHex = (shape.meta?.fillHex as string | undefined) ?? undefined;
   if (metaFillHex && metaFillHex.startsWith("#")) {
     style.fillColor = nearestShapeColor(metaFillHex);
   }
-  const metaBorderHex = (shape.meta?.borderHex as string | undefined) ?? undefined;
+  const metaBorderHex = shape.meta?.borderHex as string | undefined;
   if (metaBorderHex) style.borderColor = metaBorderHex;
 
   const item: MiroBulkItem = {
@@ -140,9 +113,8 @@ export function buildStickyNotePayload(shape: RawShape, ctx: BuilderCtx): MiroBu
   const content = pickRichText(props);
 
   const style: Record<string, unknown> = {};
-  // For sticky notes Miro requires a named-enum fillColor. If shape carries
-  // meta.fillHex use it; otherwise default to "yellow".
-  const metaFillHex = (shape.meta?.fillHex as string | undefined) ?? undefined;
+  // Miro sticky notes require a named-enum fillColor (not hex).
+  const metaFillHex = shape.meta?.fillHex as string | undefined;
   style.fillColor = metaFillHex ? nearestStickyColor(metaFillHex) : "yellow";
 
   const item: MiroBulkItem = {
@@ -179,7 +151,6 @@ export function buildFramePayload(shape: RawShape, ctx: BuilderCtx): MiroBulkIte
   const props = shape.props ?? {};
   const w = (props.w as number | undefined) ?? 400;
   const h = (props.h as number | undefined) ?? 300;
-  // tldraw frame stores title in props.name. Boundary shapes — in meta.name.
   const title =
     (props.name as string | undefined) ??
     (shape.meta?.name as string | undefined) ??
@@ -196,10 +167,6 @@ export function buildFramePayload(shape: RawShape, ctx: BuilderCtx): MiroBulkIte
   return item;
 }
 
-// ---------------------------------------------------------------------------
-// Connector helpers (Pass B)
-// ---------------------------------------------------------------------------
-
 export interface ArrowEndpoint {
   toId: string;
   normalizedAnchor: { x: number; y: number };
@@ -210,10 +177,7 @@ export interface ArrowEndpoints {
   end?: ArrowEndpoint;
 }
 
-/**
- * Walk the store for binding records where fromId === arrowId.
- * tldraw 5.x: bindings are first-class records (typeName='binding', type='arrow').
- */
+/** Walk store bindings (typeName='binding', type='arrow') to find arrow endpoints. */
 export function collectArrowEndpointsFromStore(
   arrowId: string,
   store: Record<string, RawShape>,
@@ -282,7 +246,7 @@ export function expandGroups(
 
 export interface ConnectorBuilderCtx {
   store: Record<string, RawShape>;
-  passAMap: Map<string, string>; // shemma elementId → miro item id
+  passAMap: Map<string, string>;
   trackingField: TrackingField;
   shemmaRoom: string;
   shemmaVersion: string;
@@ -305,11 +269,8 @@ export function buildConnectorPayload(
   if (!startMiroId || !endMiroId) {
     return { kind: "skip", reason: "cross-selection-connector" };
   }
-  // Connector shape: tldraw arrows have props.bend (curve); if non-zero — curved.
   const bend = (arrow.props?.bend as number | undefined) ?? 0;
   const shape: "straight" | "curved" = bend === 0 ? "straight" : "curved";
-
-  // Caption from richText (label text).
   const labelText = richTextToPlain(arrow.props?.richText);
   const captions = labelText ? [{ content: labelText }] : undefined;
 
@@ -326,7 +287,7 @@ export function buildConnectorPayload(
     style: {},
     ...(captions ? { captions } : {}),
   };
-  attachConnectorTracking(payload, ctx.trackingField, {
+  attachTracking(payload, ctx.trackingField, {
     shemmaId: arrow.id,
     shemmaRoom: ctx.shemmaRoom,
     exportedAt: new Date().toISOString(),
