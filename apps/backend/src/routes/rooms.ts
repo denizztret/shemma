@@ -12,6 +12,7 @@ import type { Rooms } from "../rooms";
 import { validateRoomId } from "../rooms";
 import { config } from "../config";
 import { renderThumbnail } from "../thumbnail";
+import { resolveStorageDirForRequest } from "./_space-context";
 
 type RoomItem = {
   id: string;
@@ -84,10 +85,16 @@ export function roomParam(c: Context):
   return { ok: true, id };
 }
 
-export function roomsRoutes(rooms: Rooms, storageDir: string) {
+export function roomsRoutes(rooms: Rooms, fallbackStorageDir: string) {
   const app = new Hono();
+  // DRW-116 Task 11: storageDir is resolved per-request — prefers
+  // `c.get("space")` from spaceMiddleware, falls back to the closure-captured
+  // default when middleware is OFF (legacy tests + single-space daemon).
+  const dirFor = (c: Context): string =>
+    resolveStorageDirForRequest(c, fallbackStorageDir);
 
   app.get("/api/rooms", async (c) => {
+    const storageDir = dirFor(c);
     const includeArchived = c.req.query("include") === "archived";
 
     async function readRoomItems(fromDir: string, archived: boolean): Promise<RoomItem[]> {
@@ -139,6 +146,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.post("/api/rooms/:id/archive", async (c) => {
+    const storageDir = dirFor(c);
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
@@ -166,6 +174,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.post("/api/rooms/:id/restore", async (c) => {
+    const storageDir = dirFor(c);
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
@@ -195,6 +204,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.post("/api/rooms/:id/export", async (c) => {
+    const storageDir = dirFor(c);
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
@@ -225,6 +235,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.post("/api/rooms/import", async (c) => {
+    const storageDir = dirFor(c);
     const body = (await c.req.json().catch(() => null)) as
       | { from?: string; as?: string; force?: boolean }
       | null;
@@ -291,6 +302,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.post("/api/rooms/:id/rename", async (c) => {
+    const storageDir = dirFor(c);
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
@@ -355,6 +367,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.post("/api/rooms/:id/duplicate", async (c) => {
+    const storageDir = dirFor(c);
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
@@ -401,6 +414,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.delete("/api/rooms/:id", async (c) => {
+    const storageDir = dirFor(c);
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
@@ -464,6 +478,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.post("/api/rooms/:id/duplicate-auto", async (c) => {
+    const storageDir = dirFor(c);
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
@@ -512,6 +527,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.get("/api/rooms/:id/thumbnail", async (c) => {
+    const storageDir = dirFor(c);
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
@@ -541,6 +557,7 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.post("/api/rooms/purge-archive", async (c) => {
+    const storageDir = dirFor(c);
     const body = (await c.req.json().catch(() => ({}))) as { confirm?: boolean };
     if (!body.confirm) {
       return c.json(

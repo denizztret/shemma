@@ -228,7 +228,14 @@ export class CanvasClient {
   }
 
   async getActiveRooms(): Promise<{
-    rooms: Array<{ room: string; clientCount: number; lastFocusedAt: number }>;
+    rooms: Array<{
+      // DRW-116 Task 11: `space` is reported on every entry — `"legacy"` for
+      // single-space daemons that haven't routed `?space=<id>` through WS yet.
+      space?: string;
+      room: string;
+      clientCount: number;
+      lastFocusedAt: number;
+    }>;
   }> {
     const r = await fetch(`${this.base}/api/active-rooms`);
     return r.json();

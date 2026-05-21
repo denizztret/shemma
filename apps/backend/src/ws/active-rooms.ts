@@ -1,10 +1,20 @@
 export type ActiveRoomEntry = {
+  /**
+   * DRW-116 Task 11: spaceId is included on every entry so multi-space
+   * daemons can disambiguate two rooms that share the same `roomId` across
+   * different spaces. Legacy single-space callers (still the production path
+   * until WS plumbing wires per-connection space) receive the synthesized
+   * `LEGACY_SPACE_ID` here.
+   */
+  space: string;
   room: string;
   clientCount: number;
   lastFocusedAt: number;
 };
 
 type Internal = {
+  space: string;
+  room: string;
   clients: Set<string>;
   lastFocusedAt: number;
 };
@@ -14,9 +24,22 @@ export type ActiveRoomsOpts = {
   now?: () => number;           // injectable clock for tests
 };
 
+/**
+ * Synthetic space id used when callers don't supply one (legacy WS plumbing
+ * predating DRW-116 Task 11). Kept as a stable string so composite keys
+ * collapse to the same bucket across tests and the single-space daemon path.
+ */
+export const LEGACY_SPACE_ID = "legacy";
+
+function compositeKey(space: string, room: string): string {
+  return `${space}\x00${room}`;
+}
+
 export class ActiveRoomsTracker {
+  /** Composite-key map: `${space}\x00${room}` → entry. */
   private rooms = new Map<string, Internal>();
-  private clientToRoom = new Map<string, string>(); // client → currently-focused room
+  /** client → composite key of currently-focused (space, room). */
+  private clientToKey = new Map<string, string>();
   /**
    * v1: removal is immediate on the last client's disconnect/blur.
    * Spec §17.2 specifies a 30s idle grace window for stale entries
@@ -35,60 +58,92 @@ export class ActiveRoomsTracker {
     this.nowFn = opts.now ?? (() => Date.now());
   }
 
-  onFocus(room: string, clientId: string): void {
-    // Если client был focused на другой room — сначала blur её.
-    const prev = this.clientToRoom.get(clientId);
-    if (prev !== undefined && prev !== room) {
-      this.removeClient(prev, clientId);
+  /**
+   * Mark `clientId` as focused on `(space, room)`. The `space` argument is
+   * optional — pre-Task-11 callers pass only `(room, clientId)` and get the
+   * synthesized `LEGACY_SPACE_ID` bucket, preserving single-space semantics.
+   */
+  onFocus(
+    room: string,
+    clientId: string,
+    space: string = LEGACY_SPACE_ID,
+  ): void {
+    const key = compositeKey(space, room);
+    // Если client был focused на другую (space, room) — сначала blur её.
+    const prevKey = this.clientToKey.get(clientId);
+    if (prevKey !== undefined && prevKey !== key) {
+      this.removeClient(prevKey, clientId);
     }
-    let entry = this.rooms.get(room);
+    let entry = this.rooms.get(key);
     if (!entry) {
-      entry = { clients: new Set(), lastFocusedAt: this.nowFn() };
-      this.rooms.set(room, entry);
+      entry = {
+        space,
+        room,
+        clients: new Set(),
+        lastFocusedAt: this.nowFn(),
+      };
+      this.rooms.set(key, entry);
     }
     entry.clients.add(clientId);
     entry.lastFocusedAt = this.nowFn();
-    this.clientToRoom.set(clientId, room);
+    this.clientToKey.set(clientId, key);
   }
 
-  onBlur(room: string, clientId: string): void {
-    this.removeClient(room, clientId);
-    if (this.clientToRoom.get(clientId) === room) {
-      this.clientToRoom.delete(clientId);
+  onBlur(
+    room: string,
+    clientId: string,
+    space: string = LEGACY_SPACE_ID,
+  ): void {
+    const key = compositeKey(space, room);
+    this.removeClient(key, clientId);
+    if (this.clientToKey.get(clientId) === key) {
+      this.clientToKey.delete(clientId);
     }
   }
 
-  /** WS disconnect — blur по всем room'ам, на которых client был focused. */
+  /** WS disconnect — blur по composite (space, room), на которой client был focused. */
   onDisconnect(clientId: string): void {
-    const room = this.clientToRoom.get(clientId);
-    if (room !== undefined) {
-      this.removeClient(room, clientId);
-      this.clientToRoom.delete(clientId);
+    const key = this.clientToKey.get(clientId);
+    if (key !== undefined) {
+      this.removeClient(key, clientId);
+      this.clientToKey.delete(clientId);
     }
   }
 
-  list(): ActiveRoomEntry[] {
-    return [...this.rooms.entries()]
-      .map(([room, e]) => ({
-        room,
+  /**
+   * List active (space, room) pairs sorted by `lastFocusedAt` desc.
+   *
+   * Optional `opts.space` filters to a single space — used by the
+   * `/api/active-rooms?space=<id>` query so a UI can show only its own
+   * gallery without leaking cross-space presence.
+   */
+  list(opts: { space?: string } = {}): ActiveRoomEntry[] {
+    const filter = opts.space;
+    const out: ActiveRoomEntry[] = [];
+    for (const e of this.rooms.values()) {
+      if (filter !== undefined && e.space !== filter) continue;
+      out.push({
+        space: e.space,
+        room: e.room,
         clientCount: e.clients.size,
         lastFocusedAt: e.lastFocusedAt,
-      }))
-      .sort((a, b) => b.lastFocusedAt - a.lastFocusedAt);
+      });
+    }
+    return out.sort((a, b) => b.lastFocusedAt - a.lastFocusedAt);
   }
 
   /** No-op в v1 (idle timeout будет нужен только если появятся stale entries без disconnect). */
   stop(): void {
     this.rooms.clear();
-    this.clientToRoom.clear();
+    this.clientToKey.clear();
   }
 
-  private removeClient(room: string, clientId: string): void {
-    const entry = this.rooms.get(room);
+  private removeClient(key: string, clientId: string): void {
+    const entry = this.rooms.get(key);
     if (!entry) return;
     entry.clients.delete(clientId);
     if (entry.clients.size === 0) {
-      this.rooms.delete(room);
+      this.rooms.delete(key);
     }
   }
 }

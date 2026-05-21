@@ -21,9 +21,13 @@ import { VERSION } from "../version";
  * `storageDir` параметр передаётся явно (instead of reading a global),
  * чтобы honor'ить `startServer({ storageDir })` override — иначе in-process
  * test daemons и `--storage` flag репортили бы ambient default path.
- * DRW-116 Task 10b: the ambient default now comes from `resolveLegacyStorageDir`
- * (single-space fallback); Task 11 will replace `storage` payload with the
- * per-space root resolved from `c.get("space")`.
+ *
+ * DRW-116 Task 11: `/api/health` остаётся в SPACE_ALLOWLIST (cross-space probe,
+ * без `?space=`) — поэтому `c.get("space")` тут заведомо undefined. Поле
+ * `storage` продолжает репортить тот же closure-resolved `storageDir`, что и в
+ * pre-Task-11 версии: для daemon-mode это `resolveLegacyStorageDir` (single-
+ * space fallback), для тестов — `startServer({ storageDir })` override. Per-
+ * space storage roots discoverable через `/api/spaces` registry.
  */
 export function makeHealthRoutes(storageDir: string) {
   return new Hono()
