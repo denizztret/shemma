@@ -19,6 +19,7 @@ import { layoutSelectionRoutes } from "./routes/layout-selection";
 import { promptRoutes } from "./routes/prompts";
 import { roomsRoutes } from "./routes/rooms";
 import { sessionRoutes } from "./routes/session";
+import { spacesRouter } from "./routes/spaces";
 import { stateRoutes } from "./routes/state";
 import { versionRoutes } from "./routes/version";
 import { viewportRoutes } from "./routes/viewport";
@@ -93,6 +94,11 @@ export function makeApp(opts: AppOpts = {}) {
       await next();
     });
   }
+  // DRW-116 Task 9: spaces router mounts BEFORE spaceMiddleware so the
+  // per-space `?space=<id>` invariant never applies to the registry itself.
+  // Hono matches routes top-down; an earlier `app.route()` short-circuits
+  // before any later `app.use("/api/*", …)` middleware sees the request.
+  app.route("/", spacesRouter);
   if (opts.enableSpaceMiddleware) {
     app.use(
       "/api/*",
