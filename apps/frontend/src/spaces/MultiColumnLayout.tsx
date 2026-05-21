@@ -4,6 +4,7 @@ import { Gallery } from "../gallery/Gallery";
 import { SplitterBar } from "./SplitterBar";
 import { applyBackToGallery, applyOpenRoom } from "./column-transitions";
 import { type Column, parseShemmaUrl, serializeColumns } from "./url-parser";
+import { applyResize } from "./widths";
 
 /**
  * Multi-column layout for DRW-116 (Tasks 17 + 18).
@@ -80,25 +81,7 @@ export function MultiColumnLayout({
 
   const resize = useCallback(
     (i: number, deltaPercent: number) => {
-      setWidths((prev) => {
-        if (i < 0 || i + 1 >= prev.length) return prev;
-        const left = prev[i];
-        const right = prev[i + 1];
-        if (left === undefined || right === undefined) return prev;
-        const next = [...prev];
-        const min = MIN_COLUMN_PERCENT;
-        const sumPair = left + right;
-        // Clamp so neither neighbour shrinks below the minimum while keeping
-        // their summed share invariant (the splitter only redistributes
-        // within the pair — other columns are untouched).
-        const candidate = Math.min(
-          sumPair - min,
-          Math.max(min, left + deltaPercent),
-        );
-        next[i] = candidate;
-        next[i + 1] = sumPair - candidate;
-        return next;
-      });
+      setWidths((prev) => applyResize(prev, i, deltaPercent, MIN_COLUMN_PERCENT));
     },
     [setWidths],
   );
