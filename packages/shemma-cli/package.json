@@ -12,6 +12,7 @@
   "dependencies": {
     "@shemma/client": "workspace:*",
     "@shemma/backend": "workspace:*",
+    "@shemma/lockfile": "workspace:*",
     "@shemma/mcp": "workspace:*"
   }
 }

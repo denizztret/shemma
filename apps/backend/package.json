@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@shemma/domain": "workspace:*",
+    "@shemma/lockfile": "workspace:*",
     "elkjs": "^0.9.3",
     "hono": "^4.6.0",
     "web-worker": "^1.5.0"

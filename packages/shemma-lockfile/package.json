@@ -1,0 +1,9 @@
+{
+  "name": "@shemma/lockfile",
+  "version": "0.20.3",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": { "test": "bun test" },
+  "dependencies": {}
+}
