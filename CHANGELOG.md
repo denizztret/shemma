@@ -1,3 +1,25 @@
+## 0.20.3 — 2026-05-21 — DRW-113 note schema backfill
+
+PATCH fix: AI-generated note shapes (через `shemma_note` / `define role=note`) ломали `loadSnapshot` валидацию, потому что не включали required tldraw 5.x props. Canvas рендерился пустым для любой комнаты с note-shape — disk-данные были валидны, отбраковывал client-side schema validator.
+
+### Fixed
+
+- `apps/frontend/src/canvas/schema-placeholder.ts:backfillStoreRecords` теперь чинит `note.props.labelColor` (default `"black"`) и `note.props.textFirstEditedBy` (default `null`) — defaults мирят tldraw migrations `AddLabelColor` + `AddFirstEditedBy`. Идемпотентно: уже валидные notes не мутируются.
+
+### Tests
+
+- 3 новых unit-теста в `schema-placeholder.test.ts` (full backfill + partial backfill + idempotency). Frontend suite: 101 pass / 0 fail.
+- Verified в браузере: room `adv-4276-allure-infra-v2` (42 shapes + 38 bindings, включая yellow sticky-note) теперь рендерится полностью, console чистая.
+
+### Affected
+
+- `apps/frontend/src/canvas/schema-placeholder.ts` (+22)
+- `apps/frontend/src/canvas/schema-placeholder.test.ts` (+50)
+
+Backend-сторона (root cause — `shemma_note` payload без required props) — отдельная задача DRW-114.
+
+---
+
 ## 0.20.2 — 2026-05-20 — DRW-103 phase code-simplifier pass (-8 LOC)
 
 PATCH chore: 3-agent /simplify review (reuse, quality, efficiency) на DRW-103 phase diff (0.19.0..0.20.1). Без изменений observable behavior.
