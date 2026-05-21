@@ -27,11 +27,11 @@ export function promptRoutes(hub: WsHub) {
       createdAt: Date.now(),
       status: "pending",
     };
-    const { rooms, scheduleSave } = bundleForRequest(c);
+    const { rooms, scheduleSave, space } = bundleForRequest(c);
     const room = await rooms.get(id);
     room.prompts.push(p);
     markDirty(id, room, scheduleSave);
-    hub.publishPrompt(id, p);
+    hub.publishPrompt(space.id, id, p);
     return c.json(p);
   });
 
@@ -55,7 +55,7 @@ export function promptRoutes(hub: WsHub) {
     const id = rv.id;
     const pid = c.req.param("id");
     const body = await c.req.json().catch(() => ({}));
-    const { rooms, scheduleSave } = bundleForRequest(c);
+    const { rooms, scheduleSave, space } = bundleForRequest(c);
     const room = await rooms.get(id);
     const p = room.prompts.find((x) => x.id === pid);
     if (!p) return c.json({ ok: false, error: "not found" }, 404);
@@ -63,7 +63,7 @@ export function promptRoutes(hub: WsHub) {
     p.response = body.response;
     p.resolvedAt = Date.now();
     markDirty(id, room, scheduleSave);
-    hub.publishPromptResolved(id, pid, body.response);
+    hub.publishPromptResolved(space.id, id, pid, body.response);
     return c.json({ ok: true });
   });
 
@@ -72,14 +72,14 @@ export function promptRoutes(hub: WsHub) {
     if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
     const id = rv.id;
     const pid = c.req.param("id");
-    const { rooms, scheduleSave } = bundleForRequest(c);
+    const { rooms, scheduleSave, space } = bundleForRequest(c);
     const room = await rooms.get(id);
     const p = room.prompts.find((x) => x.id === pid);
     if (!p) return c.json({ ok: false, error: "not found" }, 404);
     p.status = "dismissed";
     p.resolvedAt = Date.now();
     markDirty(id, room, scheduleSave);
-    hub.publishPromptResolved(id, pid);
+    hub.publishPromptResolved(space.id, id, pid);
     return c.json({ ok: true });
   });
 
@@ -88,13 +88,13 @@ export function promptRoutes(hub: WsHub) {
     if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
     const id = rv.id;
     const pid = c.req.param("id");
-    const { rooms, scheduleSave } = bundleForRequest(c);
+    const { rooms, scheduleSave, space } = bundleForRequest(c);
     const room = await rooms.get(id);
     const idx = room.prompts.findIndex((x) => x.id === pid);
     if (idx === -1) return c.json({ ok: false, error: "not found" }, 404);
     room.prompts.splice(idx, 1);
     markDirty(id, room, scheduleSave);
-    hub.publishPromptRemoved(id, [pid]);
+    hub.publishPromptRemoved(space.id, id, [pid]);
     return c.json({ ok: true });
   });
 
@@ -102,7 +102,7 @@ export function promptRoutes(hub: WsHub) {
     const rv = resolveRoomId(c.req.query("room"));
     if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
     const id = rv.id;
-    const { rooms, scheduleSave } = bundleForRequest(c);
+    const { rooms, scheduleSave, space } = bundleForRequest(c);
     const room = await rooms.get(id);
     const removedIds: string[] = [];
     room.prompts = room.prompts.filter((p) => {
@@ -112,7 +112,7 @@ export function promptRoutes(hub: WsHub) {
     });
     if (removedIds.length > 0) {
       markDirty(id, room, scheduleSave);
-      hub.publishPromptRemoved(id, removedIds);
+      hub.publishPromptRemoved(space.id, id, removedIds);
     }
     return c.json({ ok: true, removed: removedIds.length });
   });

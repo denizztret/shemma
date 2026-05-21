@@ -67,7 +67,8 @@ export function domainRoutes(bus: StoreChangeBus) {
         return c.json({ ...cached, idempotent: true } as DomainResponse);
     }
 
-    const { rooms, scheduleSave } = bundleForRequest(c);
+    const { rooms, scheduleSave, space } = bundleForRequest(c);
+    const spaceId = space.id;
     const room = await rooms.get(id);
 
     // Cascade pre-check (before validate). Container = shape with type=frame.
@@ -173,7 +174,7 @@ export function domainRoutes(bus: StoreChangeBus) {
       );
       room.dirty = true;
       scheduleSave(id, room);
-      bus.publish(id, {
+      bus.publish(spaceId, id, {
         changes: compiled.batch,
         source: "ai",
         version: room.version,
@@ -255,7 +256,7 @@ export function domainRoutes(bus: StoreChangeBus) {
           scheduleSave(id, room);
           // Intentional second publish: clients receive a two-phase render —
           // first the semantic mutation, then the layout-adjusted positions.
-          bus.publish(id, {
+          bus.publish(spaceId, id, {
             changes: lr.batch,
             source: "ai",
             version: room.version,

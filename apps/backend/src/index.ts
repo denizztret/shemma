@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import { releaseLock, writeLockMetadata } from "@shemma/lockfile";
-import type { SpaceRecord } from "@shemma/spaces";
+import {
+  SPACE_ID_PATTERN,
+  type SpaceRecord,
+  findSpaceById,
+} from "@shemma/spaces";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { config, resolveLegacyStorageDir } from "./config";
@@ -317,7 +321,66 @@ export async function startServer(opts: AppOpts = {}) {
   const idle = daemonMode
     ? new IdleTracker(undefined, () => onIdleFire())
     : undefined;
-  const { app, bus, persistence, rooms } = makeApp({ ...opts, idle });
+  const { app, bus, persistence, bundleForSpace, legacyBundle } = makeApp({
+    ...opts,
+    idle,
+  });
+  /**
+   * DRW-116 Task 12 — resolve `(space, room)` for a WS upgrade.
+   *
+   * When `enableSpaceMiddleware: true` AND `?space=<id>` is provided we
+   * validate via the registry (same checks as HTTP `spaceMiddleware`):
+   *   1. Format check — `SPACE_ID_PATTERN`. Reject malformed.
+   *   2. Registry lookup — `findSpaceById`. Reject unknown.
+   * Otherwise (middleware OFF, or `?space=` absent) we fall back to the
+   * synthesized `LEGACY_SPACE_ID` bucket and the daemon's legacy bundle —
+   * which preserves single-space behavior for the existing WS tests AND for
+   * any production frontend that hasn't been updated to send `?space=` yet.
+   *
+   * Returns `null` when validation fails so the caller can reject the
+   * upgrade with a 4xx instead of a silent fallback (security: the client
+   * asked for a specific space; refusing is safer than swapping it out for
+   * the legacy one without telling them).
+   */
+  function resolveWsSpace(
+    rawSpaceId: string | null,
+  ): { spaceId: string; bundle: ReturnType<typeof bundleForSpace> } | null {
+    if (!rawSpaceId) {
+      // No ?space= → fall back to the legacy bundle. We don't enforce
+      // `?space=` on WS even when `enableSpaceMiddleware` is on because the
+      // running daemon still serves browser tabs from frontends that haven't
+      // shipped the multi-space query string yet. HTTP routes gain
+      // enforcement first; WS rejection is reserved for the explicit
+      // malformed/unknown case below.
+      //
+      // CRITICAL invariant: the subscription key uses `legacyBundle.space.id`
+      // (NOT `LEGACY_SPACE_ID`) so it matches the value routes pass to
+      // `bus.publish(...)` via `bundle.space.id` — otherwise the publish
+      // and the subscribe land in different buckets and the broadcast
+      // silently drops. `LEGACY_SPACE_ID` remains the active-rooms
+      // tracker default (Task 11 fix); it is a separate concept.
+      return { spaceId: legacyBundle.space.id, bundle: legacyBundle };
+    }
+    if (opts.enableSpaceMiddleware) {
+      if (!SPACE_ID_PATTERN.test(rawSpaceId)) return null;
+      const record = findSpaceById(rawSpaceId);
+      if (!record) return null;
+      return { spaceId: record.id, bundle: bundleForSpace(record) };
+    }
+    // Middleware OFF + explicit `?space=<id>` — preserve the test path where
+    // a `?space=` value is supplied without going through `/api/spaces`
+    // registration. We don't synthesize a SpaceRecord here (would diverge
+    // from production storage layout); instead routes still see the legacy
+    // bundle, and we use the legacy bundle's id for the subscription key
+    // so the publish/subscribe pair stays consistent.
+    return { spaceId: legacyBundle.space.id, bundle: legacyBundle };
+  }
+  type WsData = {
+    space: string;
+    room: string;
+    clientId: string;
+    bundleSpaceId: string;
+  };
   const server = Bun.serve({
     port: opts.port ?? config.port,
     // SO_REUSEPORT: освобождает port:bind race после graceful stop() — без него
@@ -332,11 +395,22 @@ export async function startServer(opts: AppOpts = {}) {
         if (!validateRoomId(room)) {
           return new Response("invalid room id", { status: 422 });
         }
+        const rawSpace = url.searchParams.get("space");
+        const resolved = resolveWsSpace(rawSpace);
+        if (!resolved) {
+          // Explicit ?space=<bad-id> or ?space=<unknown> — reject with 1008
+          // semantics via HTTP 400 before the upgrade. (We can't send a
+          // close frame yet — handshake hasn't completed.)
+          return new Response("invalid space id", { status: 400 });
+        }
         const clientId = crypto.randomUUID();
-        if (
-          srv.upgrade(req, { data: { room, clientId } as unknown as undefined })
-        )
-          return;
+        const data: WsData = {
+          space: resolved.spaceId,
+          room,
+          clientId,
+          bundleSpaceId: resolved.bundle.space.id,
+        };
+        if (srv.upgrade(req, { data: data as unknown as undefined })) return;
         return new Response("upgrade failed", { status: 500 });
       }
       // serve frontend for release/debug profiles; dev relies on Vite's own server
@@ -348,22 +422,30 @@ export async function startServer(opts: AppOpts = {}) {
     },
     websocket: {
       open(ws) {
-        const { room } = ws.data as unknown as {
-          room: string;
-          clientId: string;
-        };
-        bus.attach(room, ws as Sock);
+        const { space, room } = ws.data as unknown as WsData;
+        bus.attach(space, room, ws as Sock);
         idle?.noteWsOpen();
       },
       async message(ws, raw) {
-        const { room, clientId } = ws.data as unknown as {
-          room: string;
-          clientId: string;
-        };
+        const { space, room, clientId, bundleSpaceId } =
+          ws.data as unknown as WsData;
+        // Resolve the bundle once per message — `bundleSpaceId` was captured
+        // at upgrade and matches the registry lookup result, so this is just
+        // a Map.get(). For legacy connections it points at the legacy
+        // bundle's id (set in resolveWsSpace).
+        const bundle =
+          bundleSpaceId === legacyBundle.space.id
+            ? legacyBundle
+            : (() => {
+                // Look up the SpaceRecord that produced `bundleSpaceId`.
+                const rec = findSpaceById(bundleSpaceId);
+                return rec ? bundleForSpace(rec) : legacyBundle;
+              })();
+        const wsRooms = bundle.rooms;
         const msg = parseClientMessage(raw);
         if (!msg) return; // malformed → ignore (must not crash)
         if (msg.kind === "hello") {
-          const r = await rooms.get(room);
+          const r = await wsRooms.get(room);
           const { reply, schemaUpgraded } = handleHello(
             r,
             msg.lastVersion,
@@ -371,13 +453,13 @@ export async function startServer(opts: AppOpts = {}) {
           );
           if (schemaUpgraded) {
             r.dirty = true;
-            if (persistence) persistence.scheduleSave(room, r);
+            bundle.scheduleSave(room, r);
           }
           ws.send(JSON.stringify(reply));
           return;
         }
         if (msg.kind === "user-change") {
-          const r = await rooms.get(room);
+          const r = await wsRooms.get(room);
           // Skip empty batches — keep version monotonic only on real mutations.
           if (isEmptyBatch(msg.changes)) return;
           // DRW-094: defense-in-depth — WS path принимает untrusted client batches;
@@ -405,10 +487,10 @@ export async function startServer(opts: AppOpts = {}) {
             config.opLogMaxSize,
           );
           r.dirty = true;
-          if (persistence) persistence.scheduleSave(room, r);
+          bundle.scheduleSave(room, r);
           // Re-broadcast to other connected clients. The sender will see this
           // frame too — frontend echo-guard suppresses it via clientOpId match.
-          bus.publish(room, {
+          bus.publish(space, room, {
             changes: msg.changes,
             source: "user",
             version: r.version,
@@ -420,10 +502,12 @@ export async function startServer(opts: AppOpts = {}) {
           // Always use `room` from ws.data (WS connection scope), NOT msg.room.
           // A client connected to room "A" could send {room:"B"} to pollute
           // tracker state for room "B" — msg.room is untrusted client input.
+          // Same rule applies to `space`: bound at upgrade, never trusted
+          // from message payload.
           if (msg.focused) {
-            bus.getActiveRooms().onFocus(room, clientId);
+            bus.getActiveRooms().onFocus(room, clientId, space);
           } else {
-            bus.getActiveRooms().onBlur(room, clientId);
+            bus.getActiveRooms().onBlur(room, clientId, space);
           }
           return;
         }
@@ -439,12 +523,9 @@ export async function startServer(opts: AppOpts = {}) {
         }
       },
       close(ws) {
-        const { room, clientId } = ws.data as unknown as {
-          room: string;
-          clientId: string;
-        };
+        const { space, room, clientId } = ws.data as unknown as WsData;
         bus.getActiveRooms().onDisconnect(clientId);
-        bus.detach(room, ws as Sock);
+        bus.detach(space, room, ws as Sock);
         idle?.noteWsClose();
       },
     },

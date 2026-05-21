@@ -51,12 +51,17 @@ describe("POST /api/agent/import-mermaid", () => {
   });
 
   it("broadcasts import-mermaid frame (no mode field; append-only) to connected WS client", async () => {
-    const { app, bus } = makeApp({ inMemory: true });
+    const { app, bus, legacyBundle } = makeApp({ inMemory: true });
     const room = "test-mermaid-room";
 
     // Simulate a connected frontend: attach mock socket that records frames.
     const sock = makeMockSock();
-    bus.attach(room, sock);
+    // DRW-116 Task 12: WS subscriptions are composite-keyed by (space, room).
+    // Tests using `makeApp({ inMemory: true })` exercise the legacy bundle
+    // path — routes resolve to `legacyBundle.space.id` when no middleware
+    // is mounted, so subscribers must attach with the same space id to
+    // receive frames.
+    bus.attach(legacyBundle.space.id, room, sock);
 
     const resPromise = app.fetch(
       new Request(`http://x/api/agent/import-mermaid?room=${room}`, {
@@ -80,7 +85,7 @@ describe("POST /api/agent/import-mermaid", () => {
     expect((frame.requestId as string).length).toBeGreaterThan(0);
 
     // Let it timeout (10s) — we won't wait. Clean up by detaching.
-    bus.detach(room, sock);
+    bus.detach(legacyBundle.space.id, room, sock);
 
     // The request will eventually resolve with timeout error
     const res = await resPromise;
@@ -90,10 +95,10 @@ describe("POST /api/agent/import-mermaid", () => {
   }, 15000); // 15s timeout to cover the 10s backend timeout
 
   it("ignores client-supplied mode field (append-only invariant)", async () => {
-    const { app, bus } = makeApp({ inMemory: true });
+    const { app, bus, legacyBundle } = makeApp({ inMemory: true });
     const room = "test-mode-ignored";
     const sock = makeMockSock();
-    bus.attach(room, sock);
+    bus.attach(legacyBundle.space.id, room, sock);
 
     const resPromise = app.fetch(
       new Request(`http://x/api/agent/import-mermaid?room=${room}`, {
@@ -111,16 +116,16 @@ describe("POST /api/agent/import-mermaid", () => {
     const frame = JSON.parse(sock.sent[0]!) as Record<string, unknown>;
     expect("mode" in frame).toBe(false);
 
-    bus.detach(room, sock);
+    bus.detach(legacyBundle.space.id, room, sock);
     await resPromise; // let it resolve (timeout)
   }, 15000);
 
   // DRW-086: focus parameter wire-up
   it("forwards focus='new' from body to WS frame (DRW-086)", async () => {
-    const { app, bus } = makeApp({ inMemory: true });
+    const { app, bus, legacyBundle } = makeApp({ inMemory: true });
     const room = "test-focus-new";
     const sock = makeMockSock();
-    bus.attach(room, sock);
+    bus.attach(legacyBundle.space.id, room, sock);
 
     const resPromise = app.fetch(
       new Request(`http://x/api/agent/import-mermaid?room=${room}`, {
@@ -137,15 +142,15 @@ describe("POST /api/agent/import-mermaid", () => {
     expect(frame.kind).toBe("import-mermaid");
     expect(frame.focus).toBe("new");
 
-    bus.detach(room, sock);
+    bus.detach(legacyBundle.space.id, room, sock);
     await resPromise;
   }, 15000);
 
   it("forwards focus='fit-all' from body to WS frame (DRW-086)", async () => {
-    const { app, bus } = makeApp({ inMemory: true });
+    const { app, bus, legacyBundle } = makeApp({ inMemory: true });
     const room = "test-focus-fit-all";
     const sock = makeMockSock();
-    bus.attach(room, sock);
+    bus.attach(legacyBundle.space.id, room, sock);
 
     const resPromise = app.fetch(
       new Request(`http://x/api/agent/import-mermaid?room=${room}`, {
@@ -162,15 +167,15 @@ describe("POST /api/agent/import-mermaid", () => {
     expect(frame.kind).toBe("import-mermaid");
     expect(frame.focus).toBe("fit-all");
 
-    bus.detach(room, sock);
+    bus.detach(legacyBundle.space.id, room, sock);
     await resPromise;
   }, 15000);
 
   it("forwards focus='none' from body to WS frame (DRW-086)", async () => {
-    const { app, bus } = makeApp({ inMemory: true });
+    const { app, bus, legacyBundle } = makeApp({ inMemory: true });
     const room = "test-focus-none";
     const sock = makeMockSock();
-    bus.attach(room, sock);
+    bus.attach(legacyBundle.space.id, room, sock);
 
     const resPromise = app.fetch(
       new Request(`http://x/api/agent/import-mermaid?room=${room}`, {
@@ -187,15 +192,15 @@ describe("POST /api/agent/import-mermaid", () => {
     expect(frame.kind).toBe("import-mermaid");
     expect(frame.focus).toBe("none");
 
-    bus.detach(room, sock);
+    bus.detach(legacyBundle.space.id, room, sock);
     await resPromise;
   }, 15000);
 
   it("omits focus field from WS frame when not provided in body (DRW-086)", async () => {
-    const { app, bus } = makeApp({ inMemory: true });
+    const { app, bus, legacyBundle } = makeApp({ inMemory: true });
     const room = "test-focus-omitted";
     const sock = makeMockSock();
-    bus.attach(room, sock);
+    bus.attach(legacyBundle.space.id, room, sock);
 
     const resPromise = app.fetch(
       new Request(`http://x/api/agent/import-mermaid?room=${room}`, {
@@ -212,7 +217,7 @@ describe("POST /api/agent/import-mermaid", () => {
     // When focus not provided — should not be present in frame (undefined/absent)
     expect("focus" in frame).toBe(false);
 
-    bus.detach(room, sock);
+    bus.detach(legacyBundle.space.id, room, sock);
     await resPromise;
   }, 15000);
 });

@@ -90,7 +90,7 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
       });
     }
 
-    const { rooms, scheduleSave } = bundleForRequest(c);
+    const { rooms, scheduleSave, space } = bundleForRequest(c);
     const r = await rooms.get(id);
 
     // DRW-088: resolve ids — принимаем оба формата:
@@ -200,7 +200,11 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
     );
     r.dirty = true;
     scheduleSave(id, r);
-    bus.publish(id, { changes: lr.batch, source: "ai", version: r.version });
+    bus.publish(space.id, id, {
+      changes: lr.batch,
+      source: "ai",
+      version: r.version,
+    });
 
     return c.json({
       ok: true,

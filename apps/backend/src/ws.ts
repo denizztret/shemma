@@ -1,6 +1,6 @@
 import type { StoreChangeBatch } from "./store-types";
 import type { AiActivity, Prompt, StoreChangeBus, WsMessage } from "./types";
-import { ActiveRoomsTracker } from "./ws/active-rooms";
+import { ActiveRoomsTracker, LEGACY_SPACE_ID } from "./ws/active-rooms";
 
 export type Sock = { send: (data: string) => void; readyState: number };
 const OPEN = 1;
@@ -15,8 +15,30 @@ export type ImportMermaidResult = {
   error?: string;
 };
 
+/**
+ * Composite subscription key: `${spaceId}\x00${roomId}`.
+ *
+ * Using `\x00` (NUL) as the separator keeps the key collision-free vs. any
+ * legal space/room id — `SPACE_ID_PATTERN` and `ROOM_ID_PATTERN` both forbid
+ * control chars, so no legitimate input can pretend to be a different key.
+ */
+function compositeKey(space: string, room: string): string {
+  return `${space}\x00${room}`;
+}
+
+/**
+ * WebSocket pub/sub hub.
+ *
+ * DRW-116 Task 12: every subscriber set is scoped by `(spaceId, roomId)`.
+ * Two WS connections to the same `roomId` in different spaces are isolated —
+ * publishes never cross the space boundary. Legacy callers (pre-Task-12 WS
+ * handshake that doesn't pass `?space=`) land in the synthesized
+ * `LEGACY_SPACE_ID` bucket, preserving the pre-multi-space single-bundle
+ * semantics that older tests assert against.
+ */
 export class WsHub implements StoreChangeBus {
-  private rooms = new Map<string, Set<Sock>>();
+  /** Composite-key map: `${space}\x00${room}` → set of sockets. */
+  private subs = new Map<string, Set<Sock>>();
   private readonly _activeRooms = new ActiveRoomsTracker();
   /** Pending import-mermaid requests awaiting frontend result. */
   private pendingImports = new Map<string, {
@@ -25,16 +47,21 @@ export class WsHub implements StoreChangeBus {
     timer: ReturnType<typeof setTimeout>;
   }>();
 
-  attach(room: string, sock: Sock) {
-    if (!this.rooms.has(room)) this.rooms.set(room, new Set());
-    // biome-ignore lint/style/noNonNullAssertion: just-checked-with-has
-    this.rooms.get(room)!.add(sock);
+  attach(space: string, room: string, sock: Sock) {
+    const key = compositeKey(space, room);
+    let set = this.subs.get(key);
+    if (!set) {
+      set = new Set();
+      this.subs.set(key, set);
+    }
+    set.add(sock);
   }
-  detach(room: string, sock: Sock) {
-    const set = this.rooms.get(room);
+  detach(space: string, room: string, sock: Sock) {
+    const key = compositeKey(space, room);
+    const set = this.subs.get(key);
     if (!set) return;
     set.delete(sock);
-    if (set.size === 0) this.rooms.delete(room);
+    if (set.size === 0) this.subs.delete(key);
   }
 
   getActiveRooms(): ActiveRoomsTracker {
@@ -42,6 +69,7 @@ export class WsHub implements StoreChangeBus {
   }
 
   publish(
+    space: string,
     room: string,
     msg: {
       changes: StoreChangeBatch;
@@ -50,27 +78,36 @@ export class WsHub implements StoreChangeBus {
       originClientId?: string;
     },
   ) {
-    this.broadcast(room, { kind: "store-change", ...msg });
+    this.broadcast(space, room, { kind: "store-change", ...msg });
   }
-  publishPrompt(room: string, prompt: Prompt) {
-    this.broadcast(room, { kind: "prompt-created", prompt });
+  publishPrompt(space: string, room: string, prompt: Prompt) {
+    this.broadcast(space, room, { kind: "prompt-created", prompt });
   }
-  publishPromptResolved(room: string, id: string, response?: string) {
-    this.broadcast(room, { kind: "prompt-resolved", id, response });
+  publishPromptResolved(
+    space: string,
+    room: string,
+    id: string,
+    response?: string,
+  ) {
+    this.broadcast(space, room, { kind: "prompt-resolved", id, response });
   }
-  publishPromptRemoved(room: string, ids: string[]) {
-    this.broadcast(room, { kind: "prompt-removed", ids });
+  publishPromptRemoved(space: string, room: string, ids: string[]) {
+    this.broadcast(space, room, { kind: "prompt-removed", ids });
   }
-  publishAiActivity(room: string, activity: AiActivity | null) {
-    this.broadcast(room, { kind: "ai-activity", activity });
+  publishAiActivity(
+    space: string,
+    room: string,
+    activity: AiActivity | null,
+  ) {
+    this.broadcast(space, room, { kind: "ai-activity", activity });
   }
 
   /**
-   * Returns the number of open WS connections in the room.
+   * Returns the number of open WS connections in `(space, room)`.
    * Used by the import-mermaid endpoint to check if a browser tab is connected.
    */
-  subscriberCount(room: string): number {
-    const set = this.rooms.get(room);
+  subscriberCount(space: string, room: string): number {
+    const set = this.subs.get(compositeKey(space, room));
     if (!set) return 0;
     let count = 0;
     for (const s of set) if (s.readyState === OPEN) count++;
@@ -78,14 +115,15 @@ export class WsHub implements StoreChangeBus {
   }
 
   /**
-   * Send an import-mermaid command to the first open subscriber in the room.
-   * Returns a Promise that resolves with the frontend result or rejects on timeout.
-   * Caller must check subscriberCount() > 0 first.
+   * Send an import-mermaid command to the first open subscriber in
+   * `(space, room)`. Returns a Promise that resolves with the frontend result
+   * or rejects on timeout. Caller must check `subscriberCount() > 0` first.
    *
    * Append-only by design (DRW-083): no mode parameter — frontend always
    * appends. AI must never wipe existing canvas state.
    */
   sendImportMermaid(
+    space: string,
     room: string,
     requestId: string,
     source: string,
@@ -99,8 +137,8 @@ export class WsHub implements StoreChangeBus {
 
       this.pendingImports.set(requestId, { resolve, reject, timer });
 
-      // Send to first open subscriber (simple: first from iterator)
-      const set = this.rooms.get(room);
+      // Send to first open subscriber (simple: first from iterator).
+      const set = this.subs.get(compositeKey(space, room));
       if (!set) {
         clearTimeout(timer);
         this.pendingImports.delete(requestId);
@@ -143,10 +181,14 @@ export class WsHub implements StoreChangeBus {
     pending.resolve(result);
   }
 
-  private broadcast(room: string, msg: WsMessage) {
-    const set = this.rooms.get(room);
+  private broadcast(space: string, room: string, msg: WsMessage) {
+    const set = this.subs.get(compositeKey(space, room));
     if (!set) return;
     const data = JSON.stringify(msg);
     for (const s of set) if (s.readyState === OPEN) s.send(data);
   }
 }
+
+// Re-export so callers can refer to the legacy sentinel via `./ws` without
+// reaching into the internal `./ws/active-rooms` module.
+export { LEGACY_SPACE_ID };

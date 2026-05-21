@@ -23,7 +23,7 @@ export function aiRoutes(bus: WsHub) {
           400 as const,
         );
       }
-      const { rooms } = bundleForRequest(c);
+      const { rooms, space } = bundleForRequest(c);
       const r = await rooms.get(room);
       const activity = {
         actor: body.actor,
@@ -31,30 +31,30 @@ export function aiRoutes(bus: WsHub) {
         startedAt: Date.now(),
       };
       r.aiActivity = activity;
-      bus.publishAiActivity(room, activity);
+      bus.publishAiActivity(space.id, room, activity);
       return c.json({ ok: true });
     })
     .post("/api/ai/stop", async (c) => {
       const rv = resolveRoomId(c.req.query("room"));
       if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
       const room = rv.id;
-      const { rooms } = bundleForRequest(c);
+      const { rooms, space } = bundleForRequest(c);
       const r = await rooms.get(room);
       r.aiActivity = undefined;
-      bus.publishAiActivity(room, null);
+      bus.publishAiActivity(space.id, room, null);
       return c.json({ ok: true });
     })
     .get("/api/ai/activity", async (c) => {
       const rv = resolveRoomId(c.req.query("room"));
       if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
       const room = rv.id;
-      const { rooms } = bundleForRequest(c);
+      const { rooms, space } = bundleForRequest(c);
       const r = await rooms.get(room);
       // Auto-expire stale records on read so clients querying after a zombie
       // don't see indefinite "AI is busy" state.
       if (r.aiActivity && Date.now() - r.aiActivity.startedAt > STALE_MS) {
         r.aiActivity = undefined;
-        bus.publishAiActivity(room, null);
+        bus.publishAiActivity(space.id, room, null);
       }
       return c.json({ activity: r.aiActivity ?? null });
     });

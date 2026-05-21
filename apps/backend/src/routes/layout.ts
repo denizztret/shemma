@@ -17,7 +17,7 @@ export function layoutRoutes(bus: StoreChangeBus) {
       spacing?: string;
     };
 
-    const { rooms, scheduleSave } = bundleForRequest(c);
+    const { rooms, scheduleSave, space } = bundleForRequest(c);
     const r = await rooms.get(id);
 
     const hint = {
@@ -50,7 +50,11 @@ export function layoutRoutes(bus: StoreChangeBus) {
     );
     r.dirty = true;
     scheduleSave(id, r);
-    bus.publish(id, { changes: lr.batch, source: "ai", version: r.version });
+    bus.publish(space.id, id, {
+      changes: lr.batch,
+      source: "ai",
+      version: r.version,
+    });
 
     return c.json({ ok: true, version: r.version, count });
   });
