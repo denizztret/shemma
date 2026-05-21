@@ -13,6 +13,7 @@
     "@shemma/client": "workspace:*",
     "@shemma/backend": "workspace:*",
     "@shemma/lockfile": "workspace:*",
-    "@shemma/mcp": "workspace:*"
+    "@shemma/mcp": "workspace:*",
+    "@shemma/spaces": "workspace:*"
   }
 }

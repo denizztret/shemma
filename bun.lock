@@ -55,6 +55,7 @@
         "@shemma/client": "workspace:*",
         "@shemma/lockfile": "workspace:*",
         "@shemma/mcp": "workspace:*",
+        "@shemma/spaces": "workspace:*",
       },
     },
     "packages/shemma-client": {

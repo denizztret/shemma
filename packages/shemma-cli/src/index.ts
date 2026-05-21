@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { cmdAiStart, cmdAiStatus, cmdAiStop } from "./ai";
+import { handleSpacesCommand } from "./commands/spaces";
 import { ensure, start, status, stop, stopAll } from "./daemon";
 import { cmdClear, cmdPatch, cmdState } from "./data";
 import { cmdDoctor } from "./doctor";
@@ -163,6 +164,10 @@ async function main() {
   }
 
   if (cmd === "ps") return cmdPs();
+
+  if (cmd === "s") {
+    process.exit(await handleSpacesCommand(argv.slice(1)));
+  }
 
   if (cmd === "logs") {
     let tailN = 50;
@@ -468,6 +473,12 @@ Default (zero-arg):
 Lifecycle:
   daemon start [--storage <path>] | stop [--all] | status | ensure
   ps                                          # JSON status for all profiles
+  s        list [--json]                      # list registered spaces
+  s        add <path> [--label <label>]       # register space at <path>
+  s        forget <id>                        # remove space from registry
+  s        rename <id> <new-label>            # update space label
+  s        prune [--dry-run] [--yes]          # remove orphan spaces (path gone)
+  s        reveal <id>                        # open space path in file manager
   rooms list
   rooms archive       <id>
   rooms restore       <id>
