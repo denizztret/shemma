@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { releaseLock, writeLockMetadata } from "@shemma/lockfile";
 import { runStartupMigration } from "./migration/legacy-spaces.js";
 import {
+  DebouncedTouch,
   SPACE_ID_PATTERN,
   type SpaceRecord,
   findSpaceById,
@@ -75,6 +76,15 @@ export type AppOpts = {
    * strictly opt-in.
    */
   enableSpaceMiddleware?: boolean;
+  /**
+   * DRW-116 W3: callback fired by `spaceMiddleware` whenever a real
+   * `SpaceRecord` is resolved for a request. Production daemon wires this
+   * to `DebouncedTouch.touch(space.id)` so the registry's `lastUsedAt`
+   * reflects actual API usage (the field was previously only updated on
+   * registration or rename, leaving long-running spaces "stale" in
+   * `s list --by-last-used`).
+   */
+  onSpaceResolved?: (space: SpaceRecord) => void;
 };
 
 /**
@@ -259,7 +269,13 @@ export function makeApp(opts: AppOpts = {}) {
   // before any later `app.use("/api/*", …)` middleware sees the request.
   app.route("/", spacesRouter);
   if (opts.enableSpaceMiddleware) {
-    app.use("/api/*", spaceMiddleware({ allowList: new Set(SPACE_ALLOWLIST) }));
+    app.use(
+      "/api/*",
+      spaceMiddleware({
+        allowList: new Set(SPACE_ALLOWLIST),
+        onResolve: opts.onSpaceResolved,
+      }),
+    );
   }
   // Bundle resolver mounts AFTER spaceMiddleware so handlers downstream see
   // `c.get("space")` already populated. Routes pull (space, rooms, scheduleSave)
@@ -359,6 +375,12 @@ export async function startServer(opts: AppOpts = {}) {
   const idle = daemonMode
     ? new IdleTracker(undefined, () => onIdleFire())
     : undefined;
+  // DRW-116 W3: debounced lastUsedAt updates. Only in daemon mode — in-process
+  // test usage skips it to avoid leaking timers + writes into the user's real
+  // ~/.config/shemma/spaces.json. The middleware fires `onResolve(space)` on
+  // every real-space request (allowlist routes skipped).
+  const debouncedTouch = daemonMode ? new DebouncedTouch() : undefined;
+
   // DRW-116 C1: production daemon MUST enforce composite-key invariant via
   // spaceMiddleware. Tests calling `makeApp({ storageDir })` keep the
   // middleware off (compat preserved). The `enableSpaceMiddleware` flag in
@@ -368,6 +390,9 @@ export async function startServer(opts: AppOpts = {}) {
     ...opts,
     idle,
     enableSpaceMiddleware: opts.enableSpaceMiddleware ?? daemonMode,
+    onSpaceResolved: debouncedTouch
+      ? (s) => debouncedTouch.touch(s.id)
+      : undefined,
   });
   /**
    * DRW-116 Task 12 — resolve `(space, room)` for a WS upgrade.
@@ -599,6 +624,12 @@ export async function startServer(opts: AppOpts = {}) {
     console.log(`[shemma] ${signal} received, flushing…`);
     idle?.shutdown();
     server.stop();
+    // DRW-116 W3: flush any pending lastUsedAt updates BEFORE the room cache
+    // shutdown — DebouncedTouch writes to spaces.json (registry), not to
+    // room storage, so ordering vs roomCache is independent, but doing it
+    // first keeps the flush chain linear and lets the registry settle while
+    // larger room writes finalize.
+    debouncedTouch?.shutdown();
     // DRW-116 Task 10b: drain EVERY cached (space, room) persistence buffer +
     // stop the sweep interval. This supersedes the per-makeApp facade flushAll
     // — it's a cache-wide flush that catches rooms touched in other spaces too.
@@ -624,6 +655,8 @@ export async function startServer(opts: AppOpts = {}) {
     close: async () => {
       idle?.shutdown();
       server.stop();
+      // DRW-116 W3: mirror SIGTERM chain — flush pending lastUsedAt updates.
+      debouncedTouch?.shutdown();
       // Test-mode close path mirrors the SIGTERM chain: flush every cached
       // persistence (across spaces touched in this process) before releasing
       // the daemon lock dir.

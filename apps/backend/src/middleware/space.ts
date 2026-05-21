@@ -1,5 +1,9 @@
 import type { MiddlewareHandler } from "hono";
-import { SPACE_ID_PATTERN, findSpaceById } from "@shemma/spaces";
+import {
+  SPACE_ID_PATTERN,
+  type SpaceRecord,
+  findSpaceById,
+} from "@shemma/spaces";
 
 /**
  * Resolves `?space=<id>` query parameter into a `SpaceRecord` on the Hono
@@ -20,9 +24,20 @@ import { SPACE_ID_PATTERN, findSpaceById } from "@shemma/spaces";
  * code and migrates tests in one pass.
  */
 export function spaceMiddleware(
-  opts: { allowList?: Set<string> } = {},
+  opts: {
+    allowList?: Set<string>;
+    /**
+     * DRW-116 W3: optional callback fired after a request resolved to a real
+     * registered space. Used by the daemon to feed `DebouncedTouch` so
+     * `lastUsedAt` reflects actual data-op activity (not just registration).
+     * Skipped for allowlisted routes (cross-space concerns don't "use" any
+     * single space).
+     */
+    onResolve?: (space: SpaceRecord) => void;
+  } = {},
 ): MiddlewareHandler {
   const allowList = opts.allowList ?? new Set<string>();
+  const onResolve = opts.onResolve;
   return async (c, next) => {
     if (allowList.has(c.req.path)) {
       await next();
@@ -37,6 +52,7 @@ export function spaceMiddleware(
       const fallback = findSpaceById("default");
       if (fallback) {
         c.set("space", fallback);
+        onResolve?.(fallback);
         await next();
         return;
       }
@@ -48,6 +64,7 @@ export function spaceMiddleware(
     const record = findSpaceById(spaceId);
     if (!record) return c.json({ error: "space_not_found", id: spaceId }, 404);
     c.set("space", record);
+    onResolve?.(record);
     await next();
   };
 }
