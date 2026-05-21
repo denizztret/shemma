@@ -1,12 +1,13 @@
 import fs from "node:fs";
-import { join } from "node:path";
 import { releaseLock, writeLockMetadata } from "@shemma/lockfile";
+import type { SpaceRecord } from "@shemma/spaces";
 import { Hono } from "hono";
-import { config } from "./config";
+import { config, resolveLegacyStorageDir } from "./config";
 import { EMBEDDED_ASSETS } from "./embedded-assets";
 import { IdleTracker } from "./idle-tracker";
 import { spaceMiddleware } from "./middleware/space";
-import { FilePersistence } from "./persistence";
+import type { FilePersistence } from "./persistence";
+import { RoomCache } from "./room-cache";
 import { type RoomStore, Rooms, pushOpLog, validateRoomId } from "./rooms";
 import { activeRoomsRoutes } from "./routes/active-rooms";
 import { aiRoutes } from "./routes/ai";
@@ -36,6 +37,17 @@ import { handleHello, parseClientMessage } from "./ws-protocol";
 export type AppOpts = {
   inMemory?: boolean;
   port?: number;
+  /**
+   * DRW-116 Task 10b: explicit storage directory override.
+   *
+   * When provided, `makeApp` synthesizes a `SpaceRecord` with `storageLayout:
+   * "direct"` so rooms land exactly under `<storageDir>/<id>.json` (no
+   * `.shemma/canvas` subdir tacked on). Used by:
+   *   - tests that want a tmpdir-scoped backend
+   *   - `--storage <path>` daemon flag → child receives `SHEMMA_STORAGE_DIR`
+   * Omitted → falls back to `resolveLegacyStorageDir(config.profile)` for
+   * single-space daemons until Task 11 wires per-request space lookup.
+   */
   storageDir?: string;
   /**
    * Optional idle tracker. When provided, every `/api/*` request resets the
@@ -73,50 +85,105 @@ export const SPACE_ALLOWLIST: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * DRW-116 Task 10a bridge:
+ * Daemon-wide RoomCache singleton. Keyed by `(spaceId, roomId)` → returns the
+ * same `FilePersistence` instance per pair so debounced writes survive across
+ * HTTP/WS requests in the same room.
  *
- * `FilePersistence` is now a single-file primitive (one instance == one room
- * file on disk). The legacy daemon entry point still wants a multi-room facade
- * keyed by `roomId` — that's what `makeApp(...).persistence` exposes to tests
- * and to the websocket handler. This adapter lazily mints a `FilePersistence`
- * per id under a single `storageDir`, preserving the pre-refactor contract.
- *
- * Task 10b will remove this adapter once `RoomCache` (keyed by `(space, room)`)
- * replaces the singleton `config.storageDir` lookup.
+ * The cache is lazily instantiated on first `getRoomCache()` call (in-process
+ * test usage that never asks for it will not pay the timer cost). Daemon
+ * shutdown calls `shutdown()` BEFORE `releaseLock` so pending writes flush.
  */
-class StorageDirPersistence {
-  private byId = new Map<string, FilePersistence>();
-  constructor(private dir: string) {}
-  private get(id: string): FilePersistence {
-    let p = this.byId.get(id);
-    if (!p) {
-      p = new FilePersistence(join(this.dir, `${id}.json`));
-      this.byId.set(id, p);
-    }
-    return p;
+let _roomCache: RoomCache | undefined;
+export function getRoomCache(): RoomCache {
+  if (!_roomCache) _roomCache = new RoomCache(config.profile);
+  return _roomCache;
+}
+/** Test-only: drop the cached instance so each test gets a fresh one. */
+export function __resetRoomCacheForTests(): void {
+  _roomCache = undefined;
+}
+
+/**
+ * DRW-116 Task 10b: per-`makeApp` single-space persistence facade.
+ *
+ * Until Task 11 wires routes/WS to read the active `SpaceRecord` from
+ * `c.get("space")`, every `makeApp` invocation owns ONE space (synthesized from
+ * `opts.storageDir` when provided, or from the legacy `~/.claude/projects/...`
+ * default). All `(load|save|scheduleSave|flushIfDirty)` calls thread that space
+ * into `RoomCache.get(space, id)` to obtain the right `FilePersistence`.
+ *
+ * Future task: replace the facade with per-call space lookup once route
+ * handlers and the WS message loop start passing `space` explicitly.
+ */
+class SingleSpacePersistence {
+  constructor(
+    private readonly space: SpaceRecord,
+    private readonly cache: RoomCache,
+  ) {}
+  private fp(id: string): FilePersistence {
+    return this.cache.get(this.space, id);
   }
   load(id: string) {
-    return this.get(id).load(id);
+    return this.fp(id).load(id);
   }
   save(id: string, s: RoomState) {
-    return this.get(id).save(id, s);
+    return this.fp(id).save(id, s);
   }
   scheduleSave(id: string, s: RoomState): void {
-    this.get(id).scheduleSave(id, s);
+    this.fp(id).scheduleSave(id, s);
   }
   flushIfDirty(id: string): Promise<void> {
-    return this.get(id).flushIfDirty(id);
+    return this.fp(id).flushIfDirty(id);
   }
+  /**
+   * Best-effort flush for shutdown chains that previously called
+   * `StorageDirPersistence.flushAll()`. We delegate to the shared RoomCache
+   * since this facade does not track which room ids it has ever touched —
+   * the cache is the source of truth. The cache itself stays alive (its
+   * timer keeps running) so subsequent `makeApp` calls from the same
+   * in-process test session see fresh entries. The daemon's SIGTERM/SIGINT
+   * chain calls `getRoomCache().shutdown()` explicitly below.
+   */
   async flushAll(): Promise<void> {
-    await Promise.all(
-      [...this.byId.values()].map((p) => p.flushAll()),
-    );
+    await this.cache.flushAll();
   }
 }
 
+/**
+ * Synthesize a `SpaceRecord` for the legacy single-space flow: storage layout
+ * `direct` means `resolveRoomStorage` treats `space.path` as the final storage
+ * directory verbatim (no `.shemma/canvas` subdir tacked on). This preserves the
+ * pre-Task-10b semantics where `--storage <path>` lands rooms exactly under
+ * `<path>/<id>.json`.
+ *
+ * The synthetic space has a stable id `legacy-default` so `RoomCache` entries
+ * for two `makeApp` instances pointing at the same dir share a `FilePersistence`
+ * — matching the `workspace-isolation.test.ts` expectation that "same storageDir
+ * see same rooms".
+ */
+function makeLegacySpace(storageDir: string): SpaceRecord {
+  const now = new Date(0).toISOString();
+  return {
+    id: `legacy:${storageDir}`,
+    path: storageDir,
+    storageLayout: "direct",
+    createdAt: now,
+    lastUsedAt: now,
+  };
+}
+
 export function makeApp(opts: AppOpts = {}) {
-  const storageDir = opts.storageDir ?? config.storageDir; // Fix: no double-join
-  const persistence = opts.inMemory ? null : new StorageDirPersistence(storageDir);
+  // DRW-116 Task 10b: synthesize a SpaceRecord for the legacy single-space flow.
+  // `opts.storageDir` (test path + `--storage` flag override) wins; otherwise
+  // fall back to the per-project default that used to be `config.storageDir`.
+  // Once Task 11 makes routes thread their own space, this synthesis collapses
+  // into "registry lookup at request time" and `opts.storageDir` becomes a pure
+  // test shortcut.
+  const storageDir = opts.storageDir ?? resolveLegacyStorageDir(config.profile);
+  const space = makeLegacySpace(storageDir);
+  const persistence = opts.inMemory
+    ? null
+    : new SingleSpacePersistence(space, getRoomCache());
   const store: RoomStore = persistence
     ? {
         load: (id) => persistence.load(id),
@@ -143,10 +210,7 @@ export function makeApp(opts: AppOpts = {}) {
   // before any later `app.use("/api/*", …)` middleware sees the request.
   app.route("/", spacesRouter);
   if (opts.enableSpaceMiddleware) {
-    app.use(
-      "/api/*",
-      spaceMiddleware({ allowList: new Set(SPACE_ALLOWLIST) }),
-    );
+    app.use("/api/*", spaceMiddleware({ allowList: new Set(SPACE_ALLOWLIST) }));
   }
   app.route("/", makeHealthRoutes(storageDir));
   app.route("/", versionRoutes);
@@ -348,7 +412,11 @@ export async function startServer(opts: AppOpts = {}) {
     console.log(`[shemma] ${signal} received, flushing…`);
     idle?.shutdown();
     server.stop();
-    if (persistence) await persistence.flushAll();
+    // DRW-116 Task 10b: drain EVERY cached (space, room) persistence buffer +
+    // stop the sweep interval. This supersedes the per-makeApp facade flushAll
+    // — it's a cache-wide flush that catches rooms touched in other spaces too.
+    // MUST run BEFORE releaseLock so the lock dir persists while writes finalize.
+    await getRoomCache().shutdown();
     if (lockDir) releaseLock(lockDir);
     process.exit(0);
   };
@@ -369,6 +437,9 @@ export async function startServer(opts: AppOpts = {}) {
     close: async () => {
       idle?.shutdown();
       server.stop();
+      // Test-mode close path mirrors the SIGTERM chain: flush every cached
+      // persistence (across spaces touched in this process) before releasing
+      // the daemon lock dir.
       if (persistence) await persistence.flushAll();
       if (lockDir) releaseLock(lockDir);
     },

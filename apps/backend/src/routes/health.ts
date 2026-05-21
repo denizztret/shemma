@@ -18,9 +18,12 @@ import { VERSION } from "../version";
  *   (включая profile subdir) и `version`, чтобы CLI мог сравнить cwd-target
  *   с активным daemon'ом и предупредить о mismatched storage.
  *
- * `storageDir` параметр передаётся явно (вместо чтения из `config.storageDir`),
+ * `storageDir` параметр передаётся явно (instead of reading a global),
  * чтобы honor'ить `startServer({ storageDir })` override — иначе in-process
- * test daemons и `--storage` flag репортили бы ambient `config.storageDir`.
+ * test daemons и `--storage` flag репортили бы ambient default path.
+ * DRW-116 Task 10b: the ambient default now comes from `resolveLegacyStorageDir`
+ * (single-space fallback); Task 11 will replace `storage` payload with the
+ * per-space root resolved from `c.get("space")`.
  */
 export function makeHealthRoutes(storageDir: string) {
   return new Hono()

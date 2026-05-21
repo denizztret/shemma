@@ -106,11 +106,19 @@ async function main() {
 
   if (cmd === "internal-server") {
     const { startServer } = await import("@shemma/backend/src/index");
-    const { getConfig } = await import("@shemma/backend/src/config");
+    const { getConfig, resolveLegacyStorageDir } = await import(
+      "@shemma/backend/src/config"
+    );
     const c = getConfig();
     const srv = await startServer({ port: c.port });
     console.log(`[shemma] listening on :${srv.port} (profile=${c.profile})`);
-    console.log(`[shemma] storage: ${c.storageDir}`);
+    // DRW-116 Task 10b: `config.storageDir` is gone — the daemon resolves
+    // storage per-room through the spaces registry. For the legacy single-space
+    // log line we surface the same path that `makeApp` (without an override)
+    // would use as the default. CLI parents that pass --storage / set
+    // SHEMMA_STORAGE_DIR see that value reflected because the env-var feeds
+    // both legs of the resolver.
+    console.log(`[shemma] storage: ${resolveLegacyStorageDir(c.profile)}`);
     await new Promise(() => {});
     return;
   }

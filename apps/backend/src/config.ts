@@ -3,6 +3,17 @@ import * as fs from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
+// DRW-116 Task 10b: `config.storageDir` removed. Per-space storage is resolved
+// through `@shemma/spaces.resolveRoomStorage(space, profile, roomId)` and cached
+// by `RoomCache` per (space, room). Callers that used to read the global
+// directory must now thread a `SpaceRecord` (or its derived path) explicitly.
+//
+// `SHEMMA_STORAGE_DIR` env still exists but is consumed only by:
+//   1. CLI `shemma open` / `daemon start --storage` flag resolution (resolveStorageForOpen)
+//   2. test-only `makeApp({ storageDir })` shortcut that mints a `direct` SpaceRecord
+// The env var no longer leaks into `getConfig()` — `legacyStorageDirEnv()` exposes
+// it for the legacy-space fallback path in `index.ts` only.
+
 const VALID_PROFILES = ["dev", "release", "debug"] as const;
 export type Profile = (typeof VALID_PROFILES)[number];
 
@@ -17,7 +28,9 @@ const LEGACY_ENV_ALIASES: Record<string, string> = {
   SHEMMA_PROJECT_DIR: "DIDRAW_PROJECT_DIR",
 };
 const _deprecationWarned = new Set<string>();
-function envWithLegacy(name: keyof typeof LEGACY_ENV_ALIASES): string | undefined {
+function envWithLegacy(
+  name: keyof typeof LEGACY_ENV_ALIASES,
+): string | undefined {
   const v = process.env[name];
   if (v !== undefined) return v;
   const legacy = LEGACY_ENV_ALIASES[name];
@@ -36,16 +49,43 @@ const portByProfile: Record<Profile, number> = {
   release: 8787,
   debug: 8787,
 };
-const storageSubdir: Record<Profile, string> = {
-  dev: "canvas-dev",
-  release: "canvas",
-  debug: "canvas",
-};
 const logLevelByProfile: Record<Profile, "debug" | "info" | "error"> = {
   dev: "debug",
   release: "info",
   debug: "debug",
 };
+
+/**
+ * Legacy default storage directory used by:
+ *   - `makeApp({ storageDir })` test shortcut when caller doesn't pass a path
+ *   - `startServer` direct-invocation banner
+ *
+ * Mirrors the historical `config.storageDir` resolution but is NOT exposed as a
+ * cached singleton — every call re-reads env and recomputes (no Proxy). Callers
+ * inside the request path MUST use `RoomCache.get(space, roomId)` instead; this
+ * helper exists only for the legacy single-space daemon bootstrap until
+ * Task 11/22 finishes the per-space routing.
+ */
+const STORAGE_SUBDIR_BY_PROFILE: Record<Profile, string> = {
+  dev: "canvas-dev",
+  release: "canvas",
+  debug: "canvas",
+};
+
+export function resolveLegacyStorageDir(
+  profile: Profile = getProfile(),
+): string {
+  return (
+    envWithLegacy("SHEMMA_STORAGE_DIR") ??
+    join(
+      homedir(),
+      ".claude",
+      "projects",
+      resolveProjectSlug(),
+      STORAGE_SUBDIR_BY_PROFILE[profile],
+    )
+  );
+}
 
 export function getProfile(): Profile {
   const raw = envWithLegacy("SHEMMA_PROFILE") ?? "release";
@@ -109,19 +149,8 @@ export function getConfig() {
   return {
     profile,
     port: parsePort(envWithLegacy("SHEMMA_PORT"), portByProfile[profile]),
-    storageDir:
-      envWithLegacy("SHEMMA_STORAGE_DIR") ??
-      join(
-        homedir(),
-        ".claude",
-        "projects",
-        resolveProjectSlug(),
-        storageSubdir[profile],
-      ),
-    logLevel: (envWithLegacy("SHEMMA_LOG_LEVEL") ?? logLevelByProfile[profile]) as
-      | "debug"
-      | "info"
-      | "error",
+    logLevel: (envWithLegacy("SHEMMA_LOG_LEVEL") ??
+      logLevelByProfile[profile]) as "debug" | "info" | "error",
     autosaveDebounceMs: 300,
     roomEvictionMs: 60 * 60 * 1000,
     opLogMaxSize: 50,
@@ -175,7 +204,9 @@ export function readConfig(): ConfigFile | null {
     const err = e as NodeJS.ErrnoException;
     if (err.code === "ENOENT") return null;
     if (err.code === "EACCES") {
-      throw new Error(`Cannot read ${p}: permission denied. Try: chmod 600 ${p}`);
+      throw new Error(
+        `Cannot read ${p}: permission denied. Try: chmod 600 ${p}`,
+      );
     }
     if (e instanceof SyntaxError) {
       throw new Error(`Invalid JSON in ${p}: ${e.message}`);

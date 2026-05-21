@@ -1,7 +1,7 @@
 import {
   type Profile,
-  resolveRoomStorage,
   type SpaceRecord,
+  resolveRoomStorage,
 } from "@shemma/spaces";
 import { FilePersistence } from "./persistence";
 
@@ -23,9 +23,11 @@ const SWEEP_MS = 60_000;
  * by a sweep interval so long-lived daemons don't accumulate one buffer per
  * room they've ever seen.
  *
- * DRW-116 Task 10a — Task 10b will wire this into routes via `space` from
- * `spaceMiddleware` (today index.ts still uses the legacy `StorageDirPersistence`
- * adapter).
+ * DRW-116 Task 10b — the daemon-wide singleton lives in `index.ts`
+ * (`getRoomCache()`); `makeApp` wraps it with `SingleSpacePersistence` for the
+ * legacy single-space flow. Task 11 will rewire routes/WS to read the per-
+ * request `space` from `c.get("space")` and call `cache.get(space, roomId)`
+ * directly.
  */
 export class RoomCache {
   private cache = new Map<Key, Entry>();
@@ -71,6 +73,25 @@ export class RoomCache {
       drained.map((e) =>
         e.persistence.flushAll().catch((err) => {
           console.error("[room-cache] evict flush error:", err);
+        }),
+      ),
+    );
+  }
+
+  /**
+   * Flush every cached persistence WITHOUT stopping the sweep timer or
+   * clearing the cache. Used by the per-makeApp `flushAll` facade so that
+   * in-process tests (which may call `srv.close()` mid-suite and then
+   * spin up another `makeApp`) preserve cache entries + the sweep interval.
+   * The daemon's SIGTERM/IDLE handler still calls `shutdown()` for full
+   * teardown.
+   */
+  async flushAll(): Promise<void> {
+    const entries = [...this.cache.values()];
+    await Promise.all(
+      entries.map((e) =>
+        e.persistence.flushAll().catch((err) => {
+          console.error("[room-cache] flushAll error:", err);
         }),
       ),
     );

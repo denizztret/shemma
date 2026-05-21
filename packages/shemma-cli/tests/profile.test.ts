@@ -57,6 +57,10 @@ describe("runtime profile isolation", () => {
   });
 
   test("storage directory differs per profile", () => {
+    // DRW-116 Task 10b: `config.storageDir` removed. The legacy default storage
+    // resolution lives in `resolveLegacyStorageDir(profile)` — still profile-
+    // sensitive (release → canvas, dev → canvas-dev) for the single-space daemon
+    // bootstrap path.
     const devEnv = { ...process.env, SHEMMA_PROFILE: "dev" };
     devEnv.SHEMMA_STORAGE_DIR = undefined;
 
@@ -64,8 +68,8 @@ describe("runtime profile isolation", () => {
     releaseEnv.SHEMMA_STORAGE_DIR = undefined;
 
     const script = `
-      const { getConfig } = await import("${CONFIG_SRC}");
-      console.log(getConfig().storageDir);
+      const { resolveLegacyStorageDir, getProfile } = await import("${CONFIG_SRC}");
+      console.log(resolveLegacyStorageDir(getProfile()));
     `;
 
     const { stdout: devPath, status: devStatus } = spawnBunScript(
