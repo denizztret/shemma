@@ -2,21 +2,48 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { Gallery } from "./gallery/Gallery";
+import { MultiColumnLayout } from "./spaces/MultiColumnLayout";
+import { SpacesPage } from "./spaces/SpacesPage";
+import { parseShemmaUrl } from "./spaces/url-parser";
 
-const params = new URLSearchParams(location.search);
-const roomParam = params.get("room");
-const viewParam = params.get("view");
+/**
+ * Routing (spec §7.2, DRW-116):
+ *   1. Legacy URLs — `?room=<id>` or `?view=gallery` without any of the new
+ *      space-aware params (`?space=`/`?cols=`). Keep rendering `<App />` /
+ *      `<Gallery />` directly so existing dev workflows and tests stay green.
+ *      Transition shim until DRW-116 wraps the whole UI under spaces.
+ *   2. Everything else — delegate to `parseShemmaUrl`:
+ *        • `view: "landing"` (bare `/`) → `<SpacesPage />`
+ *        • `view: "columns"` → `<MultiColumnLayout />` (handles 1+ columns;
+ *          single-column re-uses existing App/Gallery; multi-column stub
+ *          until Task 17).
+ */
+const params = new URLSearchParams(window.location.search);
+const hasRoomQuery = params.has("room");
+const hasGalleryView = params.get("view") === "gallery";
+const hasSpaceQuery = params.has("space");
+const hasColsQuery = params.has("cols");
+const isLegacyRoute =
+  (hasRoomQuery || hasGalleryView) && !hasSpaceQuery && !hasColsQuery;
 
-// Routing:
-// - No ?room= AND no ?view=gallery → Gallery
-// - ?view=gallery → Gallery (explicit)
-// - ?room=<id> → App (room editor)
-const showGallery = viewParam === "gallery" || roomParam === null;
-const room = roomParam ?? "default";
+let tree: React.ReactNode;
+if (isLegacyRoute) {
+  // Legacy single-room / gallery path — preserved unchanged.
+  const roomParam = params.get("room");
+  const showGallery = hasGalleryView || roomParam === null;
+  const room = roomParam ?? "default";
+  tree = showGallery ? <Gallery /> : <App room={room} />;
+} else {
+  const state = parseShemmaUrl(window.location.href);
+  tree =
+    state.view === "landing" ? (
+      <SpacesPage />
+    ) : (
+      <MultiColumnLayout columns={state.columns} />
+    );
+}
 
 // biome-ignore lint/style/noNonNullAssertion: root element is guaranteed by index.html
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    {showGallery ? <Gallery /> : <App room={room} />}
-  </React.StrictMode>,
+  <React.StrictMode>{tree}</React.StrictMode>,
 );

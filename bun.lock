@@ -28,6 +28,7 @@
       "name": "@shemma/frontend",
       "dependencies": {
         "@shemma/domain": "workspace:*",
+        "@shemma/spaces": "workspace:*",
         "@tldraw/mermaid": "^5.0.0",
         "react": "^18.3.0",
         "react-dom": "^18.3.0",
