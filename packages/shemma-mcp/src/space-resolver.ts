@@ -2,6 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { findSpaceById, listSpaces, type SpaceRecord } from "@shemma/spaces";
 
+/** Function shape for the resolver — used for DI in MCP tool tests. */
+export type ResolveSpaceFn = (args: { space?: string; cwd?: string }) => ResolveResult;
+
 export type ResolveSource = "explicit" | "cwd" | "default" | "ambiguous" | "not_found";
 
 export type ResolveResult =

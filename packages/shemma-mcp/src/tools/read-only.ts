@@ -3,10 +3,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
 import { mapFetchError, toolResult, type ToolResult } from "../errors";
 import { clientForRoom } from "../client-utils";
+import { resolveSpace as defaultResolveSpace, type ResolveSpaceFn } from "../space-resolver";
 
 export type ReadOnlyDeps = {
   client: CanvasClient;
   defaultRoom: string;
+  /** DRW-116 Task 26: DI seam for tests; defaults to real resolver. */
+  resolveSpace?: ResolveSpaceFn;
 };
 
 export type ReadOnlyHandles = {
@@ -14,10 +17,24 @@ export type ReadOnlyHandles = {
   version: { call: (input: Record<string, never>) => Promise<ToolResult> };
   rooms_list: { call: (input: Record<string, never>) => Promise<ToolResult> };
   active_rooms: { call: (input: Record<string, never>) => Promise<ToolResult> };
-  context: { call: (input: { room?: string; since?: number; viewport?: string; select?: string[] }) => Promise<ToolResult> };
-  prompts_list: { call: (input: { room?: string; status?: "pending" | "resolved" | "dismissed" | "all" }) => Promise<ToolResult> };
-  ai_activity_status: { call: (input: { room?: string }) => Promise<ToolResult> };
+  context: { call: (input: { room?: string; space?: string; since?: number; viewport?: string; select?: string[] }) => Promise<ToolResult> };
+  prompts_list: { call: (input: { room?: string; space?: string; status?: "pending" | "resolved" | "dismissed" | "all" }) => Promise<ToolResult> };
+  ai_activity_status: { call: (input: { room?: string; space?: string }) => Promise<ToolResult> };
 };
+
+/** Resolve space via DI'd resolver and map ambiguity → ToolResult error. */
+function resolveSpaceOrError(
+  deps: { resolveSpace?: ResolveSpaceFn },
+  argSpace: string | undefined,
+): { spaceId: string } | { error: ToolResult } {
+  const resolver = deps.resolveSpace ?? defaultResolveSpace;
+  const r = resolver({ space: argSpace });
+  if (r.error) {
+    const code = r.source === "not_found" ? "space-not-found" : "ambiguous-space";
+    return { error: toolResult({ ok: false, code, message: r.error }) };
+  }
+  return { spaceId: r.space.id };
+}
 
 export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): ReadOnlyHandles {
   /** Wraps a no-argument client fetch in the standard try/catch → toolResult pattern. */
@@ -112,9 +129,11 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
   );
 
   // ── shemma_context ─────────────────────────────────────────────────────────
-  async function contextCall(input: { room?: string; since?: number; viewport?: string; select?: string[] }): Promise<ToolResult> {
+  async function contextCall(input: { room?: string; space?: string; since?: number; viewport?: string; select?: string[] }): Promise<ToolResult> {
+    const spaceRes = resolveSpaceOrError(deps, input.space);
+    if ("error" in spaceRes) return spaceRes.error;
     try {
-      const client = clientForRoom(deps.client, input.room);
+      const client = clientForRoom(deps.client, input.room, spaceRes.spaceId);
       const data = await client.getContext({ since: input.since, viewport: input.viewport, select: input.select });
       const room = input.room ?? deps.defaultRoom;
       return toolResult({ ok: true, room, data });
@@ -129,19 +148,22 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
       description: "Token-cheap domain context for a room. Optional: since=<version> for diff; viewport=x,y,w,h; select=<comma-separated ids>.",
       inputSchema: {
         room: z.string().optional(),
+        space: z.string().optional(),
         since: z.number().optional(),
         viewport: z.string().optional(),
         select: z.array(z.string()).optional(),
       },
       annotations: { readOnlyHint: true },
     },
-    async (args) => contextCall(args as { room?: string; since?: number; viewport?: string; select?: string[] }),
+    async (args) => contextCall(args as { room?: string; space?: string; since?: number; viewport?: string; select?: string[] }),
   );
 
   // ── shemma_prompts_list ────────────────────────────────────────────────────
-  async function promptsListCall(input: { room?: string; status?: "pending" | "resolved" | "dismissed" | "all" }): Promise<ToolResult> {
+  async function promptsListCall(input: { room?: string; space?: string; status?: "pending" | "resolved" | "dismissed" | "all" }): Promise<ToolResult> {
+    const spaceRes = resolveSpaceOrError(deps, input.space);
+    if ("error" in spaceRes) return spaceRes.error;
     try {
-      const client = clientForRoom(deps.client, input.room);
+      const client = clientForRoom(deps.client, input.room, spaceRes.spaceId);
       const data = await client.getPrompts(input.status ?? "pending");
       return toolResult({ ok: true, data });
     } catch (e) {
@@ -155,16 +177,19 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
       description: "List canvas prompts. status ∈ pending|resolved|dismissed|all (default pending).",
       inputSchema: {
         room: z.string().optional(),
+        space: z.string().optional(),
         status: z.enum(["pending", "resolved", "dismissed", "all"]).optional(),
       },
       annotations: { readOnlyHint: true },
     },
-    async (args) => promptsListCall(args as { room?: string; status?: "pending" | "resolved" | "dismissed" | "all" }),
+    async (args) => promptsListCall(args as { room?: string; space?: string; status?: "pending" | "resolved" | "dismissed" | "all" }),
   );
 
   // ── shemma_ai_activity_status ──────────────────────────────────────────────
-  async function aiActivityStatusCall(input: { room?: string }): Promise<ToolResult> {
-    return fetchData(() => clientForRoom(deps.client, input.room).aiActivity());
+  async function aiActivityStatusCall(input: { room?: string; space?: string }): Promise<ToolResult> {
+    const spaceRes = resolveSpaceOrError(deps, input.space);
+    if ("error" in spaceRes) return spaceRes.error;
+    return fetchData(() => clientForRoom(deps.client, input.room, spaceRes.spaceId).aiActivity());
   }
 
   server.registerTool(
@@ -173,10 +198,11 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
       description: "Read current AI activity badge state.",
       inputSchema: {
         room: z.string().optional(),
+        space: z.string().optional(),
       },
       annotations: { readOnlyHint: true },
     },
-    async (args) => aiActivityStatusCall(args as { room?: string }),
+    async (args) => aiActivityStatusCall(args as { room?: string; space?: string }),
   );
 
   return {

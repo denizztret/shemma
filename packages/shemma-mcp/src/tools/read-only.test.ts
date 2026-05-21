@@ -1,7 +1,20 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
+import type { ResolveSpaceFn } from "../space-resolver";
 import { registerReadOnlyTools } from "./read-only";
+
+const fakeSpaceRecord = {
+  id: "test-space",
+  path: "/tmp/test-space",
+  storageLayout: "project" as const,
+  createdAt: "2026-01-01T00:00:00Z",
+  lastUsedAt: "2026-01-01T00:00:00Z",
+};
+const fakeResolveSpace: ResolveSpaceFn = ({ space }) => {
+  if (space) return { space: { ...fakeSpaceRecord, id: space }, source: "explicit" };
+  return { space: fakeSpaceRecord, source: "default" };
+};
 
 const originalFetch = globalThis.fetch;
 
@@ -24,7 +37,11 @@ describe("read-only tools", () => {
   function setup() {
     const server = new McpServer({ name: "t", version: "0" });
     const client = new CanvasClient({ baseUrl: "http://test" });
-    const handles = registerReadOnlyTools(server, { client, defaultRoom: "default" });
+    const handles = registerReadOnlyTools(server, {
+      client,
+      defaultRoom: "default",
+      resolveSpace: fakeResolveSpace,
+    });
     return { server, client, handles };
   }
 

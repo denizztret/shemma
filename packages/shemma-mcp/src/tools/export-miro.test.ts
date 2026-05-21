@@ -2,7 +2,20 @@ import { describe, expect, it } from "bun:test";
 import { CanvasClient } from "@shemma/client";
 import { RoomResolver } from "../room-resolver";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ResolveSpaceFn } from "../space-resolver";
 import { registerExportMiroTool } from "./export-miro";
+
+const fakeSpaceRecord = {
+  id: "test-space",
+  path: "/tmp/test-space",
+  storageLayout: "project" as const,
+  createdAt: "2026-01-01T00:00:00Z",
+  lastUsedAt: "2026-01-01T00:00:00Z",
+};
+const fakeResolveSpace: ResolveSpaceFn = ({ space }) => {
+  if (space) return { space: { ...fakeSpaceRecord, id: space }, source: "explicit" };
+  return { space: fakeSpaceRecord, source: "default" };
+};
 
 function startFakeDaemon(handler: (req: Request) => Response | Promise<Response>) {
   const server = Bun.serve({ port: 0, fetch: handler });
@@ -49,6 +62,7 @@ describe("registerExportMiroTool — success path", () => {
         client,
         resolver: makeResolver("default"),
         defaultRoom: "default",
+        resolveSpace: fakeResolveSpace,
       });
       const res = await handles.exportMiro.call({
         boardId: "B1",
@@ -86,6 +100,7 @@ describe("registerExportMiroTool — error mapping", () => {
         client,
         resolver: makeResolver("default"),
         defaultRoom: "default",
+        resolveSpace: fakeResolveSpace,
       });
       const res = await handles.exportMiro.call({ boardId: "B1", selection: ["shape:a"] });
       const text = JSON.parse((res.content[0] as { text: string }).text) as {
@@ -117,6 +132,7 @@ describe("registerExportMiroTool — dryRun", () => {
         client,
         resolver: makeResolver("default"),
         defaultRoom: "default",
+        resolveSpace: fakeResolveSpace,
       });
       await handles.exportMiro.call({ boardId: "B1", selection: ["shape:a"], dryRun: true });
       expect(captured.dryRun).toBe(true);

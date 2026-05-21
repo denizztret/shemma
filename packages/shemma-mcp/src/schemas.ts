@@ -18,6 +18,10 @@ export const LayoutHintSchema = z
 
 export const CommonWriteArgs = {
   room: z.string().optional(),
+  // DRW-116 Task 26: optional space id; when omitted, resolved via space-resolver
+  // (explicit > CWD match > "default" fallback). Passes through to CanvasClient
+  // as `?space=<id>` so backend bundleForRequest routes to the right space.
+  space: z.string().optional(),
   clientOpId: z.string().optional(),
   dryRun: z.boolean().optional(),
   layoutHint: LayoutHintSchema,
@@ -86,11 +90,13 @@ export const LayoutSelectionArgs = {
   mode: LayoutModeEnum.optional(),
   spacing: SpacingEnum.optional(),
   room: z.string().optional(),
+  space: z.string().optional(),
 };
 
 export const ImportMermaidArgs = {
   source: z.string().min(1),
   room: z.string().optional(),
+  space: z.string().optional(),
   clientOpId: z.string().optional(),
   /**
    * DRW-086: Viewport behavior after a successful import.
@@ -133,4 +139,5 @@ export const ExportMiroArgs = {
       "If true — returns preview JSON without making Miro API calls.",
     ),
   room: z.string().optional().describe("Room id (resolved via resolver chain when omitted)."),
+  space: z.string().optional().describe("Space id (resolved via space-resolver chain when omitted)."),
 };

@@ -5,6 +5,8 @@ export type ShemmaMcpErrorCode =
   | "http-error"
   | "unexpected-error"
   | "ambiguous-room"
+  | "ambiguous-space"
+  | "space-not-found"
   | "no-client-connected"
   | "import-failed";
 
