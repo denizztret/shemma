@@ -43,7 +43,7 @@
     },
     "packages/shemma-cli": {
       "name": "shemma",
-      "version": "0.12.3",
+      "version": "0.20.3",
       "bin": {
         "shemma": "src/index.ts",
       },
@@ -61,13 +61,17 @@
     },
     "packages/shemma-mcp": {
       "name": "@shemma/mcp",
-      "version": "0.0.0",
+      "version": "0.20.3",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.0.0",
         "@shemma/client": "workspace:*",
         "@shemma/domain": "workspace:*",
         "zod": "^3.23.0",
       },
+    },
+    "packages/shemma-spaces": {
+      "name": "@shemma/spaces",
+      "version": "0.20.3",
     },
   },
   "packages": {
@@ -398,6 +402,8 @@
     "@shemma/frontend": ["@shemma/frontend@workspace:apps/frontend"],
 
     "@shemma/mcp": ["@shemma/mcp@workspace:packages/shemma-mcp"],
+
+    "@shemma/spaces": ["@shemma/spaces@workspace:packages/shemma-spaces"],
 
     "@tiptap/core": ["@tiptap/core@3.23.4", "", { "peerDependencies": { "@tiptap/pm": "3.23.4" } }, "sha512-ni2LWE52bVeSt3L2HVBSmbBw+elc32ATej9C68EyKzN/8vR5ILxFn6RCdDTKm4asmwZyq2jys12dKmBdWMr9QA=="],
 
