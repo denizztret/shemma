@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { config } from "./config";
 import { EMBEDDED_ASSETS } from "./embedded-assets";
 import { IdleTracker } from "./idle-tracker";
+import { spaceMiddleware } from "./middleware/space";
 import { FilePersistence } from "./persistence";
 import { type RoomStore, Rooms, pushOpLog, validateRoomId } from "./rooms";
 import { activeRoomsRoutes } from "./routes/active-rooms";
@@ -40,7 +41,34 @@ export type AppOpts = {
    * daemon-mode `startServer` constructs a live tracker and passes it in.
    */
   idle?: IdleTracker;
+  /**
+   * DRW-116: mount `spaceMiddleware` on `/api/*` to enforce `?space=<id>`
+   * presence + registry lookup. OFF by default so legacy backend tests
+   * AND the running daemon (which still receives /api/state?room=… from
+   * legacy CLI/frontend clients) keep working. Task 11 flips the default
+   * to ON and migrates every caller in one pass; until then the flag is
+   * strictly opt-in.
+   */
+  enableSpaceMiddleware?: boolean;
 };
+
+/**
+ * Routes that intentionally do NOT require a `?space=<id>`. Cross-space
+ * concerns (health probes, version, server-side session metadata, the
+ * aggregated active-rooms view, the spaces registry itself, and the global
+ * miro-boards listing) live here.
+ */
+export const SPACE_ALLOWLIST: ReadonlySet<string> = new Set([
+  "/api/health",
+  "/api/version",
+  "/api/session",
+  "/api/active-rooms",
+  "/api/export/miro/boards",
+  // /api/spaces is its own router (added in DRW-116 Task 9) and remains
+  // outside the per-space middleware path; the entry is reserved for the
+  // forthcoming router prefix even though Hono's `app.use("/api/*")` will
+  // skip non-existent paths anyway.
+]);
 
 export function makeApp(opts: AppOpts = {}) {
   const storageDir = opts.storageDir ?? config.storageDir; // Fix: no double-join
@@ -64,6 +92,12 @@ export function makeApp(opts: AppOpts = {}) {
       idle.noteHttp();
       await next();
     });
+  }
+  if (opts.enableSpaceMiddleware) {
+    app.use(
+      "/api/*",
+      spaceMiddleware({ allowList: new Set(SPACE_ALLOWLIST) }),
+    );
   }
   app.route("/", makeHealthRoutes(storageDir));
   app.route("/", versionRoutes);
