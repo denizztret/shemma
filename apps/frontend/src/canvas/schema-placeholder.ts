@@ -58,6 +58,28 @@ export function backfillStoreRecords(
         out[id] = { ...r, props: { ...props, color: "black" } };
         continue;
       }
+    } else if (
+      r &&
+      typeof r === "object" &&
+      r.typeName === "shape" &&
+      r.type === "note"
+    ) {
+      // tldraw 5.x added required props to TLNoteShape that older `shemma_note`
+      // payloads omit. Defaults mirror tldraw's own migrations:
+      //   AddLabelColor    → labelColor: "black"
+      //   AddFirstEditedBy → textFirstEditedBy: null (T.string.nullable())
+      const props = (r.props as Record<string, unknown> | undefined) ?? {};
+      let newProps: Record<string, unknown> | undefined;
+      if (props.labelColor === undefined) {
+        newProps = { ...(newProps ?? props), labelColor: "black" };
+      }
+      if (props.textFirstEditedBy === undefined) {
+        newProps = { ...(newProps ?? props), textFirstEditedBy: null };
+      }
+      if (newProps !== undefined) {
+        out[id] = { ...r, props: newProps };
+        continue;
+      }
     }
     out[id] = r as unknown;
   }
