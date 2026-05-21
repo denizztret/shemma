@@ -174,4 +174,54 @@ describe("backfillStoreRecords", () => {
     const props = (out["shape:fr2"] as { props: Record<string, unknown> }).props;
     expect(props.color).toBe("blue");
   });
+
+  // DRW-113 — tldraw 5.x added required props to TLNoteShape via migrations:
+  //   AddLabelColor    → labelColor: "black"
+  //   AddFirstEditedBy → textFirstEditedBy: null
+  // Notes from older `shemma_note` payloads omit them → loadSnapshot rejects.
+  it("adds labelColor='black' and textFirstEditedBy=null on note shapes missing both", () => {
+    const store = {
+      "shape:nt1": {
+        id: "shape:nt1",
+        typeName: "shape",
+        type: "note",
+        props: { color: "yellow", size: "m", align: "middle" },
+      },
+    };
+    const out = backfillStoreRecords(store);
+    const props = (out["shape:nt1"] as { props: Record<string, unknown> }).props;
+    expect(props.labelColor).toBe("black");
+    expect(props.textFirstEditedBy).toBeNull();
+    expect(props.color).toBe("yellow");
+  });
+
+  it("does not overwrite existing labelColor on note shapes (idempotent)", () => {
+    const store = {
+      "shape:nt2": {
+        id: "shape:nt2",
+        typeName: "shape",
+        type: "note",
+        props: { color: "yellow", labelColor: "red", textFirstEditedBy: "user:42", size: "m" },
+      },
+    };
+    const out = backfillStoreRecords(store);
+    const props = (out["shape:nt2"] as { props: Record<string, unknown> }).props;
+    expect(props.labelColor).toBe("red");
+    expect(props.textFirstEditedBy).toBe("user:42");
+  });
+
+  it("backfills only the missing note prop when one is already set", () => {
+    const store = {
+      "shape:nt3": {
+        id: "shape:nt3",
+        typeName: "shape",
+        type: "note",
+        props: { color: "blue", labelColor: "white", size: "m" },
+      },
+    };
+    const out = backfillStoreRecords(store);
+    const props = (out["shape:nt3"] as { props: Record<string, unknown> }).props;
+    expect(props.labelColor).toBe("white");
+    expect(props.textFirstEditedBy).toBeNull();
+  });
 });
