@@ -25,6 +25,7 @@ export type SpacePublicDTO = {
   label?: string;
   lastUsedAt: string;
   orphaned?: boolean;
+  pathHint?: string;
 };
 
 export type SpaceLocalDTO = SpacePublicDTO & {
