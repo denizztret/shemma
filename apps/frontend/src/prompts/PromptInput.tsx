@@ -5,12 +5,16 @@ import { postPrompt } from "../transport/prompts";
 
 export function PromptInput({
   editor,
+  space,
+  room,
   selection,
   cameraTick: _cameraTick,
   visible,
   onClose,
 }: {
   editor: Editor;
+  space: string;
+  room: string;
   selection: string[];
   /** Bumped on every viewport change so anchor re-computes on pan/zoom. */
   cameraTick: number;
@@ -35,7 +39,7 @@ export function PromptInput({
 
   const send = async () => {
     if (!text.trim()) return;
-    await postPrompt(selection, text);
+    await postPrompt(space, room, selection, text);
     setText("");
     onClose();
   };

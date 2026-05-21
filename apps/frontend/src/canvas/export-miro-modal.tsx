@@ -21,6 +21,7 @@ interface ExportResult {
 
 export interface ExportMiroModalProps {
   open: boolean;
+  space: string;
   room: string;
   selectedIds: string[];
   onClose: () => void;
@@ -30,6 +31,7 @@ type Phase = "loading" | "pick" | "confirm" | "exporting" | "result" | "error";
 
 export function ExportMiroModal({
   open,
+  space,
   room,
   selectedIds,
   onClose,
@@ -79,16 +81,19 @@ export function ExportMiroModal({
     if (!selectedBoardId) return;
     setPhase("exporting");
     try {
-      const res = await fetch(`/api/export/miro?room=${encodeURIComponent(room)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          boardId: selectedBoardId,
-          boardName: boards.find((b) => b.id === selectedBoardId)?.name,
-          selection: selectedIds,
-          scope: "selection",
-        }),
-      });
+      const res = await fetch(
+        `/api/export/miro?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            boardId: selectedBoardId,
+            boardName: boards.find((b) => b.id === selectedBoardId)?.name,
+            selection: selectedIds,
+            scope: "selection",
+          }),
+        },
+      );
       const j = (await res.json()) as ExportResult;
       setResult(j);
       setPhase("result");

@@ -1,21 +1,26 @@
 import type { Editor } from "tldraw";
+import { LEGACY_SPACE_ID } from "./api";
 
 const DEBOUNCE_MS = 500;
 
 export function viewportReporter(
   editor: Editor,
-  opts: { roomId: string; baseUrl?: string } = { roomId: "default" },
+  opts: { roomId: string; space?: string; baseUrl?: string } = { roomId: "default" },
 ): () => void {
   const base = opts.baseUrl ?? "";
+  const space = opts.space ?? LEGACY_SPACE_ID;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   function send() {
     const vp = editor.getViewportPageBounds();
-    fetch(`${base}/api/viewport?room=${encodeURIComponent(opts.roomId)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ x: vp.x, y: vp.y, w: vp.w, h: vp.h, zoom: editor.getCamera().z }),
-    }).catch(() => {});
+    fetch(
+      `${base}/api/viewport?space=${encodeURIComponent(space)}&room=${encodeURIComponent(opts.roomId)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ x: vp.x, y: vp.y, w: vp.w, h: vp.h, zoom: editor.getCamera().z }),
+      },
+    ).catch(() => {});
   }
 
   function schedule() {

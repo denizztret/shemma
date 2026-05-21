@@ -69,7 +69,7 @@ function maybeZoomToAffected(
   }, 300);
 }
 
-export function App({ room }: { room: string }) {
+export function App({ space, room }: { space: string; room: string }) {
   const [editor, setEditor] = useState<Editor | null>(null);
   const [selection, setSelection] = useState<string[]>([]);
   const [promptsTick, setPromptsTick] = useState(0);
@@ -144,7 +144,7 @@ export function App({ room }: { room: string }) {
       () => (editor ? (editor.getSelectedShapeIds() as unknown as string[]) : []),
       async (ids) => {
         if (!editor) return;
-        const result = await tidyLayout(ids, room);
+        const result = await tidyLayout(ids, space, room);
         if (result.kind === "ok") {
           maybeZoomToAffected(editor, result.affected, inProgrammaticCameraOp);
         }
@@ -152,7 +152,7 @@ export function App({ room }: { room: string }) {
     );
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [editor, room]);
+  }, [editor, space, room]);
 
   // ⌘⇧E / Ctrl+Shift+E — open Export to Miro modal for current selection.
   useEffect(() => {
@@ -174,7 +174,7 @@ export function App({ room }: { room: string }) {
     const refetch = async () => {
       try {
         const r = await fetch(
-          `/api/ai/activity?room=${encodeURIComponent(room)}`,
+          `/api/ai/activity?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room)}`,
         );
         const j = await r.json();
         if (!cancelled) setAiActivity(j.activity ?? null);
@@ -190,7 +190,7 @@ export function App({ room }: { room: string }) {
       clearInterval(id);
       window.removeEventListener("focus", onFocus);
     };
-  }, [room]);
+  }, [space, room]);
 
   // Chrome (prompt drawer + AI badge) listens to ws-bus dispatched events
   // from transport/ws.ts (`shemma:ws-message`). Transport itself stays
@@ -218,9 +218,9 @@ export function App({ room }: { room: string }) {
   // Viewport reporter (camera → backend, debounced 500ms).
   useEffect(() => {
     if (!editor) return;
-    const stop = viewportReporter(editor, { roomId: room });
+    const stop = viewportReporter(editor, { roomId: room, space });
     return () => stop();
-  }, [editor, room]);
+  }, [editor, space, room]);
 
   // Primary lifecycle: hydrate tldraw from /api/state, start WS store-sync,
   // wire selection/camera listeners. All shape mutations go through tldraw's
@@ -238,11 +238,11 @@ export function App({ room }: { room: string }) {
     // and apply via mergeRemoteChanges. Shared by initial hydrate and truncated-recovery.
     const fetchAndLoadSnapshot = async (): Promise<{ version: number } | null> => {
       try {
-        await seedSchema(room, editor.store.schema.serialize());
+        await seedSchema(space, room, editor.store.schema.serialize());
       } catch {
         // network blip; getState path handles legacy placeholder rooms too.
       }
-      const s = await getState();
+      const s = await getState(space, room);
       if (!active) return null;
       const snapshot = { ...s.store, store: backfillStoreRecords(s.store?.store) };
       editor.store.mergeRemoteChanges(() => {
@@ -255,7 +255,7 @@ export function App({ room }: { room: string }) {
     // handler above, accessed via ref so TldrawComponents can invoke it without
     // importing editor state.
     onTidySelection.current = async (ids: string[]) => {
-      const result = await tidyLayout(ids, room);
+      const result = await tidyLayout(ids, space, room);
       if (result.kind === "ok") {
         maybeZoomToAffected(editor, result.affected, inProgrammaticCameraOp);
       }
@@ -334,7 +334,9 @@ export function App({ room }: { room: string }) {
       if (!loaded) return;
 
       // Initial AI-activity snapshot.
-      fetch(`/api/ai/activity?room=${encodeURIComponent(room)}`)
+      fetch(
+        `/api/ai/activity?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room)}`,
+      )
         .then((r) => r.json())
         .then((j) => active && setAiActivity(j.activity ?? null))
         .catch(() => {});
@@ -365,7 +367,11 @@ export function App({ room }: { room: string }) {
       }, 50);
 
       // Start WS store sync.
-      const wsUrl = `ws://${location.host}/ws?room=${encodeURIComponent(room)}`;
+      // DRW-116 Task 15: composite (space, room) key — backend's WS handshake
+      // routes the connection to the right per-space bundle. In legacy mode
+      // (middleware off) `space` is the `__legacy__` sentinel and the backend
+      // ignores it, preserving single-space semantics.
+      const wsUrl = `ws://${location.host}/ws?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room)}`;
       syncHandle = startStoreSync({
         editor,
         wsUrl,
@@ -504,7 +510,7 @@ export function App({ room }: { room: string }) {
       // biome-ignore lint/performance/noDelete: intentional property removal
       delete (window as any).shemmaImportMermaid;
     };
-  }, [editor, room]);
+  }, [editor, space, room]);
 
   return (
     <AppChrome
@@ -514,6 +520,8 @@ export function App({ room }: { room: string }) {
           {editor && (
             <PromptInput
               editor={editor}
+              space={space}
+              room={room}
               selection={selection}
               cameraTick={cameraTick}
               visible={promptOpen}
@@ -537,12 +545,13 @@ export function App({ room }: { room: string }) {
           {editor && (
             <ExportMiroModal
               open={exportOpen}
+              space={space}
               room={room}
               selectedIds={selection}
               onClose={() => setExportOpen(false)}
             />
           )}
-          <PromptDrawer tick={promptsTick} />
+          <PromptDrawer space={space} room={room} tick={promptsTick} />
           <AiActivityBadge activity={aiActivity} />
           <ErrorBanner />
         </>

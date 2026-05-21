@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { tokens } from "../design-tokens";
 import {
+  LEGACY_SPACE_ID,
   archiveRoom,
   deleteRoom,
   duplicateRoomAuto,
@@ -57,6 +58,7 @@ type UndoState = {
 };
 
 export function RoomCard({
+  space,
   room,
   sessionId,
   onArchived,
@@ -64,6 +66,7 @@ export function RoomCard({
   onDeleted,
   onRefresh,
 }: {
+  space: string;
   room: RoomCardData;
   sessionId: string | null;
   onArchived: (id: string) => void;
@@ -82,7 +85,15 @@ export function RoomCard({
     room.linkedSession === sessionId;
 
   function openRoom() {
-    location.assign(`/?room=${encodeURIComponent(room.id)}`);
+    // Legacy mode opens the bare `?room=` URL so existing single-space dev
+    // flows и тесты не меняют поведение; multi-space columns navigate to
+    // `?space=<id>&room=<id>` так что main.tsx направит запрос в
+    // MultiColumnLayout с правильным space-контекстом.
+    const href =
+      space === LEGACY_SPACE_ID
+        ? `/?room=${encodeURIComponent(room.id)}`
+        : `/?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room.id)}`;
+    location.assign(href);
   }
 
   function startRename() {
@@ -102,7 +113,7 @@ export function RoomCard({
       cancelRename();
       return;
     }
-    const res = await renameRoom(room.id, to);
+    const res = await renameRoom(space, room.id, to);
     if (!res.ok) {
       pushError(
         res.error === "room-exists"
@@ -122,7 +133,7 @@ export function RoomCard({
   }
 
   async function handleDuplicate() {
-    const res = await duplicateRoomAuto(room.id);
+    const res = await duplicateRoomAuto(space, room.id);
     if (!res.ok) {
       pushError(`Duplicate failed: ${res.error ?? "unknown error"}`);
       return;
@@ -133,7 +144,7 @@ export function RoomCard({
   async function handleArchive() {
     onArchived(room.id);
     try {
-      await archiveRoom(room.id);
+      await archiveRoom(space, room.id);
     } catch (e) {
       onRestored(room.id);
       pushError(`Failed to archive "${room.id}": ${(e as Error).message}`);
@@ -150,7 +161,7 @@ export function RoomCard({
     clearTimeout(undoState.timer);
     setUndoState(null);
     try {
-      await restoreRoom(room.id);
+      await restoreRoom(space, room.id);
       onRestored(room.id);
     } catch (e) {
       pushError(`Failed to undo archive "${room.id}": ${(e as Error).message}`);
@@ -159,7 +170,7 @@ export function RoomCard({
 
   async function handleRestore() {
     try {
-      await restoreRoom(room.id);
+      await restoreRoom(space, room.id);
       onRestored(room.id);
     } catch (e) {
       pushError(`Failed to restore "${room.id}": ${(e as Error).message}`);
@@ -175,7 +186,7 @@ export function RoomCard({
       return;
     onDeleted(room.id);
     try {
-      await deleteRoom(room.id, { mode: "hard", force: true });
+      await deleteRoom(space, room.id, { mode: "hard", force: true });
     } catch (e) {
       onRestored(room.id);
       pushError(
@@ -191,13 +202,13 @@ export function RoomCard({
     );
     if (!dest) return;
     try {
-      await exportRoom(room.id, dest);
+      await exportRoom(space, room.id, dest);
     } catch (e) {
       pushError(`Export failed: ${(e as Error).message}`);
     }
   }
 
-  const thumbnailSrc = `/api/rooms/${encodeURIComponent(room.id)}/thumbnail?v=${room.version}${room.archived ? "&archived=true" : ""}`;
+  const thumbnailSrc = `/api/rooms/${encodeURIComponent(room.id)}/thumbnail?space=${encodeURIComponent(space)}&v=${room.version}${room.archived ? "&archived=true" : ""}`;
 
   return (
     <div
