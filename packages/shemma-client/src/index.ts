@@ -70,6 +70,18 @@ export class CanvasClient {
     return params.toString();
   }
 
+  /**
+   * Build query string with `space` only — no `room`. Used by room-management
+   * endpoints (`/api/rooms/<id>/<action>`), where the target room is encoded
+   * in the path, but the request still needs space-bundle resolution
+   * (DRW-116: backend `bundleForRequest` reads `c.get("space")`).
+   */
+  private qSpaceOnly(spaceOverride?: string): string {
+    return new URLSearchParams({
+      space: spaceOverride ?? this.space,
+    }).toString();
+  }
+
   async getState(opts: { fmt?: "full" | "compact"; since?: number } = {}) {
     const r = await fetch(
       `${this.base}/api/state?${this.q({ fmt: opts.fmt ?? "compact", since: opts.since })}`,
@@ -231,11 +243,15 @@ export class CanvasClient {
   }
 
   async listRooms() {
-    const r = await fetch(`${this.base}/api/rooms`);
+    const r = await fetch(`${this.base}/api/rooms?${this.qSpaceOnly()}`);
     return r.json();
   }
 
-  async getActiveRooms(): Promise<{
+  /**
+   * `/api/active-rooms` aggregates across all spaces by default; pass
+   * `opts.space` to filter to a single space (DRW-116 Task 11).
+   */
+  async getActiveRooms(opts: { space?: string } = {}): Promise<{
     rooms: Array<{
       // DRW-116 Task 11: `space` is reported on every entry — `"legacy"` for
       // single-space daemons that haven't routed `?space=<id>` through WS yet.
@@ -245,13 +261,16 @@ export class CanvasClient {
       lastFocusedAt: number;
     }>;
   }> {
-    const r = await fetch(`${this.base}/api/active-rooms`);
+    const url = opts.space
+      ? `${this.base}/api/active-rooms?space=${encodeURIComponent(opts.space)}`
+      : `${this.base}/api/active-rooms`;
+    const r = await fetch(url);
     return r.json();
   }
 
   async archiveRoom(id: string) {
     const r = await fetch(
-      `${this.base}/api/rooms/${encodeURIComponent(id)}/archive`,
+      `${this.base}/api/rooms/${encodeURIComponent(id)}/archive?${this.qSpaceOnly()}`,
       { method: "POST" },
     );
     return r.json();
@@ -259,7 +278,7 @@ export class CanvasClient {
 
   async restoreRoom(id: string) {
     const r = await fetch(
-      `${this.base}/api/rooms/${encodeURIComponent(id)}/restore`,
+      `${this.base}/api/rooms/${encodeURIComponent(id)}/restore?${this.qSpaceOnly()}`,
       { method: "POST" },
     );
     return r.json();
@@ -267,7 +286,7 @@ export class CanvasClient {
 
   async exportRoom(id: string, to: string) {
     const r = await fetch(
-      `${this.base}/api/rooms/${encodeURIComponent(id)}/export`,
+      `${this.base}/api/rooms/${encodeURIComponent(id)}/export?${this.qSpaceOnly()}`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -278,7 +297,7 @@ export class CanvasClient {
   }
 
   async importRoom(from: string, opts: { as?: string; force?: boolean } = {}) {
-    const r = await fetch(`${this.base}/api/rooms/import`, {
+    const r = await fetch(`${this.base}/api/rooms/import?${this.qSpaceOnly()}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ from, as: opts.as, force: opts.force }),
@@ -292,7 +311,7 @@ export class CanvasClient {
     opts: { mode?: "archive" | "hard"; force?: boolean } = {},
   ) {
     const r = await fetch(
-      `${this.base}/api/rooms/${encodeURIComponent(id)}`,
+      `${this.base}/api/rooms/${encodeURIComponent(id)}?${this.qSpaceOnly()}`,
       {
         method: "DELETE",
         headers: { "content-type": "application/json" },
@@ -304,7 +323,7 @@ export class CanvasClient {
 
   async renameRoom(id: string, to: string, opts: { force?: boolean } = {}) {
     const r = await fetch(
-      `${this.base}/api/rooms/${encodeURIComponent(id)}/rename`,
+      `${this.base}/api/rooms/${encodeURIComponent(id)}/rename?${this.qSpaceOnly()}`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -316,7 +335,7 @@ export class CanvasClient {
 
   async duplicateRoom(id: string, as: string) {
     const r = await fetch(
-      `${this.base}/api/rooms/${encodeURIComponent(id)}/duplicate`,
+      `${this.base}/api/rooms/${encodeURIComponent(id)}/duplicate?${this.qSpaceOnly()}`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -328,14 +347,14 @@ export class CanvasClient {
 
   async duplicateAuto(id: string): Promise<{ ok: true; id: string }> {
     const r = await fetch(
-      `${this.base}/api/rooms/${encodeURIComponent(id)}/duplicate-auto`,
+      `${this.base}/api/rooms/${encodeURIComponent(id)}/duplicate-auto?${this.qSpaceOnly()}`,
       { method: "POST" },
     );
     return r.json();
   }
 
   async purgeArchive(): Promise<{ ok: true; removed: number }> {
-    const r = await fetch(`${this.base}/api/rooms/purge-archive`, {
+    const r = await fetch(`${this.base}/api/rooms/purge-archive?${this.qSpaceOnly()}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ confirm: true }),
