@@ -65,6 +65,7 @@ export function RoomCard({
   onRestored,
   onDeleted,
   onRefresh,
+  onOpen,
 }: {
   space: string;
   room: RoomCardData;
@@ -73,6 +74,13 @@ export function RoomCard({
   onRestored: (id: string) => void;
   onDeleted: (id: string) => void;
   onRefresh?: () => void;
+  /**
+   * Optional override for room-open behaviour. When set, clicking the title /
+   * thumbnail invokes the callback with the room id instead of doing a
+   * full-page `location.assign`. Used by `MultiColumnLayout` to swap the
+   * gallery column to a room column in place (DRW-116 Task 18).
+   */
+  onOpen?: (roomId: string) => void;
 }) {
   const [undoState, setUndoState] = useState<UndoState | null>(null);
   const [renameEditing, setRenameEditing] = useState(false);
@@ -85,8 +93,15 @@ export function RoomCard({
     room.linkedSession === sessionId;
 
   function openRoom() {
+    if (onOpen) {
+      // Within-column transition path: MultiColumnLayout flips the column
+      // from gallery → room in place; no navigation needed.
+      onOpen(room.id);
+      return;
+    }
     // Legacy mode opens the bare `?room=` URL so existing single-space dev
-    // flows и тесты не меняют поведение; multi-space columns navigate to
+    // flows и тесты не меняют поведение; multi-space columns без callback
+    // (e.g. landing-driven single column) navigate to
     // `?space=<id>&room=<id>` так что main.tsx направит запрос в
     // MultiColumnLayout с правильным space-контекстом.
     const href =

@@ -34,7 +34,20 @@ function sortRooms(rooms: RoomListItem[], mode: SortMode): RoomListItem[] {
   });
 }
 
-export function Gallery({ space }: { space: string }) {
+export function Gallery({
+  space,
+  onRoomOpen,
+}: {
+  space: string;
+  /**
+   * Optional callback invoked when the user clicks a room card. When set,
+   * `RoomCard` calls this instead of doing a full-page navigation — used by
+   * `MultiColumnLayout` to swap the gallery column to a room column in
+   * place (DRW-116 Task 18). When omitted, legacy `location.assign` flow
+   * stays untouched.
+   */
+  onRoomOpen?: (roomId: string) => void;
+}) {
   const [filterTab, setFilterTab] = useState<FilterTab>("current");
   const [rooms, setRooms] = useState<RoomListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -325,6 +338,7 @@ export function Gallery({ space }: { space: string }) {
                         onRestored={handleRestored}
                         onDeleted={handleDeleted}
                         onRefresh={handleRefresh}
+                        onOpen={onRoomOpen}
                       />
                     ))}
                   </div>
