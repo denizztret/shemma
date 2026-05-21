@@ -122,7 +122,13 @@ export async function status(profile: Profile) {
   const meta = readLockMetadata(dir);
   if (!meta) return { running: false, profile, port };
   if (!isAlive(meta.pid)) return { running: false, profile, port };
-  return { running: await isHealthy(port), pid: meta.pid, profile, port };
+  return {
+    running: await isHealthy(port),
+    pid: meta.pid,
+    profile,
+    port,
+    startedAt: meta.startedAt,
+  };
 }
 
 export type StartOpts = {

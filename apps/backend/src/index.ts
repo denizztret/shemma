@@ -3,6 +3,7 @@ import { releaseLock, writeLockMetadata } from "@shemma/lockfile";
 import { Hono } from "hono";
 import { config } from "./config";
 import { EMBEDDED_ASSETS } from "./embedded-assets";
+import { IdleTracker } from "./idle-tracker";
 import { FilePersistence } from "./persistence";
 import { type RoomStore, Rooms, pushOpLog, validateRoomId } from "./rooms";
 import { activeRoomsRoutes } from "./routes/active-rooms";
@@ -33,6 +34,12 @@ export type AppOpts = {
   inMemory?: boolean;
   port?: number;
   storageDir?: string;
+  /**
+   * Optional idle tracker. When provided, every `/api/*` request resets the
+   * activity timestamp. Tests omit this to avoid leaking intervals; the
+   * daemon-mode `startServer` constructs a live tracker and passes it in.
+   */
+  idle?: IdleTracker;
 };
 
 export function makeApp(opts: AppOpts = {}) {
@@ -51,6 +58,13 @@ export function makeApp(opts: AppOpts = {}) {
   const onDirty = persistence
     ? (id: string, room: RoomState) => persistence.scheduleSave(id, room)
     : undefined;
+  if (opts.idle) {
+    const idle = opts.idle;
+    app.use("/api/*", async (c, next) => {
+      idle.noteHttp();
+      await next();
+    });
+  }
   app.route("/", makeHealthRoutes(storageDir));
   app.route("/", versionRoutes);
   app.route("/", sessionRoutes);
@@ -84,7 +98,21 @@ async function tryServeFrontend(pathname: string): Promise<Response | null> {
 }
 
 export async function startServer(opts: AppOpts = {}) {
-  const { app, bus, persistence, rooms } = makeApp(opts);
+  // Idle tracker is daemon-only: in-process test usage (lifecycle.http.test
+  // and friends) would otherwise leak intervals and risk killing the test
+  // runner via the default `process.exit(0)` onIdle. Gate matches the same
+  // condition as the SIGTERM handler installation below.
+  const daemonMode = import.meta.main || !!process.env.SHEMMA_LOCK_DIR;
+  // onIdle is patched below to point at the graceful `shutdown` chain; until
+  // then we never fire (the interval has not started ticking yet). Using a
+  // forwarding closure lets IdleTracker exist before `shutdown` is declared
+  // while still routing idle-exit through the same flush + releaseLock path
+  // SIGTERM uses (a raw process.exit(0) would leak the lock dir).
+  let onIdleFire: () => void = () => process.exit(0);
+  const idle = daemonMode
+    ? new IdleTracker(undefined, () => onIdleFire())
+    : undefined;
+  const { app, bus, persistence, rooms } = makeApp({ ...opts, idle });
   const server = Bun.serve({
     port: opts.port ?? config.port,
     // SO_REUSEPORT: освобождает port:bind race после graceful stop() — без него
@@ -120,6 +148,7 @@ export async function startServer(opts: AppOpts = {}) {
           clientId: string;
         };
         bus.attach(room, ws as Sock);
+        idle?.noteWsOpen();
       },
       async message(ws, raw) {
         const { room, clientId } = ws.data as unknown as {
@@ -211,6 +240,7 @@ export async function startServer(opts: AppOpts = {}) {
         };
         bus.getActiveRooms().onDisconnect(clientId);
         bus.detach(room, ws as Sock);
+        idle?.noteWsClose();
       },
     },
   });
@@ -233,11 +263,14 @@ export async function startServer(opts: AppOpts = {}) {
 
   const shutdown = async (signal: string) => {
     console.log(`[shemma] ${signal} received, flushing…`);
+    idle?.shutdown();
     server.stop();
     if (persistence) await persistence.flushAll();
     if (lockDir) releaseLock(lockDir);
     process.exit(0);
   };
+  // Route idle-exit through the same graceful chain as SIGTERM.
+  onIdleFire = () => void shutdown("IDLE");
   // Install signal handlers when running as a daemon process. Two triggers:
   //   - `import.meta.main` — direct `bun apps/backend/src/index.ts` invocation
   //   - `SHEMMA_LOCK_DIR` env — CLI-spawned child via `shemma internal-server`
@@ -251,6 +284,7 @@ export async function startServer(opts: AppOpts = {}) {
   return {
     port: server.port as number,
     close: async () => {
+      idle?.shutdown();
       server.stop();
       if (persistence) await persistence.flushAll();
       if (lockDir) releaseLock(lockDir);
