@@ -6,6 +6,7 @@ import { registerSpace, spacesJsonPath } from "@shemma/spaces";
 const SLUG_PREFIX = "legacy-";
 
 export type LegacyMigrationResult = { migrated: number; defaultId?: string };
+export type StartupMigrationResult = LegacyMigrationResult & { skipped?: boolean };
 
 /**
  * Auto-register existing `~/.claude/projects/<slug>/canvas/` directories as
@@ -111,4 +112,24 @@ function writeEmptyRegistry(): void {
   const file = spacesJsonPath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, spaces: [] }, null, 2));
+}
+
+/**
+ * Entry-point for backend daemon startup. Wraps `migrateLegacySpacesIfNeeded`
+ * with SHEMMA_SKIP_LEGACY_MIGRATION gating so the call site in `index.ts` stays
+ * clean and the skip-flag path remains independently testable.
+ *
+ * When `skipFlag` is true the scan is bypassed entirely; an empty registry is
+ * still created if it does not exist (so subsequent reads don't throw ENOENT).
+ */
+export function runStartupMigration(
+  opts: { skipFlag?: boolean; homeDir?: string } = {},
+): StartupMigrationResult {
+  if (opts.skipFlag) {
+    if (!fs.existsSync(spacesJsonPath())) {
+      writeEmptyRegistry();
+    }
+    return { migrated: 0, skipped: true };
+  }
+  return migrateLegacySpacesIfNeeded({ homeDir: opts.homeDir });
 }

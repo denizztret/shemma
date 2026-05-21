@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { listSpaces, findSpaceById } from "@shemma/spaces";
-import { migrateLegacySpacesIfNeeded } from "../legacy-spaces";
+import { listSpaces, findSpaceById, spacesJsonPath } from "@shemma/spaces";
+import { migrateLegacySpacesIfNeeded, runStartupMigration } from "../legacy-spaces";
 
 let tmpXdg: string;
 let origXdg: string | undefined;
@@ -94,5 +94,30 @@ describe("migrateLegacySpacesIfNeeded", () => {
 
     expect(r.migrated).toBe(0);
     expect(listSpaces()).toEqual([]);
+  });
+});
+
+describe("runStartupMigration", () => {
+  it("skip flag creates empty registry without scanning", () => {
+    const projDir = path.join(tmpHome, ".claude", "projects", "foo");
+    fs.mkdirSync(path.join(projDir, "canvas"), { recursive: true });
+
+    const r = runStartupMigration({ skipFlag: true, homeDir: tmpHome });
+
+    expect(r.skipped).toBe(true);
+    expect(r.migrated).toBe(0);
+    expect(listSpaces()).toEqual([]);
+    expect(fs.existsSync(spacesJsonPath())).toBe(true);
+  });
+
+  it("no skip flag delegates to migrateLegacySpacesIfNeeded", () => {
+    const projDir = path.join(tmpHome, ".claude", "projects", "foo");
+    fs.mkdirSync(path.join(projDir, "canvas"), { recursive: true });
+    fs.writeFileSync(path.join(projDir, "canvas", "r.json"), "{}");
+
+    const r = runStartupMigration({ homeDir: tmpHome });
+
+    expect(r.migrated).toBe(1);
+    expect(r.skipped).toBeUndefined();
   });
 });

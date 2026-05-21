@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { releaseLock, writeLockMetadata } from "@shemma/lockfile";
+import { runStartupMigration } from "./migration/legacy-spaces.js";
 import {
   SPACE_ID_PATTERN,
   type SpaceRecord,
@@ -334,6 +335,21 @@ export async function startServer(opts: AppOpts = {}) {
       console.error(`[shemma] Failed to auto-register: ${msg}`);
     }
   }
+  // DRW-116 Task 30: auto-register legacy ~/.claude/projects/*/canvas/ on first
+  // boot. Idempotent — skipped when spaces.json already exists.
+  if (daemonMode) {
+    const migResult = runStartupMigration({
+      skipFlag: process.env.SHEMMA_SKIP_LEGACY_MIGRATION === "1",
+    });
+    if (migResult.skipped) {
+      console.error("[shemma] SHEMMA_SKIP_LEGACY_MIGRATION=1 — skipping legacy migration scan");
+    } else if (migResult.migrated > 0) {
+      console.error(
+        `[shemma] Legacy migration: ${migResult.migrated} project(s) auto-registered. Default space: ${migResult.defaultId ?? "(none)"}`,
+      );
+    }
+  }
+
   // onIdle is patched below to point at the graceful `shutdown` chain; until
   // then we never fire (the interval has not started ticking yet). Using a
   // forwarding closure lets IdleTracker exist before `shutdown` is declared
