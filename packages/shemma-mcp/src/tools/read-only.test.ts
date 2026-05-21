@@ -92,6 +92,78 @@ describe("read-only tools", () => {
     expect(r.structuredContent).toMatchObject({ ok: true });
   });
 
+  it("shemma_active_rooms with space filter resolves space and returns data", async () => {
+    let capturedUrl = "";
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      capturedUrl = typeof url === "string" ? url : url.toString();
+      return new Response(JSON.stringify({ rooms: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const { handles } = setup();
+    const r = await handles.active_rooms.call({ space: "my-space" });
+    expect(r.structuredContent).toMatchObject({ ok: true });
+    expect(capturedUrl).toContain("space=my-space");
+  });
+
+  it("shemma_active_rooms with unknown space returns space-not-found error", async () => {
+    const errorResolver: ResolveSpaceFn = ({ space }) => {
+      if (space) return { space: undefined, source: "not_found", error: `space_not_found: ${space}` };
+      return { space: fakeSpaceRecord, source: "default" };
+    };
+    const server = new McpServer({ name: "t", version: "0" });
+    const client = new CanvasClient({ baseUrl: "http://test" });
+    const handles = registerReadOnlyTools(server, { client, defaultRoom: "default", resolveSpace: errorResolver });
+    const r = await handles.active_rooms.call({ space: "no-such-space" });
+    expect(r.structuredContent).toMatchObject({ ok: false, code: "space-not-found" });
+    expect(r.isError).toBe(true);
+  });
+
+  it("shemma_rooms_list resolves space and calls listRooms with it", async () => {
+    let capturedUrl = "";
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      capturedUrl = typeof url === "string" ? url : url.toString();
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const { handles } = setup();
+    const r = await handles.rooms_list.call({ space: "proj-space" });
+    expect(r.structuredContent).toMatchObject({ ok: true });
+    // fakeResolveSpace echoes back the given space id → CanvasClient encodes it
+    expect(capturedUrl).toContain("space=proj-space");
+  });
+
+  it("shemma_rooms_list returns space-not-found when space unknown", async () => {
+    const errorResolver: ResolveSpaceFn = () => ({
+      space: undefined,
+      source: "not_found",
+      error: "space_not_found: bad-space",
+    });
+    const server = new McpServer({ name: "t", version: "0" });
+    const client = new CanvasClient({ baseUrl: "http://test" });
+    const handles = registerReadOnlyTools(server, { client, defaultRoom: "default", resolveSpace: errorResolver });
+    const r = await handles.rooms_list.call({ space: "bad-space" });
+    expect(r.structuredContent).toMatchObject({ ok: false, code: "space-not-found" });
+    expect(r.isError).toBe(true);
+  });
+
+  it("shemma_rooms_list returns ambiguous-space when no cwd match and no default", async () => {
+    const ambiguousResolver: ResolveSpaceFn = () => ({
+      space: undefined,
+      source: "ambiguous",
+      error: "space_ambiguous: no spaces registered",
+    });
+    const server = new McpServer({ name: "t", version: "0" });
+    const client = new CanvasClient({ baseUrl: "http://test" });
+    const handles = registerReadOnlyTools(server, { client, defaultRoom: "default", resolveSpace: ambiguousResolver });
+    const r = await handles.rooms_list.call({});
+    expect(r.structuredContent).toMatchObject({ ok: false, code: "ambiguous-space" });
+    expect(r.isError).toBe(true);
+  });
+
   it("shemma_context returns data and echoes room", async () => {
     mockFetch(() => ({ body: { ok: true, version: 1, elements: [] } }));
     const { handles } = setup();

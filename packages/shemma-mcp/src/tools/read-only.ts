@@ -15,8 +15,8 @@ export type ReadOnlyDeps = {
 export type ReadOnlyHandles = {
   health: { call: (input: { ensure?: boolean; extended?: boolean }) => Promise<ToolResult> };
   version: { call: (input: Record<string, never>) => Promise<ToolResult> };
-  rooms_list: { call: (input: Record<string, never>) => Promise<ToolResult> };
-  active_rooms: { call: (input: Record<string, never>) => Promise<ToolResult> };
+  rooms_list: { call: (input: { space?: string }) => Promise<ToolResult> };
+  active_rooms: { call: (input: { space?: string }) => Promise<ToolResult> };
   context: { call: (input: { room?: string; space?: string; since?: number; viewport?: string; select?: string[] }) => Promise<ToolResult> };
   prompts_list: { call: (input: { room?: string; space?: string; status?: "pending" | "resolved" | "dismissed" | "all" }) => Promise<ToolResult> };
   ai_activity_status: { call: (input: { room?: string; space?: string }) => Promise<ToolResult> };
@@ -99,33 +99,51 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
   );
 
   // ── shemma_rooms_list ──────────────────────────────────────────────────────
-  async function roomsListCall(_input: Record<string, never>): Promise<ToolResult> {
-    return fetchData(() => deps.client.listRooms());
+  async function roomsListCall(input: { space?: string }): Promise<ToolResult> {
+    const spaceRes = resolveSpaceOrError(deps, input.space);
+    if ("error" in spaceRes) return spaceRes.error;
+    try {
+      const client = new CanvasClient({ baseUrl: deps.client.baseUrl, space: spaceRes.spaceId });
+      const data = await client.listRooms();
+      return toolResult({ ok: true, data });
+    } catch (e) {
+      return toolResult(mapFetchError(e));
+    }
   }
 
   server.registerTool(
     "shemma_rooms_list",
     {
-      description: "List rooms known to the daemon.",
-      inputSchema: {},
+      description: "List rooms known to the daemon for the resolved space.",
+      inputSchema: {
+        space: z.string().optional(),
+      },
       annotations: { readOnlyHint: true },
     },
-    async (_args) => roomsListCall({} as Record<string, never>),
+    async (args) => roomsListCall(args as { space?: string }),
   );
 
   // ── shemma_active_rooms ────────────────────────────────────────────────────
-  async function activeRoomsCall(_input: Record<string, never>): Promise<ToolResult> {
-    return fetchData(() => deps.client.getActiveRooms());
+  async function activeRoomsCall(input: { space?: string }): Promise<ToolResult> {
+    let spaceId: string | undefined;
+    if (input.space) {
+      const spaceRes = resolveSpaceOrError(deps, input.space);
+      if ("error" in spaceRes) return spaceRes.error;
+      spaceId = spaceRes.spaceId;
+    }
+    return fetchData(() => deps.client.getActiveRooms(spaceId !== undefined ? { space: spaceId } : {}));
   }
 
   server.registerTool(
     "shemma_active_rooms",
     {
-      description: "List rooms currently focused in any tldraw UI tab, sorted by lastFocusedAt desc.",
-      inputSchema: {},
+      description: "List rooms currently focused in any tldraw UI tab, sorted by lastFocusedAt desc. Optional: space filter.",
+      inputSchema: {
+        space: z.string().optional(),
+      },
       annotations: { readOnlyHint: true },
     },
-    async (_args) => activeRoomsCall({} as Record<string, never>),
+    async (args) => activeRoomsCall(args as { space?: string }),
   );
 
   // ── shemma_context ─────────────────────────────────────────────────────────
@@ -208,8 +226,8 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
   return {
     health: { call: healthCall },
     version: { call: versionCall },
-    rooms_list: { call: roomsListCall },
-    active_rooms: { call: activeRoomsCall },
+    rooms_list: { call: (input: { space?: string }) => roomsListCall(input) },
+    active_rooms: { call: (input: { space?: string }) => activeRoomsCall(input) },
     context: { call: contextCall },
     prompts_list: { call: promptsListCall },
     ai_activity_status: { call: aiActivityStatusCall },
