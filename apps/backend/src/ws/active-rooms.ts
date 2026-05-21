@@ -26,10 +26,12 @@ export type ActiveRoomsOpts = {
 
 /**
  * Synthetic space id used when callers don't supply one (legacy WS plumbing
- * predating DRW-116 Task 11). Kept as a stable string so composite keys
- * collapse to the same bucket across tests and the single-space daemon path.
+ * predating DRW-116 Task 11). Double-underscore wrapped so it cannot collide
+ * with any real space id — `SPACE_ID_PATTERN` (`/^[a-z0-9][a-z0-9-]{0,62}$/`)
+ * forbids underscores, so `__legacy__` is physically unreachable through the
+ * `/api/spaces` registry path.
  */
-export const LEGACY_SPACE_ID = "legacy";
+export const LEGACY_SPACE_ID = "__legacy__";
 
 function compositeKey(space: string, room: string): string {
   return `${space}\x00${room}`;

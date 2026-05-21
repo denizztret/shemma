@@ -1,13 +1,13 @@
 import { Hono } from "hono";
 import { resolveRoomId } from "../rooms";
-import type { Rooms } from "../rooms";
 import type { WsHub } from "../ws";
+import { bundleForRequest } from "./_space-context";
 
 // Stale activity records auto-clear after this window so a crashed/zombie
 // subagent that never called /api/ai/stop doesn't leave the badge spinning.
 const STALE_MS = 5 * 60 * 1000;
 
-export function aiRoutes(rooms: Rooms, bus: WsHub) {
+export function aiRoutes(bus: WsHub) {
   return new Hono()
     .post("/api/ai/start", async (c) => {
       const rv = resolveRoomId(c.req.query("room"));
@@ -23,6 +23,7 @@ export function aiRoutes(rooms: Rooms, bus: WsHub) {
           400 as const,
         );
       }
+      const { rooms } = bundleForRequest(c);
       const r = await rooms.get(room);
       const activity = {
         actor: body.actor,
@@ -37,6 +38,7 @@ export function aiRoutes(rooms: Rooms, bus: WsHub) {
       const rv = resolveRoomId(c.req.query("room"));
       if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
       const room = rv.id;
+      const { rooms } = bundleForRequest(c);
       const r = await rooms.get(room);
       r.aiActivity = undefined;
       bus.publishAiActivity(room, null);
@@ -46,6 +48,7 @@ export function aiRoutes(rooms: Rooms, bus: WsHub) {
       const rv = resolveRoomId(c.req.query("room"));
       if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
       const room = rv.id;
+      const { rooms } = bundleForRequest(c);
       const r = await rooms.get(room);
       // Auto-expire stale records on read so clients querying after a zombie
       // don't see indefinite "AI is busy" state.

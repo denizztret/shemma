@@ -16,7 +16,7 @@ describe("ActiveRoomsTracker", () => {
     t.onFocus("room-a", "client-1");
     expect(t.list()).toEqual([
       {
-        space: "legacy",
+        space: "__legacy__",
         room: "room-a",
         clientCount: 1,
         lastFocusedAt: 1_700_000_000_000,

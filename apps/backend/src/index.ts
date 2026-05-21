@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { releaseLock, writeLockMetadata } from "@shemma/lockfile";
 import type { SpaceRecord } from "@shemma/spaces";
+import type { Context } from "hono";
 import { Hono } from "hono";
 import { config, resolveLegacyStorageDir } from "./config";
 import { EMBEDDED_ASSETS } from "./embedded-assets";
@@ -9,6 +10,10 @@ import { spaceMiddleware } from "./middleware/space";
 import type { FilePersistence } from "./persistence";
 import { RoomCache } from "./room-cache";
 import { type RoomStore, Rooms, pushOpLog, validateRoomId } from "./rooms";
+import {
+  type SpaceBundle,
+  installBundleResolver,
+} from "./routes/_space-context";
 import { activeRoomsRoutes } from "./routes/active-rooms";
 import { aiRoutes } from "./routes/ai";
 import { contextRoutes } from "./routes/context";
@@ -173,30 +178,68 @@ function makeLegacySpace(storageDir: string): SpaceRecord {
 }
 
 export function makeApp(opts: AppOpts = {}) {
+  // DRW-116 Task 11: per-space bundle registry.
+  //
+  // Each space the daemon ever sees gets its own `Rooms` (in-memory state) +
+  // `SingleSpacePersistence` (debounced write adapter for the cache entry
+  // matching that space). Bundles are created lazily on first request — the
+  // legacy bundle for `opts.storageDir` / `resolveLegacyStorageDir(...)` is
+  // pre-seeded so existing tests that call `makeApp(...).rooms` see the same
+  // instance they always did.
+  const inMemory = !!opts.inMemory;
+  const bundles = new Map<string, SpaceBundle>();
+
+  function bundleForSpace(space: SpaceRecord): SpaceBundle {
+    const cached = bundles.get(space.id);
+    if (cached) return cached;
+    const persistence = inMemory
+      ? null
+      : new SingleSpacePersistence(space, getRoomCache());
+    const store: RoomStore = persistence
+      ? {
+          load: (id) => persistence.load(id),
+          save: (id, s) => persistence.save(id, s),
+        }
+      : { load: async () => null, save: async () => {} };
+    const rooms = new Rooms(store);
+    if (persistence) rooms.setPersistence(persistence);
+    const bundle: SpaceBundle = {
+      space,
+      rooms,
+      scheduleSave: persistence
+        ? (id, s) => persistence.scheduleSave(id, s)
+        : () => {},
+      flushIfDirty: persistence
+        ? (id) => persistence.flushIfDirty(id)
+        : async () => {},
+      flushAll: persistence ? () => persistence.flushAll() : async () => {},
+    };
+    bundles.set(space.id, bundle);
+    return bundle;
+  }
+
   // DRW-116 Task 10b: synthesize a SpaceRecord for the legacy single-space flow.
   // `opts.storageDir` (test path + `--storage` flag override) wins; otherwise
   // fall back to the per-project default that used to be `config.storageDir`.
-  // Once Task 11 makes routes thread their own space, this synthesis collapses
-  // into "registry lookup at request time" and `opts.storageDir` becomes a pure
-  // test shortcut.
+  // The legacy bundle is the default fallback when `?space=<id>` is absent
+  // (test path with `enableSpaceMiddleware` off) — and the value exposed via
+  // `makeApp(...).rooms` for backwards-compatible test access.
   const storageDir = opts.storageDir ?? resolveLegacyStorageDir(config.profile);
-  const space = makeLegacySpace(storageDir);
-  const persistence = opts.inMemory
-    ? null
-    : new SingleSpacePersistence(space, getRoomCache());
-  const store: RoomStore = persistence
-    ? {
-        load: (id) => persistence.load(id),
-        save: (id, s) => persistence.save(id, s),
-      }
-    : { load: async () => null, save: async () => {} };
-  const rooms = new Rooms(store);
-  if (persistence) rooms.setPersistence(persistence);
+  const legacySpace = makeLegacySpace(storageDir);
+  const legacyBundle = bundleForSpace(legacySpace);
+
+  // Resolver used by every route handler to obtain its (space, rooms) tuple.
+  // Reads `c.get("space")` when `spaceMiddleware` set it; otherwise returns
+  // the legacy bundle so middleware-off tests keep working unchanged.
+  const bundleResolver = (c: Context): SpaceBundle => {
+    const ctxSpace = c.get("space") as SpaceRecord | undefined;
+    if (ctxSpace) return bundleForSpace(ctxSpace);
+    return legacyBundle;
+  };
+
   const bus = new WsHub();
   const app = new Hono();
-  const onDirty = persistence
-    ? (id: string, room: RoomState) => persistence.scheduleSave(id, room)
-    : undefined;
+
   if (opts.idle) {
     const idle = opts.idle;
     app.use("/api/*", async (c, next) => {
@@ -212,22 +255,37 @@ export function makeApp(opts: AppOpts = {}) {
   if (opts.enableSpaceMiddleware) {
     app.use("/api/*", spaceMiddleware({ allowList: new Set(SPACE_ALLOWLIST) }));
   }
+  // Bundle resolver mounts AFTER spaceMiddleware so handlers downstream see
+  // `c.get("space")` already populated. Routes pull (space, rooms, scheduleSave)
+  // exclusively through `bundleForRequest(c)` from here on.
+  app.use("/api/*", installBundleResolver(bundleResolver));
+
   app.route("/", makeHealthRoutes(storageDir));
   app.route("/", versionRoutes);
   app.route("/", sessionRoutes);
-  app.route("/", stateRoutes(rooms, { onDirty }));
-  app.route("/", layoutRoutes(rooms, bus, { onDirty }));
-  app.route("/", layoutSelectionRoutes(rooms, bus, { onDirty }));
-  app.route("/", promptRoutes(rooms, bus, { onDirty }));
-  app.route("/", aiRoutes(rooms, bus));
-  app.route("/", roomsRoutes(rooms, storageDir));
-  app.route("/", viewportRoutes(rooms));
-  app.route("/", domainRoutes(rooms, bus, { onDirty }));
-  app.route("/", contextRoutes(rooms));
+  app.route("/", stateRoutes());
+  app.route("/", layoutRoutes(bus));
+  app.route("/", layoutSelectionRoutes(bus));
+  app.route("/", promptRoutes(bus));
+  app.route("/", aiRoutes(bus));
+  app.route("/", roomsRoutes(storageDir));
+  app.route("/", viewportRoutes());
+  app.route("/", domainRoutes(bus));
+  app.route("/", contextRoutes());
   app.route("/", importMermaidRoutes(bus));
   app.route("/", activeRoomsRoutes(bus.getActiveRooms()));
-  app.route("/", exportRoutes(rooms, { onDirty }));
-  return { app, rooms, bus, persistence };
+  app.route("/", exportRoutes());
+  return {
+    app,
+    bus,
+    // Backward-compat exports — legacy single-space tests assert against these.
+    rooms: legacyBundle.rooms,
+    persistence: inMemory ? null : legacyBundle,
+    // DRW-116 Task 11 multi-space hooks (used by integration tests).
+    legacyBundle,
+    bundleForSpace,
+    bundles,
+  };
 }
 
 // In compiled binary EMBEDDED_ASSETS maps URL paths → /$bunfs/... virtual paths

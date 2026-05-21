@@ -2,9 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { SpaceRecord } from "@shemma/spaces";
 import { Hono } from "hono";
 import { Rooms } from "../rooms";
+import type { RoomState } from "../types";
 import { exportRoutes } from "./export";
+import {
+  type SpaceBundle,
+  installBundleResolver,
+} from "./_space-context";
 
 let savedXdg: string | undefined;
 let tmpRoot: string;
@@ -21,8 +27,37 @@ afterEach(() => {
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-function makeApp(rooms: Rooms, miroBaseUrl: string) {
-  return new Hono().route("/", exportRoutes(rooms, { miroBaseUrl }));
+const TEST_SPACE: SpaceRecord = {
+  id: "test-export",
+  path: "/tmp/test-export",
+  storageLayout: "direct",
+  createdAt: "1970-01-01T00:00:00.000Z",
+  lastUsedAt: "1970-01-01T00:00:00.000Z",
+};
+
+function makeBundle(
+  rooms: Rooms,
+  onDirty?: (id: string, state: RoomState) => void,
+): SpaceBundle {
+  return {
+    space: TEST_SPACE,
+    rooms,
+    scheduleSave: (id, s) => onDirty?.(id, s),
+    flushIfDirty: async () => {},
+    flushAll: async () => {},
+  };
+}
+
+function makeApp(
+  rooms: Rooms,
+  miroBaseUrl: string,
+  onDirty?: (id: string, state: RoomState) => void,
+) {
+  const bundle = makeBundle(rooms, onDirty);
+  const app = new Hono();
+  app.use("/api/*", installBundleResolver(() => bundle));
+  app.route("/", exportRoutes({ miroBaseUrl }));
+  return app;
 }
 
 function writeToken(token: string) {
@@ -80,10 +115,7 @@ describe("POST /api/export/miro — happy path", () => {
       return new Response("{}", { status: 200 });
     });
     try {
-      const app = new Hono().route(
-        "/",
-        exportRoutes(rooms, { miroBaseUrl: m.url, onDirty: (id) => onDirtyCalls.push(id) }),
-      );
+      const app = makeApp(rooms, m.url, (id) => onDirtyCalls.push(id));
       const res = await app.request("/api/export/miro?room=default", {
         method: "POST",
         body: JSON.stringify({ boardId: "B1", selection: ["shape:a"] }),
@@ -130,18 +162,12 @@ describe("POST /api/export/miro — happy path", () => {
       return new Response("{}");
     });
     try {
-      const app = new Hono().route(
-        "/",
-        exportRoutes(rooms, {
-          miroBaseUrl: m.url,
-          onDirty: (id, room) => {
-            onDirtyCalls.push({
-              room: id,
-              itemCount: Object.keys(room.meta?.miroExports?.["B1"]?.items ?? {}).length,
-            });
-          },
-        }),
-      );
+      const app = makeApp(rooms, m.url, (id, room) => {
+        onDirtyCalls.push({
+          room: id,
+          itemCount: Object.keys(room.meta?.miroExports?.["B1"]?.items ?? {}).length,
+        });
+      });
       await app.request("/api/export/miro?room=default", {
         method: "POST",
         body: JSON.stringify({ boardId: "B1", selection: ["shape:F", "shape:c"] }),

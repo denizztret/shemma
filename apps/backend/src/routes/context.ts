@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { buildContext } from "../domain/context";
 import { resolveRoomId } from "../rooms";
-import type { Rooms } from "../rooms";
+import { bundleForRequest } from "./_space-context";
 
-export function contextRoutes(rooms: Rooms) {
+export function contextRoutes() {
   return new Hono().get("/api/agent/context", async (c) => {
     const rv = resolveRoomId(c.req.query("room"));
     if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
@@ -15,6 +15,7 @@ export function contextRoutes(rooms: Rooms) {
     }
     const include = c.req.query("include");
     const includeGeometry = include === "geometry";
+    const { rooms } = bundleForRequest(c);
     const room = await rooms.get(id);
     const view = buildContext(
       room.store,

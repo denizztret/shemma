@@ -17,14 +17,15 @@ import { Hono } from "hono";
 import { config } from "../config";
 import { runLayout } from "../domain/layout";
 import { pushOpLog, resolveRoomId } from "../rooms";
-import type { Rooms } from "../rooms";
 import { applyStoreChanges, rebuildDidrawIndex } from "../store-ops";
-import type { RoomState, StoreChangeBus } from "../types";
+import type { StoreChangeBus } from "../types";
+import { bundleForRequest } from "./_space-context";
 
 // DRW-088: AC#8 — парсим flowchart/graph direction из mermaidSource если все
 // selected shapes имеют meta.mermaidSource. Regex ищет первую строку "graph LR"
 // или "flowchart TB" за опциональным frontmatter-блоком.
-const MERMAID_DIRECTION_RE = /^(?:%%\{.*?\}%%\n)?(?:graph|flowchart)\s+(TB|TD|LR|RL|BT)/m;
+const MERMAID_DIRECTION_RE =
+  /^(?:%%\{.*?\}%%\n)?(?:graph|flowchart)\s+(TB|TD|LR|RL|BT)/m;
 
 function detectMermaidMode(
   sources: string[],
@@ -40,7 +41,10 @@ function detectMermaidMode(
   const dir = directions[0];
   if (!directions.every((d) => d === dir)) return undefined; // разные источники
   // Маппинг Mermaid direction → LayoutMode
-  const map: Record<string, "layered-tb" | "layered-lr" | "layered-bt" | "layered-rl"> = {
+  const map: Record<
+    string,
+    "layered-tb" | "layered-lr" | "layered-bt" | "layered-rl"
+  > = {
     TB: "layered-tb",
     TD: "layered-tb",
     LR: "layered-lr",
@@ -50,11 +54,7 @@ function detectMermaidMode(
   return map[dir];
 }
 
-export function layoutSelectionRoutes(
-  rooms: Rooms,
-  bus: StoreChangeBus,
-  opts: { onDirty?: (room: string, state: RoomState) => void } = {},
-) {
+export function layoutSelectionRoutes(bus: StoreChangeBus) {
   return new Hono().post("/api/agent/layout-selection", async (c) => {
     const rv = resolveRoomId(c.req.query("room"));
     if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
@@ -67,7 +67,9 @@ export function layoutSelectionRoutes(
     };
 
     const rawIds: string[] = Array.isArray(body.ids)
-      ? (body.ids as unknown[]).filter((x): x is string => typeof x === "string")
+      ? (body.ids as unknown[]).filter(
+          (x): x is string => typeof x === "string",
+        )
       : [];
 
     // AC#9: empty ids → noop
@@ -88,6 +90,7 @@ export function layoutSelectionRoutes(
       });
     }
 
+    const { rooms, scheduleSave } = bundleForRequest(c);
     const r = await rooms.get(id);
 
     // DRW-088: resolve ids — принимаем оба формата:
@@ -143,7 +146,8 @@ export function layoutSelectionRoutes(
       let allHaveSource = true;
       for (const shapeId of affectedIds) {
         const rec = r.store.store[shapeId];
-        const src = (rec?.meta as Record<string, unknown> | undefined)?.mermaidSource;
+        const src = (rec?.meta as Record<string, unknown> | undefined)
+          ?.mermaidSource;
         if (typeof src === "string") {
           sources.push(src);
         } else {
@@ -195,7 +199,7 @@ export function layoutSelectionRoutes(
       config.opLogMaxSize,
     );
     r.dirty = true;
-    opts.onDirty?.(id, r);
+    scheduleSave(id, r);
     bus.publish(id, { changes: lr.batch, source: "ai", version: r.version });
 
     return c.json({
