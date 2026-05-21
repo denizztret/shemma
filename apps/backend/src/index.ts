@@ -359,9 +359,15 @@ export async function startServer(opts: AppOpts = {}) {
   const idle = daemonMode
     ? new IdleTracker(undefined, () => onIdleFire())
     : undefined;
+  // DRW-116 C1: production daemon MUST enforce composite-key invariant via
+  // spaceMiddleware. Tests calling `makeApp({ storageDir })` keep the
+  // middleware off (compat preserved). The `enableSpaceMiddleware` flag in
+  // `opts` (if a future caller passes it explicitly) wins over the
+  // daemonMode-derived default.
   const { app, bus, persistence, bundleForSpace, legacyBundle } = makeApp({
     ...opts,
     idle,
+    enableSpaceMiddleware: opts.enableSpaceMiddleware ?? daemonMode,
   });
   /**
    * DRW-116 Task 12 — resolve `(space, room)` for a WS upgrade.
