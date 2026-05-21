@@ -4,7 +4,7 @@ import { CanvasClient } from "@shemma/client";
 import { mapFetchError, toolResult, type ToolResult } from "../errors";
 import type { RoomResolver } from "../room-resolver";
 import type { AutoOpenManager } from "../auto-open";
-import { resolveSpace as defaultResolveSpace, type ResolveSpaceFn } from "../space-resolver";
+import { resolveSpaceOrError, type ResolveSpaceFn } from "../space-resolver";
 import {
   DefineArgs,
   ConnectArgs,
@@ -25,22 +25,6 @@ export type DomainDeps = {
   /** DRW-116 Task 26: DI seam for tests; defaults to real resolver. */
   resolveSpace?: ResolveSpaceFn;
 };
-
-/** Resolve space via DI'd resolver and map ambiguity → ToolResult error. */
-function resolveSpaceOrError(
-  deps: { resolveSpace?: ResolveSpaceFn },
-  argSpace: string | undefined,
-): { spaceId: string } | { error: ToolResult } {
-  const resolver = deps.resolveSpace ?? defaultResolveSpace;
-  const r = resolver({ space: argSpace });
-  if (r.error) {
-    const code = r.source === "not_found" ? "space-not-found" : "ambiguous-space";
-    return {
-      error: toolResult({ ok: false, code, message: r.error }),
-    };
-  }
-  return { spaceId: r.space.id };
-}
 
 type DefineInput = z.infer<z.ZodObject<typeof DefineArgs>>;
 type ConnectInput = z.infer<z.ZodObject<typeof ConnectArgs>>;

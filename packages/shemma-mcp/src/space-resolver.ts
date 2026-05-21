@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { findSpaceById, listSpaces, type SpaceRecord } from "@shemma/spaces";
+import { toolResult, type ToolResult } from "./errors";
 
 /** Function shape for the resolver — used for DI in MCP tool tests. */
 export type ResolveSpaceFn = (args: { space?: string; cwd?: string }) => ResolveResult;
@@ -10,6 +11,27 @@ export type ResolveSource = "explicit" | "cwd" | "default" | "ambiguous" | "not_
 export type ResolveResult =
   | { space: SpaceRecord; source: "explicit" | "cwd" | "default"; error?: undefined }
   | { space: undefined; source: "ambiguous" | "not_found"; error: string };
+
+/**
+ * Resolve `args.space` (or fall back to CWD/default) via a DI-able resolver and
+ * map ambiguity/not_found onto a ready-to-return `ToolResult` error.
+ *
+ * DRW-116 Task 26: every MCP tool that takes an optional `space?: string`
+ * needs the same explicit→cwd→default→ambiguous decision tree; extracting it
+ * here keeps the tool handlers terse and the error-code mapping consistent.
+ */
+export function resolveSpaceOrError(
+  deps: { resolveSpace?: ResolveSpaceFn },
+  argSpace: string | undefined,
+): { spaceId: string; space: SpaceRecord } | { error: ToolResult } {
+  const resolver = deps.resolveSpace ?? resolveSpace;
+  const r = resolver({ space: argSpace });
+  if (r.error) {
+    const code = r.source === "not_found" ? "space-not-found" : "ambiguous-space";
+    return { error: toolResult({ ok: false, code, message: r.error }) };
+  }
+  return { spaceId: r.space.id, space: r.space };
+}
 
 /**
  * Resolve which `SpaceRecord` an MCP tool call should operate on.

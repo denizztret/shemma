@@ -419,6 +419,17 @@ export async function startServer(opts: AppOpts = {}) {
     clientId: string;
     bundleSpaceId: string;
   };
+  /**
+   * Map a `bundleSpaceId` captured at WS upgrade back to its bundle. Legacy
+   * connections short-circuit to the closure-resolved `legacyBundle`; real
+   * spaces re-resolve through the registry so a forgotten space falls back
+   * gracefully without crashing the WS message loop.
+   */
+  function resolveBundleForWs(bundleSpaceId: string): SpaceBundle {
+    if (bundleSpaceId === legacyBundle.space.id) return legacyBundle;
+    const rec = findSpaceById(bundleSpaceId);
+    return rec ? bundleForSpace(rec) : legacyBundle;
+  }
   const server = Bun.serve({
     port: opts.port ?? config.port,
     // SO_REUSEPORT: освобождает port:bind race после graceful stop() — без него
@@ -471,14 +482,7 @@ export async function startServer(opts: AppOpts = {}) {
         // at upgrade and matches the registry lookup result, so this is just
         // a Map.get(). For legacy connections it points at the legacy
         // bundle's id (set in resolveWsSpace).
-        const bundle =
-          bundleSpaceId === legacyBundle.space.id
-            ? legacyBundle
-            : (() => {
-                // Look up the SpaceRecord that produced `bundleSpaceId`.
-                const rec = findSpaceById(bundleSpaceId);
-                return rec ? bundleForSpace(rec) : legacyBundle;
-              })();
+        const bundle = resolveBundleForWs(bundleSpaceId);
         const wsRooms = bundle.rooms;
         const msg = parseClientMessage(raw);
         if (!msg) return; // malformed → ignore (must not crash)

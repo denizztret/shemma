@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
 import { mapFetchError, toolResult, type ToolResult } from "../errors";
 import { clientForRoom } from "../client-utils";
-import { resolveSpace as defaultResolveSpace, type ResolveSpaceFn } from "../space-resolver";
+import { resolveSpaceOrError, type ResolveSpaceFn } from "../space-resolver";
 
 export type ReadOnlyDeps = {
   client: CanvasClient;
@@ -21,20 +21,6 @@ export type ReadOnlyHandles = {
   prompts_list: { call: (input: { room?: string; space?: string; status?: "pending" | "resolved" | "dismissed" | "all" }) => Promise<ToolResult> };
   ai_activity_status: { call: (input: { room?: string; space?: string }) => Promise<ToolResult> };
 };
-
-/** Resolve space via DI'd resolver and map ambiguity → ToolResult error. */
-function resolveSpaceOrError(
-  deps: { resolveSpace?: ResolveSpaceFn },
-  argSpace: string | undefined,
-): { spaceId: string } | { error: ToolResult } {
-  const resolver = deps.resolveSpace ?? defaultResolveSpace;
-  const r = resolver({ space: argSpace });
-  if (r.error) {
-    const code = r.source === "not_found" ? "space-not-found" : "ambiguous-space";
-    return { error: toolResult({ ok: false, code, message: r.error }) };
-  }
-  return { spaceId: r.space.id };
-}
 
 export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): ReadOnlyHandles {
   /** Wraps a no-argument client fetch in the standard try/catch → toolResult pattern. */

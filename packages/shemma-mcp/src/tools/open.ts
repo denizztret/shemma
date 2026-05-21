@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AutoOpenManager } from "../auto-open";
 import { toolResult, type ToolResult } from "../errors";
-import { resolveSpace as defaultResolveSpace, type ResolveSpaceFn } from "../space-resolver";
+import { resolveSpaceOrError, type ResolveSpaceFn } from "../space-resolver";
 
 export type OpenDeps = {
   autoOpen: AutoOpenManager;
@@ -20,12 +20,8 @@ export function registerOpenTool(server: McpServer, deps: OpenDeps): OpenHandles
     // Resolve space first — even though the spawn subprocess does not yet
     // thread `space` through, surfacing ambiguity here keeps the contract
     // uniform across MCP tools (Task 26).
-    const resolver = deps.resolveSpace ?? defaultResolveSpace;
-    const sr = resolver({ space: input.space });
-    if (sr.error) {
-      const code = sr.source === "not_found" ? "space-not-found" : "ambiguous-space";
-      return toolResult({ ok: false, code, message: sr.error });
-    }
+    const spaceRes = resolveSpaceOrError(deps, input.space);
+    if ("error" in spaceRes) return spaceRes.error;
 
     const room = input.room ?? deps.defaultRoom;
     if (input.noBrowser) {

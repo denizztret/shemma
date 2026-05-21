@@ -228,6 +228,15 @@ export async function start(
   const port = portFor(profile);
   const dir = lockDirFor(port);
 
+  /** Force-release a stale lock dir and reacquire; throws on contention. */
+  const forceReacquire = (): void => {
+    releaseLock(dir);
+    if (!acquireLock(dir)) {
+      uiError("daemon-lock-contention");
+      throw new Error("daemon-lock-contention");
+    }
+  };
+
   if (!acquireLock(dir)) {
     // EEXIST — probe the existing holder.
     const meta = readLockMetadata(dir);
@@ -239,11 +248,7 @@ export async function start(
       );
       if (!appeared) {
         // Stale acquire — force-release and retry once.
-        releaseLock(dir);
-        if (!acquireLock(dir)) {
-          uiError("daemon-lock-contention");
-          throw new Error("daemon-lock-contention");
-        }
+        forceReacquire();
       } else {
         const refreshed = readLockMetadata(dir);
         if (refreshed && (await isHealthy(refreshed.port))) {
@@ -256,11 +261,7 @@ export async function start(
           emitStartOutput(result, opts.storageDir);
           return result;
         }
-        releaseLock(dir);
-        if (!acquireLock(dir)) {
-          uiError("daemon-lock-contention");
-          throw new Error("daemon-lock-contention");
-        }
+        forceReacquire();
       }
     } else {
       if (isLockAlive(dir) && (await isHealthy(meta.port))) {
@@ -273,11 +274,7 @@ export async function start(
         emitStartOutput(result, opts.storageDir);
         return result;
       }
-      releaseLock(dir);
-      if (!acquireLock(dir)) {
-        uiError("daemon-lock-contention");
-        throw new Error("daemon-lock-contention");
-      }
+      forceReacquire();
     }
   }
 
@@ -412,8 +409,27 @@ async function waitForLockGone(
   return pollFor(() => !existsSync(dir), deadlineMs);
 }
 
-export async function stop(profile: Profile) {
-  const ui = getOutput();
+/** Resolve graceful shutdown deadline honouring `SHEMMA_GRACEFUL_SHUTDOWN_MS`. */
+function gracefulShutdownMs(): number {
+  const overrideMs = Number(process.env.SHEMMA_GRACEFUL_SHUTDOWN_MS);
+  return Number.isFinite(overrideMs) && overrideMs > 0
+    ? overrideMs
+    : GRACEFUL_SHUTDOWN_MS;
+}
+
+type StopOutcome =
+  | { profile: Profile; already: true }
+  | { profile: Profile; stopped: number };
+
+/**
+ * Stop a single profile's daemon and release its lock dir. Returns an outcome
+ * descriptor used by both `stop` (single-profile UI) and `stopAll` (batched).
+ *
+ * Sequence: SIGTERM → poll for exit up to `gracefulShutdownMs()` → SIGKILL if
+ * still alive → wait briefly for lock dir to be removed by the child → force
+ * release as fallback (idempotent).
+ */
+async function stopOneProfile(profile: Profile): Promise<StopOutcome> {
   const port = portFor(profile);
   const dir = lockDirFor(port);
   const meta = readLockMetadata(dir);
@@ -421,26 +437,16 @@ export async function stop(profile: Profile) {
     // Lock dir may exist as an "acquire-in-progress" stub; clean it up
     // regardless (releaseLock is idempotent — no-op if absent).
     releaseLock(dir);
-    if (ui.mode === "json") {
-      console.log(JSON.stringify({ ok: true, already: true, profile }));
-    } else {
-      uiSuccess(`daemon not running (profile ${profile})`);
-    }
-    return;
+    return { profile, already: true };
   }
   try {
     process.kill(meta.pid, "SIGTERM");
   } catch (_) {
     /* already dead */
   }
-  const overrideMs = Number(process.env.SHEMMA_GRACEFUL_SHUTDOWN_MS);
-  const gracefulMs =
-    Number.isFinite(overrideMs) && overrideMs > 0
-      ? overrideMs
-      : GRACEFUL_SHUTDOWN_MS;
   // Wait for the child to disappear OR for the lock dir to be removed
   // (the backend removes it on SIGTERM as part of graceful shutdown).
-  const deadline = Date.now() + gracefulMs;
+  const deadline = Date.now() + gracefulShutdownMs();
   while (Date.now() < deadline) {
     if (!isAlive(meta.pid)) break;
     await new Promise((r) => setTimeout(r, 50));
@@ -456,10 +462,24 @@ export async function stop(profile: Profile) {
   // force-release as a fallback (idempotent).
   await waitForLockGone(dir, 500);
   releaseLock(dir);
+  return { profile, stopped: meta.pid };
+}
+
+export async function stop(profile: Profile) {
+  const ui = getOutput();
+  const outcome = await stopOneProfile(profile);
+  if ("already" in outcome) {
+    if (ui.mode === "json") {
+      console.log(JSON.stringify({ ok: true, already: true, profile }));
+    } else {
+      uiSuccess(`daemon not running (profile ${profile})`);
+    }
+    return;
+  }
   if (ui.mode === "json") {
-    console.log(JSON.stringify({ ok: true, stopped: meta.pid, profile }));
+    console.log(JSON.stringify({ ok: true, stopped: outcome.stopped, profile }));
   } else {
-    uiSuccess(`daemon stopped (pid ${meta.pid}, profile ${profile})`);
+    uiSuccess(`daemon stopped (pid ${outcome.stopped}, profile ${profile})`);
   }
 }
 
@@ -472,39 +492,12 @@ export async function stopAll(onlyProfile?: Profile) {
   const profiles = onlyProfile ? [onlyProfile] : [...ALL_PROFILES];
   const results: object[] = [];
   for (const p of profiles) {
-    const port = portFor(p);
-    const dir = lockDirFor(port);
-    const meta = readLockMetadata(dir);
-    if (!meta) {
-      releaseLock(dir);
+    const outcome = await stopOneProfile(p);
+    if ("already" in outcome) {
       results.push({ ok: true, already: true, profile: p });
-      continue;
+    } else {
+      results.push({ ok: true, stopped: outcome.stopped, profile: p });
     }
-    try {
-      process.kill(meta.pid, "SIGTERM");
-    } catch (_) {
-      /* already dead */
-    }
-    const overrideMs = Number(process.env.SHEMMA_GRACEFUL_SHUTDOWN_MS);
-    const gracefulMs =
-      Number.isFinite(overrideMs) && overrideMs > 0
-        ? overrideMs
-        : GRACEFUL_SHUTDOWN_MS;
-    const deadline = Date.now() + gracefulMs;
-    while (Date.now() < deadline) {
-      if (!isAlive(meta.pid)) break;
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    if (isAlive(meta.pid)) {
-      try {
-        process.kill(meta.pid, "SIGKILL");
-      } catch (_) {
-        /* ignore */
-      }
-    }
-    await waitForLockGone(dir, 500);
-    releaseLock(dir);
-    results.push({ ok: true, stopped: meta.pid, profile: p });
   }
   const ui = getOutput();
   if (ui.mode === "json") {

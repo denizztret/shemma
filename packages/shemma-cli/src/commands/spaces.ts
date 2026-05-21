@@ -172,12 +172,17 @@ function cmdReveal(args: string[]): number {
     console.error(`Unknown space: ${id}`);
     return 1;
   }
-  const cmd =
-    process.platform === "darwin"
-      ? "open"
-      : process.platform === "win32"
-        ? "explorer"
-        : "xdg-open";
+  let cmd: string;
+  switch (process.platform) {
+    case "darwin":
+      cmd = "open";
+      break;
+    case "win32":
+      cmd = "explorer";
+      break;
+    default:
+      cmd = "xdg-open";
+  }
   try {
     spawn(cmd, [s.path], { detached: true, stdio: "ignore" }).unref();
     console.log(`opening: ${s.path}`);

@@ -52,6 +52,14 @@ function qs(space: string, room: string): string {
   return `space=${encodeURIComponent(space)}&room=${encodeURIComponent(room)}`;
 }
 
+/**
+ * Compose `?space=<id>` for room-management endpoints where the room id is
+ * already encoded in the path (`/api/rooms/<id>/<action>`).
+ */
+function spaceQs(space: string): string {
+  return `space=${encodeURIComponent(space)}`;
+}
+
 export async function getState(
   space: string,
   roomId: string,
@@ -125,7 +133,7 @@ export async function listRooms(
 
 export async function archiveRoom(space: string, id: string): Promise<void> {
   const r = await fetch(
-    `/api/rooms/${encodeURIComponent(id)}/archive?space=${encodeURIComponent(space)}`,
+    `/api/rooms/${encodeURIComponent(id)}/archive?${spaceQs(space)}`,
     { method: "POST" },
   );
   if (!r.ok) throw new Error(`archiveRoom ${r.status}`);
@@ -133,7 +141,7 @@ export async function archiveRoom(space: string, id: string): Promise<void> {
 
 export async function restoreRoom(space: string, id: string): Promise<void> {
   const r = await fetch(
-    `/api/rooms/${encodeURIComponent(id)}/restore?space=${encodeURIComponent(space)}`,
+    `/api/rooms/${encodeURIComponent(id)}/restore?${spaceQs(space)}`,
     { method: "POST" },
   );
   if (!r.ok) {
@@ -148,7 +156,7 @@ export async function deleteRoom(
   opts: { mode: "archive" | "hard"; force?: boolean },
 ): Promise<void> {
   const r = await fetch(
-    `/api/rooms/${encodeURIComponent(id)}?space=${encodeURIComponent(space)}`,
+    `/api/rooms/${encodeURIComponent(id)}?${spaceQs(space)}`,
     {
       method: "DELETE",
       headers: { "content-type": "application/json" },
@@ -167,7 +175,7 @@ export async function exportRoom(
   to: string,
 ): Promise<void> {
   const r = await fetch(
-    `/api/rooms/${encodeURIComponent(id)}/export?space=${encodeURIComponent(space)}`,
+    `/api/rooms/${encodeURIComponent(id)}/export?${spaceQs(space)}`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -184,7 +192,7 @@ export async function renameRoom(
   opts: { force?: boolean } = {},
 ): Promise<{ ok: boolean; id?: string; error?: string; existingId?: string }> {
   const r = await fetch(
-    `/api/rooms/${encodeURIComponent(id)}/rename?space=${encodeURIComponent(space)}`,
+    `/api/rooms/${encodeURIComponent(id)}/rename?${spaceQs(space)}`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -200,7 +208,7 @@ export async function duplicateRoom(
   as: string,
 ): Promise<{ ok: boolean; id?: string; error?: string; existingId?: string }> {
   const r = await fetch(
-    `/api/rooms/${encodeURIComponent(id)}/duplicate?space=${encodeURIComponent(space)}`,
+    `/api/rooms/${encodeURIComponent(id)}/duplicate?${spaceQs(space)}`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -215,7 +223,7 @@ export async function duplicateRoomAuto(
   id: string,
 ): Promise<{ ok: boolean; id?: string; error?: string }> {
   const r = await fetch(
-    `/api/rooms/${encodeURIComponent(id)}/duplicate-auto?space=${encodeURIComponent(space)}`,
+    `/api/rooms/${encodeURIComponent(id)}/duplicate-auto?${spaceQs(space)}`,
     { method: "POST" },
   );
   return r.json();
@@ -225,7 +233,7 @@ export async function purgeArchive(
   space: string,
 ): Promise<{ removed: number }> {
   const r = await fetch(
-    `/api/rooms/purge-archive?space=${encodeURIComponent(space)}`,
+    `/api/rooms/purge-archive?${spaceQs(space)}`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
