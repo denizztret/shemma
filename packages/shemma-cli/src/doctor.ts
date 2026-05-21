@@ -1,10 +1,16 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { execFileSync } from "node:child_process";
-import { ALL_PROFILES, type Profile, portFor } from "./profile";
 import { isHealthy, status } from "./daemon";
+import { ALL_PROFILES, type Profile, portFor } from "./profile";
 import { getOutput } from "./ui";
 
 export type CheckStatus = "ok" | "warn" | "fail";
@@ -61,14 +67,14 @@ async function checkDaemonStatus(p: Profile): Promise<CheckResult> {
     const s = await status(p);
     const port = portFor(p);
     if (!s.running) {
-      // No pidfile or pidfile stale — but an ad-hoc daemon may still be running.
-      // Probe the port with a short timeout before declaring "not running".
+      // No lock dir or lock metadata stale — but an ad-hoc daemon may still be
+      // running. Probe the port with a short timeout before declaring "not running".
       const adHocHealthy = await isHealthy(port);
       if (adHocHealthy) {
         return {
           check: `daemon-status[${p}]`,
           status: "ok",
-          detail: `running (ad-hoc, no pidfile) on :${port}`,
+          detail: `running (ad-hoc, no lock dir) on :${port}`,
         };
       }
       return {
@@ -119,7 +125,7 @@ async function checkPortOwner(p: Profile): Promise<CheckResult> {
       };
     }
     if (!s.running) {
-      // No pidfile and port not responding — port is free
+      // No lock dir and port not responding — port is free
       return {
         check: `port-owner[${p}]`,
         status: "ok",
@@ -128,10 +134,14 @@ async function checkPortOwner(p: Profile): Promise<CheckResult> {
     }
     // Running (pid alive) but not healthy: check who owns the port via lsof
     try {
-      const out = execFileSync("lsof", ["-i", `:${port}`, "-P", "-n", "-F", "pcn"], {
-        encoding: "utf8",
-        timeout: 3000,
-      });
+      const out = execFileSync(
+        "lsof",
+        ["-i", `:${port}`, "-P", "-n", "-F", "pcn"],
+        {
+          encoding: "utf8",
+          timeout: 3000,
+        },
+      );
       // parse lsof field output: p=pid, c=command, n=name
       const lines = out.split("\n");
       let pid: string | undefined;
@@ -202,7 +212,10 @@ function checkStorageWritable(p: Profile): CheckResult {
             .replace(/[^a-z0-9_-]/g, "-")
             .replace(/-+/g, "-")
             .replace(/^-+|-+$/g, "");
-          const hash = createHash("sha1").update(base).digest("hex").slice(0, 8);
+          const hash = createHash("sha1")
+            .update(base)
+            .digest("hex")
+            .slice(0, 8);
           return body ? `${body}-${hash}` : "default-project";
         } catch {
           return "default-project";

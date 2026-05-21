@@ -13,7 +13,7 @@
  * real release/dev daemon, and tracks the lock dir path so leaks are visible.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -82,4 +82,58 @@ describe("DRW-116: daemon mkdir-lock acquire/release", () => {
     expect(stopRes.status).toBe(0);
     expect(existsSync(LOCK_DIR)).toBe(false);
   }, 15000);
+
+  test("acquires lock from stale daemon.pid with dead PID", async () => {
+    // Seed lock dir with metadata whose PID is virtually guaranteed to be dead.
+    // The first start() should detect (isLockAlive=false → !isHealthy), force
+    // releaseLock, then acquire fresh and spawn a real child.
+    mkdirSync(LOCK_DIR, { recursive: true });
+    const deadPid = 99_999_999;
+    writeFileSync(
+      join(LOCK_DIR, "daemon.pid"),
+      JSON.stringify({
+        pid: deadPid,
+        port: TEST_PORT,
+        startedAt: new Date(Date.now() - 86_400_000).toISOString(),
+        profile: "release",
+      }),
+    );
+
+    const r = await cli(["daemon", "start", "--profile", "debug"]);
+    expect(r.status).toBe(0);
+    const j = JSON.parse(r.stdout);
+    expect(j.ok).toBe(true);
+    expect(j.already).toBeUndefined(); // fresh start, not a reuse
+    expect(typeof j.pid).toBe("number");
+    expect(j.pid).not.toBe(deadPid); // different PID assigned by spawn
+
+    const stopRes = await cli(["daemon", "stop", "--profile", "debug"]);
+    expect(stopRes.status).toBe(0);
+  }, 15000);
+
+  test("recovers from lock dir without daemon.pid (parent crashed mid-acquire)", async () => {
+    // Empty lock dir = parent acquired but crashed before child wrote PID.
+    // Path: !acquire → meta undefined → pollFor(existsSync daemon.pid) → never
+    // appears → after ACQUIRE_TIMEOUT_MS (5s) force-releaseLock + retry acquire
+    // → spawn fresh child. Total elapsed should be ~5s + spawn time, well
+    // under 15s timeout but bounded above 4.5s.
+    mkdirSync(LOCK_DIR, { recursive: true });
+    // No daemon.pid inside.
+
+    const startAt = Date.now();
+    const r = await cli(["daemon", "start", "--profile", "debug"]);
+    const elapsed = Date.now() - startAt;
+
+    expect(r.status).toBe(0);
+    const j = JSON.parse(r.stdout);
+    expect(j.ok).toBe(true);
+    expect(j.already).toBeUndefined(); // fresh start, not a reuse
+    expect(typeof j.pid).toBe("number");
+    // Sanity: at least one full poll cycle (5s) elapsed before recovery —
+    // otherwise the test isn't exercising the timeout branch.
+    expect(elapsed).toBeGreaterThan(4500);
+
+    const stopRes = await cli(["daemon", "stop", "--profile", "debug"]);
+    expect(stopRes.status).toBe(0);
+  }, 20000);
 });

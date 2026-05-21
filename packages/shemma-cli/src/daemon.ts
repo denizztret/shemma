@@ -304,7 +304,12 @@ export async function start(
     const lf = logFile(profile);
     const msg = `daemon failed to start within 5s; check ${lf}`;
     uiError(msg);
-    throw new Error(msg);
+    // Preserve historic CLI exit-code contract: health-timeout = exit 3
+    // (declared in usage help-text as "daemon-not-healthy"). The top-level
+    // main().catch in index.ts reads `exitCode` off thrown errors.
+    const err = new Error(msg) as Error & { exitCode?: number };
+    err.exitCode = 3;
+    throw err;
   }
 
   const final = readLockMetadata(dir);

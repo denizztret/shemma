@@ -1,15 +1,21 @@
 #!/usr/bin/env bun
 import { cmdAiStart, cmdAiStatus, cmdAiStop } from "./ai";
 import { ensure, start, status, stop, stopAll } from "./daemon";
-import {
-  ensureStorageDir,
-  parseStorageArg,
-  resolveStorageDirForProfile,
-} from "./storage";
 import { cmdClear, cmdPatch, cmdState } from "./data";
-import { applyStdin, connectCmd, context, define, deleteCmd, group, layoutCmd, note } from "./domain";
+import { cmdDoctor } from "./doctor";
+import {
+  applyStdin,
+  connectCmd,
+  context,
+  define,
+  deleteCmd,
+  group,
+  layoutCmd,
+  note,
+} from "./domain";
 import {
   archiveRoom,
+  cmdInit,
   duplicateRoom,
   duplicateRoomAuto,
   exportRoom,
@@ -20,17 +26,20 @@ import {
   renameRoom,
   restoreRoom,
   rmRoom,
-  cmdInit,
 } from "./lifecycle";
 import { cmdLogs } from "./logs";
-import { applyProfile, parseProfile, portFor, type Profile } from "./profile";
-import { cmdPs } from "./ps";
-import { cmdPrompts } from "./prompts";
-import { cmdDoctor } from "./doctor";
-import { cmdUpdate, cmdUpdateCheck, cmdUpdateSetChannel } from "./update";
 import { cmdMcpStart } from "./mcp";
+import { type Profile, applyProfile, parseProfile, portFor } from "./profile";
+import { cmdPrompts } from "./prompts";
+import { cmdPs } from "./ps";
+import {
+  ensureStorageDir,
+  parseStorageArg,
+  resolveStorageDirForProfile,
+} from "./storage";
+import { initOutput, parseOutputMode, error as uiError } from "./ui";
+import { cmdUpdate, cmdUpdateCheck, cmdUpdateSetChannel } from "./update";
 import { cmdVersion } from "./version-cmd";
-import { error as uiError, initOutput, parseOutputMode } from "./ui";
 
 const rawArgv = process.argv.slice(2);
 const profile = parseProfile(rawArgv);
@@ -190,7 +199,11 @@ async function main() {
     }
     if (sub === "status") {
       const s = await status(profile);
-      const { getOutput, success: uiSuccess, info: uiInfo } = await import("./ui");
+      const {
+        getOutput,
+        success: uiSuccess,
+        info: uiInfo,
+      } = await import("./ui");
       const ui = getOutput();
       if (ui.mode === "json") {
         console.log(JSON.stringify(s, null, 2));
@@ -198,7 +211,9 @@ async function main() {
         // biome-ignore lint/suspicious/noExplicitAny: union narrowing for diff shapes
         const sa: any = s;
         if (sa.running) {
-          uiSuccess(`daemon running (pid ${sa.pid}, profile ${sa.profile}, port ${sa.port})`);
+          uiSuccess(
+            `daemon running (pid ${sa.pid}, profile ${sa.profile}, port ${sa.port})`,
+          );
         } else {
           uiInfo(`daemon not running (profile ${sa.profile}, port ${sa.port})`);
         }
@@ -223,9 +238,12 @@ async function main() {
     const sub = argv[1]; // "set" | "get" | "unset"
     const key = argv[2]; // "miro.token"
     const value = argv[3]; // только для set
-    const { cmdConfigSet, cmdConfigGet, cmdConfigUnset } = await import("./config");
+    const { cmdConfigSet, cmdConfigGet, cmdConfigUnset } = await import(
+      "./config"
+    );
     if (sub === "set") {
-      if (!key || value === undefined) die("usage: shemma config set <key> <value>");
+      if (!key || value === undefined)
+        die("usage: shemma config set <key> <value>");
       return cmdConfigSet(key, value);
     }
     if (sub === "get") {
@@ -244,7 +262,9 @@ async function main() {
   // flags (e.g. `shemma --storage /foo`) — first token starts with `--`,
   // there's no positional command yet.
   const isOpenCmd =
-    cmd === "open" || cmd === undefined || (cmd !== undefined && cmd.startsWith("--"));
+    cmd === "open" ||
+    cmd === undefined ||
+    (cmd !== undefined && cmd.startsWith("--"));
   if (isOpenCmd) {
     const subArgs = cmd === "open" ? argv.slice(1) : argv;
     const { storage, errors } = parseStorageArg(subArgs, process.cwd());
@@ -509,5 +529,14 @@ Exit codes: 0 ok, 1 usage/error, 2 not-found, 3 daemon-not-healthy/doctor-fail
 
 main().catch((e) => {
   uiError(String(e), { code: String(e) });
-  process.exit(1);
+  // Tagged exit codes: errors thrown by lifecycle code may attach
+  // `exitCode` to preserve CLI contract (see daemon.start health timeout → 3).
+  // Anything untagged falls back to 1 (generic error).
+  const tagged =
+    e &&
+    typeof e === "object" &&
+    typeof (e as { exitCode?: unknown }).exitCode === "number"
+      ? (e as { exitCode: number }).exitCode
+      : 1;
+  process.exit(tagged);
 });
