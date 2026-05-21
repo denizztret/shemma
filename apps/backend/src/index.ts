@@ -4,6 +4,7 @@ import {
   SPACE_ID_PATTERN,
   type SpaceRecord,
   findSpaceById,
+  registerSpace,
 } from "@shemma/spaces";
 import type { Context } from "hono";
 import { Hono } from "hono";
@@ -312,6 +313,27 @@ export async function startServer(opts: AppOpts = {}) {
   // runner via the default `process.exit(0)` onIdle. Gate matches the same
   // condition as the SIGTERM handler installation below.
   const daemonMode = import.meta.main || !!process.env.SHEMMA_LOCK_DIR;
+
+  // DRW-116 Task 23: deprecate SHEMMA_STORAGE_DIR. Only warn + auto-register
+  // at actual daemon entry point — not in tests or in-process usage.
+  if (process.env.SHEMMA_STORAGE_DIR && daemonMode) {
+    console.error(
+      `[shemma] WARNING: SHEMMA_STORAGE_DIR is deprecated. Use 'shemma s add <path>' to register a space.`,
+    );
+    try {
+      const { space, created } = registerSpace(process.env.SHEMMA_STORAGE_DIR, {
+        storageLayout: "direct",
+        label: "Default (from SHEMMA_STORAGE_DIR)",
+        id: "default",
+      });
+      if (created) {
+        console.error(`[shemma] Auto-registered as space '${space.id}'.`);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[shemma] Failed to auto-register: ${msg}`);
+    }
+  }
   // onIdle is patched below to point at the graceful `shutdown` chain; until
   // then we never fire (the interval has not started ticking yet). Using a
   // forwarding closure lets IdleTracker exist before `shutdown` is declared

@@ -42,6 +42,7 @@ import {
   parseStorageArg,
   resolveStorageDirForProfile,
 } from "./storage";
+import { registerSpace } from "@shemma/spaces";
 import { initOutput, parseOutputMode, error as uiError } from "./ui";
 import { cmdUpdate, cmdUpdateCheck, cmdUpdateSetChannel } from "./update";
 import { cmdVersion } from "./version-cmd";
@@ -91,6 +92,34 @@ function stripProfileFlag(a: string[]): string[] {
 function die(error: string): never {
   uiError(error, { code: error });
   process.exit(1);
+}
+
+/**
+ * DRW-116 Task 23: emit deprecation warning and auto-register `--storage <path>`
+ * as a `direct`-layout space so the new multi-space model has a corresponding
+ * registry entry. Legacy behavior (storageDir closed-over var) is preserved.
+ */
+function warnStorageFlagDeprecated(storageDir: string): void {
+  console.error(
+    `[shemma] WARNING: --storage is deprecated. Use 'shemma s add <path>' instead.`,
+  );
+  try {
+    const { space, created } = registerSpace(storageDir, {
+      storageLayout: "direct",
+      label: "Default (from --storage)",
+      id: "default",
+    });
+    if (created) {
+      console.error(
+        `[shemma] Auto-registered as space '${space.id}' (direct storage layout).`,
+      );
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[shemma] WARNING: Failed to auto-register --storage path: ${msg}`,
+    );
+  }
 }
 
 function assertNotAllWithProfile(all: boolean): void {
@@ -205,6 +234,8 @@ async function main() {
         const finalDir = resolveStorageDirForProfile(storage, profile);
         const mkdirErr = ensureStorageDir(finalDir);
         if (mkdirErr) die(mkdirErr);
+        // Warn + auto-register only after path is validated (dir created ok).
+        warnStorageFlagDeprecated(storage);
         return start(profile, { storageDir: finalDir });
       }
       return start(profile);
@@ -286,6 +317,7 @@ async function main() {
     const subArgs = cmd === "open" ? argv.slice(1) : argv;
     const { storage, errors } = parseStorageArg(subArgs, process.cwd());
     if (errors.length > 0) die(errors[0]!);
+    if (storage !== undefined) warnStorageFlagDeprecated(storage);
     let noBrowser = false;
     let room: string | undefined;
     for (let i = 0; i < subArgs.length; i++) {
