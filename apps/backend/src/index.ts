@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import { releaseLock, writeLockMetadata } from "@shemma/lockfile";
 import { Hono } from "hono";
 import { config } from "./config";
 import { EMBEDDED_ASSETS } from "./embedded-assets";
@@ -7,18 +9,22 @@ import { activeRoomsRoutes } from "./routes/active-rooms";
 import { aiRoutes } from "./routes/ai";
 import { contextRoutes } from "./routes/context";
 import { domainRoutes } from "./routes/domain";
-import { importMermaidRoutes } from "./routes/import-mermaid";
+import { exportRoutes } from "./routes/export";
 import { makeHealthRoutes } from "./routes/health";
+import { importMermaidRoutes } from "./routes/import-mermaid";
 import { layoutRoutes } from "./routes/layout";
 import { layoutSelectionRoutes } from "./routes/layout-selection";
-import { sessionRoutes } from "./routes/session";
 import { promptRoutes } from "./routes/prompts";
 import { roomsRoutes } from "./routes/rooms";
+import { sessionRoutes } from "./routes/session";
 import { stateRoutes } from "./routes/state";
 import { versionRoutes } from "./routes/version";
 import { viewportRoutes } from "./routes/viewport";
-import { exportRoutes } from "./routes/export";
-import { applyStoreChanges, isEmptyBatch, rebuildDidrawIndex } from "./store-ops";
+import {
+  applyStoreChanges,
+  isEmptyBatch,
+  rebuildDidrawIndex,
+} from "./store-ops";
 import { DEFAULT_ROOM, type RoomState } from "./types";
 import { type Sock, WsHub } from "./ws";
 import { handleHello, parseClientMessage } from "./ws-protocol";
@@ -94,7 +100,10 @@ export async function startServer(opts: AppOpts = {}) {
           return new Response("invalid room id", { status: 422 });
         }
         const clientId = crypto.randomUUID();
-        if (srv.upgrade(req, { data: { room, clientId } as unknown as undefined })) return;
+        if (
+          srv.upgrade(req, { data: { room, clientId } as unknown as undefined })
+        )
+          return;
         return new Response("upgrade failed", { status: 500 });
       }
       // serve frontend for release/debug profiles; dev relies on Vite's own server
@@ -106,16 +115,26 @@ export async function startServer(opts: AppOpts = {}) {
     },
     websocket: {
       open(ws) {
-        const { room } = ws.data as unknown as { room: string; clientId: string };
+        const { room } = ws.data as unknown as {
+          room: string;
+          clientId: string;
+        };
         bus.attach(room, ws as Sock);
       },
       async message(ws, raw) {
-        const { room, clientId } = ws.data as unknown as { room: string; clientId: string };
+        const { room, clientId } = ws.data as unknown as {
+          room: string;
+          clientId: string;
+        };
         const msg = parseClientMessage(raw);
         if (!msg) return; // malformed → ignore (must not crash)
         if (msg.kind === "hello") {
           const r = await rooms.get(room);
-          const { reply, schemaUpgraded } = handleHello(r, msg.lastVersion, msg.schema);
+          const { reply, schemaUpgraded } = handleHello(
+            r,
+            msg.lastVersion,
+            msg.schema,
+          );
           if (schemaUpgraded) {
             r.dirty = true;
             if (persistence) persistence.scheduleSave(room, r);
@@ -186,20 +205,45 @@ export async function startServer(opts: AppOpts = {}) {
         }
       },
       close(ws) {
-        const { room, clientId } = ws.data as unknown as { room: string; clientId: string };
+        const { room, clientId } = ws.data as unknown as {
+          room: string;
+          clientId: string;
+        };
         bus.getActiveRooms().onDisconnect(clientId);
         bus.detach(room, ws as Sock);
       },
     },
   });
 
+  // DRW-116: write lock metadata after the server is listening, so any
+  // concurrent `shemma daemon start` invocation can detect a healthy holder
+  // via readLockMetadata(SHEMMA_LOCK_DIR). The CLI parent created the lock
+  // dir before spawn; we only write the PID file inside it.
+  const lockDir = process.env.SHEMMA_LOCK_DIR;
+  if (lockDir) {
+    // mkdir is idempotent (CLI already created it via acquireLock).
+    fs.mkdirSync(lockDir, { recursive: true });
+    writeLockMetadata(lockDir, {
+      pid: process.pid,
+      port: server.port as number,
+      startedAt: new Date().toISOString(),
+      profile: config.profile,
+    });
+  }
+
   const shutdown = async (signal: string) => {
     console.log(`[shemma] ${signal} received, flushing…`);
     server.stop();
     if (persistence) await persistence.flushAll();
+    if (lockDir) releaseLock(lockDir);
     process.exit(0);
   };
-  if (import.meta.main) {
+  // Install signal handlers when running as a daemon process. Two triggers:
+  //   - `import.meta.main` — direct `bun apps/backend/src/index.ts` invocation
+  //   - `SHEMMA_LOCK_DIR` env — CLI-spawned child via `shemma internal-server`
+  // In-process test usage (lifecycle.http.test) sets neither and must NOT
+  // attach handlers (they'd swallow the test runner's signals).
+  if (import.meta.main || process.env.SHEMMA_LOCK_DIR) {
     process.on("SIGTERM", () => void shutdown("SIGTERM"));
     process.on("SIGINT", () => void shutdown("SIGINT"));
   }
@@ -209,6 +253,7 @@ export async function startServer(opts: AppOpts = {}) {
     close: async () => {
       server.stop();
       if (persistence) await persistence.flushAll();
+      if (lockDir) releaseLock(lockDir);
     },
   };
 }
