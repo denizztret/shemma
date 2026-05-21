@@ -1,6 +1,10 @@
 #!/usr/bin/env bun
 import { cmdAiStart, cmdAiStatus, cmdAiStop } from "./ai";
 import { handleSpacesCommand } from "./commands/spaces";
+import {
+  cmdTopLevelPath,
+  looksLikePath,
+} from "./commands/top-level-path";
 import { ensure, start, status, stop, stopAll } from "./daemon";
 import { cmdClear, cmdPatch, cmdState } from "./data";
 import { cmdDoctor } from "./doctor";
@@ -454,6 +458,15 @@ async function main() {
       else if (argv[i] === "--room") room = argv[++i];
     }
     return context({ since, viewport, profile, room });
+  }
+
+  // Top-level positional path detection (DRW-116 Task 22):
+  // `shemma /path` or `shemma /a /b /c` registers spaces + opens browser.
+  // Must come AFTER all `if (cmd === ...)` keyword branches so subcommand
+  // names take precedence over directory lookups.
+  if (looksLikePath(cmd)) {
+    const code = await cmdTopLevelPath(argv, profile);
+    process.exit(code);
   }
 
   usage();
