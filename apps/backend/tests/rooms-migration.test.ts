@@ -58,7 +58,7 @@ describe("rooms.load migration", () => {
       }),
     );
 
-    const persistence = new FilePersistence(dir);
+    const persistence = new FilePersistence(file);
     const rooms = new Rooms({
       load: persistence.load.bind(persistence),
       save: persistence.save.bind(persistence),
@@ -107,7 +107,7 @@ describe("rooms.load migration", () => {
       }),
     );
 
-    const persistence = new FilePersistence(dir);
+    const persistence = new FilePersistence(file);
     const rooms = new Rooms({
       load: persistence.load.bind(persistence),
       save: persistence.save.bind(persistence),

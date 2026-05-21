@@ -1,5 +1,5 @@
 import { promises as fs, existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname } from "node:path";
 import { config } from "./config";
 import { parseFull, parseHeader, parseV2OrThrow, serialize } from "./envelope";
 import { migrateV2ToV3 } from "./migrate-v2";
@@ -33,12 +33,21 @@ export class FilePersistence implements RoomStore {
     RoomId,
     { timer: ReturnType<typeof setTimeout>; state: RoomState }
   >();
-  constructor(private dir: string) {
+  /**
+   * One FilePersistence == one room file. The `id` argument on
+   * `load`/`save`/`scheduleSave`/`flushIfDirty` is kept for back-compat with the
+   * `RoomStore` contract (which is multi-room by design), but the path is fixed
+   * at construction and the id is no longer used to derive it. Callers are
+   * expected to keep one FilePersistence per (space, room) pair — see
+   * `RoomCache` for the daemon-wide factory + TTL eviction.
+   */
+  constructor(private filePath: string) {
+    const dir = dirname(filePath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   }
 
-  pathFor(id: RoomId): string {
-    return join(this.dir, `${id}.json`);
+  pathFor(_id: RoomId): string {
+    return this.filePath;
   }
 
   async load(id: RoomId): Promise<RoomState | null> {

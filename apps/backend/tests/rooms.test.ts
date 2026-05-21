@@ -86,7 +86,7 @@ describe("Rooms — linkedSession", () => {
       process.env.CLAUDE_SESSION_ID = "persist-session";
       __resetConfigForTests();
 
-      const persistence = new FilePersistence(dir);
+      const persistence = new FilePersistence(join(dir, "persist-session.json"));
       const r = new Rooms({
         load: (id) => persistence.load(id),
         save: (id, s) => persistence.save(id, s),
@@ -175,7 +175,7 @@ describe("Rooms", () => {
   test("evictIdle flushes pending debounce and removes", async () => {
     const dir = mkdtempSync(join(tmpdir(), "shemma-evict-"));
     try {
-      const persistence = new FilePersistence(dir);
+      const persistence = new FilePersistence(join(dir, "a.json"));
       const r2 = new Rooms({
         load: (id) => persistence.load(id),
         save: (id, s) => persistence.save(id, s),
@@ -206,7 +206,7 @@ describe("Rooms", () => {
   test("evictIdle cancels pending debounce (no double-write after flushAll)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "shemma-evict-cancel-"));
     try {
-      const persistence = new FilePersistence(dir);
+      const persistence = new FilePersistence(join(dir, "a.json"));
       const r2 = new Rooms({
         load: (id) => persistence.load(id),
         save: (id, s) => persistence.save(id, s),

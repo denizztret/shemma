@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { join } from "node:path";
 import { releaseLock, writeLockMetadata } from "@shemma/lockfile";
 import { Hono } from "hono";
 import { config } from "./config";
@@ -71,9 +72,51 @@ export const SPACE_ALLOWLIST: ReadonlySet<string> = new Set([
   // skip non-existent paths anyway.
 ]);
 
+/**
+ * DRW-116 Task 10a bridge:
+ *
+ * `FilePersistence` is now a single-file primitive (one instance == one room
+ * file on disk). The legacy daemon entry point still wants a multi-room facade
+ * keyed by `roomId` — that's what `makeApp(...).persistence` exposes to tests
+ * and to the websocket handler. This adapter lazily mints a `FilePersistence`
+ * per id under a single `storageDir`, preserving the pre-refactor contract.
+ *
+ * Task 10b will remove this adapter once `RoomCache` (keyed by `(space, room)`)
+ * replaces the singleton `config.storageDir` lookup.
+ */
+class StorageDirPersistence {
+  private byId = new Map<string, FilePersistence>();
+  constructor(private dir: string) {}
+  private get(id: string): FilePersistence {
+    let p = this.byId.get(id);
+    if (!p) {
+      p = new FilePersistence(join(this.dir, `${id}.json`));
+      this.byId.set(id, p);
+    }
+    return p;
+  }
+  load(id: string) {
+    return this.get(id).load(id);
+  }
+  save(id: string, s: RoomState) {
+    return this.get(id).save(id, s);
+  }
+  scheduleSave(id: string, s: RoomState): void {
+    this.get(id).scheduleSave(id, s);
+  }
+  flushIfDirty(id: string): Promise<void> {
+    return this.get(id).flushIfDirty(id);
+  }
+  async flushAll(): Promise<void> {
+    await Promise.all(
+      [...this.byId.values()].map((p) => p.flushAll()),
+    );
+  }
+}
+
 export function makeApp(opts: AppOpts = {}) {
   const storageDir = opts.storageDir ?? config.storageDir; // Fix: no double-join
-  const persistence = opts.inMemory ? null : new FilePersistence(storageDir);
+  const persistence = opts.inMemory ? null : new StorageDirPersistence(storageDir);
   const store: RoomStore = persistence
     ? {
         load: (id) => persistence.load(id),

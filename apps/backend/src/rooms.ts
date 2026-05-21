@@ -1,9 +1,22 @@
 import { defaultDocument, defaultPage, defaultSchema } from "./migrate-v2";
-import type { FilePersistence } from "./persistence";
 import type { StoreOpLogEntry, TLStoreSnapshot } from "./store-types";
 import type { RoomId, RoomState } from "./types";
 import { DEFAULT_ROOM } from "./types";
 import { config, resolveWorkspaceDir } from "./config";
+
+/**
+ * Subset of `FilePersistence` (and the per-daemon multi-room adapter) needed
+ * by `Rooms` to flush debounced writes around lifecycle events. Decoupled
+ * from the concrete `FilePersistence` type so the daemon entry point can
+ * inject a multi-room facade without `Rooms` importing the bridge class.
+ *
+ * DRW-116 Task 10b will likely fold this into a richer `Persistence`
+ * interface once `RoomCache` is plumbed through.
+ */
+export type RoomPersistence = {
+  scheduleSave: (id: RoomId, s: RoomState) => void;
+  flushIfDirty: (id: RoomId) => Promise<void>;
+};
 
 const ROOM_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 // Stored viewport hints expire after this window of inactivity so a stale
@@ -71,7 +84,7 @@ export function makeRoomState(): RoomState {
 export class Rooms {
   private map = new Map<RoomId, RoomState>();
   private loading = new Map<RoomId, Promise<RoomState>>();
-  private persistence?: FilePersistence;
+  private persistence?: RoomPersistence;
   private viewports = new Map<string, { x: number; y: number; w: number; h: number; zoom?: number; at: number }>();
 
   constructor(private store: RoomStore) {}
@@ -91,7 +104,7 @@ export class Rooms {
     return rest;
   }
 
-  setPersistence(p: FilePersistence) {
+  setPersistence(p: RoomPersistence) {
     this.persistence = p;
   }
 

@@ -30,13 +30,17 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
+// DRW-116 Task 10a: FilePersistence now takes a full filePath (one instance ==
+// one room file). Tests below build the path explicitly via `join(dir, "<id>.json")`.
 describe("FilePersistence", () => {
   test("load missing returns null", async () => {
-    expect(await new FilePersistence(dir).load("none")).toBeNull();
+    expect(
+      await new FilePersistence(join(dir, "none.json")).load("none"),
+    ).toBeNull();
   });
 
   test("save + load round-trip", async () => {
-    const p = new FilePersistence(dir);
+    const p = new FilePersistence(join(dir, "t.json"));
     const s = makeRoomState();
     seedShape(s, "shape:n1", "n1");
     s.version = 3;
@@ -55,7 +59,7 @@ describe("FilePersistence", () => {
   });
 
   test("opLog persisted, dirty NOT persisted", async () => {
-    const p = new FilePersistence(dir);
+    const p = new FilePersistence(join(dir, "o.json"));
     const s = makeRoomState();
     s.opLog.push({
       ops: { added: {}, updated: {}, removed: {} },
@@ -73,7 +77,7 @@ describe("FilePersistence", () => {
   });
 
   test("scheduleSave debounces", async () => {
-    const p = new FilePersistence(dir);
+    const p = new FilePersistence(join(dir, "d.json"));
     let writes = 0;
     const orig = p.save.bind(p);
     p.save = async (id, s) => {
@@ -89,7 +93,7 @@ describe("FilePersistence", () => {
   });
 
   test("flushAll writes pending immediately", async () => {
-    const p = new FilePersistence(dir);
+    const p = new FilePersistence(join(dir, "urgent.json"));
     const s = makeRoomState();
     seedShape(s, "shape:n1", "n1");
     p.scheduleSave("urgent", s);
@@ -100,7 +104,7 @@ describe("FilePersistence", () => {
   });
 
   test("flushIfDirty writes pending state synchronously, clears timer", async () => {
-    const p = new FilePersistence(dir);
+    const p = new FilePersistence(join(dir, "r.json"));
     const s = makeRoomState();
     seedShape(s, "shape:x", "x");
     s.version = 1;
@@ -117,7 +121,7 @@ describe("FilePersistence", () => {
   });
 
   test("flushIfDirty is idempotent — safe to call without pending", async () => {
-    const p = new FilePersistence(dir);
+    const p = new FilePersistence(join(dir, "nonexistent.json"));
     await p.flushIfDirty("nonexistent");
     // No exception, no file created
     const { existsSync } = await import("node:fs");
