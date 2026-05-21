@@ -1,3 +1,49 @@
+## 0.22.0 — 2026-05-22 — DRW-116 singleton daemon + spaces registry + multi-gallery
+
+MINOR feature: переход от per-project daemon (отдельный port для каждой папки) к глобальному singleton daemon с composite-key `(spaceId, roomId)` и spaces registry в `~/.config/shemma/spaces.json`. Legacy `~/.claude/projects/*/canvas/*.json` мигрирует автоматически на первом старте; default space сохраняет совместимость для клиентов, которые ещё не присылают `?space=<id>`.
+
+### Breaking changes
+
+- **Port now shared между release и debug profiles** — оба профайла используют `8787` (был раздельный `8788` для debug). Dev profile остаётся на `8788` (Vite HMR). Старая конфигурация `SHEMMA_PROFILE=debug` со старым port не пробрасывается.
+- **mkdir-lock формат** изменён: PID-handshake + metadata file внутри `~/.shemma/run/<profile>.lock/`. Старые `.pid` файлы игнорируются (graceful → создаётся новый lock).
+- **`SHEMMA_STORAGE_DIR` deprecated** — переменная всё ещё работает (auto-registers как space `default` + warning в stderr), но новые установки должны использовать `shemma s add <path>`.
+- **`--storage <path>` CLI флаг deprecated** — аналогично, auto-translates в space registration + warning.
+
+### Added
+
+- **Singleton daemon** с mkdir-lock-based PID handshake (`@shemma/lockfile` shared package). `shemma daemon status` читает metadata, idle-shutdown (30 min default) graceful flush'ит room cache + releaseLock.
+- **`@shemma/spaces` package** — file-backed registry с `proper-lockfile` concurrency, id-gen с storage layouts (`direct` / `claude` / `shemma`), `DebouncedTouch` для `lastUsedAt` updates на data-op activity.
+- **`/api/spaces` CRUD** с local/public DTO split — public DTO без абсолютных путей (privacy на frontend и MCP).
+- **`spaceMiddleware`** на `/api/*` — enforces composite-key `(spaceId, roomId)` invariant (spec §6.2). Fallback на `default` space если `?space=` отсутствует. Allowlist: `/api/health`, `/api/version`, `/api/session`, `/api/active-rooms`, `/api/export/miro/boards`.
+- **Per-space Rooms bundles** в backend — каждый space владеет собственным `Rooms` map + `SingleSpacePersistence` adapter, `RoomCache` singleton keyed по `(spaceId, roomId)`.
+- **WS subscriptions scoped by `(space, room)`** composite key — concurrent `?space=A&room=X` и `?space=B&room=X` не пересекаются.
+- **CLI top-level positional** — `shemma <abs-path>...` регистрирует spaces + открывает браузер на `?space=<id>`. `shemma s {list,add,forget,rename,prune,reveal}` subcommands для управления registry.
+- **Frontend multi-column gallery** — spaces landing page, URL routing с `cols=` syntax, active column tracking, resizable splitter, within-column gallery↔room transitions.
+- **MCP space-aware tools** — все tools принимают optional `space?: string`. Resolver: explicit > CWD > `default` > ambiguous (с error payload, который НЕ содержит абсолютных путей — privacy per spec §3 + §8.3).
+- **Legacy migration** — на первом запуске daemon сканирует `~/.claude/projects/*/canvas/` и автоматически регистрирует найденные директории как `legacy-*` spaces, первый становится `default`. Idempotent (skipped когда `spaces.json` уже существует). Override через `SHEMMA_SKIP_LEGACY_MIGRATION=1`.
+
+### Fixed (final review blockers)
+
+- **C1:** `startServer` теперь автоматически передаёт `enableSpaceMiddleware: true` в production daemon. До фикса middleware был включён только в integration тестах — production daemon не enforced composite-key invariant.
+- **W1:** `spaceMiddleware` fallback'ит на `default` space при отсутствии `?space=` (вместо 400) — спасает legacy клиенты, которые ещё не пересланы на новую query-string схему.
+- **W2:** MCP `resolveSpace` ambiguity error больше не утекает абсолютные пути файловой системы в LLM context (только `id` + `label`).
+- **W3:** `DebouncedTouch` подключён к `spaceMiddleware` через `onResolve` callback — `lastUsedAt` теперь обновляется при data-op activity, а не только при `registerSpace` / `s rename`. Flush в graceful shutdown chain.
+
+### Tests
+
+- **989 pass / 0 fail** across 5 packages (backend 498 + cli 67 + mcp 193 + spaces 17 + domain 42 + root + frontend 192). Baseline на старте фазы — 932 tests; добавлено 57 новых тестов (per-space isolation, middleware edge cases, MCP integration, legacy migration, smoke matrix, default fallback, privacy redaction).
+
+### Affected (high-level)
+
+- New packages: `@shemma/spaces`, `@shemma/lockfile`.
+- Backend: `apps/backend/src/index.ts`, `apps/backend/src/middleware/space.ts`, `apps/backend/src/room-cache.ts`, `apps/backend/src/routes/_space-context.ts`, `apps/backend/src/routes/spaces.ts`, `apps/backend/src/migration/legacy-spaces.ts`.
+- CLI: `packages/shemma-cli/src/index.ts` (top-level positional + `s` subcommands), `packages/shemma-cli/src/daemon.ts`.
+- MCP: `packages/shemma-mcp/src/space-resolver.ts`, все tool handlers пробрасывают `space?: string`.
+- Frontend: multi-column layout, spaces landing, URL parser/serializer.
+- Docs: `docs/superpowers/specs/2026-05-21-global-daemon-spaces-design.md` v0.3, `docs/superpowers/plans/2026-05-21-global-daemon-spaces-plan.md` v0.2, `docs/manual-tests/drw-116-global-daemon-spaces.md`.
+
+---
+
 ## 0.20.3 — 2026-05-21 — DRW-113 note schema backfill
 
 PATCH fix: AI-generated note shapes (через `shemma_note` / `define role=note`) ломали `loadSnapshot` валидацию, потому что не включали required tldraw 5.x props. Canvas рендерился пустым для любой комнаты с note-shape — disk-данные были валидны, отбраковывал client-side schema validator.

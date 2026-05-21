@@ -1,6 +1,6 @@
 # DRW-116 — Global daemon + spaces (Smoke matrix)
 
-Version: 0.21.0 (pending)
+Version: 0.22.0
 Date: 2026-05-22
 Plan: `docs/superpowers/plans/2026-05-21-global-daemon-spaces-plan.md`
 Spec: `docs/superpowers/specs/2026-05-21-global-daemon-spaces-design.md`
@@ -9,7 +9,7 @@ Spec: `docs/superpowers/specs/2026-05-21-global-daemon-spaces-design.md`
 для каждого указан либо автотест, который покрывает его (run via `bun run test`),
 либо ручные шаги, требующие chrome-devtools / реальный браузер.
 
-Запускать после `bun run test` (зелёный suite) — перед release-коммитом 0.21.0.
+Запускать после `bun run test` (зелёный suite) — перед release-коммитом 0.22.0.
 
 ---
 
@@ -181,4 +181,4 @@ UI-функциональность вне scope автотестов:
 - [ ] Ни одного chrome-devtools error / unhandled rejection в браузере.
 - [ ] `shemma doctor` (если применимо) — без warnings.
 
-После приёмки — release-коммит + tag `0.21.0` + merge `feature/global-daemon-spaces` → `main` через `--no-ff`.
+После приёмки — release-коммит + tag `0.22.0` + merge `feature/global-daemon-spaces` → `main` через `--no-ff`.

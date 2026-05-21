@@ -2,7 +2,7 @@
 
 **AI-driven canvas board for Claude Code sessions.**
 
-tldraw 5.x frontend + Bun backend (`:8787` release, `:8788` dev) + `shemma` CLI + skill cheat-sheet. Per-workspace canvas-документы в `~/.claude/projects/<slug-hash>/canvas/<room>.json`. Multi-room, runtime profiles (dev/release/debug), single-binary distribution через `bun build --compile`.
+tldraw 5.x frontend + Bun backend (singleton daemon на `:8787` release+debug, `:8788` dev) + `shemma` CLI + skill cheat-sheet. Canvas-документы привязаны к spaces из registry `~/.config/shemma/spaces.json`; composite key `(spaceId, roomId)`. Multi-room, runtime profiles (dev/release/debug), single-binary distribution через `bun build --compile`.
 
 ## Project status
 
@@ -48,11 +48,14 @@ tldraw 5.x frontend + Bun backend (`:8787` release, `:8788` dev) + `shemma` CLI 
 ## Architecture summary
 
 - **Core:** `CanvasState + PatchOp` REST/WS API в Bun backend.
+- **Singleton daemon (0.22.0+):** один process на машину обслуживает все spaces. mkdir-lock в `~/.shemma/run/<profile>.lock/` с PID handshake + metadata file; `shemma daemon status` читает оттуда. Idle-shutdown 30 min default. Параллельные `shemma` invocations либо attach'атся к существующему daemon, либо подвисают на lock acquire.
+- **Spaces registry (0.22.0+):** `~/.config/shemma/spaces.json` с `proper-lockfile` concurrency. Каждый space = `{id, path, storageLayout, lastUsedAt, ...}`. Storage layouts: `direct` (path/<room>.json — для тестов и legacy `--storage`), `claude` (legacy `~/.claude/projects/*/canvas/`), `shemma` (новый default: `<path>/.shemma/canvas/<room>.json`). Composite key `(spaceId, roomId)` — глобально уникален.
 - **Domain layer (v0.2.0+):** typed actions (define/connect/group/note/layout/delete) поверх `@shemma/domain` shared package. AI работает через `POST /api/domain` (`shemma` CLI обёртка), не через сырой `/api/patch`.
 - **Token-cheap context:** `GET /api/agent/context?since=N` отдаёт domain summary без геометрии (≤8KB на 100 элементов).
-- **Machine interface:** `shemma` CLI (lifecycle + data commands), shared `@shemma/client` HTTP wrapper. AI работает через Bash в skill cheat-sheet'е.
-- **Runtime profiles:** `release` (8787, embedded UI) / `dev` (8788, Vite HMR) / `debug` (release + verbose). Параллельная работа без конфликтов.
-- **MCP — Phase 2.3** (не 2.1 — спека сдвинула). Тонкий adapter поверх `/api/domain`, не сырой patch.
+- **Machine interface:** `shemma` CLI (lifecycle + data commands + `s` subcommands для registry), shared `@shemma/client` HTTP wrapper (threads `space?` через каждый HTTP call). AI работает через Bash в skill cheat-sheet'е.
+- **Runtime profiles:** `release` / `debug` шарят port 8787 (одновременно работать не могут — second instance attach'ится к первому через mkdir-lock), `dev` (8788, Vite HMR) — параллельно ОК.
+- **MCP:** все tools принимают optional `space?: string`. Resolver: explicit > CWD prefix match > `default` > ambiguous. Ambiguity error содержит только `id` + `label`, без absolute paths (privacy per spec §3 + §8.3).
+- **Frontend multi-column (0.22.0+):** spaces landing page → `?cols=` URL syntax → multi-column layout с resizable splitters, active column tracking, within-column gallery↔room transitions.
 - **UI:** tldraw editor — primary; shemma добавляет минимальный service-layer через `components`/`overrides`. См. Phase 2.1 spec §3.8.
 
 ## Key files (current)
