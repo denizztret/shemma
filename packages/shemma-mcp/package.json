@@ -10,6 +10,7 @@
   "dependencies": {
     "@shemma/client": "workspace:*",
     "@shemma/domain": "workspace:*",
+    "@shemma/spaces": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "zod": "^3.23.0"
   }

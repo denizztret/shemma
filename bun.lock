@@ -75,6 +75,7 @@
         "@modelcontextprotocol/sdk": "^1.0.0",
         "@shemma/client": "workspace:*",
         "@shemma/domain": "workspace:*",
+        "@shemma/spaces": "workspace:*",
         "zod": "^3.23.0",
       },
     },
