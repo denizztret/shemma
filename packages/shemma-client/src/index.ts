@@ -1,4 +1,4 @@
-export type ClientOpts = { baseUrl?: string; room?: string };
+export type ClientOpts = { baseUrl?: string; room?: string; space?: string };
 
 // Phase 3.0 response shapes (mirror backend payloads).
 // Backend is source of truth (apps/backend/src/routes/state.ts,
@@ -43,10 +43,12 @@ export type StateDiffResponse =
 
 export class CanvasClient {
   readonly room: string;
+  readonly space: string;
   private base: string;
 
   constructor(opts: ClientOpts = {}) {
     this.room = opts.room ?? process.env.CLAUDE_SESSION_ID ?? "default";
+    this.space = opts.space ?? "__legacy__";
     this.base =
       opts.baseUrl ?? `http://localhost:${process.env.SHEMMA_PORT ?? 8787}`;
   }
@@ -55,8 +57,14 @@ export class CanvasClient {
     return this.base;
   }
 
-  private q(extra: Record<string, string | number | undefined> = {}) {
-    const params = new URLSearchParams({ room: this.room });
+  private q(
+    extra: Record<string, string | number | undefined> = {},
+    spaceOverride?: string,
+  ) {
+    const params = new URLSearchParams({
+      space: spaceOverride ?? this.space,
+      room: this.room,
+    });
     for (const [k, v] of Object.entries(extra))
       if (v !== undefined) params.set(k, String(v));
     return params.toString();
@@ -349,8 +357,13 @@ export class CanvasClient {
     return r.json();
   }
 
-  async getContext(opts: { since?: number; viewport?: string; select?: string[] } = {}) {
-    const params = new URLSearchParams({ room: this.room });
+  async getContext(
+    opts: { since?: number; viewport?: string; select?: string[]; space?: string } = {},
+  ) {
+    const params = new URLSearchParams({
+      space: opts.space ?? this.space,
+      room: this.room,
+    });
     if (opts.since !== undefined) params.set("since", String(opts.since));
     if (opts.viewport) params.set("viewport", opts.viewport);
     if (opts.select?.length) params.set("select", opts.select.join(","));
