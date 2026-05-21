@@ -125,6 +125,31 @@ describe("resolveSpace — ambiguity", () => {
     fs.rmSync(elsewhere, { recursive: true });
   });
 
+  it("ambiguity error does not leak absolute paths (privacy)", () => {
+    // DRW-116 §3 + §8.3: MCP error payload reaches LLM context. Must
+    // contain only id+label, no filesystem paths.
+    const a = fs.mkdtempSync(path.join(os.tmpdir(), "a-"));
+    const b = fs.mkdtempSync(path.join(os.tmpdir(), "b-"));
+    const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), "x-"));
+    try {
+      registerSpace(a);
+      registerSpace(b);
+      process.chdir(elsewhere);
+      const r = resolveSpace({});
+      expect(r.error).toBeDefined();
+      expect(r.error).not.toContain("/private/");
+      expect(r.error).not.toContain("/Users/");
+      expect(r.error).not.toContain("/var/");
+      expect(r.error).not.toContain("/tmp/");
+      // The realpath'd elsewhere path also must not appear.
+      expect(r.error).not.toContain(fs.realpathSync(elsewhere));
+    } finally {
+      fs.rmSync(a, { recursive: true, force: true });
+      fs.rmSync(b, { recursive: true, force: true });
+      fs.rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
   it("returns ambiguous with 'no spaces registered' hint when registry empty", () => {
     const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), "empty-"));
     process.chdir(elsewhere);

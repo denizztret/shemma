@@ -57,8 +57,7 @@ export function resolveSpace(args: { space?: string; cwd?: string }): ResolveRes
   }
 
   // 2. CWD match — realpath normalisation matches registry storage.
-  const rawCwd = args.cwd ?? process.cwd();
-  const realCwd = realpathSafe(rawCwd);
+  const realCwd = realpathSafe(args.cwd ?? process.cwd());
   const all = listSpaces();
 
   const matches = all.filter(s => {
@@ -77,10 +76,16 @@ export function resolveSpace(args: { space?: string; cwd?: string }): ResolveRes
   }
 
   // 4. Ambiguous — surface helpful list so the caller can retry with explicit id.
-  const available = all.map(s => `  - ${s.id} (${s.path})`).join("\n");
+  // DRW-116 §3 + §8.3: error payload sent to LLM context must NOT leak
+  // absolute filesystem paths — only `id` + `label` are allowed. Path of
+  // current CWD is also redacted (LLM doesn't need it; user can read the
+  // error in their own terminal where their cwd is already visible).
+  const available = all
+    .map(s => `  - ${s.id}${s.label ? " — " + s.label : ""}`)
+    .join("\n");
   const msg = all.length === 0
     ? "space_ambiguous: no spaces registered. Run 'shemma s add <path>' first."
-    : `space_ambiguous: cannot resolve space for cwd=${rawCwd}. Available spaces:\n${available}\nPass explicit 'space' arg or 'cd' into a registered path.`;
+    : `space_ambiguous: cannot resolve space from current cwd. Available spaces:\n${available}\nPass explicit 'space' arg or 'cd' into a registered path.`;
   return { space: undefined, source: "ambiguous", error: msg };
 }
 
