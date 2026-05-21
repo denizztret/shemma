@@ -10,27 +10,35 @@ type PromptItem = {
   response?: string;
 };
 
-export function PromptDrawer({ tick }: { tick: number }) {
+export function PromptDrawer({
+  space,
+  room,
+  tick,
+}: {
+  space: string;
+  room: string;
+  tick: number;
+}) {
   const [items, setItems] = useState<PromptItem[]>([]);
   const [open, setOpen] = useState(false);
   // biome-ignore lint/correctness/useExhaustiveDependencies: tick is a prop, used as refresh signal
   useEffect(() => {
-    fetchPrompts("all").then((r) =>
+    fetchPrompts(space, room, "all").then((r) =>
       setItems((r.prompts as PromptItem[]) ?? []),
     );
-  }, [tick]);
+  }, [tick, space, room]);
   const pending = items.filter((p) => p.status === "pending").length;
   const oldCount = items.length - pending;
 
   const onDelete = async (id: string) => {
     setItems((xs) => xs.filter((p) => p.id !== id));
-    await deletePrompt(id);
+    await deletePrompt(space, room, id);
   };
   const onPurge = async () => {
     if (oldCount === 0) return;
     if (!confirm(`Удалить ${oldCount} старых prompt(s)?`)) return;
     setItems((xs) => xs.filter((p) => p.status === "pending"));
-    await purgePrompts();
+    await purgePrompts(space, room);
   };
 
   return (

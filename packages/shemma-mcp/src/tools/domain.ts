@@ -4,6 +4,7 @@ import { CanvasClient } from "@shemma/client";
 import { mapFetchError, toolResult, type ToolResult } from "../errors";
 import type { RoomResolver } from "../room-resolver";
 import type { AutoOpenManager } from "../auto-open";
+import { resolveSpaceOrError, type ResolveSpaceFn } from "../space-resolver";
 import {
   DefineArgs,
   ConnectArgs,
@@ -21,6 +22,8 @@ export type DomainDeps = {
   resolver: RoomResolver;
   defaultRoom?: string;
   autoOpen?: AutoOpenManager;
+  /** DRW-116 Task 26: DI seam for tests; defaults to real resolver. */
+  resolveSpace?: ResolveSpaceFn;
 };
 
 type DefineInput = z.infer<z.ZodObject<typeof DefineArgs>>;
@@ -47,6 +50,7 @@ export type DomainHandles = {
 
 type CommonArgs = {
   room?: string;
+  space?: string;
   clientOpId?: string;
   dryRun?: boolean;
   layoutHint?: unknown;
@@ -58,6 +62,9 @@ async function runActions(
   actions: Array<Record<string, unknown>>,
   args: CommonArgs,
 ): Promise<ToolResult> {
+  const spaceRes = resolveSpaceOrError(deps, args.space);
+  if ("error" in spaceRes) return spaceRes.error;
+
   const resolved = await deps.resolver.resolve({ argRoom });
   if (!resolved.ok) {
     return toolResult({
@@ -70,7 +77,11 @@ async function runActions(
 
   const clientOpId = args.clientOpId ?? crypto.randomUUID();
   try {
-    const c = new CanvasClient({ baseUrl: deps.client.baseUrl, room: resolved.room });
+    const c = new CanvasClient({
+      baseUrl: deps.client.baseUrl,
+      room: resolved.room,
+      space: spaceRes.spaceId,
+    });
     const resp = (await c.applyDomain({
       actions,
       clientOpId,
@@ -120,10 +131,10 @@ async function runActions(
 export function registerDomainTools(server: McpServer, deps: DomainDeps): DomainHandles {
   // ── shemma_define ───────────────────────────────────────────────────────────
   async function defineCall(input: DefineInput): Promise<ToolResult> {
-    const { room, clientOpId, dryRun, layoutHint, name, role, label } = input;
+    const { room, space, clientOpId, dryRun, layoutHint, name, role, label } = input;
     const action: Record<string, unknown> = { kind: "define", name, role };
     if (label !== undefined) action.label = label;
-    return runActions(deps, room, [action], { clientOpId, dryRun, layoutHint });
+    return runActions(deps, room, [action], { space, clientOpId, dryRun, layoutHint });
   }
 
   server.registerTool(
@@ -138,10 +149,10 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
 
   // ── shemma_connect ──────────────────────────────────────────────────────────
   async function connectCall(input: ConnectInput): Promise<ToolResult> {
-    const { room, clientOpId, dryRun, layoutHint, from, to, connectionKind, label } = input;
+    const { room, space, clientOpId, dryRun, layoutHint, from, to, connectionKind, label } = input;
     const action: Record<string, unknown> = { kind: "connect", from, to, connectionKind };
     if (label !== undefined) action.label = label;
-    return runActions(deps, room, [action], { clientOpId, dryRun, layoutHint });
+    return runActions(deps, room, [action], { space, clientOpId, dryRun, layoutHint });
   }
 
   server.registerTool(
@@ -156,13 +167,13 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
 
   // ── shemma_group ────────────────────────────────────────────────────────────
   async function groupCall(input: GroupInput): Promise<ToolResult> {
-    const { room, clientOpId, dryRun, layoutHint, name, label, children, as } = input;
+    const { room, space, clientOpId, dryRun, layoutHint, name, label, children, as } = input;
     // DRW-072: domain validator требует as ∈ {network, boundary}. Если не пришло
     // от MCP-клиента — default "boundary" (visible container, наиболее частый
     // use-case для архитектурных диаграмм).
     const action: Record<string, unknown> = { kind: "group", name, children, as: as ?? "boundary" };
     if (label !== undefined) action.label = label;
-    return runActions(deps, room, [action], { clientOpId, dryRun, layoutHint });
+    return runActions(deps, room, [action], { space, clientOpId, dryRun, layoutHint });
   }
 
   server.registerTool(
@@ -177,8 +188,8 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
 
   // ── shemma_note ─────────────────────────────────────────────────────────────
   async function noteCall(input: NoteInput): Promise<ToolResult> {
-    const { room, clientOpId, dryRun, layoutHint, name, text } = input;
-    return runActions(deps, room, [{ kind: "note", name, text }], { clientOpId, dryRun, layoutHint });
+    const { room, space, clientOpId, dryRun, layoutHint, name, text } = input;
+    return runActions(deps, room, [{ kind: "note", name, text }], { space, clientOpId, dryRun, layoutHint });
   }
 
   server.registerTool(
@@ -193,12 +204,12 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
 
   // ── shemma_layout ───────────────────────────────────────────────────────────
   async function layoutCall(input: LayoutInput): Promise<ToolResult> {
-    const { room, clientOpId, dryRun, layoutHint, mode, scope, spacing } = input;
+    const { room, space, clientOpId, dryRun, layoutHint, mode, scope, spacing } = input;
     const action: Record<string, unknown> = { kind: "layout" };
     if (mode !== undefined) action.mode = mode;
     if (scope !== undefined) action.scope = scope;
     if (spacing !== undefined) action.spacing = spacing;
-    return runActions(deps, room, [action], { clientOpId, dryRun, layoutHint });
+    return runActions(deps, room, [action], { space, clientOpId, dryRun, layoutHint });
   }
 
   server.registerTool(
@@ -212,10 +223,10 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
 
   // ── shemma_delete ───────────────────────────────────────────────────────────
   async function deleteCall(input: DeleteInput): Promise<ToolResult> {
-    const { room, clientOpId, dryRun, layoutHint, ids, cascade } = input;
+    const { room, space, clientOpId, dryRun, layoutHint, ids, cascade } = input;
     const action: Record<string, unknown> = { kind: "delete", ids };
     if (cascade !== undefined) action.cascade = cascade;
-    return runActions(deps, room, [action], { clientOpId, dryRun, layoutHint });
+    return runActions(deps, room, [action], { space, clientOpId, dryRun, layoutHint });
   }
 
   server.registerTool(
@@ -230,8 +241,8 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
 
   // ── shemma_apply ────────────────────────────────────────────────────────────
   async function applyCall(input: ApplyInput): Promise<ToolResult> {
-    const { room, clientOpId, dryRun, layoutHint, actions } = input;
-    return runActions(deps, room, actions, { clientOpId, dryRun, layoutHint });
+    const { room, space, clientOpId, dryRun, layoutHint, actions } = input;
+    return runActions(deps, room, actions, { space, clientOpId, dryRun, layoutHint });
   }
 
   server.registerTool(
@@ -248,7 +259,10 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
   // leaving the rest of the canvas untouched (pinned shapes never move).
   // AC#7: пустой ids → full-canvas noop (endpoint returns count:0 + hint).
   async function layoutSelectionCall(input: LayoutSelectionInput): Promise<ToolResult> {
-    const { room: argRoom, ids, mode, spacing } = input;
+    const { room: argRoom, space: argSpace, ids, mode, spacing } = input;
+    const spaceRes = resolveSpaceOrError(deps, argSpace);
+    if ("error" in spaceRes) return spaceRes.error;
+
     const resolved = await deps.resolver.resolve({ argRoom });
     if (!resolved.ok) {
       return toolResult({
@@ -260,7 +274,11 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
     }
 
     try {
-      const c = new CanvasClient({ baseUrl: deps.client.baseUrl, room: resolved.room });
+      const c = new CanvasClient({
+        baseUrl: deps.client.baseUrl,
+        room: resolved.room,
+        space: spaceRes.spaceId,
+      });
       const resp = (await c.layoutSelection({
         ids: ids ?? [],
         mode,
@@ -314,7 +332,10 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
   // Append-only. The MCP layer never sends a mode flag — wiping the canvas is
   // a separate explicit action that requires user confirmation.
   async function importMermaidCall(input: ImportMermaidInput): Promise<ToolResult> {
-    const { room: argRoom, clientOpId, source, focus } = input;
+    const { room: argRoom, space: argSpace, clientOpId, source, focus } = input;
+    const spaceRes = resolveSpaceOrError(deps, argSpace);
+    if ("error" in spaceRes) return spaceRes.error;
+
     const resolved = await deps.resolver.resolve({ argRoom });
     if (!resolved.ok) {
       return toolResult({
@@ -326,7 +347,11 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
     }
 
     try {
-      const c = new CanvasClient({ baseUrl: deps.client.baseUrl, room: resolved.room });
+      const c = new CanvasClient({
+        baseUrl: deps.client.baseUrl,
+        room: resolved.room,
+        space: spaceRes.spaceId,
+      });
       const resp = (await c.importMermaid({
         source,
         clientOpId,

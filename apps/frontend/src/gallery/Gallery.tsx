@@ -34,7 +34,20 @@ function sortRooms(rooms: RoomListItem[], mode: SortMode): RoomListItem[] {
   });
 }
 
-export function Gallery() {
+export function Gallery({
+  space,
+  onRoomOpen,
+}: {
+  space: string;
+  /**
+   * Optional callback invoked when the user clicks a room card. When set,
+   * `RoomCard` calls this instead of doing a full-page navigation — used by
+   * `MultiColumnLayout` to swap the gallery column to a room column in
+   * place (DRW-116 Task 18). When omitted, legacy `location.assign` flow
+   * stays untouched.
+   */
+  onRoomOpen?: (roomId: string) => void;
+}) {
   const [filterTab, setFilterTab] = useState<FilterTab>("current");
   const [rooms, setRooms] = useState<RoomListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,11 +69,11 @@ export function Gallery() {
 
   useEffect(() => {
     setLoading(true);
-    listRooms({ includeArchived: filterTab === "archived" })
+    listRooms(space, { includeArchived: filterTab === "archived" })
       .then((res) => setRooms(res.rooms))
       .catch((e) => pushError(`Failed to load rooms: ${(e as Error).message}`))
       .finally(() => setLoading(false));
-  }, [filterTab]);
+  }, [filterTab, space]);
 
   function handleArchived(id: string) {
     setRooms((prev) => prev.filter((r) => r.id !== id));
@@ -73,7 +86,7 @@ export function Gallery() {
       setRooms((prev) => prev.filter((r) => r.id !== id));
     } else {
       // Re-fetch to get restored room in active list
-      listRooms({ includeArchived: false })
+      listRooms(space, { includeArchived: false })
         .then((res) => setRooms(res.rooms))
         .catch(() => {});
     }
@@ -84,7 +97,7 @@ export function Gallery() {
   }
 
   function handleRefresh() {
-    listRooms({ includeArchived: filterTab === "archived" })
+    listRooms(space, { includeArchived: filterTab === "archived" })
       .then((res) => setRooms(res.rooms))
       .catch((e) => pushError(`Failed to reload rooms: ${(e as Error).message}`));
   }
@@ -104,7 +117,7 @@ export function Gallery() {
     )
       return;
     try {
-      const result = await purgeArchive();
+      const result = await purgeArchive(space);
       setRooms([]);
       pushError(`Removed ${result.removed} archived room(s).`);
     } catch (e) {
@@ -222,7 +235,7 @@ export function Gallery() {
             </span>
           )}
         </div>
-        <NewRoomForm />
+        <NewRoomForm space={space} />
       </div>
 
       {/* Main content */}
@@ -318,12 +331,14 @@ export function Gallery() {
                     {group.rooms.map((r) => (
                       <RoomCard
                         key={r.id}
+                        space={space}
                         room={r}
                         sessionId={sessionId}
                         onArchived={handleArchived}
                         onRestored={handleRestored}
                         onDeleted={handleDeleted}
                         onRefresh={handleRefresh}
+                        onOpen={onRoomOpen}
                       />
                     ))}
                   </div>

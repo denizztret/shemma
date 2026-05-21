@@ -6,8 +6,8 @@ import { dirname, join } from "node:path";
 import { authHeaders, readToken } from "./auth";
 import { ensure, stop } from "./daemon";
 import { parseProfile } from "./profile";
+import { getOutput, error as uiError, success as uiSuccess } from "./ui";
 import { fail } from "./util";
-import { error as uiError, getOutput, success as uiSuccess } from "./ui";
 
 export const VALID_CHANNELS = ["stable", "nightly", "dev"] as const;
 type Channel = (typeof VALID_CHANNELS)[number];
@@ -25,7 +25,9 @@ function resolveCurrentVersion(): string {
   try {
     // packages/shemma-cli/src/update.ts → ../package.json
     const pkgPath = join(import.meta.dir, "..", "package.json");
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string };
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
+      version?: string;
+    };
     if (pkg.version) return `${pkg.version}-dev`;
   } catch {
     // ignore — caller treats "0.0.0" as "pre-release"
@@ -123,13 +125,19 @@ type Manifest = { channels?: Record<string, ManifestChannel> };
 function isStaticManifestUrl(url: string): boolean {
   // GitHub API releases endpoint pattern:
   //   https://api.github.com/repos/<owner>/<repo>/releases/(latest|<id>)
-  if (/^https?:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/releases\//.test(url)) {
+  if (
+    /^https?:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/releases\//.test(url)
+  ) {
     return false;
   }
   return true;
 }
 
-async function fetchJson<T>(url: string, token: string | null, accept: string): Promise<T> {
+async function fetchJson<T>(
+  url: string,
+  token: string | null,
+  accept: string,
+): Promise<T> {
   const r = await fetch(url, {
     headers: {
       Accept: accept,
@@ -149,7 +157,10 @@ async function fetchJson<T>(url: string, token: string | null, accept: string): 
  *
  * Token (PAT) injected on both paths when available.
  */
-async function fetchManifest(): Promise<{ manifest: Manifest; release?: GitHubRelease }> {
+async function fetchManifest(): Promise<{
+  manifest: Manifest;
+  release?: GitHubRelease;
+}> {
   const url = latestReleaseUrl();
   const token = readToken({ skipGhCli: false });
 
@@ -158,10 +169,18 @@ async function fetchManifest(): Promise<{ manifest: Manifest; release?: GitHubRe
     return { manifest };
   }
 
-  const release = await fetchJson<GitHubRelease>(url, token, "application/vnd.github+json");
-  const manifestAsset = release.assets.find((a) => a.name === "release-manifest.json");
+  const release = await fetchJson<GitHubRelease>(
+    url,
+    token,
+    "application/vnd.github+json",
+  );
+  const manifestAsset = release.assets.find(
+    (a) => a.name === "release-manifest.json",
+  );
   if (!manifestAsset) {
-    throw new Error(`release ${release.tag_name} has no release-manifest.json asset`);
+    throw new Error(
+      `release ${release.tag_name} has no release-manifest.json asset`,
+    );
   }
   const manifest = await fetchJson<Manifest>(
     manifestAsset.url,
@@ -180,10 +199,17 @@ export async function cmdUpdateCheck() {
     const ui = getOutput();
     if (ui.mode === "json") {
       console.log(
-        JSON.stringify({ current: CURRENT_VERSION, latest, available, channel }),
+        JSON.stringify({
+          current: CURRENT_VERSION,
+          latest,
+          available,
+          channel,
+        }),
       );
     } else if (available) {
-      uiSuccess(`update available: v${latest} (current v${CURRENT_VERSION}, channel ${channel})`);
+      uiSuccess(
+        `update available: v${latest} (current v${CURRENT_VERSION}, channel ${channel})`,
+      );
     } else {
       uiSuccess(`already on latest v${CURRENT_VERSION} (channel ${channel})`);
     }
@@ -234,7 +260,9 @@ function resolveAssetDownloadUrl(
   release?: GitHubRelease,
 ): { url: string; accept: string } {
   if (release) {
-    const apiAsset = release.assets.find((a) => a.name === `shemma-${platformKey}`);
+    const apiAsset = release.assets.find(
+      (a) => a.name === `shemma-${platformKey}`,
+    );
     if (apiAsset) {
       return { url: apiAsset.url, accept: "application/octet-stream" };
     }
@@ -319,7 +347,11 @@ export async function cmdUpdate(argv: string[]) {
   const asset = ch.assets.find((a) => a.platform === key);
   if (!asset) fail(`no asset for ${key} in channel ${channel}`);
 
-  const { url: downloadUrl, accept } = resolveAssetDownloadUrl(asset.url, key, release);
+  const { url: downloadUrl, accept } = resolveAssetDownloadUrl(
+    asset.url,
+    key,
+    release,
+  );
 
   const target = process.execPath;
   const dir = dirname(target);
@@ -355,8 +387,10 @@ export async function cmdUpdate(argv: string[]) {
   }
 
   // Swap is complete and irreversible — emit success before restarting the daemon.
-  // ensure() calls process.exit(3) directly on health timeout, which would suppress
-  // this output if printed after; the caller reads stdout, not exit code, for success.
+  // ensure() → start() throws a tagged Error (exitCode=3) on health timeout,
+  // which the top-level catch in index.ts converts to process.exit(3); that
+  // would suppress this output if printed after, so emit it first. Callers
+  // read stdout, not the exit code, for success.
   const profile = parseProfile(argv);
 
   const ui = getOutput();
@@ -372,7 +406,9 @@ export async function cmdUpdate(argv: string[]) {
       }),
     );
   } else {
-    uiSuccess(`updated v${CURRENT_VERSION} → v${ch.version} (channel ${channel})`);
+    uiSuccess(
+      `updated v${CURRENT_VERSION} → v${ch.version} (channel ${channel})`,
+    );
   }
 
   // ensure() self-spawns from process.execPath, which now points at the new binary.
@@ -386,6 +422,7 @@ export async function cmdUpdate(argv: string[]) {
   delete process.env.SHEMMA_PORT_AUTOSET;
   await ensure(profile);
   // Successful restart — drop the rollback backup to avoid accumulating ~70MB
-  // per update. If ensure() throws (process.exit(3)), .old stays for manual rollback.
+  // per update. If ensure() throws (tagged exit 3 surfaced via main().catch),
+  // .old stays for manual rollback.
   await fs.unlink(oldPath).catch(() => {});
 }

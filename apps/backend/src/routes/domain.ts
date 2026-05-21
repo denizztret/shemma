@@ -1,5 +1,5 @@
-import { Hono } from "hono";
 import type { LayoutMode, Spacing } from "@shemma/domain";
+import { Hono } from "hono";
 import { config } from "../config";
 import { compile } from "../domain/compile";
 import { runLayout } from "../domain/layout";
@@ -11,9 +11,13 @@ import type {
 } from "../domain/types";
 import { validateBatch } from "../domain/validate";
 import { pushOpLog, resolveRoomId } from "../rooms";
-import type { Rooms } from "../rooms";
-import { applyStoreChanges, isEmptyBatch, rebuildDidrawIndex } from "../store-ops";
-import type { RoomState, StoreChangeBus } from "../types";
+import {
+  applyStoreChanges,
+  isEmptyBatch,
+  rebuildDidrawIndex,
+} from "../store-ops";
+import type { StoreChangeBus } from "../types";
+import { bundleForRequest } from "./_space-context";
 
 type LayoutInfo = { applied: boolean; affected?: ElementId[]; reason?: string };
 
@@ -42,13 +46,11 @@ function makeLruCache<K, V>(max: number) {
   };
 }
 
-export function domainRoutes(
-  rooms: Rooms,
-  bus: StoreChangeBus,
-  opts: { onDirty?: (room: string, state: RoomState) => void } = {},
-) {
+export function domainRoutes(bus: StoreChangeBus) {
   // Per-instance idempotency cache: clientOpId → response. Bounded LRU (oldest evicted past max).
-  const idempotencyCache = makeLruCache<string, DomainResponse>(MAX_IDEMPOTENCY_ENTRIES);
+  const idempotencyCache = makeLruCache<string, DomainResponse>(
+    MAX_IDEMPOTENCY_ENTRIES,
+  );
 
   return new Hono().post("/api/domain", async (c) => {
     const rv = resolveRoomId(c.req.query("room"));
@@ -61,9 +63,12 @@ export function domainRoutes(
 
     if (body.clientOpId) {
       const cached = idempotencyCache.get(`${id}:${body.clientOpId}`);
-      if (cached) return c.json({ ...cached, idempotent: true } as DomainResponse);
+      if (cached)
+        return c.json({ ...cached, idempotent: true } as DomainResponse);
     }
 
+    const { rooms, scheduleSave, space } = bundleForRequest(c);
+    const spaceId = space.id;
     const room = await rooms.get(id);
 
     // Cascade pre-check (before validate). Container = shape with type=frame.
@@ -81,7 +86,8 @@ export function domainRoutes(
         for (const sid in room.store.store) {
           const s = room.store.store[sid];
           if (s?.parentId === recId && s.typeName === "shape") {
-            const childName = (s.meta as { didrawName?: unknown } | undefined)?.didrawName;
+            const childName = (s.meta as { didrawName?: unknown } | undefined)
+              ?.didrawName;
             children.push(typeof childName === "string" ? childName : sid);
           }
         }
@@ -93,7 +99,8 @@ export function domainRoutes(
                 {
                   actionIndex: i,
                   code: "cascade-confirm-required" as const,
-                  message: "container has children; pass cascade:true to delete",
+                  message:
+                    "container has children; pass cascade:true to delete",
                   affected: children,
                 },
               ],
@@ -107,7 +114,10 @@ export function domainRoutes(
     // Validate.
     const v = validateBatch(body.actions, room.store, room.didrawIndex);
     if (!v.ok) {
-      return c.json({ ok: false, errors: v.errors } satisfies DomainResponse, 422);
+      return c.json(
+        { ok: false, errors: v.errors } satisfies DomainResponse,
+        422,
+      );
     }
 
     // Compile.
@@ -118,7 +128,13 @@ export function domainRoutes(
       return c.json(
         {
           ok: false,
-          errors: [{ actionIndex: 0, code: "compile-error" as const, message: (e as Error).message }],
+          errors: [
+            {
+              actionIndex: 0,
+              code: "compile-error" as const,
+              message: (e as Error).message,
+            },
+          ],
         } satisfies DomainResponse,
         500,
       );
@@ -157,8 +173,8 @@ export function domainRoutes(
         config.opLogMaxSize,
       );
       room.dirty = true;
-      opts.onDirty?.(id, room);
-      bus.publish(id, {
+      scheduleSave(id, room);
+      bus.publish(spaceId, id, {
         changes: compiled.batch,
         source: "ai",
         version: room.version,
@@ -183,7 +199,8 @@ export function domainRoutes(
       const base: EffectiveHint = {
         mode: (body.layoutHint?.mode ?? "layered-lr") as EffectiveHint["mode"],
         scope: body.layoutHint?.scope ?? "affected",
-        spacing: (body.layoutHint?.spacing ?? "normal") as EffectiveHint["spacing"],
+        spacing: (body.layoutHint?.spacing ??
+          "normal") as EffectiveHint["spacing"],
       };
       // Phase 2.x preserved: any AI batch runs layout by default. An explicit
       // `layout` action lets the batch override mode/scope/spacing (last wins).
@@ -236,10 +253,10 @@ export function domainRoutes(
             config.opLogMaxSize,
           );
           room.dirty = true;
-          opts.onDirty?.(id, room);
+          scheduleSave(id, room);
           // Intentional second publish: clients receive a two-phase render —
           // first the semantic mutation, then the layout-adjusted positions.
-          bus.publish(id, {
+          bus.publish(spaceId, id, {
             changes: lr.batch,
             source: "ai",
             version: room.version,

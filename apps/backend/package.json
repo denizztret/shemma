@@ -1,5 +1,6 @@
 {
   "name": "@shemma/backend",
+  "version": "0.22.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +10,8 @@
   },
   "dependencies": {
     "@shemma/domain": "workspace:*",
+    "@shemma/lockfile": "workspace:*",
+    "@shemma/spaces": "workspace:*",
     "elkjs": "^0.9.3",
     "hono": "^4.6.0",
     "web-worker": "^1.5.0"

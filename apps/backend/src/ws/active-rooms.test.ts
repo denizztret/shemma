@@ -15,7 +15,12 @@ describe("ActiveRoomsTracker", () => {
   it("adds room when client focuses", () => {
     t.onFocus("room-a", "client-1");
     expect(t.list()).toEqual([
-      { room: "room-a", clientCount: 1, lastFocusedAt: 1_700_000_000_000 },
+      {
+        space: "__legacy__",
+        room: "room-a",
+        clientCount: 1,
+        lastFocusedAt: 1_700_000_000_000,
+      },
     ]);
   });
 
@@ -59,5 +64,37 @@ describe("ActiveRoomsTracker", () => {
     now += 500;
     t.onFocus("room-b", "client-1");
     expect(t.list().map((r) => r.room)).toEqual(["room-b"]);
+  });
+
+  it("same room id in two spaces lives in separate buckets", () => {
+    // DRW-116 Task 11: composite-key ensures two clients focused on the same
+    // roomId across different spaces don't collapse into one entry.
+    t.onFocus("shared", "client-1", "space-a");
+    now += 500;
+    t.onFocus("shared", "client-2", "space-b");
+    const entries = t.list();
+    expect(entries).toHaveLength(2);
+    expect(entries.map((e) => `${e.space}:${e.room}`)).toEqual([
+      "space-b:shared",
+      "space-a:shared",
+    ]);
+  });
+
+  it("list({ space }) filters to a single space", () => {
+    t.onFocus("room-a", "client-1", "space-a");
+    t.onFocus("room-b", "client-2", "space-b");
+    const onlyA = t.list({ space: "space-a" });
+    expect(onlyA).toHaveLength(1);
+    expect(onlyA[0]?.room).toBe("room-a");
+    expect(onlyA[0]?.space).toBe("space-a");
+  });
+
+  it("client switching across spaces blurs the previous bucket", () => {
+    t.onFocus("room-a", "client-1", "space-a");
+    expect(t.list({ space: "space-a" })).toHaveLength(1);
+    t.onFocus("room-a", "client-1", "space-b");
+    // Same client moved to space-b — space-a bucket should be empty again.
+    expect(t.list({ space: "space-a" })).toEqual([]);
+    expect(t.list({ space: "space-b" })).toHaveLength(1);
   });
 });

@@ -98,7 +98,17 @@ export type WsMessage =
     };
 
 export type StoreChangeBus = {
+  /**
+   * Publish a store-change frame to every subscriber of `(space, room)`.
+   *
+   * DRW-116 Task 12 — subscriptions are composite-keyed by space + room, so
+   * routes MUST thread the active space id through every publish call. Legacy
+   * single-space callers (or tests that never registered a space) pass the
+   * synthesized `LEGACY_SPACE_ID` ("__legacy__") to land in the default
+   * bucket.
+   */
   publish: (
+    space: string,
     room: string,
     msg: {
       changes: StoreChangeBatch;

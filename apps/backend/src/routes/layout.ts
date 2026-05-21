@@ -2,15 +2,11 @@ import { Hono } from "hono";
 import { config } from "../config";
 import { runLayout } from "../domain/layout";
 import { pushOpLog, resolveRoomId } from "../rooms";
-import type { Rooms } from "../rooms";
 import { applyStoreChanges, rebuildDidrawIndex } from "../store-ops";
-import type { RoomState, StoreChangeBus } from "../types";
+import type { StoreChangeBus } from "../types";
+import { bundleForRequest } from "./_space-context";
 
-export function layoutRoutes(
-  rooms: Rooms,
-  bus: StoreChangeBus,
-  opts: { onDirty?: (room: string, state: RoomState) => void } = {},
-) {
+export function layoutRoutes(bus: StoreChangeBus) {
   return new Hono().post("/api/layout", async (c) => {
     const rv = resolveRoomId(c.req.query("room"));
     if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
@@ -21,6 +17,7 @@ export function layoutRoutes(
       spacing?: string;
     };
 
+    const { rooms, scheduleSave, space } = bundleForRequest(c);
     const r = await rooms.get(id);
 
     const hint = {
@@ -52,8 +49,12 @@ export function layoutRoutes(
       config.opLogMaxSize,
     );
     r.dirty = true;
-    opts.onDirty?.(id, r);
-    bus.publish(id, { changes: lr.batch, source: "ai", version: r.version });
+    scheduleSave(id, r);
+    bus.publish(space.id, id, {
+      changes: lr.batch,
+      source: "ai",
+      version: r.version,
+    });
 
     return c.json({ ok: true, version: r.version, count });
   });

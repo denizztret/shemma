@@ -1,6 +1,6 @@
 {
   "name": "shemma",
-  "version": "0.20.3",
+  "version": "0.22.0",
   "private": true,
   "type": "module",
   "bin": {
@@ -12,6 +12,8 @@
   "dependencies": {
     "@shemma/client": "workspace:*",
     "@shemma/backend": "workspace:*",
-    "@shemma/mcp": "workspace:*"
+    "@shemma/lockfile": "workspace:*",
+    "@shemma/mcp": "workspace:*",
+    "@shemma/spaces": "workspace:*"
   }
 }

@@ -85,3 +85,7 @@ export function portFor(p: Profile): number {
   }
   return PORT_BY_PROFILE[p];
 }
+
+export function lockDir(port: number): string {
+  return join(homedir(), ".claude", `.shemma-port-${port}.lock`);
+}

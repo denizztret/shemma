@@ -18,9 +18,16 @@ import { VERSION } from "../version";
  *   (включая profile subdir) и `version`, чтобы CLI мог сравнить cwd-target
  *   с активным daemon'ом и предупредить о mismatched storage.
  *
- * `storageDir` параметр передаётся явно (вместо чтения из `config.storageDir`),
+ * `storageDir` параметр передаётся явно (instead of reading a global),
  * чтобы honor'ить `startServer({ storageDir })` override — иначе in-process
- * test daemons и `--storage` flag репортили бы ambient `config.storageDir`.
+ * test daemons и `--storage` flag репортили бы ambient default path.
+ *
+ * DRW-116 Task 11: `/api/health` остаётся в SPACE_ALLOWLIST (cross-space probe,
+ * без `?space=`) — поэтому `c.get("space")` тут заведомо undefined. Поле
+ * `storage` продолжает репортить тот же closure-resolved `storageDir`, что и в
+ * pre-Task-11 версии: для daemon-mode это `resolveLegacyStorageDir` (single-
+ * space fallback), для тестов — `startServer({ storageDir })` override. Per-
+ * space storage roots discoverable через `/api/spaces` registry.
  */
 export function makeHealthRoutes(storageDir: string) {
   return new Hono()

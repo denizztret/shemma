@@ -24,23 +24,29 @@ function seedShape(s: RoomState, id: string, name: string) {
   s.didrawIndex.set(name, id);
 }
 
+// DRW-116 Task 10a: FilePersistence is single-file now. We mint one per (dir, id)
+// at the start of each test so the API contract (id-keyed methods) keeps working
+// while the underlying instance is bound to a specific file.
 let dir: string;
-let persistence: FilePersistence;
-let rooms: Rooms;
+
+function buildRooms(id: string): { persistence: FilePersistence; rooms: Rooms } {
+  const persistence = new FilePersistence(join(dir, `${id}.json`));
+  const rooms = new Rooms({
+    load: (rid) => persistence.load(rid),
+    save: (rid, s) => persistence.save(rid, s),
+  });
+  rooms.setPersistence(persistence);
+  return { persistence, rooms };
+}
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "shemma-flush-"));
-  persistence = new FilePersistence(dir);
-  rooms = new Rooms({
-    load: (id) => persistence.load(id),
-    save: (id, s) => persistence.save(id, s),
-  });
-  rooms.setPersistence(persistence);
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("Rooms.flushIfDirty", () => {
   test("flushes pending autosave synchronously", async () => {
+    const { persistence, rooms } = buildRooms("a");
     const r = await rooms.get("a");
     seedShape(r, "shape:n1", "n1");
     r.dirty = true;
@@ -57,6 +63,7 @@ describe("Rooms.flushIfDirty", () => {
   });
 
   test("idempotent: flushIfDirty on clean room is no-op", async () => {
+    const { rooms } = buildRooms("b");
     await rooms.get("b");
     await rooms.flushIfDirty("b");
     expect(existsSync(join(dir, "b.json"))).toBe(false);
@@ -65,6 +72,7 @@ describe("Rooms.flushIfDirty", () => {
 
 describe("Rooms.evict", () => {
   test("removes from in-memory map", async () => {
+    const { rooms } = buildRooms("c");
     await rooms.get("c");
     expect(rooms.has("c")).toBe(true);
     await rooms.evict("c");
@@ -72,6 +80,7 @@ describe("Rooms.evict", () => {
   });
 
   test("evict flushes pending first (no data loss)", async () => {
+    const { persistence, rooms } = buildRooms("d");
     const r = await rooms.get("d");
     seedShape(r, "shape:n1", "n1");
     r.dirty = true;

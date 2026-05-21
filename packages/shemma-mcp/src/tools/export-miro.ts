@@ -4,12 +4,15 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CanvasClient } from "@shemma/client";
 import { mapFetchError, toolResult, type ToolResult } from "../errors";
 import type { RoomResolver } from "../room-resolver";
+import { resolveSpaceOrError, type ResolveSpaceFn } from "../space-resolver";
 import { ExportMiroArgs } from "../schemas";
 
 export type ExportMiroDeps = {
   client: CanvasClient;
   resolver: RoomResolver;
   defaultRoom: string;
+  /** DRW-116 Task 26: DI seam for tests; defaults to real resolver. */
+  resolveSpace?: ResolveSpaceFn;
 };
 
 type ExportMiroInput = z.infer<z.ZodObject<typeof ExportMiroArgs>>;
@@ -23,6 +26,9 @@ export function registerExportMiroTool(
   deps: ExportMiroDeps,
 ): ExportMiroHandles {
   async function exportMiroCall(input: ExportMiroInput): Promise<ToolResult> {
+    const spaceRes = resolveSpaceOrError(deps, input.space);
+    if ("error" in spaceRes) return spaceRes.error;
+
     const resolved = await deps.resolver.resolve({ argRoom: input.room });
     if (!resolved.ok) {
       return toolResult({
@@ -33,7 +39,9 @@ export function registerExportMiroTool(
       });
     }
 
-    const url = `${deps.client.baseUrl}/api/export/miro?room=${encodeURIComponent(resolved.room)}`;
+    const url =
+      `${deps.client.baseUrl}/api/export/miro?room=${encodeURIComponent(resolved.room)}` +
+      `&space=${encodeURIComponent(spaceRes.spaceId)}`;
     const body = {
       boardId: input.boardId,
       boardName: input.boardName,

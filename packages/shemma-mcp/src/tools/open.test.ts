@@ -1,7 +1,20 @@
 import { describe, expect, it } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AutoOpenManager } from "../auto-open";
+import type { ResolveSpaceFn } from "../space-resolver";
 import { registerOpenTool } from "./open";
+
+const fakeSpaceRecord = {
+  id: "test-space",
+  path: "/tmp/test-space",
+  storageLayout: "project" as const,
+  createdAt: "2026-01-01T00:00:00Z",
+  lastUsedAt: "2026-01-01T00:00:00Z",
+};
+const fakeResolveSpace: ResolveSpaceFn = ({ space }) => {
+  if (space) return { space: { ...fakeSpaceRecord, id: space }, source: "explicit" };
+  return { space: fakeSpaceRecord, source: "default" };
+};
 
 function setup(opts: { mode?: "never" | "once" | "always" | "confirm"; throwOnSpawn?: boolean } = {}) {
   const calls: string[] = [];
@@ -14,7 +27,11 @@ function setup(opts: { mode?: "never" | "once" | "always" | "confirm"; throwOnSp
     },
   });
   const server = new McpServer({ name: "t", version: "0" });
-  const handles = registerOpenTool(server, { autoOpen: auto, defaultRoom: "default" });
+  const handles = registerOpenTool(server, {
+    autoOpen: auto,
+    defaultRoom: "default",
+    resolveSpace: fakeResolveSpace,
+  });
   return { server, auto, handles, calls };
 }
 

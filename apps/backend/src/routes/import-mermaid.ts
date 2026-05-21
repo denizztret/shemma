@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { resolveRoomId } from "../rooms";
 import type { WsHub } from "../ws";
+import { bundleForRequest } from "./_space-context";
 
 /**
  * POST /api/agent/import-mermaid
@@ -46,7 +47,8 @@ export function importMermaidRoutes(bus: WsHub) {
         ? (body.focus as FocusMode)
         : undefined;
 
-    if (bus.subscriberCount(room) === 0) {
+    const { space } = bundleForRequest(c);
+    if (bus.subscriberCount(space.id, room) === 0) {
       // Build canonical room URL so AI can open the tab and retry. We surface
       // the request's host (works across profiles/ports) rather than hard-coding.
       const reqUrl = new URL(c.req.url);
@@ -57,7 +59,13 @@ export function importMermaidRoutes(bus: WsHub) {
     const requestId = crypto.randomUUID();
 
     try {
-      const result = await bus.sendImportMermaid(room, requestId, source, focus);
+      const result = await bus.sendImportMermaid(
+        space.id,
+        room,
+        requestId,
+        source,
+        focus,
+      );
       if (!result.ok) {
         return c.json({ error: result.error ?? "import failed" }, 500);
       }

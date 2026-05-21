@@ -1,20 +1,33 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import {
   existsSync,
   openSync,
-  readFileSync,
   renameSync,
   statSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
+import path from "node:path";
 import { CanvasClient } from "@shemma/client";
+import {
+  acquireLock,
+  isLockAlive,
+  readLockMetadata,
+  releaseLock,
+} from "@shemma/lockfile";
 
 const GRACEFUL_SHUTDOWN_MS = 2000; // matches backend default; override via SHEMMA_GRACEFUL_SHUTDOWN_MS
 const DEFAULT_LOG_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+const POLL_INTERVAL_MS = 100;
+const ACQUIRE_TIMEOUT_MS = 5000;
 
-import { type Profile, ALL_PROFILES, logFile, pidFile, portFor } from "./profile";
-import { error as uiError, getOutput, success as uiSuccess } from "./ui";
+import {
+  ALL_PROFILES,
+  type Profile,
+  lockDir as lockDirFor,
+  logFile,
+  portFor,
+} from "./profile";
+import { getOutput, error as uiError, success as uiSuccess } from "./ui";
 
 // Module-level guard: nudge is informational — print at most once per process,
 // not once per ensureDaemon() call. Tests reset via __resetNudgeForTesting.
@@ -60,7 +73,11 @@ function rotateLogIfNeeded(path: string): void {
     const size = statSync(path).size;
     if (size > logMaxBytes()) {
       const backup = `${path}.1`;
-      try { unlinkSync(backup); } catch { /* no backup yet */ }
+      try {
+        unlinkSync(backup);
+      } catch {
+        /* no backup yet */
+      }
       renameSync(path, backup);
     }
   } catch {
@@ -87,13 +104,31 @@ export async function isHealthy(port: number): Promise<boolean> {
   }
 }
 
+async function pollFor(
+  condition: () => boolean | Promise<boolean>,
+  timeoutMs: number,
+): Promise<boolean> {
+  const startTs = Date.now();
+  while (Date.now() - startTs < timeoutMs) {
+    if (await condition()) return true;
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+  }
+  return false;
+}
+
 export async function status(profile: Profile) {
   const port = portFor(profile);
-  const file = pidFile(profile);
-  if (!existsSync(file)) return { running: false, profile, port };
-  const pid = Number(readFileSync(file, "utf8"));
-  if (!isAlive(pid)) return { running: false, profile, port };
-  return { running: await isHealthy(port), pid, profile, port };
+  const dir = lockDirFor(port);
+  const meta = readLockMetadata(dir);
+  if (!meta) return { running: false, profile, port };
+  if (!isAlive(meta.pid)) return { running: false, profile, port };
+  return {
+    running: await isHealthy(port),
+    pid: meta.pid,
+    profile,
+    port,
+    startedAt: meta.startedAt,
+  };
 }
 
 export type StartOpts = {
@@ -104,31 +139,32 @@ export type StartOpts = {
   storageDir?: string;
 };
 
-export async function start(profile: Profile, opts: StartOpts = {}) {
-  const s = await status(profile);
-  if (s.running) {
-    const ui = getOutput();
-    if (ui.mode === "json") {
-      console.log(JSON.stringify({ ok: true, already: true, ...s }));
-    } else {
-      uiSuccess(
-        `daemon already running (pid ${(s as { pid?: number }).pid}, profile ${profile}, port ${(s as { port?: number }).port})`,
-      );
-    }
-    return;
-  }
-  const port = portFor(profile);
+export type StartResult = {
+  reused: boolean;
+  pid: number;
+  profile: Profile;
+  port: number;
+};
+
+type SpawnEnvExtras = {
+  lockDir: string;
+  port: number;
+  profile: Profile;
+  storageDir?: string;
+};
+
+function spawnDetached(profile: Profile, extras: SpawnEnvExtras): ChildProcess {
   const lf = logFile(profile);
   rotateLogIfNeeded(lf);
   const logFd = openSync(lf, "a");
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     SHEMMA_PROFILE: profile,
-    SHEMMA_PORT: String(port),
+    SHEMMA_PORT: String(extras.port),
+    SHEMMA_LOCK_DIR: extras.lockDir,
   };
-  // Explicit --storage wins over ambient SHEMMA_STORAGE_DIR.
-  if (opts.storageDir !== undefined) {
-    env.SHEMMA_STORAGE_DIR = opts.storageDir;
+  if (extras.storageDir !== undefined) {
+    env.SHEMMA_STORAGE_DIR = extras.storageDir;
   }
   // process.argv[1] differs by exec mode:
   //   bun source: ".../shemma-cli/src/index.ts" (script path needed by bun)
@@ -144,19 +180,151 @@ export async function start(profile: Profile, opts: StartOpts = {}) {
     env,
   });
   child.unref();
-  if (!child.pid) {
-    uiError("failed to spawn daemon: no PID");
-    process.exit(1);
-  }
-  writeFileSync(pidFile(profile), String(child.pid));
+  return child;
+}
+
+function emitStartOutput(result: StartResult, storageDir?: string): void {
   const ui = getOutput();
   if (ui.mode === "json") {
-    const out: Record<string, unknown> = { ok: true, pid: child.pid, profile, port };
-    if (opts.storageDir !== undefined) out.storage = opts.storageDir;
+    const out: Record<string, unknown> = {
+      ok: true,
+      pid: result.pid,
+      profile: result.profile,
+      port: result.port,
+    };
+    if (result.reused) out.already = true;
+    if (storageDir !== undefined) out.storage = storageDir;
     console.log(JSON.stringify(out));
+  } else if (result.reused) {
+    uiSuccess(
+      `daemon already running (pid ${result.pid}, profile ${result.profile}, port ${result.port})`,
+    );
   } else {
-    uiSuccess(`daemon started (pid ${child.pid}, profile ${profile}, port ${port})`);
+    uiSuccess(
+      `daemon started (pid ${result.pid}, profile ${result.profile}, port ${result.port})`,
+    );
   }
+}
+
+/**
+ * Acquire daemon lock and spawn a child. If a healthy daemon already holds the
+ * lock, returns {reused:true,...}. If the lock dir exists but is stale (dead
+ * pid OR no metadata after timeout), forcibly releases and re-acquires.
+ *
+ * Lock layout: ~/.claude/.shemma-port-<port>.lock/ (dir = mutex via mkdir).
+ *   Inside: daemon.pid — JSON {pid, port, startedAt, profile} written by child
+ *   after Bun.serve listens. Absent = "parent holds lock, child not ready yet".
+ *
+ * Failure paths:
+ *   - acquire fails AND alive+healthy daemon present → reuse
+ *   - acquire fails, no metadata, polling deadline → force-release + retry
+ *   - acquire fails, metadata stale (pid dead) → force-release + retry
+ *   - spawn succeeds but no healthcheck in time → SIGTERM child + release + error
+ */
+export async function start(
+  profile: Profile,
+  opts: StartOpts = {},
+): Promise<StartResult> {
+  const port = portFor(profile);
+  const dir = lockDirFor(port);
+
+  /** Force-release a stale lock dir and reacquire; throws on contention. */
+  const forceReacquire = (): void => {
+    releaseLock(dir);
+    if (!acquireLock(dir)) {
+      uiError("daemon-lock-contention");
+      throw new Error("daemon-lock-contention");
+    }
+  };
+
+  if (!acquireLock(dir)) {
+    // EEXIST — probe the existing holder.
+    const meta = readLockMetadata(dir);
+    if (!meta) {
+      // Parent holds lock but child hasn't written PID yet. Wait bounded.
+      const appeared = await pollFor(
+        () => existsSync(path.join(dir, "daemon.pid")),
+        ACQUIRE_TIMEOUT_MS,
+      );
+      if (!appeared) {
+        // Stale acquire — force-release and retry once.
+        forceReacquire();
+      } else {
+        const refreshed = readLockMetadata(dir);
+        if (refreshed && (await isHealthy(refreshed.port))) {
+          const result: StartResult = {
+            reused: true,
+            pid: refreshed.pid,
+            profile,
+            port: refreshed.port,
+          };
+          emitStartOutput(result, opts.storageDir);
+          return result;
+        }
+        forceReacquire();
+      }
+    } else {
+      if (isLockAlive(dir) && (await isHealthy(meta.port))) {
+        const result: StartResult = {
+          reused: true,
+          pid: meta.pid,
+          profile,
+          port: meta.port,
+        };
+        emitStartOutput(result, opts.storageDir);
+        return result;
+      }
+      forceReacquire();
+    }
+  }
+
+  // Lock acquired. Spawn detached child.
+  const child = spawnDetached(profile, {
+    lockDir: dir,
+    port,
+    profile,
+    storageDir: opts.storageDir,
+  });
+  if (!child.pid) {
+    releaseLock(dir);
+    uiError("failed to spawn daemon: no PID");
+    throw new Error("failed to spawn daemon: no PID");
+  }
+
+  // Wait for child to (1) write PID metadata, (2) pass health check.
+  const ready = await pollFor(async () => {
+    if (!existsSync(path.join(dir, "daemon.pid"))) return false;
+    return isHealthy(port);
+  }, ACQUIRE_TIMEOUT_MS);
+
+  if (!ready) {
+    try {
+      process.kill(child.pid, "SIGTERM");
+    } catch {
+      /* ignore */
+    }
+    releaseLock(dir);
+    const lf = logFile(profile);
+    const msg = `daemon failed to start within 5s; check ${lf}`;
+    uiError(msg);
+    // Preserve historic CLI exit-code contract: health-timeout = exit 3
+    // (declared in usage help-text as "daemon-not-healthy"). The top-level
+    // main().catch in index.ts reads `exitCode` off thrown errors.
+    const err = new Error(msg) as Error & { exitCode?: number };
+    err.exitCode = 3;
+    throw err;
+  }
+
+  const final = readLockMetadata(dir);
+  const childPid = final?.pid ?? child.pid;
+  const result: StartResult = {
+    reused: false,
+    pid: childPid,
+    profile,
+    port,
+  };
+  emitStartOutput(result, opts.storageDir);
+  return result;
 }
 
 /**
@@ -194,9 +362,13 @@ async function ensureDaemon(profile: Profile, verbose: boolean) {
       if (verbose) {
         const ui = getOutput();
         if (ui.mode === "json") {
-          console.log(JSON.stringify({ ok: true, already: true, profile, port }));
+          console.log(
+            JSON.stringify({ ok: true, already: true, profile, port }),
+          );
         } else {
-          uiSuccess(`daemon already running (profile ${profile}, port ${port})`);
+          uiSuccess(
+            `daemon already running (profile ${profile}, port ${port})`,
+          );
         }
       }
       maybePrintMcpNudge(verbose);
@@ -220,23 +392,83 @@ async function ensureDaemon(profile: Profile, verbose: boolean) {
     maybePrintMcpNudge(verbose);
     return;
   }
+  // start() already polls for health up to 5s and emits its own output;
+  // on success the daemon is healthy, on failure it throws.
   await start(profile);
+  maybePrintMcpNudge(verbose);
+}
+
+/**
+ * Best-effort wait for the lock dir to disappear (child removed it on SIGTERM).
+ * Returns true if the dir is gone before deadline.
+ */
+async function waitForLockGone(
+  dir: string,
+  deadlineMs: number,
+): Promise<boolean> {
+  return pollFor(() => !existsSync(dir), deadlineMs);
+}
+
+/** Resolve graceful shutdown deadline honouring `SHEMMA_GRACEFUL_SHUTDOWN_MS`. */
+function gracefulShutdownMs(): number {
+  const overrideMs = Number(process.env.SHEMMA_GRACEFUL_SHUTDOWN_MS);
+  return Number.isFinite(overrideMs) && overrideMs > 0
+    ? overrideMs
+    : GRACEFUL_SHUTDOWN_MS;
+}
+
+type StopOutcome =
+  | { profile: Profile; already: true }
+  | { profile: Profile; stopped: number };
+
+/**
+ * Stop a single profile's daemon and release its lock dir. Returns an outcome
+ * descriptor used by both `stop` (single-profile UI) and `stopAll` (batched).
+ *
+ * Sequence: SIGTERM → poll for exit up to `gracefulShutdownMs()` → SIGKILL if
+ * still alive → wait briefly for lock dir to be removed by the child → force
+ * release as fallback (idempotent).
+ */
+async function stopOneProfile(profile: Profile): Promise<StopOutcome> {
   const port = portFor(profile);
-  for (let i = 0; i < 50; i++) {
-    await new Promise((r) => setTimeout(r, 100));
-    if (await isHealthy(port)) {
-      maybePrintMcpNudge(verbose);
-      return;
+  const dir = lockDirFor(port);
+  const meta = readLockMetadata(dir);
+  if (!meta) {
+    // Lock dir may exist as an "acquire-in-progress" stub; clean it up
+    // regardless (releaseLock is idempotent — no-op if absent).
+    releaseLock(dir);
+    return { profile, already: true };
+  }
+  try {
+    process.kill(meta.pid, "SIGTERM");
+  } catch (_) {
+    /* already dead */
+  }
+  // Wait for the child to disappear OR for the lock dir to be removed
+  // (the backend removes it on SIGTERM as part of graceful shutdown).
+  const deadline = Date.now() + gracefulShutdownMs();
+  while (Date.now() < deadline) {
+    if (!isAlive(meta.pid)) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  if (isAlive(meta.pid)) {
+    try {
+      process.kill(meta.pid, "SIGKILL");
+    } catch (_) {
+      /* ignore */
     }
   }
-  uiError(`shemma: not healthy within 5s on :${port}`);
-  process.exit(3);
+  // Give the child a tiny extra window to delete the lock dir cleanly, then
+  // force-release as a fallback (idempotent).
+  await waitForLockGone(dir, 500);
+  releaseLock(dir);
+  return { profile, stopped: meta.pid };
 }
 
 export async function stop(profile: Profile) {
   const ui = getOutput();
-  const file = pidFile(profile);
-  if (!existsSync(file)) {
+  const outcome = await stopOneProfile(profile);
+  if ("already" in outcome) {
     if (ui.mode === "json") {
       console.log(JSON.stringify({ ok: true, already: true, profile }));
     } else {
@@ -244,34 +476,10 @@ export async function stop(profile: Profile) {
     }
     return;
   }
-  const pid = Number(readFileSync(file, "utf8"));
-  try {
-    process.kill(pid, "SIGTERM");
-  } catch (_) {}
-  const overrideMs = Number(process.env.SHEMMA_GRACEFUL_SHUTDOWN_MS);
-  const gracefulMs =
-    Number.isFinite(overrideMs) && overrideMs > 0
-      ? overrideMs
-      : GRACEFUL_SHUTDOWN_MS;
-  const deadline = Date.now() + gracefulMs;
-  while (Date.now() < deadline) {
-    if (!isAlive(pid)) break;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  if (isAlive(pid)) {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch (_) {}
-  }
-  try {
-    unlinkSync(file);
-  } catch (_) {
-    /* ignore — file may already be gone */
-  }
   if (ui.mode === "json") {
-    console.log(JSON.stringify({ ok: true, stopped: pid, profile }));
+    console.log(JSON.stringify({ ok: true, stopped: outcome.stopped, profile }));
   } else {
-    uiSuccess(`daemon stopped (pid ${pid}, profile ${profile})`);
+    uiSuccess(`daemon stopped (pid ${outcome.stopped}, profile ${profile})`);
   }
 }
 
@@ -284,30 +492,12 @@ export async function stopAll(onlyProfile?: Profile) {
   const profiles = onlyProfile ? [onlyProfile] : [...ALL_PROFILES];
   const results: object[] = [];
   for (const p of profiles) {
-    const file = pidFile(p);
-    if (!existsSync(file)) {
+    const outcome = await stopOneProfile(p);
+    if ("already" in outcome) {
       results.push({ ok: true, already: true, profile: p });
-      continue;
+    } else {
+      results.push({ ok: true, stopped: outcome.stopped, profile: p });
     }
-    const pid = Number(readFileSync(file, "utf8"));
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch (_) {}
-    const overrideMs = Number(process.env.SHEMMA_GRACEFUL_SHUTDOWN_MS);
-    const gracefulMs =
-      Number.isFinite(overrideMs) && overrideMs > 0
-        ? overrideMs
-        : GRACEFUL_SHUTDOWN_MS;
-    const deadline = Date.now() + gracefulMs;
-    while (Date.now() < deadline) {
-      if (!isAlive(pid)) break;
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    if (isAlive(pid)) {
-      try { process.kill(pid, "SIGKILL"); } catch (_) {}
-    }
-    try { unlinkSync(file); } catch (_) { /* ignore */ }
-    results.push({ ok: true, stopped: pid, profile: p });
   }
   const ui = getOutput();
   if (ui.mode === "json") {

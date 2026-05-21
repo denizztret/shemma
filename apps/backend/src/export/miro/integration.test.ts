@@ -1,11 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import type { SpaceRecord } from "@shemma/spaces";
 import { Hono } from "hono";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Rooms } from "../../rooms";
 import { exportRoutes } from "../../routes/export";
+import {
+  type SpaceBundle,
+  installBundleResolver,
+} from "../../routes/_space-context";
 import type { RawShape } from "./coords";
+
+const INT_SPACE: SpaceRecord = {
+  id: "test-export-int",
+  path: "/tmp/test-export-int",
+  storageLayout: "direct",
+  createdAt: "1970-01-01T00:00:00.000Z",
+  lastUsedAt: "1970-01-01T00:00:00.000Z",
+};
+
+function bundleFor(rooms: Rooms): SpaceBundle {
+  return {
+    space: INT_SPACE,
+    rooms,
+    scheduleSave: () => {},
+    flushIfDirty: async () => {},
+    flushAll: async () => {},
+  };
+}
 
 let savedXdg: string | undefined;
 let tmpRoot: string;
@@ -126,7 +149,10 @@ describe("E2E backend: full export — 5 shapes + 3 connectors + 1 frame", () =>
       } as unknown as RawShape;
     }
 
-    const app = new Hono().route("/", exportRoutes(rooms, { miroBaseUrl: miroServer.url }));
+    const app = new Hono();
+    const bundle = bundleFor(rooms);
+    app.use("/api/*", installBundleResolver(() => bundle));
+    app.route("/", exportRoutes({ miroBaseUrl: miroServer.url }));
     const res = await app.request("/api/export/miro?room=default", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

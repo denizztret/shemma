@@ -3,7 +3,23 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
 import { AutoOpenManager } from "../auto-open";
 import { RoomResolver } from "../room-resolver";
+import type { ResolveSpaceFn } from "../space-resolver";
 import { registerDomainTools } from "./domain";
+
+const fakeSpaceRecord = {
+  id: "test-space",
+  path: "/tmp/test-space",
+  storageLayout: "project" as const,
+  createdAt: "2026-01-01T00:00:00Z",
+  lastUsedAt: "2026-01-01T00:00:00Z",
+};
+
+// DRW-116 Task 26: stub resolveSpace so the registry is not consulted during
+// unit tests — explicit id passes through; otherwise default to the fake.
+const fakeResolveSpace: ResolveSpaceFn = ({ space }) => {
+  if (space) return { space: { ...fakeSpaceRecord, id: space }, source: "explicit" };
+  return { space: fakeSpaceRecord, source: "default" };
+};
 
 const originalFetch = globalThis.fetch;
 
@@ -53,7 +69,11 @@ function setup(resolverOpts?: Parameters<typeof makeResolver>[0]) {
   const server = new McpServer({ name: "t", version: "0" });
   const client = new CanvasClient({ baseUrl: "http://test" });
   const resolver = makeResolver(resolverOpts);
-  const handles = registerDomainTools(server, { client, resolver });
+  const handles = registerDomainTools(server, {
+    client,
+    resolver,
+    resolveSpace: fakeResolveSpace,
+  });
   return { server, client, resolver, handles };
 }
 
@@ -65,7 +85,12 @@ function setupWithAutoOpen(
   const client = new CanvasClient({ baseUrl: "http://test" });
   const resolver = makeResolver(resolverOpts);
   const { auto, calls } = makeAutoOpen(autoOpenOpts);
-  const handles = registerDomainTools(server, { client, resolver, autoOpen: auto });
+  const handles = registerDomainTools(server, {
+    client,
+    resolver,
+    autoOpen: auto,
+    resolveSpace: fakeResolveSpace,
+  });
   return { server, client, resolver, handles, auto, calls };
 }
 
@@ -362,6 +387,83 @@ describe("domain write tools", () => {
     );
     await handles.define.call({ name: "svc", role: "service" });
     expect(calls).toEqual([]);
+  });
+
+  // DRW-116 Task 26: space arg threads through to CanvasClient → URL query.
+  it("shemma_define threads explicit space into URL query", async () => {
+    let capturedUrl = "";
+    mockFetch((url) => {
+      capturedUrl = url;
+      return { body: okDomainResponse };
+    });
+    const { handles } = setup({ mode: "direct", room: "r" });
+    await handles.define.call({ name: "svc", role: "service", space: "my-project" });
+    expect(capturedUrl).toContain("space=my-project");
+  });
+
+  it("shemma_define falls back to resolved default space when none provided", async () => {
+    let capturedUrl = "";
+    mockFetch((url) => {
+      capturedUrl = url;
+      return { body: okDomainResponse };
+    });
+    const { handles } = setup({ mode: "direct", room: "r" });
+    await handles.define.call({ name: "svc", role: "service" });
+    expect(capturedUrl).toContain("space=test-space");
+  });
+
+  it("shemma_define returns ambiguous-space when resolver fails", async () => {
+    const server = new McpServer({ name: "t", version: "0" });
+    const client = new CanvasClient({ baseUrl: "http://test" });
+    const resolver = new RoomResolver({
+      configRoom: "r",
+      sessionEnv: undefined,
+      getActiveRooms: async () => ({ rooms: [] }),
+      getInProgressTasks: async () => [],
+    });
+    const ambiguousResolveSpace: ResolveSpaceFn = () => ({
+      space: undefined,
+      source: "ambiguous",
+      error: "space_ambiguous: no spaces registered.",
+    });
+    const handles = registerDomainTools(server, {
+      client,
+      resolver,
+      resolveSpace: ambiguousResolveSpace,
+    });
+    const r = await handles.define.call({ name: "svc", role: "service" });
+    expect(r.structuredContent).toMatchObject({
+      ok: false,
+      code: "ambiguous-space",
+    });
+    expect(r.isError).toBe(true);
+  });
+
+  it("shemma_define returns space-not-found when explicit space unknown", async () => {
+    const server = new McpServer({ name: "t", version: "0" });
+    const client = new CanvasClient({ baseUrl: "http://test" });
+    const resolver = new RoomResolver({
+      configRoom: "r",
+      sessionEnv: undefined,
+      getActiveRooms: async () => ({ rooms: [] }),
+      getInProgressTasks: async () => [],
+    });
+    const notFoundResolveSpace: ResolveSpaceFn = () => ({
+      space: undefined,
+      source: "not_found",
+      error: "space_not_found: foo",
+    });
+    const handles = registerDomainTools(server, {
+      client,
+      resolver,
+      resolveSpace: notFoundResolveSpace,
+    });
+    const r = await handles.define.call({ name: "svc", role: "service", space: "foo" });
+    expect(r.structuredContent).toMatchObject({
+      ok: false,
+      code: "space-not-found",
+    });
+    expect(r.isError).toBe(true);
   });
 });
 

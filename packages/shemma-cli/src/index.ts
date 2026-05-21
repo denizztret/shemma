@@ -1,15 +1,26 @@
 #!/usr/bin/env bun
 import { cmdAiStart, cmdAiStatus, cmdAiStop } from "./ai";
-import { ensure, start, status, stop, stopAll } from "./daemon";
+import { handleSpacesCommand } from "./commands/spaces";
 import {
-  ensureStorageDir,
-  parseStorageArg,
-  resolveStorageDirForProfile,
-} from "./storage";
+  cmdTopLevelPath,
+  looksLikePath,
+} from "./commands/top-level-path";
+import { ensure, start, status, stop, stopAll } from "./daemon";
 import { cmdClear, cmdPatch, cmdState } from "./data";
-import { applyStdin, connectCmd, context, define, deleteCmd, group, layoutCmd, note } from "./domain";
+import { cmdDoctor } from "./doctor";
+import {
+  applyStdin,
+  connectCmd,
+  context,
+  define,
+  deleteCmd,
+  group,
+  layoutCmd,
+  note,
+} from "./domain";
 import {
   archiveRoom,
+  cmdInit,
   duplicateRoom,
   duplicateRoomAuto,
   exportRoom,
@@ -20,17 +31,21 @@ import {
   renameRoom,
   restoreRoom,
   rmRoom,
-  cmdInit,
 } from "./lifecycle";
 import { cmdLogs } from "./logs";
-import { applyProfile, parseProfile, portFor, type Profile } from "./profile";
-import { cmdPs } from "./ps";
-import { cmdPrompts } from "./prompts";
-import { cmdDoctor } from "./doctor";
-import { cmdUpdate, cmdUpdateCheck, cmdUpdateSetChannel } from "./update";
 import { cmdMcpStart } from "./mcp";
+import { type Profile, applyProfile, parseProfile, portFor } from "./profile";
+import { cmdPrompts } from "./prompts";
+import { cmdPs } from "./ps";
+import {
+  ensureStorageDir,
+  parseStorageArg,
+  resolveStorageDirForProfile,
+} from "./storage";
+import { registerSpace } from "@shemma/spaces";
+import { initOutput, parseOutputMode, error as uiError } from "./ui";
+import { cmdUpdate, cmdUpdateCheck, cmdUpdateSetChannel } from "./update";
 import { cmdVersion } from "./version-cmd";
-import { error as uiError, initOutput, parseOutputMode } from "./ui";
 
 const rawArgv = process.argv.slice(2);
 const profile = parseProfile(rawArgv);
@@ -79,6 +94,34 @@ function die(error: string): never {
   process.exit(1);
 }
 
+/**
+ * DRW-116 Task 23: emit deprecation warning and auto-register `--storage <path>`
+ * as a `direct`-layout space so the new multi-space model has a corresponding
+ * registry entry. Legacy behavior (storageDir closed-over var) is preserved.
+ */
+function warnStorageFlagDeprecated(storageDir: string): void {
+  console.error(
+    `[shemma] WARNING: --storage is deprecated. Use 'shemma s add <path>' instead.`,
+  );
+  try {
+    const { space, created } = registerSpace(storageDir, {
+      storageLayout: "direct",
+      label: "Default (from --storage)",
+      id: "default",
+    });
+    if (created) {
+      console.error(
+        `[shemma] Auto-registered as space '${space.id}' (direct storage layout).`,
+      );
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[shemma] WARNING: Failed to auto-register --storage path: ${msg}`,
+    );
+  }
+}
+
 function assertNotAllWithProfile(all: boolean): void {
   if (all && explicitProfileProvided) {
     die("--all and --profile are mutually exclusive");
@@ -97,11 +140,19 @@ async function main() {
 
   if (cmd === "internal-server") {
     const { startServer } = await import("@shemma/backend/src/index");
-    const { getConfig } = await import("@shemma/backend/src/config");
+    const { getConfig, resolveLegacyStorageDir } = await import(
+      "@shemma/backend/src/config"
+    );
     const c = getConfig();
     const srv = await startServer({ port: c.port });
     console.log(`[shemma] listening on :${srv.port} (profile=${c.profile})`);
-    console.log(`[shemma] storage: ${c.storageDir}`);
+    // DRW-116 Task 10b: `config.storageDir` is gone — the daemon resolves
+    // storage per-room through the spaces registry. For the legacy single-space
+    // log line we surface the same path that `makeApp` (without an override)
+    // would use as the default. CLI parents that pass --storage / set
+    // SHEMMA_STORAGE_DIR see that value reflected because the env-var feeds
+    // both legs of the resolver.
+    console.log(`[shemma] storage: ${resolveLegacyStorageDir(c.profile)}`);
     await new Promise(() => {});
     return;
   }
@@ -147,6 +198,10 @@ async function main() {
 
   if (cmd === "ps") return cmdPs();
 
+  if (cmd === "s") {
+    process.exit(await handleSpacesCommand(argv.slice(1)));
+  }
+
   if (cmd === "logs") {
     let tailN = 50;
     let follow = false;
@@ -179,6 +234,8 @@ async function main() {
         const finalDir = resolveStorageDirForProfile(storage, profile);
         const mkdirErr = ensureStorageDir(finalDir);
         if (mkdirErr) die(mkdirErr);
+        // Warn + auto-register only after path is validated (dir created ok).
+        warnStorageFlagDeprecated(storage);
         return start(profile, { storageDir: finalDir });
       }
       return start(profile);
@@ -190,7 +247,11 @@ async function main() {
     }
     if (sub === "status") {
       const s = await status(profile);
-      const { getOutput, success: uiSuccess, info: uiInfo } = await import("./ui");
+      const {
+        getOutput,
+        success: uiSuccess,
+        info: uiInfo,
+      } = await import("./ui");
       const ui = getOutput();
       if (ui.mode === "json") {
         console.log(JSON.stringify(s, null, 2));
@@ -198,7 +259,9 @@ async function main() {
         // biome-ignore lint/suspicious/noExplicitAny: union narrowing for diff shapes
         const sa: any = s;
         if (sa.running) {
-          uiSuccess(`daemon running (pid ${sa.pid}, profile ${sa.profile}, port ${sa.port})`);
+          uiSuccess(
+            `daemon running (pid ${sa.pid}, profile ${sa.profile}, port ${sa.port})`,
+          );
         } else {
           uiInfo(`daemon not running (profile ${sa.profile}, port ${sa.port})`);
         }
@@ -223,9 +286,12 @@ async function main() {
     const sub = argv[1]; // "set" | "get" | "unset"
     const key = argv[2]; // "miro.token"
     const value = argv[3]; // только для set
-    const { cmdConfigSet, cmdConfigGet, cmdConfigUnset } = await import("./config");
+    const { cmdConfigSet, cmdConfigGet, cmdConfigUnset } = await import(
+      "./config"
+    );
     if (sub === "set") {
-      if (!key || value === undefined) die("usage: shemma config set <key> <value>");
+      if (!key || value === undefined)
+        die("usage: shemma config set <key> <value>");
       return cmdConfigSet(key, value);
     }
     if (sub === "get") {
@@ -244,11 +310,14 @@ async function main() {
   // flags (e.g. `shemma --storage /foo`) — first token starts with `--`,
   // there's no positional command yet.
   const isOpenCmd =
-    cmd === "open" || cmd === undefined || (cmd !== undefined && cmd.startsWith("--"));
+    cmd === "open" ||
+    cmd === undefined ||
+    (cmd !== undefined && cmd.startsWith("--"));
   if (isOpenCmd) {
     const subArgs = cmd === "open" ? argv.slice(1) : argv;
     const { storage, errors } = parseStorageArg(subArgs, process.cwd());
     if (errors.length > 0) die(errors[0]!);
+    if (storage !== undefined) warnStorageFlagDeprecated(storage);
     let noBrowser = false;
     let room: string | undefined;
     for (let i = 0; i < subArgs.length; i++) {
@@ -423,6 +492,15 @@ async function main() {
     return context({ since, viewport, profile, room });
   }
 
+  // Top-level positional path detection (DRW-116 Task 22):
+  // `shemma /path` or `shemma /a /b /c` registers spaces + opens browser.
+  // Must come AFTER all `if (cmd === ...)` keyword branches so subcommand
+  // names take precedence over directory lookups.
+  if (looksLikePath(cmd)) {
+    const code = await cmdTopLevelPath(argv, profile);
+    process.exit(code);
+  }
+
   usage();
   process.exit(cmd ? 1 : 0);
 }
@@ -440,6 +518,12 @@ Default (zero-arg):
 Lifecycle:
   daemon start [--storage <path>] | stop [--all] | status | ensure
   ps                                          # JSON status for all profiles
+  s        list [--json]                      # list registered spaces
+  s        add <path> [--label <label>]       # register space at <path>
+  s        forget <id>                        # remove space from registry
+  s        rename <id> <new-label>            # update space label
+  s        prune [--dry-run] [--yes]          # remove orphan spaces (path gone)
+  s        reveal <id>                        # open space path in file manager
   rooms list
   rooms archive       <id>
   rooms restore       <id>
@@ -509,5 +593,14 @@ Exit codes: 0 ok, 1 usage/error, 2 not-found, 3 daemon-not-healthy/doctor-fail
 
 main().catch((e) => {
   uiError(String(e), { code: String(e) });
-  process.exit(1);
+  // Tagged exit codes: errors thrown by lifecycle code may attach
+  // `exitCode` to preserve CLI contract (see daemon.start health timeout → 3).
+  // Anything untagged falls back to 1 (generic error).
+  const tagged =
+    e &&
+    typeof e === "object" &&
+    typeof (e as { exitCode?: unknown }).exitCode === "number"
+      ? (e as { exitCode: number }).exitCode
+      : 1;
+  process.exit(tagged);
 });

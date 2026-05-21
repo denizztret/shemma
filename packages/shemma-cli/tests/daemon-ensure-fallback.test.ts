@@ -25,14 +25,17 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 const CLI = join(import.meta.dir, "..", "src", "index.ts");
 
-function pidFileFor(profile: string): string {
-  return join(homedir(), ".claude", `.shemma-${profile}.pid`);
+// DRW-116: status() now reads daemon metadata from the lock dir
+// (~/.claude/.shemma-port-<port>.lock/daemon.pid as JSON), not from the
+// legacy ~/.claude/.shemma-<profile>.pid plain-text file.
+function lockDirFor(port: number): string {
+  return join(homedir(), ".claude", `.shemma-port-${port}.lock`);
 }
 
 async function cli(
@@ -161,17 +164,27 @@ describe("ensureDaemon fast-path: SHEMMA_PORT_AUTOSET marker bypasses fast path"
       },
     });
 
-    // Use the `debug` profile so we don't clobber a real running dev/release
-    // pid file the developer may have.
-    const pidPath = pidFileFor("debug");
-    const hadExisting = existsSync(pidPath);
-    let savedPid: string | null = null;
-    if (hadExisting) {
-      savedPid = await Bun.file(pidPath).text();
-    }
+    // Use a lock dir keyed on the stub port (SHEMMA_PORT override). The CLI
+    // resolves portFor("debug") through SHEMMA_PORT first, so status() reads
+    // from .shemma-port-<stub>.lock/ — we seed metadata pointing at our own
+    // process PID (always alive) so status() reports running=true.
+    const dir = lockDirFor(stub.port);
+    const pidPath = join(dir, "daemon.pid");
+    // Save existing dir contents (paranoid: extremely unlikely on a random port)
+    const hadExisting = existsSync(dir);
 
     try {
-      writeFileSync(pidPath, String(process.pid));
+      // Build metadata identical to what backend writes on start.
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        pidPath,
+        JSON.stringify({
+          pid: process.pid,
+          port: stub.port,
+          startedAt: new Date().toISOString(),
+          profile: "debug",
+        }),
+      );
 
       const r = await cli(["daemon", "ensure", "--profile", "debug"], {
         SHEMMA_PORT: String(stub.port),
@@ -180,7 +193,9 @@ describe("ensureDaemon fast-path: SHEMMA_PORT_AUTOSET marker bypasses fast path"
 
       // Fast-path-specific error MUST NOT appear: that's the DRW-060
       // regression signature.
-      expect(r.stderr).not.toContain("SHEMMA_PORT is set but server not healthy");
+      expect(r.stderr).not.toContain(
+        "SHEMMA_PORT is set but server not healthy",
+      );
       expect(r.status).toBe(0);
       const j = JSON.parse(r.stdout);
       expect(j.ok).toBe(true);
@@ -189,9 +204,12 @@ describe("ensureDaemon fast-path: SHEMMA_PORT_AUTOSET marker bypasses fast path"
       expect(j.pid).toBe(process.pid);
     } finally {
       stub.stop(true);
-      // Restore previous pid file state.
-      try { unlinkSync(pidPath); } catch {}
-      if (savedPid !== null) writeFileSync(pidPath, savedPid);
+      // Clean up the synthetic lock dir.
+      if (!hadExisting) {
+        try {
+          rmSync(dir, { recursive: true, force: true });
+        } catch {}
+      }
     }
   });
 });

@@ -13,9 +13,14 @@ export type TidyLayoutResult =
  *
  * Returns noop if fewer than 2 ids provided (consistent with AC#9/AC#10 —
  * backend will also return noop, but we short-circuit here to avoid the round-trip).
+ *
+ * DRW-116 Task 15: accepts `space` so multi-space gallery can address the
+ * correct per-space bundle. Legacy callers pass `LEGACY_SPACE_ID` (the
+ * backend ignores it when the space middleware is off).
  */
 export async function tidyLayout(
   ids: string[],
+  space: string,
   room: string,
 ): Promise<TidyLayoutResult> {
   if (ids.length < 2) {
@@ -30,7 +35,7 @@ export async function tidyLayout(
 
   try {
     const res = await fetch(
-      `/api/agent/layout-selection?room=${encodeURIComponent(room)}`,
+      `/api/agent/layout-selection?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room)}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -71,7 +76,7 @@ export async function tidyLayout(
  * Usage:
  *   const handler = makeTidyHotkeyHandler(
  *     () => editor.getSelectedShapeIds() as unknown as string[],
- *     (ids) => void tidyLayout(ids, room),
+ *     (ids) => void tidyLayout(ids, space, room),
  *   );
  *   window.addEventListener("keydown", handler);
  */

@@ -45,11 +45,11 @@ afterEach(() => {
 describe("tidyLayout helper", () => {
   test("returns noop when ids.length < 2", async () => {
     const { tidyLayout } = await import("./tidy-layout");
-    const result = await tidyLayout([], "test-room");
+    const result = await tidyLayout([], "__legacy__", "test-room");
     expect(result.kind).toBe("noop");
   });
 
-  test("POSTs to /api/agent/layout-selection with room query param and ids in body", async () => {
+  test("POSTs to /api/agent/layout-selection with space + room query params and ids in body", async () => {
     let capturedUrl = "";
     let capturedBody: unknown;
     mockFetch((url, init) => {
@@ -58,8 +58,9 @@ describe("tidyLayout helper", () => {
       return { body: { ok: true, count: 2, affected: ["shape:a", "shape:b"] } };
     });
     const { tidyLayout } = await import("./tidy-layout");
-    const result = await tidyLayout(["shape:a", "shape:b"], "myroom");
+    const result = await tidyLayout(["shape:a", "shape:b"], "ws-7", "myroom");
     expect(capturedUrl).toContain("/api/agent/layout-selection");
+    expect(capturedUrl).toContain("space=ws-7");
     expect(capturedUrl).toContain("room=myroom");
     expect((capturedBody as { ids: string[] }).ids).toEqual(["shape:a", "shape:b"]);
     expect(result.kind).toBe("ok");
@@ -71,7 +72,7 @@ describe("tidyLayout helper", () => {
   test("returns error result on non-ok response", async () => {
     mockFetch(() => ({ body: { ok: false, error: "no shapes found" }, status: 400 }));
     const { tidyLayout } = await import("./tidy-layout");
-    const result = await tidyLayout(["a", "b"], "r");
+    const result = await tidyLayout(["a", "b"], "__legacy__", "r");
     expect(result.kind).toBe("error");
   });
 
@@ -81,7 +82,7 @@ describe("tidyLayout helper", () => {
       throw new Error("network error");
     }) as unknown as typeof fetch;
     const { tidyLayout } = await import("./tidy-layout");
-    const result = await tidyLayout(["a", "b"], "r");
+    const result = await tidyLayout(["a", "b"], "__legacy__", "r");
     expect(result.kind).toBe("error");
   });
 });

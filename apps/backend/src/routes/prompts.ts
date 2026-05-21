@@ -1,18 +1,18 @@
 import { Hono } from "hono";
 import { resolveRoomId } from "../rooms";
-import type { Rooms } from "../rooms";
 import type { Prompt, RoomState } from "../types";
 import type { WsHub } from "../ws";
+import { bundleForRequest } from "./_space-context";
 
-export function promptRoutes(
-  rooms: Rooms,
-  hub: WsHub,
-  opts: { onDirty?: (room: string, state: RoomState) => void } = {},
-) {
+export function promptRoutes(hub: WsHub) {
   const r = new Hono();
-  const markDirty = (id: string, room: RoomState) => {
+  const markDirty = (
+    id: string,
+    room: RoomState,
+    scheduleSave: (id: string, s: RoomState) => void,
+  ) => {
     room.dirty = true;
-    opts.onDirty?.(id, room);
+    scheduleSave(id, room);
   };
 
   r.post("/api/prompt", async (c) => {
@@ -27,10 +27,11 @@ export function promptRoutes(
       createdAt: Date.now(),
       status: "pending",
     };
+    const { rooms, scheduleSave, space } = bundleForRequest(c);
     const room = await rooms.get(id);
     room.prompts.push(p);
-    markDirty(id, room);
-    hub.publishPrompt(id, p);
+    markDirty(id, room, scheduleSave);
+    hub.publishPrompt(space.id, id, p);
     return c.json(p);
   });
 
@@ -39,6 +40,7 @@ export function promptRoutes(
     if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
     const id = rv.id;
     const status = c.req.query("status") ?? "pending";
+    const { rooms } = bundleForRequest(c);
     const room = await rooms.get(id);
     const prompts =
       status === "all"
@@ -53,14 +55,15 @@ export function promptRoutes(
     const id = rv.id;
     const pid = c.req.param("id");
     const body = await c.req.json().catch(() => ({}));
+    const { rooms, scheduleSave, space } = bundleForRequest(c);
     const room = await rooms.get(id);
     const p = room.prompts.find((x) => x.id === pid);
     if (!p) return c.json({ ok: false, error: "not found" }, 404);
     p.status = "resolved";
     p.response = body.response;
     p.resolvedAt = Date.now();
-    markDirty(id, room);
-    hub.publishPromptResolved(id, pid, body.response);
+    markDirty(id, room, scheduleSave);
+    hub.publishPromptResolved(space.id, id, pid, body.response);
     return c.json({ ok: true });
   });
 
@@ -69,13 +72,14 @@ export function promptRoutes(
     if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
     const id = rv.id;
     const pid = c.req.param("id");
+    const { rooms, scheduleSave, space } = bundleForRequest(c);
     const room = await rooms.get(id);
     const p = room.prompts.find((x) => x.id === pid);
     if (!p) return c.json({ ok: false, error: "not found" }, 404);
     p.status = "dismissed";
     p.resolvedAt = Date.now();
-    markDirty(id, room);
-    hub.publishPromptResolved(id, pid);
+    markDirty(id, room, scheduleSave);
+    hub.publishPromptResolved(space.id, id, pid);
     return c.json({ ok: true });
   });
 
@@ -84,12 +88,13 @@ export function promptRoutes(
     if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
     const id = rv.id;
     const pid = c.req.param("id");
+    const { rooms, scheduleSave, space } = bundleForRequest(c);
     const room = await rooms.get(id);
     const idx = room.prompts.findIndex((x) => x.id === pid);
     if (idx === -1) return c.json({ ok: false, error: "not found" }, 404);
     room.prompts.splice(idx, 1);
-    markDirty(id, room);
-    hub.publishPromptRemoved(id, [pid]);
+    markDirty(id, room, scheduleSave);
+    hub.publishPromptRemoved(space.id, id, [pid]);
     return c.json({ ok: true });
   });
 
@@ -97,6 +102,7 @@ export function promptRoutes(
     const rv = resolveRoomId(c.req.query("room"));
     if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
     const id = rv.id;
+    const { rooms, scheduleSave, space } = bundleForRequest(c);
     const room = await rooms.get(id);
     const removedIds: string[] = [];
     room.prompts = room.prompts.filter((p) => {
@@ -105,8 +111,8 @@ export function promptRoutes(
       return false;
     });
     if (removedIds.length > 0) {
-      markDirty(id, room);
-      hub.publishPromptRemoved(id, removedIds);
+      markDirty(id, room, scheduleSave);
+      hub.publishPromptRemoved(space.id, id, removedIds);
     }
     return c.json({ ok: true, removed: removedIds.length });
   });

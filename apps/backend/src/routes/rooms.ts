@@ -1,17 +1,28 @@
-import { readdir, readFile, rename, mkdir, stat, writeFile, unlink } from "node:fs/promises";
-import { join, basename } from "node:path";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
+import { basename, join } from "node:path";
 import type { Context } from "hono";
 import { Hono } from "hono";
+import { config } from "../config";
 import {
   ENVELOPE_SCHEMA_VERSION,
   parseFull,
   parseHeader,
   serializeExport,
 } from "../envelope";
-import type { Rooms } from "../rooms";
 import { validateRoomId } from "../rooms";
-import { config } from "../config";
 import { renderThumbnail } from "../thumbnail";
+import {
+  bundleForRequest,
+  resolveStorageDirForRequest,
+} from "./_space-context";
 
 type RoomItem = {
   id: string;
@@ -68,29 +79,35 @@ async function findRoomFile(
 // Shared path-param validator. All `:id` routes MUST go through this —
 // raw c.req.param("id") joined with storageDir is a path-traversal vector
 // (e.g. id="../etc/passwd" → escape storageDir).
-export function roomParam(c: Context):
-  | { ok: true; id: string }
-  | { ok: false; response: Response } {
+export function roomParam(
+  c: Context,
+): { ok: true; id: string } | { ok: false; response: Response } {
   const id = c.req.param("id") ?? "";
   if (!validateRoomId(id)) {
     return {
       ok: false,
-      response: c.json(
-        { ok: false, error: `invalid room id "${id}"` },
-        422,
-      ),
+      response: c.json({ ok: false, error: `invalid room id "${id}"` }, 422),
     };
   }
   return { ok: true, id };
 }
 
-export function roomsRoutes(rooms: Rooms, storageDir: string) {
+export function roomsRoutes(fallbackStorageDir: string) {
   const app = new Hono();
+  // DRW-116 Task 11: storageDir is resolved per-request — prefers
+  // `c.get("space")` from spaceMiddleware, falls back to the closure-captured
+  // default when middleware is OFF (legacy tests + single-space daemon).
+  const dirFor = (c: Context): string =>
+    resolveStorageDirForRequest(c, fallbackStorageDir);
 
   app.get("/api/rooms", async (c) => {
+    const storageDir = dirFor(c);
     const includeArchived = c.req.query("include") === "archived";
 
-    async function readRoomItems(fromDir: string, archived: boolean): Promise<RoomItem[]> {
+    async function readRoomItems(
+      fromDir: string,
+      archived: boolean,
+    ): Promise<RoomItem[]> {
       const files = await readdirOrEmpty(fromDir);
       const out: RoomItem[] = [];
       for (const f of files) {
@@ -112,7 +129,8 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
           // Best-effort: parse full envelope to read linkedSession + projectDir.
           try {
             const full = parseFull(raw);
-            if (full.linkedSession !== undefined) item.linkedSession = full.linkedSession;
+            if (full.linkedSession !== undefined)
+              item.linkedSession = full.linkedSession;
             if (full.projectDir !== undefined) {
               item.projectDir = full.projectDir;
               item.projectName = basename(full.projectDir);
@@ -139,6 +157,8 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.post("/api/rooms/:id/archive", async (c) => {
+    const storageDir = dirFor(c);
+    const { rooms } = bundleForRequest(c);
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
@@ -166,6 +186,8 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.post("/api/rooms/:id/restore", async (c) => {
+    const storageDir = dirFor(c);
+    const { rooms } = bundleForRequest(c);
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
@@ -190,15 +212,19 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
     }
 
     await rename(srcPath, dstPath);
-    await rooms.evict(id);   // clear stale in-memory state from prior GETs
+    await rooms.evict(id); // clear stale in-memory state from prior GETs
     return c.json({ ok: true });
   });
 
   app.post("/api/rooms/:id/export", async (c) => {
+    const storageDir = dirFor(c);
+    const { rooms } = bundleForRequest(c);
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
-    const body = (await c.req.json().catch(() => null)) as { to?: string } | null;
+    const body = (await c.req.json().catch(() => null)) as {
+      to?: string;
+    } | null;
     if (!body?.to) {
       return c.json({ ok: false, error: "expected {to: <path>}" }, 400);
     }
@@ -225,9 +251,13 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.post("/api/rooms/import", async (c) => {
-    const body = (await c.req.json().catch(() => null)) as
-      | { from?: string; as?: string; force?: boolean }
-      | null;
+    const storageDir = dirFor(c);
+    const { rooms } = bundleForRequest(c);
+    const body = (await c.req.json().catch(() => null)) as {
+      from?: string;
+      as?: string;
+      force?: boolean;
+    } | null;
 
     if (!body?.from) {
       return c.json({ ok: false, error: "expected {from, as?, force?}" }, 400);
@@ -291,11 +321,16 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.post("/api/rooms/:id/rename", async (c) => {
+    const storageDir = dirFor(c);
+    const { rooms } = bundleForRequest(c);
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
 
-    const body = (await c.req.json().catch(() => null)) as { to?: string; force?: boolean } | null;
+    const body = (await c.req.json().catch(() => null)) as {
+      to?: string;
+      force?: boolean;
+    } | null;
     const to = body?.to;
     const force = !!body?.force;
 
@@ -327,9 +362,19 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
     const dstPath = join(storageDir, `${to}.json`);
     const dstArchivedPath = join(storageDir, ".archive", `${to}.json`);
     let conflict = false;
-    try { await stat(dstPath); conflict = true; } catch { /* ok */ }
+    try {
+      await stat(dstPath);
+      conflict = true;
+    } catch {
+      /* ok */
+    }
     if (!conflict) {
-      try { await stat(dstArchivedPath); conflict = true; } catch { /* ok */ }
+      try {
+        await stat(dstArchivedPath);
+        conflict = true;
+      } catch {
+        /* ok */
+      }
     }
     if (conflict && !force) {
       return c.json({ ok: false, error: "room-exists", existingId: to }, 409);
@@ -355,11 +400,15 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.post("/api/rooms/:id/duplicate", async (c) => {
+    const storageDir = dirFor(c);
+    const { rooms } = bundleForRequest(c);
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
 
-    const body = (await c.req.json().catch(() => null)) as { as?: string } | null;
+    const body = (await c.req.json().catch(() => null)) as {
+      as?: string;
+    } | null;
     const as = body?.as;
 
     if (!as || !validateRoomId(as)) {
@@ -379,7 +428,9 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
     try {
       await stat(dstPath);
       return c.json({ ok: false, error: "room-exists", existingId: as }, 409);
-    } catch { /* ok — target doesn't exist */ }
+    } catch {
+      /* ok — target doesn't exist */
+    }
 
     const raw = await readFile(srcPath, "utf8");
     let envelope: Record<string, unknown>;
@@ -401,6 +452,8 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.delete("/api/rooms/:id", async (c) => {
+    const storageDir = dirFor(c);
+    const { rooms } = bundleForRequest(c);
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
@@ -464,6 +517,8 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.post("/api/rooms/:id/duplicate-auto", async (c) => {
+    const storageDir = dirFor(c);
+    const { rooms } = bundleForRequest(c);
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
@@ -488,7 +543,10 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
     }
 
     if (!validateRoomId(newId)) {
-      return c.json({ ok: false, error: `generated id "${newId}" failed validation` }, 500);
+      return c.json(
+        { ok: false, error: `generated id "${newId}" failed validation` },
+        500,
+      );
     }
 
     const raw = await readFile(srcPath, "utf8");
@@ -512,12 +570,19 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.get("/api/rooms/:id/thumbnail", async (c) => {
+    const storageDir = dirFor(c);
     const idParam = roomParam(c);
     if (!idParam.ok) return idParam.response;
     const id = idParam.id;
 
-    const w = Math.min(Math.max(Number(c.req.query("w") ?? 240) || 240, 1), 2000);
-    const h = Math.min(Math.max(Number(c.req.query("h") ?? 160) || 160, 1), 2000);
+    const w = Math.min(
+      Math.max(Number(c.req.query("w") ?? 240) || 240, 1),
+      2000,
+    );
+    const h = Math.min(
+      Math.max(Number(c.req.query("h") ?? 160) || 160, 1),
+      2000,
+    );
     const archived = c.req.query("archived") === "true";
 
     const srcPath = archived
@@ -541,7 +606,10 @@ export function roomsRoutes(rooms: Rooms, storageDir: string) {
   });
 
   app.post("/api/rooms/purge-archive", async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { confirm?: boolean };
+    const storageDir = dirFor(c);
+    const body = (await c.req.json().catch(() => ({}))) as {
+      confirm?: boolean;
+    };
     if (!body.confirm) {
       return c.json(
         { ok: false, error: "expected {confirm:true} in body" },

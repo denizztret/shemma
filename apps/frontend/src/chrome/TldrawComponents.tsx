@@ -28,9 +28,20 @@ export function buildTldrawComponents(
     onMermaidImport?: () => void;
     onTidySelection?: (ids: string[]) => void;
     onExportSelection?: (ids: string[]) => void;
+    /**
+     * DRW-116 Task 18: when provided, the "← Gallery" affordance fires this
+     * callback instead of navigating to `/?view=gallery`. Used by
+     * MultiColumnLayout to swap the column from room → gallery in place.
+     */
+    onBackToGallery?: () => void;
   } = {},
 ): TLComponents {
-  const { onMermaidImport, onTidySelection, onExportSelection } = opts;
+  const {
+    onMermaidImport,
+    onTidySelection,
+    onExportSelection,
+    onBackToGallery,
+  } = opts;
 
   // We wrap DefaultContextMenu and append items as children — DefaultContextMenu
   // overrides its inner content while keeping the Radix shell + canvas rendering.
@@ -96,7 +107,7 @@ export function buildTldrawComponents(
         className="tlui-share-zone"
         style={{ pointerEvents: "all", zIndex: 300 }}
       >
-        <GalleryLink />
+        <GalleryLink onBack={onBackToGallery} />
         <RoomBadge room={room} />
       </div>
     ),

@@ -99,6 +99,13 @@ export type OpenStorageResolution = {
  *
  * Не делает I/O. Caller вызывает `ensureStorageDir(result.storageDir)` отдельно
  * + сравнивает с running-daemon storage через `getRunningDaemonStorage`.
+ *
+ * @deprecated DRW-116 Task 10b: this helper is the legacy single-space path
+ * resolution. The CLI top-level (`shemma open`, `daemon start --storage`) still
+ * uses it as an intermediate step; Task 21 will rewire those callers to query
+ * the spaces registry via `@shemma/spaces.findSpaceByPath` directly. Do NOT
+ * introduce new call sites — pass a `SpaceRecord` instead and let
+ * `@shemma/spaces.resolveRoomStorage` compute the on-disk path.
  */
 export function resolveStorageForOpen(
   opts: { explicit?: string },
