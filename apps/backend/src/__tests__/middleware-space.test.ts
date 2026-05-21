@@ -69,6 +69,21 @@ describe("spaceMiddleware", () => {
     expect(body.path).toBe(fs.realpathSync(tmpProject));
   });
 
+  it("falls back to 'default' space when no ?space= and default exists", async () => {
+    // DRW-116 §6.4: legacy clients without ?space= must transparently land
+    // on the registered `default` space — instead of getting a 400.
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), "def-"));
+    try {
+      registerSpace(proj, { id: "default" });
+      const resp = await app.fetch(new Request("http://x/api/echo"));
+      expect(resp.status).toBe(200);
+      const body = (await resp.json()) as { id: string };
+      expect(body.id).toBe("default");
+    } finally {
+      fs.rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   it("bypasses validation for allowlisted paths", async () => {
     const guarded = new Hono();
     guarded.use(

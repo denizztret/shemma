@@ -29,7 +29,19 @@ export function spaceMiddleware(
       return;
     }
     const spaceId = c.req.query("space");
-    if (!spaceId) return c.json({ error: "space_required" }, 400);
+    // DRW-116 W1 (spec §6.4): if `?space=` absent, fall back to the
+    // registered `default` space (transparent migration for legacy clients
+    // that still don't send the query param). Only return 400 when no
+    // `default` space is registered either.
+    if (!spaceId) {
+      const fallback = findSpaceById("default");
+      if (fallback) {
+        c.set("space", fallback);
+        await next();
+        return;
+      }
+      return c.json({ error: "space_required" }, 400);
+    }
     if (!SPACE_ID_PATTERN.test(spaceId)) {
       return c.json({ error: "invalid_space_id" }, 400);
     }
