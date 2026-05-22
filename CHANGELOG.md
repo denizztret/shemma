@@ -1,3 +1,41 @@
+## 0.21.5 — 2026-05-22 — DRW-121 cwd-aware open: `shemma` resolves to space gallery
+
+PATCH feature. Зеркальный fix для запуска из терминала: `shemma` без аргументов теперь резолвит cwd к зарегистрированному space и открывает gallery того space, а не legacy `?room=default` URL (который после DRW-120 redirect'ится на landing).
+
+### New behavior
+
+`shemma` zero-arg / `shemma open [<room>]` flow (полностью переписан `lifecycle.open()`):
+
+1. **cwd инсайд зарегистрированного space** (exact path или поддиректория) → URL = `/?space=<id>` (gallery) или `/?space=<id>&room=<room>` если задан room arg.
+2. **cwd НЕ зарегистрирован, но имеет `.shemma/canvas/`** → авто-регистрация как `project`-layout space + URL = `/?space=<new-id>`.
+3. **cwd без всего** → URL = `/` (landing) — SpacesPage с возможностью Add a space by path.
+4. **`--storage <path>`** (legacy compat) → регистрация как `direct`-layout space + URL = `/?space=<id>`.
+
+Никаких больше `SHEMMA_STORAGE_DIR` env propagation в child daemon (singleton resolves per-space сам через middleware). Никаких "daemon-conflict" exits — singleton не конфликтует с самим собой.
+
+### Test plan
+
+| Command | cwd | URL |
+|---|---|---|
+| `shemma` | `~/Projects/sandbox/di.draw` (registered) | `?space=di-draw` |
+| `shemma` | `/tmp/<empty>` | `/` (landing) |
+| `shemma open default` | `~/Projects/sandbox/di.draw` | `?space=di-draw&room=default` |
+| `shemma --storage /tmp/foo` | any | `?space=<auto-id>` (direct-layout) |
+
+Verified manually after restart.
+
+### Removed (dead code)
+
+- `lifecycle.ts`: `promptForMissingStorage` + `isInteractive` (interactive 3-option prompt больше не нужен — landing берёт на себя UX).
+- `lifecycle.ts`: `_resolveOpenStorage` test-only export (использовался legacy tests).
+- Импорты `start` (вместо него `ensureSilent`), `getRunningDaemonStorage`, `createInterface`, `resolveStorageForOpen`, `OpenStorageResolution`.
+
+### Test changes
+
+- `tests/zero-arg-open.test.ts` полностью переписан: drop conflict-detection / canvas-dev / `?room=` URL assertions; добавлены 4 теста под новый контракт (landing fallback / auto-register / room threading / --storage legacy).
+- `tests/storage-interactive.test.ts` обновлён: non-TTY без `.shemma/` больше не fail-fast, а opens landing.
+- `tests/banner.test.ts` обновлён: `storage:` row теперь показывает space-path (не synthesized `canvas-dev` subdir).
+
 ## 0.21.4 — 2026-05-22 — DRW-120 first-run UX hotfix (SHEMMA_STORAGE_DIR orphan + legacy URLs)
 
 PATCH bugfix. После 0.21.3 release всплыли два связанных регресса при первом запуске:

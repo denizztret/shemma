@@ -41,56 +41,42 @@ async function cli(
   return { status, stdout, stderr };
 }
 
-describe("DRW-058: missing .shemma/ handling", () => {
-  test("non-TTY: fail-fast with friendly hint + exit 1 when .shemma/ missing", async () => {
+describe("DRW-058 / DRW-121: missing .shemma/ handling", () => {
+  test("non-TTY without .shemma/ → opens landing URL (exit 0) instead of fail-fast", async () => {
+    // DRW-121: when cwd has no registered space AND no .shemma/canvas, the
+    // CLI no longer fails — it falls back to opening the SpacesPage landing
+    // (`/`) so the user can register a space via Add Space form.
     const tmpCwd = mkdtempSync(join(tmpdir(), "shemma-no-storage-"));
     try {
-      // Strip env that would bypass the check.
       const env: Record<string, string> = {
         ...(process.env as Record<string, string>),
         SHEMMA_PROFILE: "release",
-      };
-      delete env.SHEMMA_STORAGE_DIR;
-      delete env.DIDRAW_STORAGE_DIR;
-      const r = await cli(["--no-browser"], { cwd: tmpCwd, env });
-      expect(r.status).toBe(1);
-      // Human-mode error to stderr; contains ✖ and the friendly hint
-      expect(r.stderr).toContain("✖");
-      expect(r.stderr).toContain("no .shemma/");
-      expect(r.stderr).toContain("shemma init");
-    } finally {
-      rmSync(tmpCwd, { recursive: true, force: true });
-    }
-  });
-
-  test("non-TTY + --json: structured fail-fast error preserved", async () => {
-    const tmpCwd = mkdtempSync(join(tmpdir(), "shemma-no-storage-json-"));
-    try {
-      const env: Record<string, string> = {
-        ...(process.env as Record<string, string>),
-        SHEMMA_PROFILE: "release",
+        SHEMMA_PORT: "59121",
       };
       delete env.SHEMMA_STORAGE_DIR;
       delete env.DIDRAW_STORAGE_DIR;
       const r = await cli(["--json", "--no-browser"], { cwd: tmpCwd, env });
-      expect(r.status).toBe(1);
-      const j = JSON.parse(r.stderr.trim());
-      expect(j.ok).toBe(false);
-      expect(j.error).toBe("no-storage");
+      // Exit could be 0 (healthy daemon) or 3 (no daemon within 5s) — but
+      // never 1 with old "no-storage" error.
+      expect(r.stderr).not.toContain("no .shemma/");
+      if (r.status === 0) {
+        const j = JSON.parse(r.stdout.trim());
+        expect(j.ok).toBe(true);
+        expect(j.space).toBeNull();
+        expect(j.url).toMatch(/\/\?$|\/$/); // landing URL
+      }
     } finally {
+      await cli(["daemon", "stop", "--profile", "release"], {
+        env: { ...(process.env as Record<string, string>), SHEMMA_PORT: "59121" },
+      }).catch(() => {});
       rmSync(tmpCwd, { recursive: true, force: true });
     }
   });
 
-  test("explicit --storage bypasses missing-.shemma/ check", async () => {
-    // Use a non-existent base path with --storage — should attempt mkdir + then
-    // hit daemon-conflict (or healthy-start) rather than no-storage error.
+  test("explicit --storage registers path as space + opens its URL", async () => {
     const cwdDir = mkdtempSync(join(tmpdir(), "shemma-bypass-cwd-"));
     const storageBase = join(cwdDir, "custom-storage");
     try {
-      // We set SHEMMA_PORT to a likely-unused port so isHealthy returns false
-      // and the CLI tries to start a daemon. We don't care about the daemon
-      // outcome — only that the no-storage check is skipped.
       const env: Record<string, string> = {
         ...(process.env as Record<string, string>),
         SHEMMA_PROFILE: "dev",
@@ -101,8 +87,8 @@ describe("DRW-058: missing .shemma/ handling", () => {
         ["--no-browser", "--storage", storageBase],
         { cwd: cwdDir, env },
       );
-      // Either exit 0 (somehow started) or exit 3 (not healthy in 5s) — but
-      // NOT exit 1 with no-storage, and stderr must not mention "no .shemma/".
+      // No "no .shemma/" error path anymore; --storage registers the path
+      // and the CLI proceeds (exit 0 or 3 depending on daemon health).
       expect(r.stderr).not.toContain("no .shemma/");
     } finally {
       // Cleanup any spawned daemon (best-effort).
