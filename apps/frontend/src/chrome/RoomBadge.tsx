@@ -21,7 +21,7 @@ export function RoomBadge({ room }: { room: string }) {
         // ВНИМАНИЕ: это контент tldraw SharePanel зоны, координат не задаём.
         // Tldraw сам позиционирует SharePanel в top-right.
         display: "inline-flex",
-        gap: 4,
+        gap: 6,
         pointerEvents: "auto",
       }}
     >

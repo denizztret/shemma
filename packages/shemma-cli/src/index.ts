@@ -138,6 +138,14 @@ async function main() {
     process.exit(0);
   }
 
+  // Version flag: `--version` / `-V` ↔ `shemma version` (same exit). Must come
+  // BEFORE the zero-arg `lifecycle.open()` fall-through so it doesn't spawn a
+  // daemon just to print the version string.
+  if (argv.includes("--version") || argv.includes("-V")) {
+    await cmdVersion();
+    return;
+  }
+
   if (cmd === "internal-server") {
     const { startServer } = await import("@shemma/backend/src/index");
     const { getConfig, resolveLegacyStorageDir } = await import(
