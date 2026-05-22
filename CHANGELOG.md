@@ -1,3 +1,15 @@
+## 0.22.2 — 2026-05-22 — DRW-118 restyle SpacesPage landing in card design
+
+PATCH UX fix: post-0.22.1 коррекция. Landing `/` рендерил `SpacesPage` в legacy bullet-list стиле — голый `<ul>`, кнопки браузера-default, никаких отступов. Переписано под тот же card-стиль что у `OpenSpaceDialog`.
+
+### Changes
+
+- Новый shared компонент `SpacePickerPanel` — инкапсулирует list + path-input form + state (status, confirm-init, error). Используется и в `OpenSpaceDialog`, и в `SpacesPage`.
+- `SpacesPage` — centered card на bg-fill page с header "shemma · Spaces" и тем же body что у dialog'а. Forget action вынесен в правую часть row'а.
+- `OpenSpaceDialog` — тонкий wrapper над `SpacePickerPanel` (backdrop + close button).
+- Удалён `AddSpaceForm.tsx` (заменён единым path-input в panel).
+- Badge'и `LEGACY` / `ORPHANED` рядом с label для visibility.
+
 ## 0.22.1 — 2026-05-22 — DRW-117 simplify spaces UI: drop multi-column, add Open Space switcher
 
 PATCH UX fix: post-0.22.0 коррекция. Multi-column `?cols=A,B,C` URL-syntax + `MultiColumnLayout` оказались over-engineering — реальный сценарий это переключение между галереями, не side-by-side comparison. Возвращаемся к single-gallery view с быстрым switcher-диалогом.
