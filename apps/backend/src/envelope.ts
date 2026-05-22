@@ -2,13 +2,18 @@
 import { config } from "./config";
 import type { StoreOpLogEntry, TLStoreSnapshot } from "./store-types";
 import type { Prompt, RoomMeta, RoomState } from "./types";
+import { VERSION } from "./version";
 
 // Schema v3 extension policy: additive optional fields do not bump SCHEMA_VERSION.
 // Required field additions or shape changes → bump to v4 + add migrate-v3.ts.
 export const ENVELOPE_SCHEMA_VERSION = 3;
 export const SUPPORTED_SCHEMA_VERSIONS = [2, 3] as const; // 2 для migrator; runtime читает 3.
 
-const SHEMMA_VERSION = "0.10.0";
+// DRW-128: pre-0.10 envelopes had no version stamp; preserve that historical
+// floor as the fallback when parsing legacy files that don't carry a
+// shemmaVersion or didrawVersion field. New envelopes are stamped with the
+// runtime version via VERSION.version (see buildV3 below) — never this literal.
+const LEGACY_FALLBACK_VERSION = "0.10.0";
 
 export type EnvelopeHeader = {
   schemaVersion: 2 | 3;
@@ -44,7 +49,7 @@ function buildV3(roomId: string, s: RoomState): EnvelopeV3 {
     version: s.version,
     lastTouched: new Date(s.lastTouched).toISOString(),
     elementCount: countShapes(s.store.store),
-    shemma: { shemmaVersion: SHEMMA_VERSION, createdAt: new Date().toISOString() },
+    shemma: { shemmaVersion: VERSION.version, createdAt: new Date().toISOString() },
     store: s.store,
     prompts: s.prompts,
     opLog: s.opLog.slice(-config.opLogMaxSize),
@@ -93,17 +98,17 @@ function normalizeShemmaMeta(j: Partial<EnvelopeV3> & {
   if (j.shemma) {
     const legacyVer = (j.shemma as { didrawVersion?: string }).didrawVersion;
     return {
-      shemmaVersion: j.shemma.shemmaVersion ?? legacyVer ?? SHEMMA_VERSION,
+      shemmaVersion: j.shemma.shemmaVersion ?? legacyVer ?? LEGACY_FALLBACK_VERSION,
       createdAt: j.shemma.createdAt ?? new Date().toISOString(),
     };
   }
   if (j.didraw) {
     return {
-      shemmaVersion: j.didraw.didrawVersion ?? SHEMMA_VERSION,
+      shemmaVersion: j.didraw.didrawVersion ?? LEGACY_FALLBACK_VERSION,
       createdAt: j.didraw.createdAt ?? new Date().toISOString(),
     };
   }
-  return { shemmaVersion: SHEMMA_VERSION, createdAt: new Date().toISOString() };
+  return { shemmaVersion: LEGACY_FALLBACK_VERSION, createdAt: new Date().toISOString() };
 }
 
 export function parseFull(raw: string): EnvelopeV3 {

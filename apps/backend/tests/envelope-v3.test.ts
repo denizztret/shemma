@@ -2,6 +2,7 @@
 import { describe, expect, it } from "bun:test";
 import { ENVELOPE_SCHEMA_VERSION, parseFull, serialize } from "../src/envelope";
 import type { RoomState } from "../src/types";
+import { VERSION } from "../src/version";
 
 function makeRoomState(): RoomState {
   return {
@@ -68,6 +69,48 @@ describe("envelope v3", () => {
   it("parseFull rejects malformed envelope (missing store)", () => {
     const bad = JSON.stringify({ schemaVersion: 3, roomId: "x", version: 0 });
     expect(() => parseFull(bad)).toThrow(/malformed envelope/);
+  });
+
+  // DRW-128: serialize used to stamp every snapshot with a hardcoded
+  // "0.10.0" string left over from the project rename. The runtime version
+  // (resolved via apps/backend/src/version.ts) must win on the write path.
+  it("DRW-128: serialize stamps shemmaVersion with the runtime version, not '0.10.0'", () => {
+    const s = makeRoomState();
+    const raw = serialize("drw128", s);
+    const j = JSON.parse(raw);
+    expect(j.shemma.shemmaVersion).toBe(VERSION.version);
+    expect(j.shemma.shemmaVersion).not.toBe("0.10.0");
+  });
+
+  it("DRW-128: parseFull on legacy envelope without shemma/didraw falls back to historical floor", () => {
+    const legacyRaw = JSON.stringify({
+      schemaVersion: 3,
+      roomId: "legacy",
+      version: 1,
+      lastTouched: "2026-01-01T00:00:00.000Z",
+      elementCount: 0,
+      store: { schema: {}, store: {} },
+      prompts: [],
+      opLog: [],
+    });
+    const parsed = parseFull(legacyRaw);
+    expect(parsed.shemma.shemmaVersion).toBe("0.10.0");
+  });
+
+  it("DRW-128: parseFull preserves shemmaVersion from existing envelope", () => {
+    const explicitRaw = JSON.stringify({
+      schemaVersion: 3,
+      roomId: "explicit",
+      version: 1,
+      lastTouched: "2026-01-01T00:00:00.000Z",
+      elementCount: 0,
+      shemma: { shemmaVersion: "0.21.5", createdAt: "2026-05-22T00:00:00.000Z" },
+      store: { schema: {}, store: {} },
+      prompts: [],
+      opLog: [],
+    });
+    const parsed = parseFull(explicitRaw);
+    expect(parsed.shemma.shemmaVersion).toBe("0.21.5");
   });
 
   it("elementCount counts only shape records", () => {
