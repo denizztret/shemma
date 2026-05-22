@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 import type { SpaceLocalDTO } from "@shemma/spaces";
 import { tokens } from "../design-tokens";
-import { expandHomePath } from "../transport/session";
+import { expandHomePath, fetchSession } from "../transport/session";
 import {
   addSpaceApi,
   forgetSpaceApi,
   listSpacesApi,
   probeSpacePathApi,
 } from "./api";
-import { relativeTime, truncatePath } from "./format";
+import { relativeTime, tildify, truncatePath } from "./format";
 import { spaceUrl } from "./url-parser";
 
 type Status =
@@ -42,6 +42,19 @@ export function SpacePickerPanel({
   const [spaces, setSpaces] = useState<SpaceLocalDTO[]>([]);
   const [pathInput, setPathInput] = useState("");
   const [status, setStatus] = useState<Status>({ kind: "loading" });
+  const [home, setHome] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchSession()
+      .then((s) => {
+        if (!cancelled) setHome(s.home ?? "");
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -199,7 +212,7 @@ export function SpacePickerPanel({
                     }}
                     title={s.path}
                   >
-                    {truncatePath(s.path)}
+                    {truncatePath(tildify(s.path, home))}
                   </span>
                   {s.lastUsedAt && (
                     <span

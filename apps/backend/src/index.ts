@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { releaseLock, writeLockMetadata } from "@shemma/lockfile";
 import { runStartupMigration } from "./migration/legacy-spaces.js";
 import {
@@ -6,6 +7,7 @@ import {
   SPACE_ID_PATTERN,
   type SpaceRecord,
   findSpaceById,
+  listSpaces,
   registerSpace,
 } from "@shemma/spaces";
 import type { Context } from "hono";
@@ -333,22 +335,45 @@ export async function startServer(opts: AppOpts = {}) {
 
   // DRW-116 Task 23: deprecate SHEMMA_STORAGE_DIR. Only warn + auto-register
   // at actual daemon entry point — not in tests or in-process usage.
+  //
+  // DRW-120 recursion guard: lifecycle.open() exports SHEMMA_STORAGE_DIR =
+  // `<cwd>/.shemma/canvas` when spawning a child daemon (legacy compat). If
+  // that path is the canvas storage of an already-registered `project`-layout
+  // space (e.g. cwd IS di.draw, which is registered with project layout),
+  // auto-registering it again would create a confusing nested orphan. Skip
+  // when the path resolves into an existing space.
   if (process.env.SHEMMA_STORAGE_DIR && daemonMode) {
-    console.error(
-      `[shemma] WARNING: SHEMMA_STORAGE_DIR is deprecated. Use 'shemma s add <path>' to register a space.`,
-    );
-    try {
-      const { space, created } = registerSpace(process.env.SHEMMA_STORAGE_DIR, {
-        storageLayout: "direct",
-        label: "Default (from SHEMMA_STORAGE_DIR)",
-        id: "default",
-      });
-      if (created) {
-        console.error(`[shemma] Auto-registered as space '${space.id}'.`);
+    const storageDirRaw = process.env.SHEMMA_STORAGE_DIR;
+    const storageDirAbs = fs.existsSync(storageDirRaw)
+      ? fs.realpathSync(storageDirRaw)
+      : path.resolve(storageDirRaw);
+    const containingSpace = listSpaces().find((s) => {
+      const sPath = s.path.endsWith(path.sep) ? s.path : s.path + path.sep;
+      return (
+        storageDirAbs === s.path || storageDirAbs.startsWith(sPath)
+      );
+    });
+    if (containingSpace) {
+      console.error(
+        `[shemma] SHEMMA_STORAGE_DIR points inside registered space '${containingSpace.id}' (${containingSpace.path}) — skipping auto-register.`,
+      );
+    } else {
+      console.error(
+        `[shemma] WARNING: SHEMMA_STORAGE_DIR is deprecated. Use 'shemma s add <path>' to register a space.`,
+      );
+      try {
+        const { space, created } = registerSpace(storageDirRaw, {
+          storageLayout: "direct",
+          label: "Default (from SHEMMA_STORAGE_DIR)",
+          id: "default",
+        });
+        if (created) {
+          console.error(`[shemma] Auto-registered as space '${space.id}'.`);
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[shemma] Failed to auto-register: ${msg}`);
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[shemma] Failed to auto-register: ${msg}`);
     }
   }
   // DRW-116 Task 30: auto-register legacy ~/.claude/projects/*/canvas/ on first

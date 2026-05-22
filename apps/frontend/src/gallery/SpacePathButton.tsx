@@ -1,6 +1,7 @@
 import { tokens } from "../design-tokens";
 import { pushError } from "../state/error-bus";
 import { revealSpaceApi } from "../spaces/api";
+import { tildify } from "../spaces/format";
 import { LEGACY_SPACE_ID } from "../transport/api";
 
 /**
@@ -19,7 +20,7 @@ export function SpacePathButton({
   home: string;
 }) {
   const isLegacy = space === LEGACY_SPACE_ID;
-  const display = prettyPath(path, home);
+  const display = tildify(path, home);
   return (
     <button
       type="button"
@@ -49,9 +50,3 @@ export function SpacePathButton({
   );
 }
 
-function prettyPath(absolute: string, home: string): string {
-  if (home && absolute.startsWith(home)) {
-    return `~${absolute.slice(home.length)}`;
-  }
-  return absolute;
-}

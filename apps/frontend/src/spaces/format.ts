@@ -22,6 +22,17 @@ export function truncatePath(p: string, max = 50): string {
 }
 
 /**
+ * Substitute the user's home directory prefix with `~`. Returns the absolute
+ * path unchanged when `home` is empty or the path does not start with it.
+ */
+export function tildify(absolute: string, home: string): string {
+  if (!home) return absolute;
+  if (absolute === home) return "~";
+  if (absolute.startsWith(home + "/")) return `~${absolute.slice(home.length)}`;
+  return absolute;
+}
+
+/**
  * Human-readable relative time: "just now", "5 minutes ago", "2 hours ago",
  * "3 days ago". No external deps; falls back to ISO string when parsing fails.
  */
