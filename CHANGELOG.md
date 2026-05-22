@@ -1,3 +1,33 @@
+## 0.22.1 — 2026-05-22 — DRW-117 simplify spaces UI: drop multi-column, add Open Space switcher
+
+PATCH UX fix: post-0.22.0 коррекция. Multi-column `?cols=A,B,C` URL-syntax + `MultiColumnLayout` оказались over-engineering — реальный сценарий это переключение между галереями, не side-by-side comparison. Возвращаемся к single-gallery view с быстрым switcher-диалогом.
+
+### UX changes
+
+- **URL grammar упрощён.** Поддерживаются: `/` (landing — список всех spaces), `?space=<id>` (gallery того space), `?space=<id>&room=<id>` (room в этом space). `?cols=` удалён полностью.
+- **Gallery header** теперь показывает путь _текущего_ space (через `GET /api/spaces/:id`), а не daemon CWD. Путь кликабельный — открывает папку в Finder/Explorer/xdg-open через новый `POST /api/spaces/:id/reveal`.
+- **"Open Space" button** рядом с path → modal со списком зарегистрированных spaces (клик = switch) + path-input снизу. Path-input:
+  - existing space → switch;
+  - path с `.shemma/canvas/` → register + switch;
+  - path без `.shemma/` → confirm "initialize?" → register + switch;
+  - missing path → inline error.
+- **Legacy `?room=`** route без `?space=` сохранён (рендерит App / Gallery с `LEGACY_SPACE_ID`).
+
+### Removed
+
+- `MultiColumnLayout`, `SplitterBar`, `column-transitions.ts`, `widths.ts` и их тесты (`__tests__/column-transitions.test.ts`, `__tests__/widths.test.ts`, `__tests__/transitions-roundtrip.test.ts`).
+- `Column`-aware ветка в `parseShemmaUrl` (теперь возвращает discriminated union `landing|gallery|room`).
+- `onRoomOpen` / `onBackToGallery` / `RoomCard.onOpen` props — больше нет in-place column transitions.
+
+### New backend endpoints
+
+- `POST /api/spaces/:id/reveal` — spawn OS reveal command (`open` / `xdg-open` / `explorer`). 404 если space не зарегистрирован или path исчез.
+- `POST /api/probe-space-path` — резолвит абсолютный путь + проверяет наличие `.shemma/canvas/`. Используется Open Space dialog для confirm-init UX.
+
+### Migration
+
+- Старые `?cols=` URL'ы (если кто-то их сохранил) теперь резолвятся как `landing` view (params вообще не парсятся). Live URL bookmarks `?space=` / `?room=` не затронуты.
+
 ## 0.22.0 — 2026-05-22 — DRW-116 singleton daemon + spaces registry + multi-gallery
 
 MINOR feature: переход от per-project daemon (отдельный port для каждой папки) к глобальному singleton daemon с composite-key `(spaceId, roomId)` и spaces registry в `~/.config/shemma/spaces.json`. Legacy `~/.claude/projects/*/canvas/*.json` мигрирует автоматически на первом старте; default space сохраняет совместимость для клиентов, которые ещё не присылают `?space=<id>`.

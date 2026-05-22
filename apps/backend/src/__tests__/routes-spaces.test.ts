@@ -318,6 +318,44 @@ describe("PATCH /api/spaces/:id", () => {
   });
 });
 
+describe("POST /api/spaces/:id/reveal", () => {
+  it("returns 404 for unknown id", async () => {
+    const resp = await app.fetch(
+      new Request("http://localhost/api/spaces/unknown/reveal", {
+        method: "POST",
+      }),
+    );
+    expect(resp.status).toBe(404);
+    const body = (await resp.json()) as { error: string };
+    expect(body.error).toBe("space_not_found");
+  });
+
+  it("returns 404 when registered path has been removed", async () => {
+    const tmpProj = fs.mkdtempSync(path.join(os.tmpdir(), "proj-reveal-"));
+    const reg = await app.fetch(
+      new Request("http://localhost/api/spaces", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: tmpProj }),
+      }),
+    );
+    const { space } = (await reg.json()) as { space: { id: string } };
+    fs.rmSync(tmpProj, { recursive: true, force: true });
+    const resp = await app.fetch(
+      new Request(`http://localhost/api/spaces/${space.id}/reveal`, {
+        method: "POST",
+      }),
+    );
+    expect(resp.status).toBe(404);
+    const body = (await resp.json()) as { error: string; path: string };
+    expect(body.error).toBe("path_missing");
+  });
+
+  // Happy-path "spawns reveal command" not unit-tested: would launch a real
+  // Finder/Explorer window during `bun test`. Verified manually via
+  // chrome-devtools smoke (DRW-117 manual checklist).
+});
+
 describe("space middleware coexistence", () => {
   it("/api/spaces bypasses spaceMiddleware even when enableSpaceMiddleware=true", async () => {
     const { app: guarded } = makeApp({

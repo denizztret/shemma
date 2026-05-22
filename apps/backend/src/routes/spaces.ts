@@ -1,4 +1,6 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { Hono } from "hono";
 import {
   findSpaceById,
@@ -72,6 +74,49 @@ export const spacesRouter = new Hono()
     forgetSpace(c.req.param("id"));
     return c.json({ ok: true });
   })
+  .post("/api/probe-space-path", async (c) => {
+    let body: { path?: unknown };
+    try {
+      body = (await c.req.json()) as { path?: unknown };
+    } catch {
+      return c.json({ error: "invalid_json" }, 400);
+    }
+    if (typeof body.path !== "string" || body.path.length === 0) {
+      return c.json({ error: "path_required" }, 400);
+    }
+    try {
+      const abs = fs.realpathSync(body.path);
+      const stat = fs.statSync(abs);
+      if (!stat.isDirectory()) {
+        return c.json({ error: "not_a_directory", path: abs }, 400);
+      }
+      const shemmaCanvas = path.join(abs, ".shemma", "canvas");
+      const hasShemma = fs.existsSync(shemmaCanvas) &&
+        fs.statSync(shemmaCanvas).isDirectory();
+      return c.json({ absolutePath: abs, hasShemma });
+    } catch (err) {
+      const code = err && typeof err === "object" && "code" in err
+        ? (err as { code?: string }).code
+        : undefined;
+      if (code === "ENOENT") return c.json({ error: "path_not_found" }, 404);
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: "probe_failed", message }, 500);
+    }
+  })
+  .post("/api/spaces/:id/reveal", (c) => {
+    const space = findSpaceById(c.req.param("id"));
+    if (!space) return c.json({ error: "space_not_found" }, 404);
+    if (!fs.existsSync(space.path)) {
+      return c.json({ error: "path_missing", path: space.path }, 404);
+    }
+    try {
+      spawn(revealCommand(), [space.path], { detached: true, stdio: "ignore" }).unref();
+      return c.json({ ok: true, path: space.path });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: "reveal_failed", message }, 500);
+    }
+  })
   .patch("/api/spaces/:id", async (c) => {
     let body: { label?: unknown };
     try {
@@ -117,6 +162,17 @@ function isLocalhostRequest(
     return isLocalhostAuthority(parsed.hostname);
   } catch {
     return false;
+  }
+}
+
+function revealCommand(): string {
+  switch (process.platform) {
+    case "darwin":
+      return "open";
+    case "win32":
+      return "explorer";
+    default:
+      return "xdg-open";
   }
 }
 

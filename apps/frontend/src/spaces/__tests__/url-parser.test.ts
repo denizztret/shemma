@@ -1,47 +1,45 @@
 import { describe, it, expect } from "bun:test";
-import { parseShemmaUrl, serializeColumns } from "../url-parser";
+import { parseShemmaUrl, spaceUrl } from "../url-parser";
 
 describe("parseShemmaUrl", () => {
   it("returns landing when no params", () => {
     expect(parseShemmaUrl("/")).toEqual({ view: "landing" });
   });
-  it("parses ?space=A as single gallery column", () => {
+  it("returns landing when only unrelated params", () => {
+    expect(parseShemmaUrl("/?other=1")).toEqual({ view: "landing" });
+  });
+  it("parses ?space=A as gallery view", () => {
     expect(parseShemmaUrl("/?space=A")).toEqual({
-      view: "columns",
-      columns: [{ kind: "gallery", spaceId: "A" }],
+      view: "gallery",
+      spaceId: "A",
     });
   });
-  it("parses ?space=A&room=R as single room column", () => {
+  it("parses ?space=A&room=R as room view", () => {
     expect(parseShemmaUrl("/?space=A&room=R")).toEqual({
-      view: "columns",
-      columns: [{ kind: "room", spaceId: "A", roomId: "R" }],
+      view: "room",
+      spaceId: "A",
+      roomId: "R",
     });
   });
-  it("parses ?cols=A,B:r2,C", () => {
-    expect(parseShemmaUrl("/?cols=A,B:r2,C")).toEqual({
-      view: "columns",
-      columns: [
-        { kind: "gallery", spaceId: "A" },
-        { kind: "room", spaceId: "B", roomId: "r2" },
-        { kind: "gallery", spaceId: "C" },
-      ],
+  it("decodes URL-encoded space + room", () => {
+    expect(parseShemmaUrl("/?space=my%20space&room=my%2Froom")).toEqual({
+      view: "room",
+      spaceId: "my space",
+      roomId: "my/room",
     });
-  });
-  it("caps columns to 3", () => {
-    const parsed = parseShemmaUrl("/?cols=A,B,C,D");
-    expect(parsed.view).toBe("columns");
-    expect((parsed as any).columns).toHaveLength(3);
   });
 });
 
-describe("serializeColumns", () => {
-  it("single gallery → ?space=A", () => {
-    expect(serializeColumns([{ kind: "gallery", spaceId: "A" }])).toBe("?space=A");
+describe("spaceUrl", () => {
+  it("builds gallery URL", () => {
+    expect(spaceUrl("A")).toBe("/?space=A");
   });
-  it("multi → ?cols=A,B:r2", () => {
-    expect(serializeColumns([
-      { kind: "gallery", spaceId: "A" },
-      { kind: "room", spaceId: "B", roomId: "r2" },
-    ])).toBe("?cols=A,B%3Ar2");
+  it("builds room URL", () => {
+    expect(spaceUrl("A", "R")).toBe("/?space=A&room=R");
+  });
+  it("encodes spaceId and roomId", () => {
+    expect(spaceUrl("my space", "my/room")).toBe(
+      "/?space=my%20space&room=my%2Froom",
+    );
   });
 });
