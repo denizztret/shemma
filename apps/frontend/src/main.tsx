@@ -4,33 +4,27 @@ import { App } from "./App";
 import { Gallery } from "./gallery/Gallery";
 import { SpacesPage } from "./spaces/SpacesPage";
 import { parseShemmaUrl } from "./spaces/url-parser";
-import { LEGACY_SPACE_ID } from "./transport/api";
 
+// DRW-120: legacy URLs (?room=foo / ?view=gallery) without ?space= are leftovers
+// from pre-multi-space bookmarks. The synthetic LEGACY_SPACE_ID fallback no
+// longer works (backend regex-rejects "__legacy__") — strip the legacy params
+// and land on SpacesPage so the user picks a real space explicitly.
 const params = new URLSearchParams(window.location.search);
-const hasRoomQuery = params.has("room");
-const hasGalleryView = params.get("view") === "gallery";
-const hasSpaceQuery = params.has("space");
-const isLegacyRoute = (hasRoomQuery || hasGalleryView) && !hasSpaceQuery;
+if (
+  (params.has("room") || params.get("view") === "gallery") &&
+  !params.has("space")
+) {
+  window.history.replaceState(null, "", "/");
+}
 
+const state = parseShemmaUrl(window.location.href);
 let tree: React.ReactNode;
-if (isLegacyRoute) {
-  const roomParam = params.get("room");
-  const showGallery = hasGalleryView || roomParam === null;
-  const room = roomParam ?? "default";
-  tree = showGallery ? (
-    <Gallery space={LEGACY_SPACE_ID} />
-  ) : (
-    <App space={LEGACY_SPACE_ID} room={room} />
-  );
+if (state.view === "landing") {
+  tree = <SpacesPage />;
+} else if (state.view === "gallery") {
+  tree = <Gallery space={state.spaceId} />;
 } else {
-  const state = parseShemmaUrl(window.location.href);
-  if (state.view === "landing") {
-    tree = <SpacesPage />;
-  } else if (state.view === "gallery") {
-    tree = <Gallery space={state.spaceId} />;
-  } else {
-    tree = <App space={state.spaceId} room={state.roomId} />;
-  }
+  tree = <App space={state.spaceId} room={state.roomId} />;
 }
 
 // biome-ignore lint/style/noNonNullAssertion: root element is guaranteed by index.html

@@ -1,3 +1,29 @@
+## 0.21.4 — 2026-05-22 — DRW-120 first-run UX hotfix (SHEMMA_STORAGE_DIR orphan + legacy URLs)
+
+PATCH bugfix. После 0.21.3 release всплыли два связанных регресса при первом запуске:
+
+### Issue 1 — Recursive `default` orphan space
+
+`shemma` zero-arg → `lifecycle.open()` всегда экспортит `SHEMMA_STORAGE_DIR=<cwd>/.shemma/canvas` для child daemon (legacy compat path). Backend на старте видит эту env и auto-регистрирует путь как space `default` с layout `direct` — даже если cwd уже зарегистрирован как `project`-layout space. Получается nested orphan вида `di-draw/.shemma/canvas` рядом с настоящим `di-draw`.
+
+**Fix:** `apps/backend/src/index.ts` — перед `registerSpace` проверяем что путь не лежит внутри уже зарегистрированного space (`listSpaces().find(s => storageDirAbs === s.path || startsWith(s.path + sep))`). Если внутри — skip + warn log "SHEMMA_STORAGE_DIR points inside registered space 'X' — skipping auto-register".
+
+### Issue 2 — Legacy `?view=gallery` / `?room=` без `?space=` → listRooms 400
+
+Pre-DRW-116 bookmarks (`/?view=gallery` или `/?room=default`) рендерили `<Gallery space={LEGACY_SPACE_ID} />` / `<App space={LEGACY_SPACE_ID} />`. После DRW-116 backend middleware regex-rejects sentinel `__legacy__` (`SPACE_ID_PATTERN.test("__legacy__")` = false) → 400 `invalid_space_id` → "Failed to load rooms: listRooms 400".
+
+**Fix:** `apps/frontend/src/main.tsx` — если URL содержит legacy params (`?room=` / `?view=gallery`) без `?space=`, через `history.replaceState(null, "", "/")` зачищаем и рендерим SpacesPage. User видит чистую landing вместо broken Gallery.
+
+### Issue 3 — Path display: `/Users/<username>/...` вместо `~/...`
+
+В SpacePickerPanel (landing + Open Space dialog) пути отображались абсолютные (`/Users/tretyakov_dv/Projects/sandbox/di.draw`). Менее читаемо + раскрывает username.
+
+**Fix:** новый shared helper `tildify(abs, home)` в `spaces/format.ts`. Применён в SpacePickerPanel rows; SpacePathButton (Gallery header) переключён с локального `prettyPath` на `tildify`.
+
+### Out of scope (отложено)
+
+- Полный rewrite `lifecycle.open()` для pure-space world (auto-register cwd как project-layout space + open `?space=X` URL вместо legacy `?room=`). Pre-existing legacy code path, не блокер. См. DRW-120 follow-up.
+
 ## 0.21.3 — 2026-05-22 — simplify pass: dead code, dup helpers, design-tokens, race fix
 
 PATCH cleanup. xhigh-effort `/simplify` over DRW-117 + DRW-118 diff. Fixed all Critical + Important findings, deferred Minor.
