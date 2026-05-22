@@ -13,12 +13,20 @@ import {
   getOutput,
   info as uiInfo,
   printResponse,
+  responseHasError,
   success as uiSuccess,
 } from "./ui";
 
-function clientFor(profile: Profile): CanvasClient {
+// DRW-130/DRW-125 gap: lifecycle commands (rooms list/archive/restore/...)
+// were never threading the top-level --space flag, so they always shipped
+// `?space=__legacy__` and 400'd against space middleware — same root cause
+// as the DRW-125 domain-command silent noop. Only `list` is rewired here
+// since that's what DRW-130 needs end-to-end; the rest of lifecycle.ts
+// stays on the original signature pending DRW-131.
+function clientFor(profile: Profile, space?: string): CanvasClient {
   return new CanvasClient({
     baseUrl: `http://localhost:${portFor(profile)}`,
+    ...(space !== undefined ? { space } : {}),
   });
 }
 
@@ -257,10 +265,81 @@ export function cmdInit(targetArg?: string): void {
   uiSuccess(`initialized .shemma/ in ${base}`, { ok: true, path: base });
 }
 
-export async function list(profile: Profile) {
+// DRW-130 (P2.6): `shemma rooms list` used to print `✔ ok` in friendly mode
+// because the generic `printResponse` doesn't know how to render an array.
+// Render a small table here instead, scoped to the rooms shape:
+//   { ok: true, rooms: [{id, version, elementCount, lastTouched, archived?}],
+//     dir: string }
+type RoomListItem = {
+  id: string;
+  version: number;
+  elementCount: number;
+  lastTouched: string;
+  schemaVersion?: number;
+  archived?: boolean;
+  linkedSession?: string;
+  projectDir?: string;
+  projectName?: string;
+};
+type RoomListRes = {
+  ok?: boolean;
+  rooms?: RoomListItem[];
+  dir?: string;
+  error?: string;
+};
+
+function relativeTime(iso: string, nowMs = Date.now()): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso;
+  const diff = Math.max(0, nowMs - t);
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day}d ago`;
+  return iso.slice(0, 10);
+}
+
+function renderRoomsTable(rooms: RoomListItem[]): string {
+  const headers = ["id", "version", "elements", "last touched"];
+  const rows = rooms.map((r) => [
+    r.id + (r.archived ? " (archived)" : ""),
+    String(r.version),
+    String(r.elementCount),
+    relativeTime(r.lastTouched),
+  ]);
+  const widths = headers.map((h, i) =>
+    Math.max(h.length, ...rows.map((r) => r[i]!.length)),
+  );
+  const pad = (cells: string[]) =>
+    cells.map((c, i) => c.padEnd(widths[i]!)).join("  ");
+  const sep = widths.map((w) => "─".repeat(w)).join("  ");
+  return [pad(headers), sep, ...rows.map(pad)].join("\n");
+}
+
+export async function list(profile: Profile, space?: string) {
   await ensureSilent(profile);
-  const res = await clientFor(profile).listRooms();
-  printResponse(res, { humanSuccess: "ok" });
+  const res = (await clientFor(profile, space).listRooms()) as RoomListRes;
+  const ui = getOutput();
+  if (ui.mode === "json") {
+    process.stdout.write(JSON.stringify(res) + "\n");
+    if (responseHasError(res)) process.exit(1);
+    return;
+  }
+  if (responseHasError(res)) {
+    printResponse(res);
+    process.exit(1);
+  }
+  const rooms = res.rooms ?? [];
+  if (rooms.length === 0) {
+    uiInfo(`no rooms in this space${res.dir ? ` (storage: ${res.dir})` : ""}`);
+    return;
+  }
+  uiSuccess(`${rooms.length} room${rooms.length === 1 ? "" : "s"}${res.dir ? ` (storage: ${res.dir})` : ""}`);
+  process.stdout.write(`${renderRoomsTable(rooms)}\n`);
 }
 
 export async function exportRoom(room: string, to: string, profile: Profile) {

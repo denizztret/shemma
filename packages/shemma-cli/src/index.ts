@@ -366,7 +366,7 @@ async function main() {
   }
   if (cmd === "rooms") {
     const sub = argv[1];
-    if (sub === "list") return list(profile);
+    if (sub === "list") return list(profile, space);
     if (sub === "archive") {
       const id = argv[2];
       if (!id) die("expected <id>");
