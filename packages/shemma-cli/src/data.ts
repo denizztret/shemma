@@ -1,6 +1,11 @@
 import { CanvasClient } from "@shemma/client";
 import { fail } from "./util";
-import { error as uiError, getOutput, printResponse } from "./ui";
+import {
+  error as uiError,
+  getOutput,
+  printResponse,
+  responseHasError,
+} from "./ui";
 
 type Args = {
   room?: string;
@@ -21,9 +26,20 @@ export function parseArgs(argv: string[]): Args {
   return a;
 }
 
-export async function cmdState(argv: string[]) {
+// DRW-131: data commands now accept the top-level --space flag (stripped
+// from argv in index.ts and passed as an explicit argument). Without it
+// CanvasClient defaults to "__legacy__" and the request bounces on space
+// middleware — same root cause as DRW-125.
+function clientFor(room?: string, space?: string): CanvasClient {
+  return new CanvasClient({
+    ...(room !== undefined ? { room } : {}),
+    ...(space !== undefined ? { space } : {}),
+  });
+}
+
+export async function cmdState(argv: string[], space?: string) {
   const a = parseArgs(argv);
-  const c = new CanvasClient({ room: a.room });
+  const c = clientFor(a.room, space);
   try {
     const r = await c.getState({
       fmt: a.compact ? "compact" : "full",
@@ -33,12 +49,13 @@ export async function cmdState(argv: string[]) {
     // TLStoreSnapshot. Emit as JSON in both modes for backward compat (existing
     // tests parse stdout). Use stdout directly to avoid prefix symbols.
     process.stdout.write(JSON.stringify(r) + "\n");
+    if (responseHasError(r)) process.exit(1);
   } catch (e) {
     fail(e);
   }
 }
 
-export async function cmdPatch(argv: string[]) {
+export async function cmdPatch(argv: string[], space?: string) {
   const a = parseArgs(argv);
   if (!argv.includes("--stdin")) {
     uiError("expected --stdin", { code: "expected --stdin" });
@@ -53,7 +70,7 @@ export async function cmdPatch(argv: string[]) {
     uiError("invalid JSON on stdin", { code: "invalid JSON on stdin" });
     process.exit(1);
   }
-  const c = new CanvasClient({ room: a.room });
+  const c = clientFor(a.room, space);
   try {
     const r = await c.applyPatch(body.ops, {
       source: body.source ?? "ai",
@@ -65,19 +82,19 @@ export async function cmdPatch(argv: string[]) {
     } else {
       printResponse(r, { humanSuccess: "patch applied" });
     }
-    if (r.ok === false) process.exit(1);
+    if (responseHasError(r)) process.exit(1);
   } catch (e) {
     fail(e);
   }
 }
 
-export async function cmdClear(argv: string[]) {
+export async function cmdClear(argv: string[], space?: string) {
   const a = parseArgs(argv);
   if (!a.confirm) {
     uiError("expected --confirm", { code: "expected --confirm" });
     process.exit(1);
   }
-  const c = new CanvasClient({ room: a.room });
+  const c = clientFor(a.room, space);
   try {
     const r = await c.clear();
     const ui = getOutput();
@@ -86,6 +103,7 @@ export async function cmdClear(argv: string[]) {
     } else {
       printResponse(r, { humanSuccess: "room cleared" });
     }
+    if (responseHasError(r)) process.exit(1);
   } catch (e) {
     fail(e);
   }
