@@ -10,6 +10,7 @@ import {
   initOutput,
   parseOutputMode,
   printResponse,
+  responseHasError,
   success,
   warn,
 } from "../src/ui";
@@ -123,6 +124,13 @@ describe("ui formatters — JSON mode", () => {
     expect(JSON.parse(p.cap.stdout.join(""))).toEqual({ ok: true, foo: "bar" });
   });
 
+  test("printResponse() in JSON mode preserves error envelope without ok field", () => {
+    printResponse({ error: "invalid_space_id" });
+    expect(JSON.parse(p.cap.stdout.join(""))).toEqual({
+      error: "invalid_space_id",
+    });
+  });
+
   test("no ANSI escapes in JSON mode even if isTTY=true", () => {
     initOutput({ mode: "json", isTTY: true, isStderrTTY: true });
     success("hi");
@@ -194,6 +202,46 @@ describe("ui formatters — human mode, non-TTY", () => {
     expect(bold("x")).toBe("x");
     expect(color("red", "x")).toBe("x");
   });
+
+  // DRW-125: backend error envelopes use { error: "..." } without ok:false
+  // (см. apps/backend/src/middleware/space.ts). Friendly mode must NOT print
+  // "✔ ok" — it must route to error() with ✖ + the backend error string.
+  test("printResponse() routes {error} (no ok field) to error stream", () => {
+    printResponse({ error: "invalid_space_id" });
+    const err = p.cap.stderr.join("");
+    const out = p.cap.stdout.join("");
+    expect(err).toContain("✖");
+    expect(err).toContain("invalid_space_id");
+    expect(out).not.toContain("✔");
+  });
+
+  test("printResponse() shows hint for invalid_space_id", () => {
+    printResponse({ error: "invalid_space_id" });
+    const err = p.cap.stderr.join("");
+    expect(err).toContain("→");
+    expect(err.toLowerCase()).toMatch(/shemma s list|--space/);
+  });
+
+  test("printResponse() shows hint for space_required", () => {
+    printResponse({ error: "space_required" });
+    const err = p.cap.stderr.join("");
+    expect(err).toContain("→");
+  });
+
+  test("printResponse() with ok:false routes to error (existing behavior)", () => {
+    printResponse({ ok: false, error: "unknown_role" });
+    const err = p.cap.stderr.join("");
+    expect(err).toContain("✖");
+    expect(err).toContain("unknown_role");
+  });
+
+  test("printResponse() with ok:true → success symbol (no false alarm on stray error field)", () => {
+    // Defensive: server returning ok:true should NEVER route to error,
+    // even if a downstream field accidentally contains the substring "error".
+    printResponse({ ok: true, layout: { error: "" } });
+    const out = p.cap.stdout.join("");
+    expect(out).toContain("✔");
+  });
 });
 
 describe("ui formatters — human mode, TTY (colors on)", () => {
@@ -219,6 +267,29 @@ describe("ui formatters — human mode, TTY (colors on)", () => {
     expect(bold("x")).toContain("\x1b[1m");
     expect(dim("x")).toContain("\x1b[2m");
     expect(color("yellow", "x")).toContain("\x1b[33m");
+  });
+});
+
+// DRW-125: shared error-envelope detection that both JSON and human modes use
+// to decide process exit code. Symmetry is the whole point — agents that scan
+// JSON output and humans that read text must see the same outcome.
+describe("responseHasError() — DRW-125", () => {
+  test("ok:true → not an error", () => {
+    expect(responseHasError({ ok: true, version: 1 })).toBe(false);
+  });
+  test("ok:false → error", () => {
+    expect(responseHasError({ ok: false, error: "unknown_role" })).toBe(true);
+  });
+  test("{error} without ok → error (middleware short-circuit)", () => {
+    expect(responseHasError({ error: "invalid_space_id" })).toBe(true);
+  });
+  test("ok:true with stray .error field → not an error (false-positive guard)", () => {
+    expect(responseHasError({ ok: true, layout: { error: "" } })).toBe(false);
+  });
+  test("non-object → not an error", () => {
+    expect(responseHasError(null)).toBe(false);
+    expect(responseHasError(undefined)).toBe(false);
+    expect(responseHasError("error")).toBe(false);
   });
 });
 

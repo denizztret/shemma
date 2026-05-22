@@ -1,3 +1,44 @@
+## 0.21.10 — 2026-05-22 — DRW-125 CLI silent noop: thread `--space` + symmetric exit codes
+
+PATCH fix for the most damaging surface bug from the 2026-05-22 MCP feedback. Domain CLI commands (`define / connect / group / note / layout / delete / apply / context`) silently swallowed backend errors: `✔ ok` on stdout, exit 0, nothing actually written. Two compounding causes:
+
+### Root cause
+
+1. **`clientFor` ignored `--space`.** `packages/shemma-cli/src/domain.ts` constructed `new CanvasClient({ baseUrl, room })` without threading the `--space` flag (it wasn't even parsed at the top level). `CanvasClient` defaults `space` to `"__legacy__"`, which fails `SPACE_ID_PATTERN` in `apps/backend/src/middleware/space.ts`, so the daemon always replied `400 {error: "invalid_space_id"}` regardless of what the user typed.
+2. **Error detection keyed on `ok === false` only.** Middleware short-circuits return `{error: "..."}` with **no `ok` field at all`. Both `printAndExitOnFail` and `printResponse` checked `ok === false`, which `undefined` doesn't satisfy → the JSON envelope passed through, and human mode happily printed `✔ ok`.
+
+The combination meant: even with `--space ios` typed explicitly, the flag was discarded, the backend rejected the request, and the CLI lied about success.
+
+### Fix
+
+- Top-level `--space <id>` flag in `packages/shemma-cli/src/index.ts`, mirroring `--profile` / `--json`. Stripped from argv before per-command parsing. `SHEMMA_SPACE` env honoured as fallback.
+- `clientFor(profile, room, space)` in `packages/shemma-cli/src/domain.ts` now threads `space` into `CanvasClient`. All eight domain entry points (`define / connect / group / note / layout / delete / apply / context`) accept and forward it.
+- New shared helper `isErrorEnvelope` (used by both `printResponse` and the new exported `responseHasError`) recognises both error shapes: `{ ok: false, error }` and `{ error }` without `ok`. False-positive guard for legitimate `ok: true` responses that nest the word "error" in a sub-field.
+- `printResponse` routes well-known error codes (`invalid_space_id`, `space_not_found`, `space_required`) through `→` hints pointing at `shemma s list` and `--space <id>`.
+- `printAndExitOnFail` uses `responseHasError` so JSON and human modes exit symmetrically.
+
+### Validation
+
+Live daemon repro (0.21.9 + fix via `bun packages/shemma-cli/src/index.ts ...`):
+
+| Variant                                          | stdout                          | exit |
+| ------------------------------------------------ | ------------------------------- | ---- |
+| `define service x` (human, no --space)           | `✖ invalid_space_id` + 2 hints  | 1    |
+| `--json define service x` (no --space)           | `{"error":"invalid_space_id"}`  | 1    |
+| `define service x --space DOES_NOT_EXIST`        | `✖ invalid_space_id` + 2 hints  | 1    |
+| `--json define service x --space di-draw`        | `{"ok":true,"version":1,...}`   | 0    |
+
+Tests:
+- `packages/shemma-cli/tests/ui.test.ts` — 12 new cases covering `printResponse` error envelopes, JSON-mode preservation, hint emission, false-positive guard, and `responseHasError` contract.
+- `packages/shemma-cli/tests/drw-125-silent-noop.test.ts` — 6 integration cases with `enableSpaceMiddleware: true` in-memory server: human mode exit code + ✖ + hint, JSON mode exit code, invalid `--space`, valid `--space` round-trip, `SHEMMA_SPACE` env path. XDG isolation via tmpdir per `feedback-cli-tests-xdg-isolation`.
+- Full monorepo suite: 1013 tests, 0 fail.
+
+### Out of scope (still in DRW-124)
+
+This patch fixes P0.1 only. P0.2 (storage rift, `shemma_health` not space-aware), P0.3 (Mermaid storage-only fallback), Q9 (URL-based MCP open + window reuse), Q10 (`SHEMMA_VERSION = "0.10.0"` envelope stamp), Q11 (`~/.claude/projects/...` orphan duplicates from legacy migration), and the remaining P1–P3 items remain tracked under DRW-126, DRW-127, DRW-128, and the umbrella DRW-124 notes.
+
+---
+
 ## 0.21.9 — 2026-05-22 — DRW-119b fix: compiled binary version regression
 
 PATCH hotfix for the regression introduced in 0.21.8. Compiled release binaries reported `0.21.8-dev` instead of `0.21.8` because the new `resolveVersion()` accessed `SHEMMA_VERSION` via a renamed local (`env.SHEMMA_VERSION` where `env = deps.env ?? process.env`), and `bun build --compile --define` does **purely textual** substitution of the literal token `process.env.SHEMMA_VERSION` — any rename defeats it.
