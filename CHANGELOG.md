@@ -1,6 +1,6 @@
-## Unreleased (DRW-124 cluster — accumulating for next release)
+## 0.22.0 — 2026-05-23 — DRW-124 cluster close (MCP feedback resolved, ex DRW-127)
 
-Per user direction 2026-05-22 («релизы не делаем до того как все задачи закроем»), the following fixes are merged on `main` without per-DRW version bumps + tags. They will roll up into one release commit when DRW-124 cluster closes.
+MINOR release consolidating DRW-129/130/131/132/133 from the DRW-124 MCP-feedback cluster. Five additive, backward-compatible improvements; no breaking changes. DRW-127 (P0.3 Mermaid storage-only fallback) was originally scheduled into this cluster but its scope expanded during 2026-05-22..23 brainstorm into a larger redesign — tracked separately as **DRW-134** (Canvas-AI bidirectional protocol — RAW+overlay in schema-frame); ADR-0004 draft (`docs/decisions/0004-mermaid-storage-only-import.md`) is committed as a frozen brainstorm artifact and superseded by DRW-134.
 
 - **DRW-129** (P3.8): MCP tool descriptions — Troubleshooting sections for `shemma_import_mermaid` (WS-not-just-tab requirement, `window.shemmaImportMermaid` DevTools fallback, active_rooms verification, append-only accumulation hazard) and `shemma_open` (spawned≠connected, dead-bundle detection). Static test pins key markers.
 - **DRW-130** (P2.6): `shemma rooms list` friendly renderer — table view with id / version / elements / last touched + relative-time formatter. Empty list → `· no rooms` hint. `--json` mode unchanged. Also closed a DRW-125 gap: `lifecycle.list` now threads `--space`.
