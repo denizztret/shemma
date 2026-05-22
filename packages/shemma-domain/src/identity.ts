@@ -34,7 +34,10 @@ export const DEFAULT_NODE_ID_REGEX: RegExp = nodeIdRegex(DEFAULT_SUFFIX_LENGTH);
 /** Генерирует случайный suffix длиной suffixLen в base36 ([0-9a-z]).
  *  @param rng — функция возвращающая [0,1); default Math.random (frontend);
  *               backend инжектирует crypto-based RNG (Task 1.2). */
-export function generateSuffix(suffixLen: number, rng: () => number = Math.random): string {
+export function generateSuffix(
+  suffixLen: number,
+  rng: () => number = Math.random,
+): string {
   const BASE36_CHARS = "0123456789abcdefghijklmnopqrstuvwxyz";
   let result = "";
   for (let i = 0; i < suffixLen; i++) {
@@ -73,6 +76,9 @@ export function generateNodeId(opts: {
 }
 
 /** Валидирует NodeId по regex с указанным suffixLen (default 6). */
-export function isValidNodeId(id: string, suffixLen: number = DEFAULT_SUFFIX_LENGTH): boolean {
+export function isValidNodeId(
+  id: string,
+  suffixLen: number = DEFAULT_SUFFIX_LENGTH,
+): boolean {
   return nodeIdRegex(suffixLen).test(id);
 }

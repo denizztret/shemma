@@ -1,5 +1,5 @@
-import { describe, test, expect } from "bun:test";
-import { SCHEMA_PROTOCOL_VERSION, ALL_SCHEMA_ACTION_KINDS } from "./index";
+import { describe, expect, test } from "bun:test";
+import { ALL_SCHEMA_ACTION_KINDS, SCHEMA_PROTOCOL_VERSION } from "./index";
 
 describe("schema meta constants (DRW-134 Task 1.3)", () => {
   test("SCHEMA_PROTOCOL_VERSION === '1.0' для 0.23.0", () => {

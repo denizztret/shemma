@@ -4,7 +4,7 @@
 // production-grade энтропии на сервере (spec §Risks#4, DRW-134 Task 1.2).
 
 import { randomBytes } from "node:crypto";
-import { generateNodeId, slugify, type NodeId } from "@shemma/domain";
+import { type NodeId, generateNodeId, slugify } from "@shemma/domain";
 
 /** Crypto-based RNG возвращает [0,1).
  *  4 bytes → uint32BE → делим на 2^32. */

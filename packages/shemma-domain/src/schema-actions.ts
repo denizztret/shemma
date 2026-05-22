@@ -1,6 +1,6 @@
+import type { ConnectionKind } from "./connections";
 import type { NodeId } from "./identity";
 import type { Role } from "./roles";
-import type { ConnectionKind } from "./connections";
 import type { OverlayEntry } from "./schema-meta";
 
 /** Добавить или upsert узел в RAW schema-frame.
@@ -10,7 +10,7 @@ export type SchemaDefineAction = {
   nodeId?: NodeId;
   role: Role;
   label?: string;
-  in?: NodeId;            // subgraph parent
+  in?: NodeId; // subgraph parent
 };
 
 /** Добавить ребро между двумя узлами. */
@@ -42,7 +42,7 @@ export type SchemaGroupAction = {
   kind: "schema-group";
   nodeIds: NodeId[];
   as: "boundary" | "network";
-  name?: NodeId;          // ID самой группы
+  name?: NodeId; // ID самой группы
   label?: string;
 };
 

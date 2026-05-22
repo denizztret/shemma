@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
-  slugify,
-  nodeIdRegex,
+  DEFAULT_SUFFIX_LENGTH,
+  SUFFIX_LENGTH_MAX,
+  SUFFIX_LENGTH_MIN,
   generateNodeId,
   generateSuffix,
   isValidNodeId,
-  DEFAULT_SUFFIX_LENGTH,
-  SUFFIX_LENGTH_MIN,
-  SUFFIX_LENGTH_MAX,
+  nodeIdRegex,
+  slugify,
 } from "../src/identity";
 
 // ---------------------------------------------------------------------------
@@ -113,7 +113,11 @@ describe("nodeIdRegex (DRW-134 Task 1.1)", () => {
 
 describe("generateNodeId (DRW-134 Task 1.1)", () => {
   test("named form: slug='api' → matches ^api-[0-9a-z]{6}$", () => {
-    const id = generateNodeId({ slug: "api", existingIds: new Set(), rng: () => 0.5 });
+    const id = generateNodeId({
+      slug: "api",
+      existingIds: new Set(),
+      rng: () => 0.5,
+    });
     expect(/^api-[0-9a-z]{6}$/.test(id)).toBe(true);
   });
 
@@ -123,12 +127,21 @@ describe("generateNodeId (DRW-134 Task 1.1)", () => {
   });
 
   test("slug='shape' (fallback from cyrillic) → matches ^shape-[0-9a-z]{6}$", () => {
-    const id = generateNodeId({ slug: "shape", existingIds: new Set(), rng: () => 0.5 });
+    const id = generateNodeId({
+      slug: "shape",
+      existingIds: new Set(),
+      rng: () => 0.5,
+    });
     expect(/^shape-[0-9a-z]{6}$/.test(id)).toBe(true);
   });
 
   test("configurable length: suffixLen=4 → matches ^api-[0-9a-z]{4}$", () => {
-    const id = generateNodeId({ slug: "api", suffixLen: 4, existingIds: new Set(), rng: () => 0.5 });
+    const id = generateNodeId({
+      slug: "api",
+      suffixLen: 4,
+      existingIds: new Set(),
+      rng: () => 0.5,
+    });
     expect(/^api-[0-9a-z]{4}$/.test(id)).toBe(true);
   });
 

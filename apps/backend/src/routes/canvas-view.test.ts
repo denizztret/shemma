@@ -2,15 +2,12 @@
 // Tests for GET /api/canvas/view — polymorphic v1/v2 handler (DRW-134 Task 1.5).
 
 import { describe, expect, it } from "bun:test";
-import { Hono } from "hono";
 import type { SpaceRecord } from "@shemma/spaces";
+import { Hono } from "hono";
 import { Rooms } from "../rooms";
 import type { RoomState } from "../types";
+import { type SpaceBundle, installBundleResolver } from "./_space-context";
 import { canvasViewRoutes } from "./canvas-view";
-import {
-  type SpaceBundle,
-  installBundleResolver,
-} from "./_space-context";
 
 const TEST_SPACE: SpaceRecord = {
   id: "test-canvas-view",
@@ -33,7 +30,10 @@ function makeBundle(rooms: Rooms): SpaceBundle {
 function makeApp(rooms: Rooms) {
   const bundle = makeBundle(rooms);
   const app = new Hono();
-  app.use("/api/*", installBundleResolver(() => bundle));
+  app.use(
+    "/api/*",
+    installBundleResolver(() => bundle),
+  );
   app.route("/", canvasViewRoutes());
   return app;
 }

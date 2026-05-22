@@ -1,7 +1,7 @@
 // apps/backend/src/domain/schema/identity.test.ts
 // Unit-тесты для backend identity wrapper (DRW-134 Task 1.2).
 
-import { describe, test, expect } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { nodeIdRegex } from "@shemma/domain";
 import { generateNodeIdServer, nodeIdFromLabel } from "./identity";
 

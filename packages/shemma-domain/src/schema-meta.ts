@@ -19,7 +19,7 @@ export type OverlayEntry = {
 export type SchemaFrameMeta = {
   didrawSchemaFrame: true;
   didrawProtocol: "v2";
-  schemaProtocolVersion: string;             // "1.0" для 0.23.0
+  schemaProtocolVersion: string; // "1.0" для 0.23.0
   mermaidSource: string;
   didrawOverlays: Record<NodeId, OverlayEntry>;
   didrawDestructiveCount?: number;
@@ -32,7 +32,7 @@ export type SchemaFrameMeta = {
 export type SchemaChildMeta = {
   didrawId: NodeId;
   didrawLabel: string;
-  didrawSchemaParent: string;                // frame tldraw id (shape:xxx)
+  didrawSchemaParent: string; // frame tldraw id (shape:xxx)
   /** @deprecated v1 legacy slug-as-identity. Сохраняется для backward compat,
    *  не используется в v2 identity. */
   didrawName?: string;

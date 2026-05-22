@@ -1,7 +1,7 @@
 // apps/backend/src/domain/schema/detect.test.ts
 // Unit-тесты для room-level v1/v2 protocol detection (DRW-134 Task 1.4).
 
-import { describe, test, expect } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type { RoomState } from "../../types";
 import { isV2Room, roomSuffixLength } from "./detect";
 
@@ -64,7 +64,9 @@ describe("roomSuffixLength (DRW-134 Task 1.4)", () => {
 
   test("didrawIdSuffixLength: 6.5 (non-integer) → DEFAULT_SUFFIX_LENGTH (6)", () => {
     expect(
-      roomSuffixLength({ meta: { didrawIdSuffixLength: 6.5 as never } } as never),
+      roomSuffixLength({
+        meta: { didrawIdSuffixLength: 6.5 as never },
+      } as never),
     ).toBe(6);
   });
 
