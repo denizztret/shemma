@@ -2,6 +2,7 @@
 // Tests HTTP shape (URL, method, body) without mounting React components.
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import type { SpaceLocalDTO } from "@shemma/spaces";
 import {
   addSpaceApi,
   forgetSpaceApi,
@@ -53,12 +54,20 @@ afterEach(() => {
 
 describe("listSpacesApi", () => {
   it("calls GET /api/spaces and returns spaces array", async () => {
-    const { calls } = makeFetch({ spaces: [{ id: "a", label: "A" }] });
+    const fixture: SpaceLocalDTO = {
+      id: "a",
+      label: "A",
+      path: "/tmp/a",
+      storageLayout: "project",
+      createdAt: "2026-01-01T00:00:00Z",
+      lastUsedAt: "2026-01-01T00:00:00Z",
+    };
+    const { calls } = makeFetch({ spaces: [fixture] });
     const result = await listSpacesApi();
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe("/api/spaces");
     expect(calls[0]!.init).toBeUndefined();
-    expect(result).toEqual([{ id: "a", label: "A" }]);
+    expect(result).toEqual([fixture]);
   });
 
   it("throws when response is not ok", async () => {

@@ -65,7 +65,6 @@ export function RoomCard({
   onRestored,
   onDeleted,
   onRefresh,
-  onOpen,
 }: {
   space: string;
   room: RoomCardData;
