@@ -1,3 +1,26 @@
+## 0.21.11 — 2026-05-22 — DRW-128 envelope snapshot stamps runtime version (was hardcoded "0.10.0")
+
+PATCH one-liner — every room JSON snapshot used to carry `shemma.shemmaVersion: "0.10.0"` regardless of the running daemon, because `apps/backend/src/envelope.ts` held a const literal `SHEMMA_VERSION = "0.10.0"` from the project rename in 0.10.0 and never bumped it since. The schema layer (`ENVELOPE_SCHEMA_VERSION = 3`) was correct; only the product-version stamp was stale.
+
+### Fix
+
+- Removed the hardcoded const. `buildV3()` now stamps `VERSION.version` from `apps/backend/src/version.ts` (which already resolves via `process.env.SHEMMA_VERSION` → `gitDescribe()` → `pkg.version-dev` chain — see DRW-119 / 0.21.8 + 0.21.9).
+- Renamed the literal `"0.10.0"` survivor to `LEGACY_FALLBACK_VERSION` and kept it strictly on the parse path: when a legacy envelope arrives without `shemma.shemmaVersion` or `didraw.didrawVersion`, we use this historical floor (the file was clearly written pre-0.10) instead of fabricating the current runtime version.
+
+### Tests
+
+- `apps/backend/tests/envelope-v3.test.ts` — 3 new cases:
+  - `serialize` stamps with `VERSION.version`, not `"0.10.0"`.
+  - `parseFull` on a legacy envelope (no `shemma` key) falls back to `"0.10.0"`.
+  - `parseFull` preserves an explicit `shemmaVersion` round-trip.
+- Full backend suite: 511 tests, 0 fail.
+
+### Verification
+
+Source-mode serialize emits `shemmaVersion: "0.21.11"` (or `git describe` output for in-flight commits). No more frozen-in-time `0.10.0` in saved files going forward.
+
+---
+
 ## 0.21.10 — 2026-05-22 — DRW-125 CLI silent noop: thread `--space` + symmetric exit codes
 
 PATCH fix for the most damaging surface bug from the 2026-05-22 MCP feedback. Domain CLI commands (`define / connect / group / note / layout / delete / apply / context`) silently swallowed backend errors: `✔ ok` on stdout, exit 0, nothing actually written. Two compounding causes:
