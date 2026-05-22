@@ -1,3 +1,14 @@
+## Unreleased (DRW-124 cluster — accumulating for next release)
+
+Per user direction 2026-05-22 («релизы не делаем до того как все задачи закроем»), the following fixes are merged on `main` without per-DRW version bumps + tags. They will roll up into one release commit when DRW-124 cluster closes.
+
+- **DRW-129** (P3.8): MCP tool descriptions — Troubleshooting sections for `shemma_import_mermaid` (WS-not-just-tab requirement, `window.shemmaImportMermaid` DevTools fallback, active_rooms verification, append-only accumulation hazard) and `shemma_open` (spawned≠connected, dead-bundle detection). Static test pins key markers.
+- **DRW-130** (P2.6): `shemma rooms list` friendly renderer — table view with id / version / elements / last touched + relative-time formatter. Empty list → `· no rooms` hint. `--json` mode unchanged. Also closed a DRW-125 gap: `lifecycle.list` now threads `--space`.
+- **DRW-131** (DRW-125 follow-up): `--space` threading completed for all non-domain CLI commands — `rooms archive/restore/export/import/duplicate/rename/rm/purge-archive`, `state/patch/clear`, `prompts/*`, `ai/*`. All exit 1 via `responseHasError` on error envelopes (drops the old `r.ok === false` checks). 6 integration cases.
+- **DRW-132** (P3.7): `shemma ps` distinct status per profile — release and debug share port 8787 → share lockDir → status used to falsely show both as running with the same pid. Now `status()` checks `meta.profile === profile` after isAlive. Extracted `evaluateLockOwnership` as a pure helper for unit-testability.
+
+---
+
 ## 0.21.12 — 2026-05-22 — DRW-126 `/api/health` is space-aware (P0.2 storage rift fix)
 
 PATCH for the second P0 from the 2026-05-22 MCP feedback. `shemma_health` used to report the daemon-default fallback storage (`~/.claude/projects/<slug>/canvas`) regardless of which space the agent was actually targeting; `shemma_rooms_list(space=X)` resolved per-space (`<space>/.shemma/canvas`). Two responses for the same daemon, one of them lying.
