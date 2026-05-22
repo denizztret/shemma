@@ -6,6 +6,7 @@ Per user direction 2026-05-22 («релизы не делаем до того к
 - **DRW-130** (P2.6): `shemma rooms list` friendly renderer — table view with id / version / elements / last touched + relative-time formatter. Empty list → `· no rooms` hint. `--json` mode unchanged. Also closed a DRW-125 gap: `lifecycle.list` now threads `--space`.
 - **DRW-131** (DRW-125 follow-up): `--space` threading completed for all non-domain CLI commands — `rooms archive/restore/export/import/duplicate/rename/rm/purge-archive`, `state/patch/clear`, `prompts/*`, `ai/*`. All exit 1 via `responseHasError` on error envelopes (drops the old `r.ok === false` checks). 6 integration cases.
 - **DRW-132** (P3.7): `shemma ps` distinct status per profile — release and debug share port 8787 → share lockDir → status used to falsely show both as running with the same pid. Now `status()` checks `meta.profile === profile` after isAlive. Extracted `evaluateLockOwnership` as a pure helper for unit-testability.
+- **DRW-133** (P1.4): `shemma_open` accepts `waitForClient: boolean` and `timeoutMs?: number` (default 5000). When set, polls `/api/active-rooms?space=<id>` until the target room has `clientCount > 0`, or the budget runs out. Response then carries `connected: boolean` and `waitedMs`. Polling: 100ms initial → 2× backoff → 500ms cap; transient fetch errors retry until timeout. `waitForClientConnection` is exported pure for unit testing with a fake clock.
 
 ---
 
