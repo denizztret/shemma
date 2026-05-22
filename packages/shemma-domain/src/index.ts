@@ -4,3 +4,4 @@ export * from "./layout-modes";
 export * from "./role-preset";
 export * from "./connection-preset";
 export * from "./validation";
+export * from "./identity";
