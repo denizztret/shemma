@@ -116,18 +116,36 @@ async function pollFor(
   return false;
 }
 
+/**
+ * DRW-132: pure decision branch for "is the lock metadata ours, and is the
+ * holder still alive". Extracted so the cross-profile lock-share case
+ * (release vs debug on port 8787) can be unit-tested without spinning up a
+ * real daemon. Returns `null` for the not-running outcomes; the live-lock
+ * details otherwise.
+ */
+export function evaluateLockOwnership(
+  meta: { pid: number; profile: string; startedAt: string } | undefined,
+  profile: Profile,
+  isAliveFn: (pid: number) => boolean = isAlive,
+): { pid: number; startedAt: string } | null {
+  if (!meta) return null;
+  if (!isAliveFn(meta.pid)) return null;
+  if (meta.profile !== profile) return null;
+  return { pid: meta.pid, startedAt: meta.startedAt };
+}
+
 export async function status(profile: Profile) {
   const port = portFor(profile);
   const dir = lockDirFor(port);
   const meta = readLockMetadata(dir);
-  if (!meta) return { running: false, profile, port };
-  if (!isAlive(meta.pid)) return { running: false, profile, port };
+  const owned = evaluateLockOwnership(meta, profile);
+  if (!owned) return { running: false, profile, port };
   return {
     running: await isHealthy(port),
-    pid: meta.pid,
+    pid: owned.pid,
     profile,
     port,
-    startedAt: meta.startedAt,
+    startedAt: owned.startedAt,
   };
 }
 
