@@ -1,63 +1,71 @@
-import { useEffect, useState } from "react";
-import type { SpaceLocalDTO } from "@shemma/spaces";
-import { AddSpaceForm } from "./AddSpaceForm";
-import { forgetSpaceApi, listSpacesApi } from "./api";
-import { relativeTime, truncatePath } from "./format";
+import { tokens } from "../design-tokens";
+import { SpacePickerPanel } from "./SpacePickerPanel";
 
 /**
- * Landing page (spec §7.2): list of registered spaces + form to add a new one.
- *
- * Routing convention: clicking a space navigates to `/?space=<id>` — the
- * single-column form parseShemmaUrl already recognises. Multi-column open
- * comes in later tasks.
+ * Landing page (bare `/`): centered card in the same visual language as the
+ * `OpenSpaceDialog` modal. List of registered spaces with `Forget`
+ * affordance, plus path-input to add / initialize a new one.
  */
 export function SpacesPage() {
-  const [spaces, setSpaces] = useState<SpaceLocalDTO[]>([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const refresh = async () => {
-    try {
-      setSpaces(await listSpacesApi());
-      setLoadError(null);
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  useEffect(() => {
-    void refresh();
-  }, []);
-
-  const open = (id: string) => {
-    window.location.href = `/?space=${encodeURIComponent(id)}`;
-  };
-
-  const forget = async (id: string) => {
-    await forgetSpaceApi(id);
-    await refresh();
-  };
-
   return (
-    <main className="spaces-page">
-      <h1>Spaces ({spaces.length})</h1>
-      <AddSpaceForm onAdded={open} />
-      {loadError && <div className="error">{loadError}</div>}
-      <ul className="spaces-list">
-        {spaces.map((s) => (
-          <li key={s.id}>
-            <button type="button" onClick={() => open(s.id)}>
-              {s.label ?? s.id}
-            </button>
-            <code title={s.path}>{truncatePath(s.path)}</code>
-            {s.legacy && <span className="badge">Legacy</span>}
-            {s.orphaned && <span className="badge">Orphaned</span>}
-            <time dateTime={s.lastUsedAt}>{relativeTime(s.lastUsedAt)}</time>
-            <button type="button" onClick={() => forget(s.id)}>
-              Forget
-            </button>
-          </li>
-        ))}
-      </ul>
+    <main
+      style={{
+        minHeight: "100vh",
+        background: "#f6f7f9",
+        fontFamily: tokens.font.sans,
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "center",
+        padding: "10vh 16px 40px",
+      }}
+    >
+      <div
+        style={{
+          background: tokens.color.bgOverlay,
+          border: `1px solid ${tokens.color.border}`,
+          borderRadius: tokens.radius.lg,
+          width: 560,
+          maxWidth: "100%",
+          maxHeight: "80vh",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          boxShadow: "0 24px 64px rgba(0,0,0,0.08)",
+        }}
+      >
+        <header
+          style={{
+            padding: "20px 24px",
+            borderBottom: `1px solid ${tokens.color.border}`,
+            display: "flex",
+            alignItems: "baseline",
+            gap: 10,
+          }}
+        >
+          <strong
+            style={{
+              fontFamily: tokens.font.mono,
+              fontSize: 16,
+              color: tokens.color.text,
+            }}
+          >
+            shemma
+          </strong>
+          <span
+            style={{
+              fontSize: tokens.font.sm,
+              color: tokens.color.textMuted,
+            }}
+          >
+            Spaces
+          </span>
+        </header>
+        <SpacePickerPanel
+          emptyMessage="No spaces registered yet. Add one below."
+          pathLabel="Add a space by path"
+          allowForget
+        />
+      </div>
     </main>
   );
 }
