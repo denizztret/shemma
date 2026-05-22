@@ -95,7 +95,12 @@ export function buildTldrawComponents(
       // className mirrors tldraw's own .tlui-share-zone for correct layout/z-index.
       <div
         className="tlui-share-zone"
-        style={{ pointerEvents: "all", zIndex: 300 }}
+        style={{
+          pointerEvents: "all",
+          zIndex: 300,
+          display: "inline-flex",
+          gap: 6,
+        }}
       >
         <GalleryLink space={space} />
         <RoomBadge room={room} />

@@ -1,3 +1,19 @@
+## 0.21.6 — 2026-05-22 — DRW-122 `--version` flag + SharePanel spacing
+
+PATCH polish.
+
+### `--version` / `-V` flag
+
+Раньше `shemma --version` падал в zero-arg fall-through → `lifecycle.open()` запускал daemon и открывал browser. Лишнее side effect для тривиального query.
+
+**Fix:** `packages/shemma-cli/src/index.ts` — flag handler перед zero-arg веткой, вызывает `cmdVersion()` и `return`. Симметрично `--help` / `-h`. Также работает `-V` alias.
+
+### SharePanel spacing
+
+Gap между `← Gallery` button и version chip был меньше чем gap между version chip и `room: <id>` chip (визуальный disbalance). Причина: gap внутри `RoomBadge` flex container = 4px, между `GalleryLink` и `RoomBadge` — natural tldraw spacing (~0–2px).
+
+**Fix:** обернул `GalleryLink` + `RoomBadge` в SharePanel wrapper с `display: inline-flex; gap: 6`. Внутренний gap у `RoomBadge` тоже bumped 4 → 6 для consistency.
+
 ## 0.21.5 — 2026-05-22 — DRW-121 cwd-aware open: `shemma` resolves to space gallery
 
 PATCH feature. Зеркальный fix для запуска из терминала: `shemma` без аргументов теперь резолвит cwd к зарегистрированному space и открывает gallery того space, а не legacy `?room=default` URL (который после DRW-120 redirect'ится на landing).
