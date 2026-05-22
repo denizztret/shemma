@@ -25,6 +25,7 @@ import {
 } from "./routes/_space-context";
 import { activeRoomsRoutes } from "./routes/active-rooms";
 import { aiRoutes } from "./routes/ai";
+import { canvasViewRoutes } from "./routes/canvas-view";
 import { contextRoutes } from "./routes/context";
 import { domainRoutes } from "./routes/domain";
 import { exportRoutes } from "./routes/export";
@@ -296,6 +297,7 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", viewportRoutes());
   app.route("/", domainRoutes(bus));
   app.route("/", contextRoutes());
+  app.route("/", canvasViewRoutes());
   app.route("/", importMermaidRoutes(bus));
   app.route("/", activeRoomsRoutes(bus.getActiveRooms()));
   app.route("/", exportRoutes());
