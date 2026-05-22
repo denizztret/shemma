@@ -72,7 +72,11 @@ export function createShemmaMcpServer(opts: ShemmaMcpServerOpts): ShemmaMcpServe
     autoOpen,
   });
   registerPromptAndActivityTools(server, { client: opts.client, defaultRoom: opts.defaultRoom });
-  registerOpenTool(server, { autoOpen, defaultRoom: opts.defaultRoom });
+  registerOpenTool(server, {
+    autoOpen,
+    defaultRoom: opts.defaultRoom,
+    client: opts.client,
+  });
   registerExportMiroTool(server, {
     client: opts.client,
     resolver,

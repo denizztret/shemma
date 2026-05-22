@@ -35,8 +35,12 @@ describe("DRW-129 — MCP tool Troubleshooting sections", () => {
   it("shemma_open description mentions Troubleshooting + spawned≠connected", () => {
     const src = read("open.ts");
     expect(src).toContain("Troubleshooting:");
-    expect(src).toContain("spawned:true");
-    expect(src).toContain("active_rooms");
+    // Tolerate either `spawned:true` or `spawned: true` wording in the
+    // description string — exact whitespace evolves over time (DRW-133
+    // restructured the explanation around waitForClient).
+    expect(src).toMatch(/spawned:\s*true/);
+    // Cross-link to the active-rooms verification path.
+    expect(src.toLowerCase()).toMatch(/active[-_]rooms|active rooms/);
   });
 
   it("shemma_health description (DRW-126) spells out space + fallback semantics", () => {
