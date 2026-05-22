@@ -1,3 +1,47 @@
+## 0.21.8 — 2026-05-22 — DRW-119 `git describe` for dev/debug version display
+
+PATCH versioning policy follow-up. Closes the gap introduced by the new "tags only at real releases" policy (2026-05-22): between releases, dev/source builds no longer show the stale `pkg.version` of the last shipped release. Compiled release binaries are unchanged.
+
+### The problem
+
+`apps/backend/src/version.ts` previously resolved version as:
+
+```
+process.env.SHEMMA_VERSION ?? pkg.version ?? "0.0.0-dev"
+```
+
+For compiled binaries `SHEMMA_VERSION` is baked in via `bun build --compile --define`, so they always report the right thing. But in dev/source mode (`bun packages/shemma-cli/src/index.ts daemon start`) — when there is no env var — the resolver fell back to `pkg.version`. After a release that field is the *just-shipped* version, so any subsequent commit on `main` (or a feature branch off it) reports the same number until the next release commit. With the new policy of *not* tagging every merge, this drift is now permanent until release.
+
+### The fix
+
+`resolveVersion()` now uses a 3-step fallback chain:
+
+1. `SHEMMA_VERSION` env (release binary — wins immediately).
+2. `git describe --tags --abbrev=7 --always --dirty` from the repo root.
+3. `pkg.version + "-dev"` (non-git environments — CI artifacts, npm tarballs).
+
+On a clean tag checkout `git describe` returns the bare tag (e.g. `0.21.7`). N commits past the tag → `0.21.7-5-gabc1234`. With uncommitted edits → `0.21.7-5-gabc1234-dirty`. So `/api/version` (and therefore the SharePanel chip and `shemma version`) now reports a precise position relative to the last release without us needing to tag every merge.
+
+`gitDescribe()` is resilient: non-zero exit, missing git, or non-repo cwd → returns `null` → falls through to `pkg.version + "-dev"`. Compiled binaries are unaffected because the env-shortcut runs before `gitDescribe()`.
+
+### Tests
+
+`apps/backend/src/__tests__/version.test.ts` — 9 tests covering:
+
+- `SHEMMA_VERSION` env wins over describe + pkg.
+- Clean tag, ahead-of-tag, and dirty describe outputs are returned as-is.
+- Empty env + `describe() → null` falls back to `pkg.version + "-dev"`.
+- Empty-string `SHEMMA_VERSION` is treated as unset (falls through).
+- `gitDescribe()` integration check on the real repo.
+
+`resolveVersion()` is DI-friendly: tests inject `env`, `describe`, `pkgVersion` directly, so no `spawnSync` mocking.
+
+### Out of scope
+
+`packages/shemma-cli/src/lifecycle.ts` `printStartupBanner()` still reads `process.env.SHEMMA_VERSION` first and falls back to its own `pkg.version` (no `git describe`). Banner only renders during daemon startup — backend `/api/version` is the primary user-facing consumer (SharePanel chip, `shemma version`). CLI banner cleanup is a follow-up.
+
+---
+
 ## 0.21.7 — 2026-05-22 — DRW-123 CLI test XDG isolation (stop leaking orphans into real registry)
 
 PATCH test infra hardening.
