@@ -16,11 +16,13 @@ const CLI = join(import.meta.dir, "..", "src", "index.ts");
 
 let srv: { port: number; close: () => Promise<void> };
 let base: string;
+let xdg: string;
 
 beforeAll(async () => {
   base = mkdtempSync(join(tmpdir(), "shemma-banner-base-"));
-  // Legacy --storage path is registered as direct-layout; daemon serves it
-  // through the spaces registry, no separate storageDir wiring needed.
+  // DRW-123: isolate registry writes — child CLI runs against an empty
+  // `<xdg>/.config/shemma/spaces.json`, never touches the user's real one.
+  xdg = mkdtempSync(join(tmpdir(), "shemma-banner-xdg-"));
   mkdirSync(base, { recursive: true });
   srv = await startServer({ port: 0 });
 });
@@ -28,6 +30,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await srv.close();
   rmSync(base, { recursive: true, force: true });
+  rmSync(xdg, { recursive: true, force: true });
 });
 
 async function cli(
@@ -39,6 +42,7 @@ async function cli(
       ...(process.env as Record<string, string>),
       SHEMMA_PORT: String(srv.port),
       SHEMMA_PROFILE: "dev",
+      XDG_CONFIG_HOME: xdg,
       ...env,
     },
     stdin: "ignore",

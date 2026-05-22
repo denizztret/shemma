@@ -19,12 +19,16 @@ import { startServer } from "../../../apps/backend/src/index";
 const CLI = join(import.meta.dir, "..", "src", "index.ts");
 
 let srv: { port: number; close: () => Promise<void> };
+let xdg: string;
 
 beforeAll(async () => {
+  // DRW-123: isolate registry writes from the user's real ~/.config/shemma.
+  xdg = mkdtempSync(join(tmpdir(), "shemma-zero-arg-xdg-"));
   srv = await startServer({ port: 0 });
 });
 afterAll(async () => {
   await srv.close();
+  rmSync(xdg, { recursive: true, force: true });
 });
 
 async function cli(
@@ -51,6 +55,7 @@ function envFor(extra: Record<string, string> = {}): Record<string, string> {
     ...(process.env as Record<string, string>),
     SHEMMA_PORT: String(srv.port),
     SHEMMA_PROFILE: "dev",
+    XDG_CONFIG_HOME: xdg,
     ...extra,
   };
   delete env.SHEMMA_STORAGE_DIR;
