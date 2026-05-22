@@ -1,6 +1,8 @@
-## 0.22.2 — 2026-05-22 — DRW-118 restyle SpacesPage landing in card design
+## 0.21.2 — 2026-05-22 — DRW-118 restyle SpacesPage landing in card design
 
-PATCH UX fix: post-0.22.1 коррекция. Landing `/` рендерил `SpacesPage` в legacy bullet-list стиле — голый `<ul>`, кнопки браузера-default, никаких отступов. Переписано под тот же card-стиль что у `OpenSpaceDialog`.
+> **Renumber 2026-05-22:** теги `0.22.0` / `0.22.1` / `0.22.2` переименованы post-hoc в `0.21.0` / `0.21.1` / `0.21.2` — заполняем пропущенный 0.21.x gap (изначально DRW-116 маркировался как 0.22 потому что pre-1.0 MINOR с breaking changes; решили вернуть monotone progression). Release-коммиты с сообщениями "release: 0.22.X" остались в истории как artifact, теги `0.21.X` указывают на те же commits. Local-only repo — bookmarks не сломались.
+
+PATCH UX fix: post-0.21.1 коррекция. Landing `/` рендерил `SpacesPage` в legacy bullet-list стиле — голый `<ul>`, кнопки браузера-default, никаких отступов. Переписано под тот же card-стиль что у `OpenSpaceDialog`.
 
 ### Changes
 
@@ -10,9 +12,9 @@ PATCH UX fix: post-0.22.1 коррекция. Landing `/` рендерил `Spac
 - Удалён `AddSpaceForm.tsx` (заменён единым path-input в panel).
 - Badge'и `LEGACY` / `ORPHANED` рядом с label для visibility.
 
-## 0.22.1 — 2026-05-22 — DRW-117 simplify spaces UI: drop multi-column, add Open Space switcher
+## 0.21.1 — 2026-05-22 — DRW-117 simplify spaces UI: drop multi-column, add Open Space switcher
 
-PATCH UX fix: post-0.22.0 коррекция. Multi-column `?cols=A,B,C` URL-syntax + `MultiColumnLayout` оказались over-engineering — реальный сценарий это переключение между галереями, не side-by-side comparison. Возвращаемся к single-gallery view с быстрым switcher-диалогом.
+PATCH UX fix: post-0.21.0 коррекция. Multi-column `?cols=A,B,C` URL-syntax + `MultiColumnLayout` оказались over-engineering — реальный сценарий это переключение между галереями, не side-by-side comparison. Возвращаемся к single-gallery view с быстрым switcher-диалогом.
 
 ### UX changes
 
@@ -40,7 +42,7 @@ PATCH UX fix: post-0.22.0 коррекция. Multi-column `?cols=A,B,C` URL-syn
 
 - Старые `?cols=` URL'ы (если кто-то их сохранил) теперь резолвятся как `landing` view (params вообще не парсятся). Live URL bookmarks `?space=` / `?room=` не затронуты.
 
-## 0.22.0 — 2026-05-22 — DRW-116 singleton daemon + spaces registry + multi-gallery
+## 0.21.0 — 2026-05-22 — DRW-116 singleton daemon + spaces registry + multi-gallery
 
 MINOR feature: переход от per-project daemon (отдельный port для каждой папки) к глобальному singleton daemon с composite-key `(spaceId, roomId)` и spaces registry в `~/.config/shemma/spaces.json`. Legacy `~/.claude/projects/*/canvas/*.json` мигрирует автоматически на первом старте; default space сохраняет совместимость для клиентов, которые ещё не присылают `?space=<id>`.
 

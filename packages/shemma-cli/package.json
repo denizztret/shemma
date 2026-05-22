@@ -1,6 +1,6 @@
 {
   "name": "shemma",
-  "version": "0.22.2",
+  "version": "0.21.2",
   "private": true,
   "type": "module",
   "bin": {
