@@ -272,10 +272,45 @@ export function banner(lines: BannerLine[]): void {
 
 // ---------- Raw JSON passthrough ----------
 
+// DRW-125: hints for well-known backend error codes. Keeps friendly mode
+// actionable when middleware short-circuits with `{ error: "..." }` envelopes
+// (apps/backend/src/middleware/space.ts) — agents and humans get a one-line
+// pointer to the fix instead of a bare error string.
+function hintsForErrorCode(code: string): string[] {
+  switch (code) {
+    case "invalid_space_id":
+    case "space_not_found":
+      return [
+        "run `shemma s list` to see registered spaces",
+        "pass `--space <id>` or cd into a registered space path",
+      ];
+    case "space_required":
+      return [
+        "no `default` space is registered — pass `--space <id>` or cd into a registered space path",
+      ];
+    default:
+      return [];
+  }
+}
+
+// DRW-125: backend uses two error envelope shapes —
+//   1. `{ ok: false, error: "..." }` from domain validation
+//   2. `{ error: "..." }` from middleware short-circuits (no `ok` at all)
+// Treat both as errors. Guard against false-positives on a legitimate
+// `ok: true` response that happens to nest the word "error" in a sub-field.
+function isErrorEnvelope(res: unknown): { error: string } | null {
+  if (res === null || typeof res !== "object") return null;
+  const r = res as { ok?: unknown; error?: unknown };
+  const errStr = typeof r.error === "string" ? r.error : undefined;
+  if (r.ok === false) return { error: errStr ?? "operation failed" };
+  if (r.ok !== true && errStr !== undefined) return { error: errStr };
+  return null;
+}
+
 /**
  * Print raw JSON response from backend. В human mode — формат `success`/`error`
- * по `ok` field. В JSON mode — `JSON.stringify(res)` as-is (byte-identical
- * с pre-Group-A behaviour).
+ * по error envelope (см. `isErrorEnvelope`). В JSON mode — `JSON.stringify(res)`
+ * as-is (byte-identical с pre-Group-A behaviour).
  *
  * Used by commands that proxy a backend response (rooms ops, domain, ai etc).
  */
@@ -284,10 +319,13 @@ export function printResponse(res: unknown, opts: { humanSuccess?: string } = {}
     process.stdout.write(JSON.stringify(res) + "\n");
     return;
   }
-  const ok = (res as { ok?: boolean }).ok;
-  if (ok === false) {
-    const err = (res as { error?: string }).error ?? "operation failed";
-    error(err, { code: err });
+  const errEnvelope = isErrorEnvelope(res);
+  if (errEnvelope) {
+    const hints = hintsForErrorCode(errEnvelope.error);
+    error(errEnvelope.error, {
+      code: errEnvelope.error,
+      ...(hints.length ? { hint: hints } : {}),
+    });
     return;
   }
   if (opts.humanSuccess) {
@@ -295,4 +333,10 @@ export function printResponse(res: unknown, opts: { humanSuccess?: string } = {}
   } else {
     success("ok");
   }
+}
+
+// DRW-125: callers (domain commands) need the same envelope check to set
+// process exit code symmetrically across JSON and human modes.
+export function responseHasError(res: unknown): boolean {
+  return isErrorEnvelope(res) !== null;
 }

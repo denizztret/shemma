@@ -70,8 +70,29 @@ initOutput({
   isTTY: !!process.stdout.isTTY,
   isStderrTTY: !!process.stderr.isTTY,
 });
+// DRW-125: parse top-level --space <id> and strip it so per-command parsers
+// don't have to know about it. Domain commands (define/connect/group/note/
+// layout/delete/apply/context) thread this into CanvasClient as ?space=<id>;
+// without it, the client falls back to "__legacy__" which fails space
+// middleware validation (apps/backend/src/middleware/space.ts).
+// Precedence: --space <id> > SHEMMA_SPACE env > unset (client default).
+const { space: spaceArg, rest: argvAfterSpace } = parseSpaceFlag(argvAfterJson);
+const space = spaceArg ?? process.env.SHEMMA_SPACE;
 // Strip --profile <value> here so per-command parsers don't need to know about it.
-const argv = stripProfileFlag(argvAfterJson);
+const argv = stripProfileFlag(argvAfterSpace);
+
+function parseSpaceFlag(a: string[]): { space?: string; rest: string[] } {
+  const rest: string[] = [];
+  let space: string | undefined;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === "--space") {
+      space = a[++i];
+      continue;
+    }
+    rest.push(a[i]!);
+  }
+  return space !== undefined ? { space, rest } : { rest };
+}
 
 function stripProfileFlag(a: string[]): string[] {
   const out: string[] = [];
@@ -179,7 +200,7 @@ async function main() {
       else if (argv[i] === "--spacing") spacing = argv[++i];
       else if (argv[i] === "--room") room = argv[++i];
     }
-    return layoutCmd({ mode, scope, spacing, profile, room });
+    return layoutCmd({ mode, scope, spacing, profile, room, space });
   }
   if (cmd === "prompts") return cmdPrompts(argv.slice(1));
   if (cmd === "ai") {
@@ -421,7 +442,7 @@ async function main() {
       else if (argv[i] === "--in") inContainer = argv[++i];
       else if (argv[i] === "--room") room = argv[++i];
     }
-    return define({ role, name, label, in: inContainer, profile, room });
+    return define({ role, name, label, in: inContainer, profile, room, space });
   }
 
   if (cmd === "connect") {
@@ -436,7 +457,7 @@ async function main() {
       else if (argv[i] === "--label") label = argv[++i];
       else if (argv[i] === "--room") room = argv[++i];
     }
-    return connectCmd({ from, to, kind, label, profile, room });
+    return connectCmd({ from, to, kind, label, profile, room, space });
   }
 
   if (cmd === "group") {
@@ -452,7 +473,7 @@ async function main() {
       else if (argv[i] === "--room") room = argv[++i];
     }
     if (!asKind || !name) die("expected --as <kind> --name <name>");
-    return group({ ids, as: asKind, name, label, profile, room });
+    return group({ ids, as: asKind, name, label, profile, room, space });
   }
 
   if (cmd === "note") {
@@ -465,7 +486,7 @@ async function main() {
       else if (argv[i] === "--room") room = argv[++i];
     }
     if (!text) die('expected --text "..."');
-    return note({ text, about, profile, room });
+    return note({ text, about, profile, room, space });
   }
 
   if (cmd === "delete") {
@@ -476,7 +497,7 @@ async function main() {
       if (argv[i] === "--room") room = argv[++i];
     }
     if (ids.length === 0) die("expected <id1,id2,...>");
-    return deleteCmd({ ids, cascade, profile, room });
+    return deleteCmd({ ids, cascade, profile, room, space });
   }
 
   if (cmd === "apply") {
@@ -485,7 +506,7 @@ async function main() {
     for (let i = 1; i < argv.length; i++) {
       if (argv[i] === "--room") room = argv[++i];
     }
-    return applyStdin({ profile, room });
+    return applyStdin({ profile, room, space });
   }
 
   if (cmd === "context") {
@@ -497,7 +518,7 @@ async function main() {
       else if (argv[i] === "--viewport") viewport = argv[++i];
       else if (argv[i] === "--room") room = argv[++i];
     }
-    return context({ since, viewport, profile, room });
+    return context({ since, viewport, profile, room, space });
   }
 
   // Top-level positional path detection (DRW-116 Task 22):
@@ -588,6 +609,8 @@ Flags:
   --profile dev|release|debug   select runtime profile (default: release)
   --debug                       shortcut for --profile debug
   --json                        emit machine-readable JSON instead of friendly text (for agent/CI)
+  --space <id>                  target a specific registered space (overrides cwd-based resolution;
+                                also honours SHEMMA_SPACE env). See 'shemma s list'.
 
 Note: Mermaid import is browser-only (see ADR-0001): open canvas and run
   await window.shemmaImportMermaid('graph LR\\n  app --> db')
