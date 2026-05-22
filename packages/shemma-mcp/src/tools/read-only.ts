@@ -13,7 +13,7 @@ export type ReadOnlyDeps = {
 };
 
 export type ReadOnlyHandles = {
-  health: { call: (input: { ensure?: boolean; extended?: boolean }) => Promise<ToolResult> };
+  health: { call: (input: { ensure?: boolean; extended?: boolean; space?: string }) => Promise<ToolResult> };
   version: { call: (input: Record<string, never>) => Promise<ToolResult> };
   rooms_list: { call: (input: { space?: string }) => Promise<ToolResult> };
   active_rooms: { call: (input: { space?: string }) => Promise<ToolResult> };
@@ -36,10 +36,27 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
   // ── shemma_health ──────────────────────────────────────────────────────────
   const ENSURE_WARNING = "ensure not yet implemented; pass --auto-ensure to shemma mcp start instead";
 
-  async function healthCall(input: { ensure?: boolean; extended?: boolean }): Promise<ToolResult> {
+  // DRW-126: `space` param lets the agent ask "what storage does THIS space
+  // use", instead of always seeing the daemon-default fallback path. When
+  // `space` is provided we resolve it (validates format + registry hit) and
+  // ask the daemon for per-space storage; without it the response carries
+  // `fallback: true` so the caller can tell.
+  async function healthCall(input: {
+    ensure?: boolean;
+    extended?: boolean;
+    space?: string;
+  }): Promise<ToolResult> {
     try {
-      if (input.extended) {
-        const info = await deps.client.getHealth();
+      let spaceId: string | undefined;
+      if (input.space) {
+        const spaceRes = resolveSpaceOrError(deps, input.space);
+        if ("error" in spaceRes) return spaceRes.error;
+        spaceId = spaceRes.spaceId;
+      }
+      if (input.extended || input.space) {
+        const info = await deps.client.getHealth(
+          spaceId !== undefined ? { space: spaceId } : {},
+        );
         if (!info) {
           const details = input.ensure ? { warning: ENSURE_WARNING } : undefined;
           return toolResult({ ok: false, code: "daemon-unavailable", message: "daemon unreachable", details });
@@ -59,14 +76,15 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
   server.registerTool(
     "shemma_health",
     {
-      description: "Check daemon reachability. Optional: ensure=true to start daemon if down; extended=true to include profile/storage/version.",
+      description: "Check daemon reachability. Optional: ensure=true to start daemon if down; extended=true to include profile/storage/version; space=<id> for per-space storage (DRW-126). Without space, storage is the daemon-default fallback (fallback:true) — pass space to get the actual storage path for that registered space (fallback:false).",
       inputSchema: {
         ensure: z.boolean().optional(),
         extended: z.boolean().optional(),
+        space: z.string().optional(),
       },
       annotations: { readOnlyHint: true },
     },
-    async (args) => healthCall(args as { ensure?: boolean; extended?: boolean }),
+    async (args) => healthCall(args as { ensure?: boolean; extended?: boolean; space?: string }),
   );
 
   // ── shemma_version ─────────────────────────────────────────────────────────

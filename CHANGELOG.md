@@ -1,3 +1,38 @@
+## 0.21.12 — 2026-05-22 — DRW-126 `/api/health` is space-aware (P0.2 storage rift fix)
+
+PATCH for the second P0 from the 2026-05-22 MCP feedback. `shemma_health` used to report the daemon-default fallback storage (`~/.claude/projects/<slug>/canvas`) regardless of which space the agent was actually targeting; `shemma_rooms_list(space=X)` resolved per-space (`<space>/.shemma/canvas`). Two responses for the same daemon, one of them lying.
+
+### Root cause
+
+`/api/health` is in `SPACE_ALLOWLIST`, so the global space middleware skipped it. The route handler returned `storageDir`, a value captured by closure at daemon startup from `resolveLegacyStorageDir(profile)`. No optional `?space=` path existed, and the MCP tool never threaded one through.
+
+### Fix
+
+- `apps/backend/src/routes/health.ts` now handles `?space=<id>` itself:
+  - Valid registered → `resolveStorageRoot(record, profile)` plus `space: <id>` and `fallback: false` fields in the response.
+  - Malformed id (fails `SPACE_ID_PATTERN`) → 400 `invalid_space_id`.
+  - Unknown id (no registry record) → 404 `space_not_found`.
+  - No `?space=` → legacy closure storage plus `fallback: true` so callers can tell that path is global, not a specific space's data dir.
+- `CanvasClient.getHealth(opts: { space? })` threads the param into the URL and parses the new optional `space` / `fallback` fields.
+- `shemma_health` MCP tool accepts `space?: string`. Resolution goes through the shared `resolveSpaceOrError` (composite-key invariants per spec §3 + §8.3). Description updated to spell out the fallback-vs-resolved semantics.
+
+### Tests
+
+- `apps/backend/tests/drw-126-health-space-aware.test.ts` — 5 cases:
+  - no `?space=` → fallback storage + `fallback: true`.
+  - valid registered space → per-space storage roots inside the space path, not claude-projects.
+  - malformed space → 400 `invalid_space_id`.
+  - unknown space → 404 `space_not_found`.
+  - cross-check: `health(space=X).storage` agrees with `rooms_list(space=X).dir`.
+- Existing `apps/backend/tests/routes-health.test.ts` still passes (no behaviour change without `?space=`, just the new additive `fallback: true` field).
+- Full monorepo suite: still green (CLI 203 + backend 511+5 + MCP 193 + client/domain ≈100s, 0 fail).
+
+### Verification
+
+`shemma_health(space="ios").data.storage` will now match the actual per-space storage dir `<ios-path>/.shemma/canvas/` — same value as `shemma_rooms_list(space="ios").data.dir`. `shemma_health()` (no space) still works and now carries `fallback: true` so agents can detect they're looking at the daemon-wide default rather than a specific space.
+
+---
+
 ## 0.21.11 — 2026-05-22 — DRW-128 envelope snapshot stamps runtime version (was hardcoded "0.10.0")
 
 PATCH one-liner — every room JSON snapshot used to carry `shemma.shemmaVersion: "0.10.0"` regardless of the running daemon, because `apps/backend/src/envelope.ts` held a const literal `SHEMMA_VERSION = "0.10.0"` from the project rename in 0.10.0 and never bumped it since. The schema layer (`ENVELOPE_SCHEMA_VERSION = 3`) was correct; only the product-version stamp was stale.

@@ -180,15 +180,32 @@ export class CanvasClient {
    * `null` if the daemon is unreachable or the response is malformed.
    * Used by `shemma open` (DRW-052) for storage-conflict detection.
    */
-  async getHealth(): Promise<{
+  // DRW-126: `getHealth` accepts an optional `space` so callers can ask "what
+  // storage does THIS space use" instead of always getting the daemon-default
+  // fallback path. Pass-through to `/api/health?space=<id>`. Without `space`,
+  // the daemon returns its closure-captured fallback storage and sets
+  // `fallback: true` so the caller can tell the difference.
+  //
+  // Returns `null` on:
+  //   - Network error / unreachable daemon.
+  //   - 400 `invalid_space_id` / 404 `space_not_found` — when the caller
+  //     passed a `space` that the registry rejects. Use `getHealthForSpace`
+  //     for typed error reporting; legacy callers stay unaware of the
+  //     distinction (the boolean "is the daemon up" probe still works).
+  async getHealth(opts: { space?: string } = {}): Promise<{
     ok: true;
     profile: string;
     storage: string;
     version: string;
     pid: number;
+    space?: string;
+    fallback?: boolean;
   } | null> {
     try {
-      const r = await fetch(`${this.base}/api/health`);
+      const url = opts.space
+        ? `${this.base}/api/health?space=${encodeURIComponent(opts.space)}`
+        : `${this.base}/api/health`;
+      const r = await fetch(url);
       if (!r.ok) return null;
       const j = (await r.json()) as {
         ok?: unknown;
@@ -196,6 +213,8 @@ export class CanvasClient {
         storage?: unknown;
         version?: unknown;
         pid?: unknown;
+        space?: unknown;
+        fallback?: unknown;
       };
       if (
         j.ok !== true ||
@@ -206,13 +225,24 @@ export class CanvasClient {
       ) {
         return null;
       }
-      return {
+      const out: {
+        ok: true;
+        profile: string;
+        storage: string;
+        version: string;
+        pid: number;
+        space?: string;
+        fallback?: boolean;
+      } = {
         ok: true,
         profile: j.profile,
         storage: j.storage,
         version: j.version,
         pid: j.pid,
       };
+      if (typeof j.space === "string") out.space = j.space;
+      if (typeof j.fallback === "boolean") out.fallback = j.fallback;
+      return out;
     } catch {
       return null;
     }
