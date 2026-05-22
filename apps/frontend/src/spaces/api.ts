@@ -82,6 +82,27 @@ export async function forgetSpaceApi(id: string): Promise<void> {
   if (!resp.ok) throw new Error(`forget ${id} failed: ${resp.status}`);
 }
 
+export async function getSpaceApi(id: string): Promise<SpaceLocalDTO | null> {
+  const resp = await fetch(`/api/spaces/${encodeURIComponent(id)}`);
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error(`/api/spaces/${id} failed: ${resp.status}`);
+  const data = (await resp.json()) as { space: SpaceLocalDTO };
+  return data.space;
+}
+
+export async function revealSpaceApi(id: string): Promise<void> {
+  const resp = await fetch(`/api/spaces/${encodeURIComponent(id)}/reveal`, {
+    method: "POST",
+  });
+  if (!resp.ok) {
+    const data = (await resp.json().catch(() => ({}))) as {
+      error?: string;
+      message?: string;
+    };
+    throw new Error(data.message ?? data.error ?? `reveal ${id} failed`);
+  }
+}
+
 export async function renameSpaceLabelApi(
   id: string,
   label: string,

@@ -1,7 +1,8 @@
 import { tokens } from "../design-tokens";
+import { LEGACY_SPACE_ID } from "../transport/api";
+import { spaceUrl } from "../spaces/url-parser";
 
 const linkStyle: React.CSSProperties = {
-  // Rendered inside tldraw SharePanel — no absolute positioning here.
   display: "inline-flex",
   alignItems: "center",
   padding: "4px 8px",
@@ -18,26 +19,13 @@ const linkStyle: React.CSSProperties = {
 
 /**
  * "← Gallery" affordance rendered inside the tldraw SharePanel (top-right).
- *
- * Two modes:
- *   • When `onBack` is provided — render a `<button>` that fires the callback.
- *     Used by MultiColumnLayout (DRW-116 Task 18) to swap the column from
- *     `kind: "room"` back to `kind: "gallery"` without a full-page navigation.
- *   • When `onBack` is `undefined` — render a plain `<a href="/?view=gallery">`
- *     for legacy single-column / single-space flows (Task 14 routing path).
- *
- * Positioned next to RoomBadge inside TldrawComponents.buildTldrawComponents.
+ * Navigates to the gallery of the room's space: `/?space=<id>` (or legacy
+ * `/?view=gallery` for the synthetic LEGACY_SPACE_ID).
  */
-export function GalleryLink({ onBack }: { onBack?: () => void } = {}) {
-  if (onBack) {
-    return (
-      <button type="button" onClick={onBack} style={linkStyle}>
-        ← Gallery
-      </button>
-    );
-  }
+export function GalleryLink({ space }: { space: string }) {
+  const href = space === LEGACY_SPACE_ID ? "/?view=gallery" : spaceUrl(space);
   return (
-    <a href="/?view=gallery" style={linkStyle}>
+    <a href={href} style={linkStyle}>
       ← Gallery
     </a>
   );

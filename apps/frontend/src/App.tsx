@@ -72,17 +72,9 @@ function maybeZoomToAffected(
 export function App({
   space,
   room,
-  onBackToGallery,
 }: {
   space: string;
   room: string;
-  /**
-   * DRW-116 Task 18: when provided, the "← Gallery" SharePanel affordance
-   * fires this callback so MultiColumnLayout can flip the column back to its
-   * `kind: "gallery"` state in place. When omitted (legacy single-column
-   * route), the link falls back to a full-page navigation to `/?view=gallery`.
-   */
-  onBackToGallery?: () => void;
 }) {
   const [editor, setEditor] = useState<Editor | null>(null);
   const [selection, setSelection] = useState<string[]>([]);
@@ -114,13 +106,12 @@ export function App({
   };
   const tldrawComponents = useMemo(
     () =>
-      buildTldrawComponents(room, {
+      buildTldrawComponents(space, room, {
         onMermaidImport: () => setMermaidOpen(true),
         onTidySelection: (ids) => onTidySelection.current?.(ids),
         onExportSelection: (ids) => onExportSelection.current?.(ids),
-        onBackToGallery,
       }),
-    [room, onBackToGallery],
+    [space, room],
   );
 
   // ⌘K / ⌘M / Esc keyboard handler.

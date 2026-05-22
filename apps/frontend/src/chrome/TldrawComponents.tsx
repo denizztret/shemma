@@ -23,25 +23,15 @@ import { RoomBadge } from "./RoomBadge";
  *   items when selection is non-empty. Hotkeys remain primary triggers.
  */
 export function buildTldrawComponents(
+  space: string,
   room: string,
   opts: {
     onMermaidImport?: () => void;
     onTidySelection?: (ids: string[]) => void;
     onExportSelection?: (ids: string[]) => void;
-    /**
-     * DRW-116 Task 18: when provided, the "← Gallery" affordance fires this
-     * callback instead of navigating to `/?view=gallery`. Used by
-     * MultiColumnLayout to swap the column from room → gallery in place.
-     */
-    onBackToGallery?: () => void;
   } = {},
 ): TLComponents {
-  const {
-    onMermaidImport,
-    onTidySelection,
-    onExportSelection,
-    onBackToGallery,
-  } = opts;
+  const { onMermaidImport, onTidySelection, onExportSelection } = opts;
 
   // We wrap DefaultContextMenu and append items as children — DefaultContextMenu
   // overrides its inner content while keeping the Radix shell + canvas rendering.
@@ -107,7 +97,7 @@ export function buildTldrawComponents(
         className="tlui-share-zone"
         style={{ pointerEvents: "all", zIndex: 300 }}
       >
-        <GalleryLink onBack={onBackToGallery} />
+        <GalleryLink space={space} />
         <RoomBadge room={room} />
       </div>
     ),

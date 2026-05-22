@@ -1,9 +1,17 @@
 import { useEffect, useState } from "react";
+import type { SpaceLocalDTO } from "@shemma/spaces";
 import { tokens } from "../design-tokens";
-import { type RoomListItem, listRooms, purgeArchive } from "../transport/api";
+import {
+  LEGACY_SPACE_ID,
+  type RoomListItem,
+  listRooms,
+  purgeArchive,
+} from "../transport/api";
 import { fetchSession } from "../transport/session";
 import { pushError } from "../state/error-bus";
 import { ErrorBanner } from "../chrome/ErrorBanner";
+import { OpenSpaceDialog } from "../spaces/OpenSpaceDialog";
+import { getSpaceApi, revealSpaceApi } from "../spaces/api";
 import { type FilterTab, FilterTabs } from "./FilterTabs";
 import { GroupHeader, type SortMode } from "./GroupHeader";
 import { NewRoomForm } from "./NewRoomForm";
@@ -34,26 +42,15 @@ function sortRooms(rooms: RoomListItem[], mode: SortMode): RoomListItem[] {
   });
 }
 
-export function Gallery({
-  space,
-  onRoomOpen,
-}: {
-  space: string;
-  /**
-   * Optional callback invoked when the user clicks a room card. When set,
-   * `RoomCard` calls this instead of doing a full-page navigation — used by
-   * `MultiColumnLayout` to swap the gallery column to a room column in
-   * place (DRW-116 Task 18). When omitted, legacy `location.assign` flow
-   * stays untouched.
-   */
-  onRoomOpen?: (roomId: string) => void;
-}) {
+export function Gallery({ space }: { space: string }) {
   const [filterTab, setFilterTab] = useState<FilterTab>("current");
   const [rooms, setRooms] = useState<RoomListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [workspaceDir, setWorkspaceDir] = useState<string>("");
   const [home, setHome] = useState<string>("");
+  const [spaceRecord, setSpaceRecord] = useState<SpaceLocalDTO | null>(null);
+  const [openSwitcher, setOpenSwitcher] = useState(false);
   // Per-group sort state; keyed by group title
   const [sortModes, setSortModes] = useState<Record<string, SortMode>>({});
 
@@ -66,6 +63,24 @@ export function Gallery({
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (space === LEGACY_SPACE_ID) {
+      setSpaceRecord(null);
+      return;
+    }
+    let cancelled = false;
+    void getSpaceApi(space)
+      .then((r) => {
+        if (!cancelled) setSpaceRecord(r);
+      })
+      .catch(() => {
+        if (!cancelled) setSpaceRecord(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [space]);
 
   useEffect(() => {
     setLoading(true);
@@ -218,22 +233,54 @@ export function Gallery({
           >
             shemma
           </span>
-          {workspaceDir && (
-            <span
-              style={{
-                fontFamily: tokens.font.mono,
-                fontSize: tokens.font.sm,
-                color: tokens.color.textMuted,
-                background: "rgba(0,0,0,0.05)",
-                borderRadius: tokens.radius.sm,
-                padding: "2px 8px",
-                wordBreak: "break-all",
-              }}
-              title={workspaceDir}
-            >
-              {prettyPath(workspaceDir, home)}
-            </span>
-          )}
+          {(() => {
+            const displayPath = spaceRecord?.path ?? workspaceDir;
+            if (!displayPath) return null;
+            const isLegacy = space === LEGACY_SPACE_ID;
+            return (
+              <button
+                type="button"
+                onClick={() => {
+                  if (isLegacy) return;
+                  void revealSpaceApi(space).catch((e) =>
+                    pushError(`Reveal failed: ${(e as Error).message}`),
+                  );
+                }}
+                disabled={isLegacy}
+                title={isLegacy ? displayPath : `Reveal in Finder: ${displayPath}`}
+                style={{
+                  fontFamily: tokens.font.mono,
+                  fontSize: tokens.font.sm,
+                  color: tokens.color.textMuted,
+                  background: "rgba(0,0,0,0.05)",
+                  borderRadius: tokens.radius.sm,
+                  padding: "2px 8px",
+                  wordBreak: "break-all",
+                  border: "none",
+                  cursor: isLegacy ? "default" : "pointer",
+                  textAlign: "left",
+                }}
+              >
+                {prettyPath(displayPath, home)}
+              </button>
+            );
+          })()}
+          <button
+            type="button"
+            onClick={() => setOpenSwitcher(true)}
+            style={{
+              fontFamily: tokens.font.sans,
+              fontSize: tokens.font.sm,
+              color: tokens.color.text,
+              background: tokens.color.bgOverlay,
+              border: `1px solid ${tokens.color.border}`,
+              borderRadius: tokens.radius.sm,
+              padding: "4px 10px",
+              cursor: "pointer",
+            }}
+          >
+            Open Space
+          </button>
         </div>
         <NewRoomForm space={space} />
       </div>
@@ -338,7 +385,6 @@ export function Gallery({
                         onRestored={handleRestored}
                         onDeleted={handleDeleted}
                         onRefresh={handleRefresh}
-                        onOpen={onRoomOpen}
                       />
                     ))}
                   </div>
@@ -348,6 +394,13 @@ export function Gallery({
           </div>
         )}
       </div>
+
+      {openSwitcher && (
+        <OpenSpaceDialog
+          currentSpaceId={space}
+          onClose={() => setOpenSwitcher(false)}
+        />
+      )}
     </div>
   );
 }
