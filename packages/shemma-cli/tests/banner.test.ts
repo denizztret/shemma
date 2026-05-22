@@ -5,26 +5,24 @@ import { join } from "node:path";
 import { startServer } from "../../../apps/backend/src/index";
 
 /**
- * DRW-057: startup banner tests.
+ * DRW-057 / DRW-121: startup banner tests.
  *
- * Strategy: spin up an in-process test daemon на known port + storage,
- * затем запускаем CLI с `--storage <base>` (где base/canvas-dev === srv.storage)
- * — это эквивалентно matching-storage happy path. Banner печатается в stdout.
- *
- * `--no-browser` чтобы CLI не пытался открыть URL.
+ * Strategy: spin up an in-process test daemon on a known port, then run the
+ * CLI with `--storage <base>` (legacy direct-layout registration) so the CLI
+ * has a concrete space target.
  */
 
 const CLI = join(import.meta.dir, "..", "src", "index.ts");
 
 let srv: { port: number; close: () => Promise<void> };
 let base: string;
-let subdir: string;
 
 beforeAll(async () => {
   base = mkdtempSync(join(tmpdir(), "shemma-banner-base-"));
-  subdir = join(base, "canvas-dev");
-  mkdirSync(subdir, { recursive: true });
-  srv = await startServer({ port: 0, storageDir: subdir });
+  // Legacy --storage path is registered as direct-layout; daemon serves it
+  // through the spaces registry, no separate storageDir wiring needed.
+  mkdirSync(base, { recursive: true });
+  srv = await startServer({ port: 0 });
 });
 
 afterAll(async () => {
@@ -55,8 +53,8 @@ async function cli(
   return { status, stdout, stderr };
 }
 
-describe("DRW-057: startup banner", () => {
-  test("banner printed before browser open with name/profile/storage/room/URL", async () => {
+describe("DRW-057: startup banner (DRW-121 — space-aware)", () => {
+  test("banner prints name/profile/storage/room/URL with the registered space path", async () => {
     const r = await cli([
       "open",
       "my-room",
@@ -65,12 +63,13 @@ describe("DRW-057: startup banner", () => {
       base,
     ]);
     expect(r.status).toBe(0);
-    // Banner content
     expect(r.stdout).toContain("shemma");
     expect(r.stdout).toContain("[dev]");
     expect(r.stdout).toContain("listening on http://localhost:");
     expect(r.stdout).toContain("storage:");
-    expect(r.stdout).toContain(subdir);
+    // DRW-121: storage row shows the registered space path (base), not a
+    // synthesized canvas-dev subdir.
+    expect(r.stdout).toContain(base);
     expect(r.stdout).toContain("room:");
     expect(r.stdout).toContain("my-room");
   });
@@ -85,7 +84,6 @@ describe("DRW-057: startup banner", () => {
       base,
     ]);
     expect(r.status).toBe(0);
-    // Stdout must parse cleanly as JSON — no banner mixed in.
     const j = JSON.parse(r.stdout.trim());
     expect(j.ok).toBe(true);
     expect(j.room).toBe("my-room");
@@ -93,9 +91,7 @@ describe("DRW-057: startup banner", () => {
     expect(r.stdout).not.toContain("→ opening");
   });
 
-  test("reused daemon distinction: '· daemon already running' (not '✔ daemon started')", async () => {
-    // First invocation may "start" (since test srv is already up, getRunningDaemonStorage
-    // returns srv.storage → no spawn needed). Banner should say "daemon already running".
+  test("reused daemon distinction shows in banner", async () => {
     const r = await cli([
       "open",
       "scratch",
@@ -104,10 +100,12 @@ describe("DRW-057: startup banner", () => {
       base,
     ]);
     expect(r.status).toBe(0);
+    // DRW-121: singleton daemon — banner always says "already running" when
+    // SHEMMA_PORT points at a live server.
     expect(r.stdout).toContain("daemon already running");
   });
 
-  test("banner omits → opening line when --no-browser is set", async () => {
+  test("banner omits opening line when --no-browser is set", async () => {
     const r = await cli([
       "open",
       "no-browser-room",

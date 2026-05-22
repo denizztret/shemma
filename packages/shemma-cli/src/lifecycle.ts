@@ -1,17 +1,12 @@
-import { existsSync } from "node:fs";
-import { createInterface } from "node:readline/promises";
-import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import fs, { existsSync } from "node:fs";
+import { isAbsolute, join, resolve as resolvePath, sep as pathSep } from "node:path";
 import { CanvasClient } from "@shemma/client";
+import { listSpaces, registerSpace } from "@shemma/spaces";
 import { openBrowser } from "./browser";
-import { ensureSilent, isHealthy, start } from "./daemon";
-import { getRunningDaemonStorage } from "./ps";
+import { ensureSilent, isHealthy } from "./daemon";
 import type { Profile } from "./profile";
 import { portFor } from "./profile";
-import {
-  type OpenStorageResolution,
-  ensureStorageDir,
-  resolveStorageForOpen,
-} from "./storage";
+import { ensureStorageDir } from "./storage";
 import {
   banner,
   error as uiError,
@@ -41,205 +36,133 @@ export type OpenOpts = {
   noBrowser?: boolean;
 };
 
-// ---------------------------------------------------------------------------
-// Interactive prompt for missing .shemma/ (DRW-058)
-// ---------------------------------------------------------------------------
-
 /**
- * Returns true if shemma should run an interactive prompt when `.shemma/` is
- * missing in cwd. False for non-TTY (CI / piped / agent invocations).
- *
- * Both stdin AND stdout must be TTY: stdin alone-TTY would let prompts read,
- * but if stdout is piped we'd swallow the prompt output too. Both-or-nothing
- * matches conventional CLI prompt behaviour.
- */
-function isInteractive(): boolean {
-  return !!(process.stdin.isTTY && process.stdout.isTTY);
-}
-
-/**
- * Run the interactive 3-option prompt when `.shemma/` is missing in cwd.
- * Returns the user-chosen base path (absolute) or null if cancelled.
- *
- * Re-prompts on empty input up to 3 times; Ctrl-C / EOF / 3-empty-tries → null.
- */
-async function promptForMissingStorage(cwd: string): Promise<string | null> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    process.stdout.write(`\nNo .shemma/ in current directory: ${cwd}\n\n`);
-    process.stdout.write(`What to do?\n`);
-    process.stdout.write(`  [1] Create .shemma/ here\n`);
-    process.stdout.write(`  [2] Specify storage path\n`);
-    process.stdout.write(`  [3] Cancel\n\n`);
-
-    for (let attempt = 0; attempt < 3; attempt++) {
-      let answer: string;
-      try {
-        answer = (await rl.question("> ")).trim();
-      } catch {
-        // EOF / Ctrl-C
-        return null;
-      }
-      if (answer === "1") {
-        return join(cwd, ".shemma");
-      }
-      if (answer === "2") {
-        let path: string;
-        try {
-          path = (await rl.question("Storage path: ")).trim();
-        } catch {
-          return null;
-        }
-        if (!path) return null;
-        return isAbsolute(path) ? path : resolvePath(cwd, path);
-      }
-      if (answer === "3") {
-        return null;
-      }
-      if (answer === "") {
-        // re-prompt up to 3 attempts
-        continue;
-      }
-      process.stdout.write(`Please enter 1, 2, or 3.\n`);
-    }
-    return null;
-  } finally {
-    rl.close();
-  }
-}
-
-/**
- * Implements zero-arg `shemma` и `shemma open [<room>]` (DRW-052 / DRW-056/057/058).
+ * Implements zero-arg `shemma` и `shemma open [<room>]` (DRW-121, replaces
+ * pre-DRW-116 storageDir-based flow).
  *
  * Steps:
- *   1. Resolve target storage (--storage > SHEMMA_STORAGE_DIR > cwd/.shemma)
- *   2. Detect missing-`.shemma/` in cwd → prompt (TTY) or fail-fast (non-TTY)
- *   3. Auto-create storage dir (`<base>/canvas` или `canvas-dev`)
- *   4. Check для running-daemon-on-other-storage → exit 1 conflict
- *   5. If no daemon → start with resolved storage + wait until healthy
- *   6. Print startup banner + open browser (unless --no-browser)
+ *   1. Resolve cwd → registered space (exact path or containing space).
+ *      • If matched → open gallery (or room) of that space.
+ *      • If unmatched but `.shemma/canvas/` exists at cwd → auto-register
+ *        as a project-layout space + open its gallery.
+ *      • If `--storage <path>` provided → register as direct-layout (legacy
+ *        compat, warns).
+ *      • Otherwise (no match, no `.shemma/`, no --storage) → open landing
+ *        (`/`) so the user picks/adds a space via the SpacesPage card.
+ *   2. Ensure daemon is healthy (singleton — no SHEMMA_STORAGE_DIR leak).
+ *   3. Print startup banner + open browser at the resolved URL.
  */
 export async function open(profile: Profile, opts: OpenOpts = {}) {
   const cwd = process.cwd();
-  let resolution = resolveStorageForOpen(
-    { explicit: opts.storage },
-    cwd,
-    // Legacy compat: accept DIDRAW_STORAGE_DIR (pre-0.10.0) as fallback.
-    { SHEMMA_STORAGE_DIR: process.env.SHEMMA_STORAGE_DIR ?? process.env.DIDRAW_STORAGE_DIR },
-    profile,
-  );
-
-  // DRW-058: when source is "auto-cwd" AND .shemma/ doesn't exist, gate behind
-  // a confirmation step. Explicit --storage / env path → skip (user already
-  // chose a target). Existing .shemma/ → silent reuse.
-  if (resolution.source === "auto-cwd" && !existsSync(resolution.base)) {
-    if (isInteractive()) {
-      const chosen = await promptForMissingStorage(cwd);
-      if (chosen === null) {
-        uiError("cancelled by user");
-        process.exit(1);
-      }
-      // Re-resolve using the chosen path as explicit base.
-      resolution = resolveStorageForOpen({ explicit: chosen }, cwd, {}, profile);
-    } else {
-      uiError(`no .shemma/ directory in ${cwd}`, {
-        code: "no-storage",
-        hint: [
-          "run with --storage <path> or SHEMMA_STORAGE_DIR=<path>",
-          "or run 'shemma init' to create .shemma/ here",
-        ],
-      });
-      process.exit(1);
-    }
-  }
-
-  // Best-effort mkdir. Bail out with structured error if FS rejects.
-  const mkdirErr = ensureStorageDir(resolution.storageDir);
-  if (mkdirErr) {
-    uiError(mkdirErr, { code: mkdirErr });
-    process.exit(1);
-  }
-
-  // Conflict detection: если daemon уже запущен на другом storage —
-  // exit 1 с понятным error. См. spec variant C.
-  const running = await getRunningDaemonStorage(profile);
-  if (running !== null) {
-    const runningAbs = resolvePath(running);
-    const targetAbs = resolvePath(resolution.storageDir);
-    if (runningAbs !== targetAbs) {
-      uiError(`daemon already running on storage "${runningAbs}"`, {
-        code: "daemon-conflict",
-        data: {
-          running: runningAbs,
-          target: targetAbs,
-          profile,
-        },
-        hint: `run 'shemma daemon stop --profile ${profile}' first`,
-      });
-      process.exit(1);
-    }
-  }
-
-  // Info-log на cwd-auto, чтобы user видел "doski этого проекта живут здесь".
-  if (resolution.source === "auto-cwd") {
-    uiInfo(`using local storage: ${resolution.base}`);
-  }
-
-  // Ensure daemon. Если уже healthy с тем же storage — no-op.
-  // Если нет — spawn с resolved storage path.
-  const freshDaemon = running === null;
-  if (freshDaemon) {
-    await start(profile, { storageDir: resolution.storageDir });
-    // Wait for health (poll up to 5s — same as ensureDaemon).
-    const port = portFor(profile);
-    let healthy = false;
-    for (let i = 0; i < 50; i++) {
-      await new Promise((r) => setTimeout(r, 100));
-      if (await isHealthy(port)) {
-        healthy = true;
-        break;
-      }
-    }
-    if (!healthy) {
-      uiError(`daemon not healthy within 5s on :${port}`, {
-        code: `daemon not healthy within 5s on :${port}`,
-      });
-      process.exit(3);
-    }
-  }
-
-  const room = opts.room ?? "default";
   const port = portFor(profile);
-  const url = `http://localhost:${port}/?room=${encodeURIComponent(room)}`;
-  const storageAbs = resolvePath(resolution.storageDir);
+
+  let target = await resolveOpenTarget(cwd, opts);
+
+  await ensureSilent(profile);
+  let healthy = false;
+  for (let i = 0; i < 50; i++) {
+    if (await isHealthy(port)) {
+      healthy = true;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  if (!healthy) {
+    uiError(`daemon not healthy within 5s on :${port}`, {
+      code: `daemon not healthy within 5s on :${port}`,
+    });
+    process.exit(3);
+  }
+
+  const room = opts.room;
+  const url = buildTargetUrl(port, target, room);
 
   // ---- DRW-057: startup banner (human mode only) ----
   await printStartupBanner({
     profile,
     port,
-    storage: storageAbs,
-    room,
+    storage: target.kind === "space" ? target.path : "(no space — landing)",
+    room: room ?? (target.kind === "space" ? "(gallery)" : "(landing)"),
     url,
-    freshDaemon,
+    freshDaemon: false, // singleton daemon — fresh/reused distinction is moot in DRW-121
     noBrowser: !!opts.noBrowser,
   });
 
   if (!opts.noBrowser) openBrowser(url);
 
-  // JSON mode preserves the pre-Group-A machine-readable payload (byte-compat).
+  // JSON mode preserves machine-readable payload (byte-compat-ish).
   const out = getOutput();
   if (out.mode === "json") {
     const result: Record<string, unknown> = {
       ok: true,
       url,
       profile,
-      room,
-      storage: storageAbs,
-      storageSource: resolution.source,
+      room: room ?? null,
+      space: target.kind === "space" ? target.id : null,
+      storage: target.kind === "space" ? target.path : null,
     };
     if (opts.noBrowser) result.browser = false;
     process.stdout.write(JSON.stringify(result) + "\n");
   }
+}
+
+type OpenTarget =
+  | { kind: "space"; id: string; path: string }
+  | { kind: "landing" };
+
+async function resolveOpenTarget(cwd: string, opts: OpenOpts): Promise<OpenTarget> {
+  const cwdReal = existsSync(cwd) ? fs.realpathSync(cwd) : resolvePath(cwd);
+
+  // Legacy --storage / SHEMMA_STORAGE_DIR explicit path.
+  if (opts.storage || process.env.SHEMMA_STORAGE_DIR) {
+    const explicit = opts.storage ?? process.env.SHEMMA_STORAGE_DIR!;
+    const abs = isAbsolute(explicit) ? explicit : resolvePath(cwd, explicit);
+    const mkdirErr = ensureStorageDir(abs);
+    if (mkdirErr) {
+      uiError(mkdirErr, { code: mkdirErr });
+      process.exit(1);
+    }
+    try {
+      const { space } = registerSpace(abs, { storageLayout: "direct" });
+      return { kind: "space", id: space.id, path: space.path };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      uiError(`failed to register storage path: ${msg}`);
+      process.exit(1);
+    }
+  }
+
+  // cwd → registered-space lookup (exact path or containing).
+  const match = listSpaces().find((s) => {
+    if (s.path === cwdReal) return true;
+    const sPath = s.path.endsWith(pathSep) ? s.path : s.path + pathSep;
+    return cwdReal.startsWith(sPath);
+  });
+  if (match) return { kind: "space", id: match.id, path: match.path };
+
+  // cwd not registered but has a gallery → auto-register as project-layout.
+  if (existsSync(join(cwdReal, ".shemma", "canvas"))) {
+    try {
+      const { space } = registerSpace(cwdReal);
+      uiInfo(`registered current directory as space '${space.id}'`);
+      return { kind: "space", id: space.id, path: space.path };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      uiError(`failed to register cwd as space: ${msg}`);
+      process.exit(1);
+    }
+  }
+
+  // No space here — land on the SpacesPage so the user adds one explicitly.
+  return { kind: "landing" };
+}
+
+function buildTargetUrl(port: number, target: OpenTarget, room?: string): string {
+  if (target.kind === "landing") return `http://localhost:${port}/`;
+  const space = encodeURIComponent(target.id);
+  return room
+    ? `http://localhost:${port}/?space=${space}&room=${encodeURIComponent(room)}`
+    : `http://localhost:${port}/?space=${space}`;
 }
 
 interface StartupBannerOpts {
@@ -332,18 +255,6 @@ export function cmdInit(targetArg?: string): void {
     process.exit(1);
   }
   uiSuccess(`initialized .shemma/ in ${base}`, { ok: true, path: base });
-}
-
-/**
- * Internal export — used by tests to verify resolution без side-effects.
- */
-export function _resolveOpenStorage(
-  opts: { storage?: string },
-  cwd: string,
-  env: { SHEMMA_STORAGE_DIR?: string | undefined },
-  profile: Profile,
-): OpenStorageResolution {
-  return resolveStorageForOpen({ explicit: opts.storage }, cwd, env, profile);
 }
 
 export async function list(profile: Profile) {
