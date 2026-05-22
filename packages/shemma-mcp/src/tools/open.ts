@@ -39,7 +39,8 @@ export function registerOpenTool(server: McpServer, deps: OpenDeps): OpenHandles
   server.registerTool(
     "shemma_open",
     {
-      description: "Open a browser tab on the canvas. By default uses the resolved/default room.",
+      description:
+        "Open a browser tab on the canvas. By default uses the resolved/default room.\n\nResponse `spawned: true` means a browser launch was attempted — it does NOT guarantee that the page loaded or established a WebSocket. For workflows that depend on a live client (e.g. `shemma_import_mermaid`), poll `shemma_active_rooms` until the target room appears.\n\nTroubleshooting:\n- spawned:true but `active_rooms` stays empty: the browser may have opened the URL but blocked by an extension, ad-blocker, or stale frontend bundle. Hard-reload (Cmd+Shift+R) the tab; if still empty after ~3s, the bundle is broken — `shemma daemon stop && shemma daemon start` to rebuild.\n- Multiple tabs open on the same room: native `open <url>` reuses the tab in Chrome, opens a new one in Safari. Currently no MCP-side dedupe (tracked as P1.4 / Q9 follow-up).\n- Space errors (invalid_space_id / space_not_found): see `shemma_rooms_list` for registered spaces; pass `space=<id>`.",
       inputSchema: {
         room: z.string().optional(),
         space: z.string().optional(),
