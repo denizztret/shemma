@@ -1,9 +1,18 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const CLI = join(import.meta.dir, "..", "src", "index.ts");
+
+// DRW-123: isolate registry writes from the user's real ~/.config/shemma.
+let xdg: string;
+beforeAll(() => {
+  xdg = mkdtempSync(join(tmpdir(), "shemma-daemon-storage-xdg-"));
+});
+afterAll(() => {
+  rmSync(xdg, { recursive: true, force: true });
+});
 
 async function runCli(
   args: string[],
@@ -13,6 +22,7 @@ async function runCli(
   for (const [k, v] of Object.entries(process.env)) {
     if (typeof v === "string") mergedEnv[k] = v;
   }
+  mergedEnv.XDG_CONFIG_HOME = xdg;
   for (const [k, v] of Object.entries(env)) {
     if (v === undefined) delete mergedEnv[k];
     else mergedEnv[k] = v;

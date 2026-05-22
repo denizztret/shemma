@@ -1,3 +1,47 @@
+## 0.21.7 — 2026-05-22 — DRW-123 CLI test XDG isolation (stop leaking orphans into real registry)
+
+PATCH test infra hardening.
+
+### The bug
+
+CLI subprocess tests spawn `bun CLI ...` with inherited `process.env`. `@shemma/spaces` resolves the registry path via `${XDG_CONFIG_HOME ?? ~/.config}/shemma/spaces.json`. Without XDG isolation, every `--storage <tmpdir>` / `shemma s add <tmpdir>` test path got registered in the **user's real** `~/.config/shemma/spaces.json` and stayed there as an `ORPHANED` entry after the tmpdir was deleted by the test cleanup.
+
+Manifested as 5+ "Default (from --storage)" / "shemma-env-storage-*" / "custom-storage-*" / "shemma-banner-base-*" cards on the landing page after `bun test`.
+
+### The fix
+
+5 test files updated to create a per-test-file `xdg` tmpdir in `beforeAll`, pass `XDG_CONFIG_HOME=<xdg>` in every `Bun.spawn` env, and `rmSync` it in `afterAll`:
+
+- `tests/banner.test.ts`
+- `tests/daemon-storage-flag.test.ts`
+- `tests/doctor.test.ts`
+- `tests/storage-interactive.test.ts`
+- `tests/zero-arg-open.test.ts`
+
+Existing tests `cli-deprecation.test.ts` and `drw-116-smoke.test.ts` already had this pattern — pattern is now standard across CLI suite.
+
+### Verification
+
+```
+$ bun packages/shemma-cli/src/index.ts s list --plain   # before tests
+ID         LABEL    PATH                                  LAST USED
+di-draw    di.draw  …etyakov_dv/Projects/sandbox/di.draw  2026-05-22
+elkonizr            …tyakov_dv/Projects/sandbox/elkonizr  2026-05-22
+
+$ bun test  # 1164 pass / 0 fail
+
+$ bun packages/shemma-cli/src/index.ts s list --plain   # after tests
+ID         LABEL    PATH                                  LAST USED
+di-draw    di.draw  …etyakov_dv/Projects/sandbox/di.draw  2026-05-22
+elkonizr            …tyakov_dv/Projects/sandbox/elkonizr  2026-05-22
+```
+
+Registry stays clean — no orphan ingress.
+
+### Recorded as project convention
+
+`feedback-cli-tests-xdg-isolation.md` memory — pattern is required for any new CLI subprocess test.
+
 ## 0.21.6 — 2026-05-22 — DRW-122 `--version` flag + SharePanel spacing
 
 PATCH polish.

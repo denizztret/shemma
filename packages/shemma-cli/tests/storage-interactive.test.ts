@@ -1,9 +1,18 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const CLI = join(import.meta.dir, "..", "src", "index.ts");
+
+// DRW-123: isolate registry writes from the user's real ~/.config/shemma.
+let xdg: string;
+beforeAll(() => {
+  xdg = mkdtempSync(join(tmpdir(), "shemma-storage-interactive-xdg-"));
+});
+afterAll(() => {
+  rmSync(xdg, { recursive: true, force: true });
+});
 
 /**
  * DRW-058 tests:
@@ -24,6 +33,7 @@ async function cli(
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
+    XDG_CONFIG_HOME: xdg,
     ...(opts.env ?? {}),
   };
   const proc = Bun.spawn(["bun", CLI, ...args], {

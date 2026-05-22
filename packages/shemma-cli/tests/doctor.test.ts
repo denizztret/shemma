@@ -1,7 +1,18 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const CLI = join(import.meta.dir, "..", "src", "index.ts");
+
+// DRW-123: isolate registry writes from the user's real ~/.config/shemma.
+let xdg: string;
+beforeAll(() => {
+  xdg = mkdtempSync(join(tmpdir(), "shemma-doctor-xdg-"));
+});
+afterAll(() => {
+  rmSync(xdg, { recursive: true, force: true });
+});
 
 async function cli(
   args: string[],
@@ -13,7 +24,11 @@ async function cli(
   // Pass `opts.human=true` for tests that explicitly verify human output.
   const finalArgs = opts.human ? args : ["--json", ...args];
   const proc = Bun.spawn(["bun", CLI, ...finalArgs], {
-    env: { ...(process.env as Record<string, string>), ...env },
+    env: {
+      ...(process.env as Record<string, string>),
+      XDG_CONFIG_HOME: xdg,
+      ...env,
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
