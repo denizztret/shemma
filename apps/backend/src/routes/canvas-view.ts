@@ -6,6 +6,7 @@
 import { Hono } from "hono";
 import { buildContext } from "../domain/context";
 import { isV2Room } from "../domain/schema/detect";
+import { buildCanvasView } from "../domain/schema/view";
 import { resolveRoomId } from "../rooms";
 import { bundleForRequest } from "./_space-context";
 
@@ -30,10 +31,7 @@ export function canvasViewRoutes() {
       });
     }
 
-    // v2 path — полная реализация в Task 2.1.
-    return c.json(
-      { ok: false, error: "v2 canvas-view not yet implemented (Task 2.1)" },
-      501,
-    );
+    // v2 path — полный reader (Task 2.1).
+    return c.json(buildCanvasView(room));
   });
 }
