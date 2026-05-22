@@ -6,6 +6,7 @@ import {
   findSpaceById,
   forgetSpace,
   listSpaces,
+  platformRevealCommand,
   registerSpace,
   renameSpaceLabel,
   toLocalDTO,
@@ -110,7 +111,7 @@ export const spacesRouter = new Hono()
       return c.json({ error: "path_missing", path: space.path }, 404);
     }
     try {
-      spawn(revealCommand(), [space.path], { detached: true, stdio: "ignore" }).unref();
+      spawn(platformRevealCommand(), [space.path], { detached: true, stdio: "ignore" }).unref();
       return c.json({ ok: true, path: space.path });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -162,17 +163,6 @@ function isLocalhostRequest(
     return isLocalhostAuthority(parsed.hostname);
   } catch {
     return false;
-  }
-}
-
-function revealCommand(): string {
-  switch (process.platform) {
-    case "darwin":
-      return "open";
-    case "win32":
-      return "explorer";
-    default:
-      return "xdg-open";
   }
 }
 

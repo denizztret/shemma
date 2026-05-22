@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { fetchSession } from "./session";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { _resetSessionCache, fetchSession } from "./session";
 
 // Access module internals to reset the tab-scoped cache between tests.
 // We do this by re-importing the module after patching — but since Bun ESM
@@ -11,11 +11,13 @@ import { fetchSession } from "./session";
 describe("fetchSession", () => {
   const originalFetch = globalThis.fetch;
 
+  beforeEach(() => {
+    _resetSessionCache();
+  });
+
   afterEach(() => {
     globalThis.fetch = originalFetch;
-    // Reset the module-level cache by re-executing. In Bun test we can't
-    // easily re-import ESM, so we rely on the mock returning stable data
-    // and the cache test being isolated within the same describe.
+    _resetSessionCache();
   });
 
   test("returns SessionInfo shape", async () => {
@@ -23,9 +25,11 @@ describe("fetchSession", () => {
       sessionId: "sess-123",
       projectSlug: "my-proj-abc12345",
       workspaceDir: "/home/user/project",
+      home: "/home/user",
     };
     globalThis.fetch = (async () =>
       ({
+        ok: true,
         json: async () => mockPayload,
       }) as unknown as Response) as unknown as typeof fetch;
 

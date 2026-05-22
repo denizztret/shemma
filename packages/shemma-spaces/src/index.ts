@@ -5,3 +5,4 @@ export * from "./registry.js";
 export * from "./paths.js";
 export * from "./dto.js";
 export * from "./debounced-touch.js";
+export * from "./reveal.js";

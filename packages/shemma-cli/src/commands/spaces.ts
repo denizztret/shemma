@@ -18,6 +18,7 @@ import {
   findSpaceById,
   forgetSpace,
   listSpaces,
+  platformRevealCommand,
   registerSpace,
   renameSpaceLabel,
 } from "@shemma/spaces";
@@ -172,19 +173,8 @@ function cmdReveal(args: string[]): number {
     console.error(`Unknown space: ${id}`);
     return 1;
   }
-  let cmd: string;
-  switch (process.platform) {
-    case "darwin":
-      cmd = "open";
-      break;
-    case "win32":
-      cmd = "explorer";
-      break;
-    default:
-      cmd = "xdg-open";
-  }
   try {
-    spawn(cmd, [s.path], { detached: true, stdio: "ignore" }).unref();
+    spawn(platformRevealCommand(), [s.path], { detached: true, stdio: "ignore" }).unref();
     console.log(`opening: ${s.path}`);
     return 0;
   } catch (err) {

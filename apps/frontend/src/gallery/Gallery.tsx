@@ -11,24 +11,18 @@ import { fetchSession } from "../transport/session";
 import { pushError } from "../state/error-bus";
 import { ErrorBanner } from "../chrome/ErrorBanner";
 import { OpenSpaceDialog } from "../spaces/OpenSpaceDialog";
-import { getSpaceApi, revealSpaceApi } from "../spaces/api";
+import { getSpaceApi } from "../spaces/api";
 import { type FilterTab, FilterTabs } from "./FilterTabs";
 import { GroupHeader, type SortMode } from "./GroupHeader";
 import { NewRoomForm } from "./NewRoomForm";
 import { RoomCard } from "./RoomCard";
+import { SpacePathButton } from "./SpacePathButton";
 
 type RoomGroup = {
   title: string;
   rooms: RoomListItem[];
   sortMode: SortMode;
 };
-
-function prettyPath(absolute: string, home: string): string {
-  if (home && absolute.startsWith(home)) {
-    return `~${absolute.slice(home.length)}`;
-  }
-  return absolute;
-}
 
 function sortRooms(rooms: RoomListItem[], mode: SortMode): RoomListItem[] {
   return [...rooms].sort((a, b) => {
@@ -233,38 +227,13 @@ export function Gallery({ space }: { space: string }) {
           >
             shemma
           </span>
-          {(() => {
-            const displayPath = spaceRecord?.path ?? workspaceDir;
-            if (!displayPath) return null;
-            const isLegacy = space === LEGACY_SPACE_ID;
-            return (
-              <button
-                type="button"
-                onClick={() => {
-                  if (isLegacy) return;
-                  void revealSpaceApi(space).catch((e) =>
-                    pushError(`Reveal failed: ${(e as Error).message}`),
-                  );
-                }}
-                disabled={isLegacy}
-                title={isLegacy ? displayPath : `Reveal in Finder: ${displayPath}`}
-                style={{
-                  fontFamily: tokens.font.mono,
-                  fontSize: tokens.font.sm,
-                  color: tokens.color.textMuted,
-                  background: "rgba(0,0,0,0.05)",
-                  borderRadius: tokens.radius.sm,
-                  padding: "2px 8px",
-                  wordBreak: "break-all",
-                  border: "none",
-                  cursor: isLegacy ? "default" : "pointer",
-                  textAlign: "left",
-                }}
-              >
-                {prettyPath(displayPath, home)}
-              </button>
-            );
-          })()}
+          {(spaceRecord?.path ?? workspaceDir) && (
+            <SpacePathButton
+              space={space}
+              path={spaceRecord?.path ?? workspaceDir}
+              home={home}
+            />
+          )}
           <button
             type="button"
             onClick={() => setOpenSwitcher(true)}

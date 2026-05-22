@@ -11,7 +11,7 @@ export function SpacesPage() {
     <main
       style={{
         minHeight: "100vh",
-        background: "#f6f7f9",
+        background: tokens.color.bgPage,
         fontFamily: tokens.font.sans,
         display: "flex",
         alignItems: "flex-start",

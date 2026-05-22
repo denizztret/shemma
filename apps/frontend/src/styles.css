@@ -8,38 +8,3 @@ body,
 body {
   font-family: system-ui, sans-serif;
 }
-
-/* DRW-116 multi-column layout (Task 17). */
-.multi-col {
-  display: flex;
-  flex-direction: row;
-  width: 100%;
-  height: 100vh;
-  overflow: hidden;
-}
-.multi-col > .col {
-  position: relative;
-  flex-grow: 0;
-  flex-shrink: 0;
-  /* When there is exactly one column the inline flex-basis is omitted so
-     the column expands to 100% via the default flex item rules. */
-  min-width: 0;
-  height: 100%;
-  overflow: hidden;
-}
-.multi-col > .col.active::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  box-shadow: inset 0 0 0 2px rgba(10, 119, 119, 0.45);
-}
-.multi-col > .splitter-bar {
-  flex: 0 0 4px;
-  cursor: col-resize;
-  background: rgba(0, 0, 0, 0.12);
-  user-select: none;
-}
-.multi-col > .splitter-bar:hover {
-  background: rgba(0, 0, 0, 0.24);
-}

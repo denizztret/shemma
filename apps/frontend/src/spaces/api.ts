@@ -1,53 +1,11 @@
 import type { SpaceLocalDTO } from "@shemma/spaces";
 
 /**
- * Frontend wrappers over the `/api/spaces` CRUD + `/api/session` info endpoint.
+ * Frontend wrappers over the `/api/spaces` CRUD endpoints.
  *
- * Why session here: the landing page lets the user type paths with `~/` prefix.
- * Backend already exposes the daemon's `home` directory via `/api/session` —
- * we expand client-side so the POST payload is an absolute path the registry
- * can validate immediately.
+ * Session info + `~/` path expansion live in `transport/session.ts` (shared
+ * by gallery chrome and the space pickers).
  */
-
-type SessionInfo = {
-  sessionId: string;
-  projectSlug: string;
-  workspaceDir: string;
-  home: string;
-};
-
-let sessionCache: Promise<SessionInfo> | null = null;
-
-export function getSession(): Promise<SessionInfo> {
-  if (!sessionCache) {
-    sessionCache = fetch("/api/session").then((r) => {
-      if (!r.ok) throw new Error(`/api/session failed: ${r.status}`);
-      return r.json() as Promise<SessionInfo>;
-    });
-  }
-  return sessionCache;
-}
-
-/** Test-only: clear the cached session promise. */
-export function _resetSessionCache(): void {
-  sessionCache = null;
-}
-
-/**
- * Expand a `~/` or `~` prefix to the daemon's home directory.
- * Non-tilde paths pass through unchanged.
- */
-export async function expandHomePath(input: string): Promise<string> {
-  if (input === "~") {
-    const { home } = await getSession();
-    return home;
-  }
-  if (input.startsWith("~/")) {
-    const { home } = await getSession();
-    return `${home}/${input.slice(2)}`;
-  }
-  return input;
-}
 
 export async function listSpacesApi(): Promise<SpaceLocalDTO[]> {
   const resp = await fetch("/api/spaces");
@@ -101,6 +59,36 @@ export async function revealSpaceApi(id: string): Promise<void> {
     };
     throw new Error(data.message ?? data.error ?? `reveal ${id} failed`);
   }
+}
+
+export type ProbeSpaceResult =
+  | { ok: true; absolutePath: string; hasShemma: boolean }
+  | { ok: false; error: string; message?: string };
+
+export async function probeSpacePathApi(
+  path: string,
+): Promise<ProbeSpaceResult> {
+  const resp = await fetch("/api/probe-space-path", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (resp.ok) {
+    const data = (await resp.json()) as {
+      absolutePath: string;
+      hasShemma: boolean;
+    };
+    return { ok: true, ...data };
+  }
+  const data = (await resp.json().catch(() => ({}))) as {
+    error?: string;
+    message?: string;
+  };
+  return {
+    ok: false,
+    error: data.error ?? "probe_failed",
+    message: data.message,
+  };
 }
 
 export async function renameSpaceLabelApi(

@@ -1,13 +1,20 @@
 import { useEffect, useState } from "react";
 import type { SpaceLocalDTO } from "@shemma/spaces";
 import { tokens } from "../design-tokens";
-import { addSpaceApi, expandHomePath, listSpacesApi } from "./api";
+import { expandHomePath } from "../transport/session";
+import {
+  addSpaceApi,
+  forgetSpaceApi,
+  listSpacesApi,
+  probeSpacePathApi,
+} from "./api";
 import { relativeTime, truncatePath } from "./format";
 import { spaceUrl } from "./url-parser";
 
 type Status =
+  | { kind: "loading" }
   | { kind: "idle" }
-  | { kind: "busy" }
+  | { kind: "submitting" }
   | { kind: "confirm-init"; absPath: string }
   | { kind: "error"; message: string };
 
@@ -17,9 +24,9 @@ type Status =
  *   - list of registered spaces (clickable rows; optional Forget action)
  *   - "Open by path" input with probe → switch / register / confirm-init / error
  *
- * Visual chrome (backdrop / page background / close button) lives in the two
- * call-sites so the same panel can act as either a modal body or a full
- * landing card.
+ * Visual chrome (backdrop / page background / close button) lives in the
+ * two call-sites so the same panel can act as either a modal body or a
+ * full landing card.
  */
 export function SpacePickerPanel({
   currentSpaceId,
@@ -34,20 +41,23 @@ export function SpacePickerPanel({
 }) {
   const [spaces, setSpaces] = useState<SpaceLocalDTO[]>([]);
   const [pathInput, setPathInput] = useState("");
-  const [status, setStatus] = useState<Status>({ kind: "idle" });
-  const [listError, setListError] = useState<string | null>(null);
-
-  const refresh = async () => {
-    try {
-      setSpaces(await listSpacesApi());
-      setListError(null);
-    } catch (err) {
-      setListError(err instanceof Error ? err.message : String(err));
-    }
-  };
+  const [status, setStatus] = useState<Status>({ kind: "loading" });
 
   useEffect(() => {
-    void refresh();
+    let cancelled = false;
+    listSpacesApi()
+      .then((items) => {
+        if (cancelled) return;
+        setSpaces(items);
+        setStatus({ kind: "idle" });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setStatus({ kind: "error", message: (err as Error).message });
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   function open(spaceId: string) {
@@ -55,9 +65,12 @@ export function SpacePickerPanel({
   }
 
   async function forget(id: string) {
-    const { forgetSpaceApi } = await import("./api");
-    await forgetSpaceApi(id);
-    await refresh();
+    try {
+      await forgetSpaceApi(id);
+      setSpaces(await listSpacesApi());
+    } catch (err) {
+      setStatus({ kind: "error", message: (err as Error).message });
+    }
   }
 
   async function register(absPath: string) {
@@ -70,40 +83,31 @@ export function SpacePickerPanel({
   }
 
   async function submitPath() {
-    if (!pathInput.trim()) return;
-    setStatus({ kind: "busy" });
+    const trimmed = pathInput.trim();
+    if (!trimmed || status.kind === "loading" || status.kind === "submitting") {
+      return;
+    }
+    setStatus({ kind: "submitting" });
     try {
-      const absPath = await expandHomePath(pathInput.trim());
+      const absPath = await expandHomePath(trimmed);
       const existing = spaces.find((s) => s.path === absPath);
       if (existing) {
         open(existing.id);
         return;
       }
-      const probe = await fetch("/api/probe-space-path", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path: absPath }),
-      });
+      const probe = await probeSpacePathApi(absPath);
       if (!probe.ok) {
-        const data = (await probe.json().catch(() => ({}))) as {
-          error?: string;
-          message?: string;
-        };
         const msg =
-          data.error === "path_not_found"
+          probe.error === "path_not_found"
             ? `Path does not exist: ${absPath}`
-            : (data.message ?? data.error ?? "Probe failed");
+            : (probe.message ?? probe.error);
         setStatus({ kind: "error", message: msg });
         return;
       }
-      const probeData = (await probe.json()) as {
-        hasShemma: boolean;
-        absolutePath: string;
-      };
-      if (probeData.hasShemma) {
-        await register(probeData.absolutePath);
+      if (probe.hasShemma) {
+        await register(probe.absolutePath);
       } else {
-        setStatus({ kind: "confirm-init", absPath: probeData.absolutePath });
+        setStatus({ kind: "confirm-init", absPath: probe.absolutePath });
       }
     } catch (err) {
       setStatus({ kind: "error", message: (err as Error).message });
@@ -113,29 +117,30 @@ export function SpacePickerPanel({
   const visibleSpaces = currentSpaceId
     ? spaces.filter((s) => s.id !== currentSpaceId)
     : spaces;
+  const submitDisabled =
+    status.kind === "loading" ||
+    status.kind === "submitting" ||
+    pathInput.trim().length === 0;
 
   return (
     <>
       <div style={{ flex: 1, overflowY: "auto" }}>
-        {listError && (
+        {status.kind === "loading" && (
           <div
             style={{
-              margin: "12px 20px",
-              padding: "8px 10px",
+              padding: 20,
+              color: tokens.color.textMuted,
               fontSize: tokens.font.sm,
-              color: "#b91c1c",
-              background: "#fef2f2",
-              border: "1px solid #fecaca",
-              borderRadius: tokens.radius.sm,
+              textAlign: "center",
             }}
           >
-            {listError}
+            Loading…
           </div>
         )}
-        {visibleSpaces.length === 0 ? (
+        {status.kind !== "loading" && visibleSpaces.length === 0 && (
           <div
             style={{
-              padding: "20px",
+              padding: 20,
               color: tokens.color.textMuted,
               fontSize: tokens.font.sm,
               textAlign: "center",
@@ -143,7 +148,8 @@ export function SpacePickerPanel({
           >
             {emptyMessage}
           </div>
-        ) : (
+        )}
+        {visibleSpaces.length > 0 && (
           <ul style={{ listStyle: "none", margin: 0, padding: "8px 0" }}>
             {visibleSpaces.map((s) => (
               <li
@@ -260,7 +266,7 @@ export function SpacePickerPanel({
             placeholder="~/projects/my-canvas"
             value={pathInput}
             onChange={(e) => setPathInput(e.target.value)}
-            disabled={status.kind === "busy"}
+            disabled={status.kind === "submitting"}
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
@@ -271,23 +277,23 @@ export function SpacePickerPanel({
               fontSize: tokens.font.sm,
               border: `1px solid ${tokens.color.border}`,
               borderRadius: tokens.radius.sm,
-              background: "#fff",
+              background: tokens.color.bg,
             }}
           />
           <button
             type="submit"
-            disabled={status.kind === "busy" || pathInput.trim().length === 0}
+            disabled={submitDisabled}
             style={{
               padding: "8px 14px",
               fontFamily: tokens.font.sans,
               fontSize: tokens.font.sm,
               fontWeight: 600,
-              color: "#fff",
+              color: tokens.color.bg,
               background: tokens.color.accent,
               border: "none",
               borderRadius: tokens.radius.sm,
               cursor: "pointer",
-              opacity: status.kind === "busy" ? 0.5 : 1,
+              opacity: submitDisabled ? 0.5 : 1,
             }}
           >
             Open
@@ -300,9 +306,9 @@ export function SpacePickerPanel({
               marginTop: 10,
               padding: "8px 10px",
               fontSize: tokens.font.sm,
-              color: "#b91c1c",
-              background: "#fef2f2",
-              border: "1px solid #fecaca",
+              color: tokens.color.dangerText,
+              background: tokens.color.dangerBg,
+              border: `1px solid ${tokens.color.dangerBorder}`,
               borderRadius: tokens.radius.sm,
             }}
           >
@@ -316,8 +322,9 @@ export function SpacePickerPanel({
               marginTop: 10,
               padding: "10px 12px",
               fontSize: tokens.font.sm,
-              background: "#fffbeb",
-              border: "1px solid #fde68a",
+              color: tokens.color.warnText,
+              background: tokens.color.warnBg,
+              border: `1px solid ${tokens.color.warnBorder}`,
               borderRadius: tokens.radius.sm,
             }}
           >
@@ -333,8 +340,8 @@ export function SpacePickerPanel({
                   padding: "6px 12px",
                   fontSize: tokens.font.sm,
                   fontWeight: 600,
-                  color: "#fff",
-                  background: "#16a34a",
+                  color: tokens.color.bg,
+                  background: tokens.color.successBg,
                   border: "none",
                   borderRadius: tokens.radius.sm,
                   cursor: "pointer",
@@ -373,8 +380,16 @@ function Badge({
 }) {
   const palette =
     tone === "warn"
-      ? { bg: "#fef3c7", color: "#78350f", border: "#f59e0b" }
-      : { bg: "#e5e7eb", color: "#374151", border: "#d1d5db" };
+      ? {
+          bg: tokens.color.warnBg,
+          color: tokens.color.warnText,
+          border: tokens.color.warnBorder,
+        }
+      : {
+          bg: tokens.color.badgeBg,
+          color: tokens.color.badgeText,
+          border: tokens.color.badgeBorder,
+        };
   return (
     <span
       style={{

@@ -1,3 +1,37 @@
+## 0.21.3 — 2026-05-22 — simplify pass: dead code, dup helpers, design-tokens, race fix
+
+PATCH cleanup. xhigh-effort `/simplify` over DRW-117 + DRW-118 diff. Fixed all Critical + Important findings, deferred Minor.
+
+### Removed dead code
+
+- `apps/frontend/src/styles.css`: `.multi-col / .col / .splitter-bar` rules (MultiColumnLayout deleted in 0.21.1 but CSS left behind).
+- `apps/backend/src/routes/spaces.ts`: local `revealCommand()` helper — replaced by shared.
+- `apps/frontend/src/spaces/api.ts`: duplicate `getSession` / `expandHomePath` (mirror of `transport/session.ts`) — single source of truth in transport.
+- Dynamic `await import("./api")` in `SpacePickerPanel.forget()` — replaced with top-level static import.
+
+### Shared helpers extracted
+
+- `packages/shemma-spaces/src/reveal.ts` → `platformRevealCommand()`. Used by both backend `/api/spaces/:id/reveal` and CLI `shemma s reveal`.
+- `apps/frontend/src/spaces/api.ts` → `probeSpacePathApi()`, `getSpaceApi()`, `revealSpaceApi()`. All `/api/spaces*` traffic now goes through wrappers (no inline `fetch` in components).
+- `apps/frontend/src/gallery/SpacePathButton.tsx` — extracted from `Gallery.tsx` header IIFE.
+
+### Design tokens
+
+`apps/frontend/src/design-tokens.ts` got: `bgPage`, `bg`, `backdrop`, `dangerBg/Border/Text`, `successBg`, `badgeBg/Border/Text`. All inline color literals в `SpacePickerPanel.tsx` / `OpenSpaceDialog.tsx` / `SpacesPage.tsx` заменены токенами (соответствие §3.8).
+
+### State / robustness
+
+- `SpacePickerPanel`: collapsed `listError` + `status:error` into one `Status` union with explicit `loading` / `submitting` states. Submit disabled until first refresh completes (race fix: ранее submitPath мог отработать с пустым `spaces` списком пока list ещё грузится).
+- `useEffect` cleanup flag в `SpacePickerPanel` (mirrors Gallery pattern) — no more setState-after-unmount.
+
+### Version sync
+
+5 внутренних `package.json` всё ещё были `0.22.0` после 0.21.x renumber. Теперь все 8 packages на `0.21.3`.
+
+### Tests
+
+1167/0 fail. `apps/frontend/src/transport/session.test.ts` обновлён для нового `ok` check + `home` field.
+
 ## 0.21.2 — 2026-05-22 — DRW-118 restyle SpacesPage landing in card design
 
 > **Renumber 2026-05-22:** теги `0.22.0` / `0.22.1` / `0.22.2` переименованы post-hoc в `0.21.0` / `0.21.1` / `0.21.2` — заполняем пропущенный 0.21.x gap (изначально DRW-116 маркировался как 0.22 потому что pre-1.0 MINOR с breaking changes; решили вернуть monotone progression). Release-коммиты с сообщениями "release: 0.22.X" остались в истории как artifact, теги `0.21.X` указывают на те же commits. Local-only repo — bookmarks не сломались.

@@ -3,14 +3,12 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
-  _resetSessionCache,
   addSpaceApi,
-  expandHomePath,
   forgetSpaceApi,
-  getSession,
   listSpacesApi,
   renameSpaceLabelApi,
 } from "../api";
+import { _resetSessionCache, expandHomePath, fetchSession } from "../../transport/session";
 
 const originalFetch = globalThis.fetch;
 
@@ -183,7 +181,7 @@ describe("renameSpaceLabelApi", () => {
 // getSession + expandHomePath
 // ---------------------------------------------------------------------------
 
-describe("getSession", () => {
+describe("fetchSession", () => {
   it("fetches /api/session and returns parsed info", async () => {
     const { calls } = makeFetch({
       sessionId: "s1",
@@ -191,7 +189,7 @@ describe("getSession", () => {
       workspaceDir: "/work",
       home: "/Users/me",
     });
-    const info = await getSession();
+    const info = await fetchSession();
     expect(calls[0]!.url).toBe("/api/session");
     expect(info.home).toBe("/Users/me");
     expect(info.sessionId).toBe("s1");
@@ -204,8 +202,8 @@ describe("getSession", () => {
       workspaceDir: "/w",
       home: "/Users/cached",
     });
-    await getSession();
-    await getSession();
+    await fetchSession();
+    await fetchSession();
     expect(calls).toHaveLength(1);
   });
 
@@ -216,7 +214,7 @@ describe("getSession", () => {
       workspaceDir: "/w",
       home: "/Users/reset",
     });
-    await getSession();
+    await fetchSession();
     _resetSessionCache();
     const { calls: calls2 } = makeFetch({
       sessionId: "s4",
@@ -224,7 +222,7 @@ describe("getSession", () => {
       workspaceDir: "/w",
       home: "/Users/reset2",
     });
-    await getSession();
+    await fetchSession();
     expect(calls2).toHaveLength(1);
   });
 });
