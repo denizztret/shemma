@@ -26,6 +26,10 @@ export type AiActivity = {
 
 export interface RoomMeta {
   miroExports?: MiroExportsMap;
+  /** DRW-134 v2 protocol marker. Presence === "v2" → backend routes на v2 handlers. */
+  didrawProtocol?: "v2";
+  /** DRW-134 NodeId suffix length, range [3..12]. Default 6 если undefined. */
+  didrawIdSuffixLength?: number;
 }
 
 export type MiroExportsMap = Record<
