@@ -342,52 +342,63 @@ export async function list(profile: Profile, space?: string) {
   process.stdout.write(`${renderRoomsTable(rooms)}\n`);
 }
 
-export async function exportRoom(room: string, to: string, profile: Profile) {
+// DRW-131: thread top-level --space through every room-management command.
+// Pattern: receive optional `space`, hand to clientFor(profile, space), then
+// use responseHasError (DRW-125) so middleware envelopes without `ok` exit 1
+// in both JSON and human modes — same symmetry as domain commands.
+export async function exportRoom(
+  room: string,
+  to: string,
+  profile: Profile,
+  space?: string,
+) {
   await ensureSilent(profile);
-  const res = await clientFor(profile).exportRoom(room, to);
+  const res = await clientFor(profile, space).exportRoom(room, to);
   printResponse(res, { humanSuccess: `exported room "${room}" → ${to}` });
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  if (responseHasError(res)) process.exit(1);
 }
 
 export async function importRoom(
   from: string,
   opts: { as?: string; force?: boolean },
   profile: Profile,
+  space?: string,
 ) {
   await ensureSilent(profile);
-  const res = await clientFor(profile).importRoom(from, opts);
+  const res = await clientFor(profile, space).importRoom(from, opts);
   printResponse(res, { humanSuccess: `imported room from ${from}` });
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  if (responseHasError(res)) process.exit(1);
 }
 
-export async function archiveRoom(room: string, profile: Profile) {
+export async function archiveRoom(room: string, profile: Profile, space?: string) {
   await ensureSilent(profile);
-  const res = await clientFor(profile).archiveRoom(room);
+  const res = await clientFor(profile, space).archiveRoom(room);
   printResponse(res, { humanSuccess: `archived room "${room}"` });
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  if (responseHasError(res)) process.exit(1);
 }
 
-export async function restoreRoom(room: string, profile: Profile) {
+export async function restoreRoom(room: string, profile: Profile, space?: string) {
   await ensureSilent(profile);
-  const res = await clientFor(profile).restoreRoom(room);
+  const res = await clientFor(profile, space).restoreRoom(room);
   printResponse(res, { humanSuccess: `restored room "${room}"` });
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  if (responseHasError(res)) process.exit(1);
 }
 
 export async function rmRoom(
   room: string,
   opts: { confirm?: boolean; archive?: boolean; force?: boolean } = {},
   profile: Profile,
+  space?: string,
 ) {
   await ensureSilent(profile);
   if (!opts.confirm) dieRequireFlag("expected --confirm flag");
   const mode = opts.archive ? "archive" : "hard";
-  const res = await clientFor(profile).deleteRoom(room, true, {
+  const res = await clientFor(profile, space).deleteRoom(room, true, {
     mode,
     force: opts.force,
   });
   printResponse(res, { humanSuccess: `removed room "${room}"` });
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  if (responseHasError(res)) process.exit(1);
 }
 
 export async function renameRoom(
@@ -395,34 +406,49 @@ export async function renameRoom(
   newId: string,
   opts: { force?: boolean } = {},
   profile: Profile,
+  space?: string,
 ) {
   await ensureSilent(profile);
-  const res = await clientFor(profile).renameRoom(oldId, newId, opts);
+  const res = await clientFor(profile, space).renameRoom(oldId, newId, opts);
   printResponse(res, { humanSuccess: `renamed "${oldId}" → "${newId}"` });
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  if (responseHasError(res)) process.exit(1);
 }
 
-export async function duplicateRoom(id: string, as: string, profile: Profile) {
+export async function duplicateRoom(
+  id: string,
+  as: string,
+  profile: Profile,
+  space?: string,
+) {
   await ensureSilent(profile);
-  const res = await clientFor(profile).duplicateRoom(id, as);
+  const res = await clientFor(profile, space).duplicateRoom(id, as);
   printResponse(res, { humanSuccess: `duplicated "${id}" → "${as}"` });
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  if (responseHasError(res)) process.exit(1);
 }
 
-export async function duplicateRoomAuto(id: string, profile: Profile) {
+export async function duplicateRoomAuto(
+  id: string,
+  profile: Profile,
+  space?: string,
+) {
   await ensureSilent(profile);
-  const res = await clientFor(profile).duplicateAuto(id);
+  const res = await clientFor(profile, space).duplicateAuto(id);
   printResponse(res, { humanSuccess: `duplicated "${id}"` });
-  if ((res as { ok?: boolean }).ok === false) process.exit(1);
+  if (responseHasError(res)) process.exit(1);
 }
 
 export async function purgeArchive(
   opts: { confirm?: boolean } = {},
   profile: Profile,
+  space?: string,
 ) {
   await ensureSilent(profile);
   if (!opts.confirm) dieRequireFlag("this is destructive, pass --confirm");
-  const res = await clientFor(profile).purgeArchive();
+  const res = await clientFor(profile, space).purgeArchive();
+  if (responseHasError(res)) {
+    printResponse(res);
+    process.exit(1);
+  }
   const removed = (res as { removed?: number }).removed ?? 0;
   const out = getOutput();
   if (out.mode === "json") {

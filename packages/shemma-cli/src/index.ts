@@ -186,9 +186,9 @@ async function main() {
     return;
   }
 
-  if (cmd === "state") return cmdState(argv.slice(1));
-  if (cmd === "patch") return cmdPatch(argv.slice(1));
-  if (cmd === "clear") return cmdClear(argv.slice(1));
+  if (cmd === "state") return cmdState(argv.slice(1), space);
+  if (cmd === "patch") return cmdPatch(argv.slice(1), space);
+  if (cmd === "clear") return cmdClear(argv.slice(1), space);
   if (cmd === "layout") {
     let mode: string | undefined;
     let scope: string | undefined;
@@ -202,11 +202,11 @@ async function main() {
     }
     return layoutCmd({ mode, scope, spacing, profile, room, space });
   }
-  if (cmd === "prompts") return cmdPrompts(argv.slice(1));
+  if (cmd === "prompts") return cmdPrompts(argv.slice(1), space);
   if (cmd === "ai") {
-    if (sub === "start") return cmdAiStart(argv.slice(2));
-    if (sub === "stop") return cmdAiStop(argv.slice(2));
-    if (sub === "status") return cmdAiStatus(argv.slice(2));
+    if (sub === "start") return cmdAiStart(argv.slice(2), space);
+    if (sub === "stop") return cmdAiStop(argv.slice(2), space);
+    if (sub === "status") return cmdAiStatus(argv.slice(2), space);
     usage();
     process.exit(1);
   }
@@ -370,12 +370,12 @@ async function main() {
     if (sub === "archive") {
       const id = argv[2];
       if (!id) die("expected <id>");
-      return archiveRoom(id, profile);
+      return archiveRoom(id, profile, space);
     }
     if (sub === "restore") {
       const id = argv[2];
       if (!id) die("expected <id>");
-      return restoreRoom(id, profile);
+      return restoreRoom(id, profile, space);
     }
     if (sub === "export") {
       const id = argv[2];
@@ -384,7 +384,7 @@ async function main() {
         if (argv[i] === "--to") to = argv[++i];
       }
       if (!id || !to) die("expected <id> --to <path>");
-      return exportRoom(id, to, profile);
+      return exportRoom(id, to, profile, space);
     }
     if (sub === "import") {
       const from = argv[2];
@@ -395,7 +395,7 @@ async function main() {
         else if (argv[i] === "--force") force = true;
       }
       if (!from) die("expected <path>");
-      return importRoom(from, { as: asVal, force }, profile);
+      return importRoom(from, { as: asVal, force }, profile, space);
     }
     if (sub === "rm") {
       const id = argv[2];
@@ -403,14 +403,14 @@ async function main() {
       const archive = argv.includes("--archive");
       const force = argv.includes("--force");
       if (!id) die("expected <id>");
-      return rmRoom(id, { confirm, archive, force }, profile);
+      return rmRoom(id, { confirm, archive, force }, profile, space);
     }
     if (sub === "rename") {
       const oldId = argv[2];
       const newId = argv[3];
       const force = argv.includes("--force");
       if (!oldId || !newId) die("expected <old> <new> [--force]");
-      return renameRoom(oldId, newId, { force }, profile);
+      return renameRoom(oldId, newId, { force }, profile, space);
     }
     if (sub === "duplicate") {
       const id = argv[2];
@@ -420,12 +420,12 @@ async function main() {
       }
       if (!id) die("expected <id> [--as <newId>]");
       // If --as omitted, use auto-suffix endpoint
-      if (!asVal) return duplicateRoomAuto(id, profile);
-      return duplicateRoom(id, asVal, profile);
+      if (!asVal) return duplicateRoomAuto(id, profile, space);
+      return duplicateRoom(id, asVal, profile, space);
     }
     if (sub === "purge-archive") {
       const confirm = argv.includes("--confirm");
-      return purgeArchive({ confirm }, profile);
+      return purgeArchive({ confirm }, profile, space);
     }
     die(`unknown rooms subcommand: ${sub ?? "(none)"}`);
   }

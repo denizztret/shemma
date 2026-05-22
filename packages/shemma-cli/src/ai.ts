@@ -1,6 +1,11 @@
 import { CanvasClient } from "@shemma/client";
 import { fail } from "./util";
-import { error as uiError, getOutput, printResponse } from "./ui";
+import {
+  error as uiError,
+  getOutput,
+  printResponse,
+  responseHasError,
+} from "./ui";
 
 type Args = {
   room?: string;
@@ -26,15 +31,24 @@ function emit(res: unknown, humanSuccess: string): void {
   } else {
     printResponse(res, { humanSuccess });
   }
+  if (responseHasError(res)) process.exit(1);
 }
 
-export async function cmdAiStart(argv: string[]) {
+// DRW-131: thread top-level --space so ai/* commands hit the right space.
+function clientFor(room: string | undefined, space: string | undefined): CanvasClient {
+  return new CanvasClient({
+    ...(room !== undefined ? { room } : {}),
+    ...(space !== undefined ? { space } : {}),
+  });
+}
+
+export async function cmdAiStart(argv: string[], space?: string) {
   const a = parseArgs(argv);
   if (!a.actor || !a.task) {
     uiError("expected --actor X --task Y", { code: "expected --actor X --task Y" });
     process.exit(1);
   }
-  const c = new CanvasClient({ room: a.room });
+  const c = clientFor(a.room, space);
   try {
     emit(await c.aiStart(a.actor, a.task), `ai started (actor=${a.actor})`);
   } catch (e) {
@@ -42,9 +56,9 @@ export async function cmdAiStart(argv: string[]) {
   }
 }
 
-export async function cmdAiStop(argv: string[]) {
+export async function cmdAiStop(argv: string[], space?: string) {
   const a = parseArgs(argv);
-  const c = new CanvasClient({ room: a.room });
+  const c = clientFor(a.room, space);
   try {
     emit(await c.aiStop(), "ai stopped");
   } catch (e) {
@@ -52,9 +66,9 @@ export async function cmdAiStop(argv: string[]) {
   }
 }
 
-export async function cmdAiStatus(argv: string[]) {
+export async function cmdAiStatus(argv: string[], space?: string) {
   const a = parseArgs(argv);
-  const c = new CanvasClient({ room: a.room });
+  const c = clientFor(a.room, space);
   try {
     emit(await c.aiActivity(), "ai status fetched");
   } catch (e) {

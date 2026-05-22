@@ -1,6 +1,11 @@
 import { CanvasClient } from "@shemma/client";
 import { fail } from "./util";
-import { error as uiError, getOutput, printResponse } from "./ui";
+import {
+  error as uiError,
+  getOutput,
+  printResponse,
+  responseHasError,
+} from "./ui";
 
 const VALID_STATUSES = ["pending", "resolved", "dismissed", "all"] as const;
 type Status = (typeof VALID_STATUSES)[number];
@@ -18,9 +23,12 @@ function emit(res: unknown, humanSuccess: string): void {
   } else {
     printResponse(res, { humanSuccess });
   }
+  if (responseHasError(res)) process.exit(1);
 }
 
-export async function cmdPrompts(argv: string[]) {
+// DRW-131: thread top-level --space (passed explicitly from index.ts after
+// strip) so prompts commands don't bounce on space middleware.
+export async function cmdPrompts(argv: string[], space?: string) {
   const sub = argv[0];
   const rest = argv.slice(1);
   let room: string | undefined;
@@ -42,7 +50,10 @@ export async function cmdPrompts(argv: string[]) {
     } else if (rest[i] === "--response") response = rest[++i];
     else if (!id && !rest[i].startsWith("--")) id = rest[i];
   }
-  const c = new CanvasClient({ room });
+  const c = new CanvasClient({
+    ...(room !== undefined ? { room } : {}),
+    ...(space !== undefined ? { space } : {}),
+  });
   try {
     if (sub === "list") {
       emit(await c.getPrompts(status ?? "pending"), "prompts listed");
