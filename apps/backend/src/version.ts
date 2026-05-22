@@ -20,17 +20,26 @@ export function gitDescribe(cwd: string = REPO_ROOT): string | null {
 }
 
 export interface ResolveVersionDeps {
-  env?: NodeJS.ProcessEnv;
+  // Override SHEMMA_VERSION lookup for tests. Pass "" to simulate "no env".
+  // Omit to read real process.env (production path).
+  envVersion?: string;
   describe?: () => string | null;
   pkgVersion?: string;
 }
 
 export function resolveVersion(deps: ResolveVersionDeps = {}): string {
-  const env = deps.env ?? process.env;
-  if (env.SHEMMA_VERSION) return env.SHEMMA_VERSION;
+  // Compiled binaries: `bun build --compile --define "process.env.SHEMMA_VERSION='X.Y.Z'"`
+  // substitutes this LITERAL token at build time, so the env-shortcut wins. Renaming
+  // the access (e.g. via a destructured variable) defeats --define — the substitution
+  // is purely textual.
+  const envVersion =
+    deps.envVersion !== undefined ? deps.envVersion : process.env.SHEMMA_VERSION;
+  if (envVersion) return envVersion;
+
   const describe = deps.describe ?? gitDescribe;
   const git = describe();
   if (git) return git;
+
   const fallback = deps.pkgVersion ?? pkg.version ?? "0.0.0";
   return `${fallback}-dev`;
 }

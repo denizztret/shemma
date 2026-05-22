@@ -1,3 +1,33 @@
+## 0.21.9 — 2026-05-22 — DRW-119b fix: compiled binary version regression
+
+PATCH hotfix for the regression introduced in 0.21.8. Compiled release binaries reported `0.21.8-dev` instead of `0.21.8` because the new `resolveVersion()` accessed `SHEMMA_VERSION` via a renamed local (`env.SHEMMA_VERSION` where `env = deps.env ?? process.env`), and `bun build --compile --define` does **purely textual** substitution of the literal token `process.env.SHEMMA_VERSION` — any rename defeats it.
+
+### Evidence
+
+Compiled 0.21.8 daemon `/api/version`:
+```json
+{"version":"0.21.8-dev","channel":"stable","gitSha":"18222ba","buildDate":"2026-05-22T09:00:13Z"}
+```
+
+`channel`, `gitSha`, `buildDate` got substituted (they read `process.env.X` literally). Only `version` fell through to the `pkg.version + "-dev"` fallback because the substitution target had been renamed.
+
+### Fix
+
+`resolveVersion()` now reads `process.env.SHEMMA_VERSION` as a literal at the production path. Tests inject via `deps.envVersion` (renamed from `deps.env`). Empty-string `envVersion: ""` is the explicit "no env" sentinel for tests that don't want to leak the host's actual `SHEMMA_VERSION`.
+
+Verified via direct `bun build --define`:
+```
+const envVersion = deps.envVersion !== undefined ? deps.envVersion : "0.21.9";
+```
+
+Tests updated: 8 tests (1 obsolete dropped). All green.
+
+### Lesson learned
+
+`bun build --define KEY=VALUE` is `String.replaceAll(KEY, VALUE)`-style. Any indirection (`const env = process.env; env.X`) breaks it. When writing code that relies on `--define` substitution, keep the **literal token** verbatim on the production path. DI for tests must layer on top without renaming the substitution target.
+
+---
+
 ## 0.21.8 — 2026-05-22 — DRW-119 `git describe` for dev/debug version display
 
 PATCH versioning policy follow-up. Closes the gap introduced by the new "tags only at real releases" policy (2026-05-22): between releases, dev/source builds no longer show the stale `pkg.version` of the last shipped release. Compiled release binaries are unchanged.
