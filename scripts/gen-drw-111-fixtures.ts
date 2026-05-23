@@ -60,18 +60,48 @@ interface GeoProps {
   index?: string;
 }
 
-let _indexCounter = 0;
-function nextIndex(): string {
-  _indexCounter++;
-  // Generate fractional index like a1, a2, ... a9, aA, ...
-  const chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-  let n = _indexCounter;
+// ─── Fractional index generator ──────────────────────────────────────────────
+// Generates valid tldraw IndexKey values in the sequence:
+//   a0, a1, ..., a9, aA, ..., aZ, aa, ..., az, b00, b01, ..., b0z, b10, ...
+// This matches what jittered-fractional-indexing generates with jitterBits=0.
+// The integer part cycles through single uppercase letters (a, b, c, ...).
+// The fractional digits use base-62 chars: 0-9, A-Z, a-z.
+
+const B62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+function toB62(n: number, width: number): string {
   let result = "";
-  do {
-    result = chars[n % chars.length] + result;
-    n = Math.floor(n / chars.length);
-  } while (n > 0);
-  return "a" + result;
+  for (let i = 0; i < width; i++) {
+    result = B62[n % 62] + result;
+    n = Math.floor(n / 62);
+  }
+  return result;
+}
+
+// Generate the Nth index key (0-based).
+// Pattern: positions 0..61 are a0..az (1 digit), 62..3843 are b00..bzz (2 digits), etc.
+function indexKeyAt(pos: number): string {
+  if (pos < 62) {
+    // Single-digit range: a0..az
+    return "a" + B62[pos];
+  }
+  pos -= 62;
+  if (pos < 62 * 62) {
+    // Two-digit range: b00..bzz
+    return "b" + toB62(pos, 2);
+  }
+  pos -= 62 * 62;
+  if (pos < 62 * 62 * 62) {
+    // Three-digit range: c000..czzz
+    return "c" + toB62(pos, 3);
+  }
+  throw new Error(`Index position too large: ${pos + 62 + 62 * 62}`);
+}
+
+let _indexCursor = 0;
+
+function nextIndex(): string {
+  return indexKeyAt(_indexCursor++);
 }
 
 function geoShape(
@@ -281,7 +311,7 @@ function noteShape(
     rotation: 0,
     props: {
       color,
-      fontSizeAdjustment: 0,
+      fontSizeAdjustment: 1,
       growY: 0,
       labelColor: "black",
       richText: richText(text),
@@ -291,6 +321,7 @@ function noteShape(
       size,
       font,
       url: "",
+      textFirstEditedBy: null,
     },
     meta: {},
   };
