@@ -9,6 +9,10 @@ import {
   collectArrowEndpointsFromStore,
   anchorToSnapTo,
   mapGeoToMiroShape,
+  tldrawSizeToFontSize,
+  tldrawSizeToBorderWidth,
+  tldrawSizeToStrokeWidth,
+  tldrawSizeToStickyFontSize,
 } from "./builder";
 import type { RawShape } from "./coords";
 
@@ -315,4 +319,43 @@ describe("buildConnectorPayload", () => {
       expect(result.reason).toBe("cross-selection-connector");
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// Task 2: size mapping helpers
+// ---------------------------------------------------------------------------
+
+describe("tldrawSizeToFontSize", () => {
+  it("s → '12'", () => expect(tldrawSizeToFontSize("s")).toBe("12"));
+  it("m → '14'", () => expect(tldrawSizeToFontSize("m")).toBe("14"));
+  it("l → '20'", () => expect(tldrawSizeToFontSize("l")).toBe("20"));
+  it("xl → '30'", () => expect(tldrawSizeToFontSize("xl")).toBe("30"));
+  it("undefined → '14' (default = m)", () => expect(tldrawSizeToFontSize(undefined)).toBe("14"));
+  it("unknown → '14' (fallback = m)", () => expect(tldrawSizeToFontSize("xxl")).toBe("14"));
+});
+
+describe("tldrawSizeToBorderWidth", () => {
+  it("s → '1.0'", () => expect(tldrawSizeToBorderWidth("s")).toBe("1.0"));
+  it("m → '2.0'", () => expect(tldrawSizeToBorderWidth("m")).toBe("2.0"));
+  it("l → '3.0'", () => expect(tldrawSizeToBorderWidth("l")).toBe("3.0"));
+  it("xl → '4.0'", () => expect(tldrawSizeToBorderWidth("xl")).toBe("4.0"));
+  it("undefined → '2.0' (default = m)", () => expect(tldrawSizeToBorderWidth(undefined)).toBe("2.0"));
+});
+
+describe("tldrawSizeToStrokeWidth", () => {
+  it("mirrors tldrawSizeToBorderWidth for all sizes", () => {
+    for (const s of ["s", "m", "l", "xl", undefined] as const) {
+      expect(tldrawSizeToStrokeWidth(s)).toBe(tldrawSizeToBorderWidth(s));
+    }
+  });
+  it("s → '1.0'", () => expect(tldrawSizeToStrokeWidth("s")).toBe("1.0"));
+  it("xl → '4.0'", () => expect(tldrawSizeToStrokeWidth("xl")).toBe("4.0"));
+});
+
+describe("tldrawSizeToStickyFontSize", () => {
+  it("s → '14'", () => expect(tldrawSizeToStickyFontSize("s")).toBe("14"));
+  it("m → '24'", () => expect(tldrawSizeToStickyFontSize("m")).toBe("24"));
+  it("l → '36'", () => expect(tldrawSizeToStickyFontSize("l")).toBe("36"));
+  it("xl → '48'", () => expect(tldrawSizeToStickyFontSize("xl")).toBe("48"));
+  it("undefined → '24' (default = m)", () => expect(tldrawSizeToStickyFontSize(undefined)).toBe("24"));
 });

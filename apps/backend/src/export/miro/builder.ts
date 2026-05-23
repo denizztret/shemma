@@ -233,6 +233,50 @@ export type ConnectorBuildResult =
   | { kind: "ok"; payload: MiroConnectorPayload }
   | { kind: "skip"; reason: "unsupported-type" | "cross-selection-connector" };
 
+// ---------------------------------------------------------------------------
+// Task 2: size mapping helpers (§ 5.1)
+// ---------------------------------------------------------------------------
+
+export type TldrawSize = "s" | "m" | "l" | "xl";
+
+export function tldrawSizeToFontSize(size: string | undefined): string {
+  switch (size) {
+    case "s":  return "12";
+    case "l":  return "20";
+    case "xl": return "30";
+    case "m":
+    default:   return "14";
+  }
+}
+
+export function tldrawSizeToBorderWidth(size: string | undefined): string {
+  switch (size) {
+    case "s":  return "1.0";
+    case "l":  return "3.0";
+    case "xl": return "4.0";
+    case "m":
+    default:   return "2.0";
+  }
+}
+
+export function tldrawSizeToStrokeWidth(size: string | undefined): string {
+  return tldrawSizeToBorderWidth(size);
+}
+
+/**
+ * Miro sticky note uses its own fontSize scale — enum 14|24|36|48|72.
+ * Not reusing tldrawSizeToFontSize because sticky values differ.
+ */
+export function tldrawSizeToStickyFontSize(size: string | undefined): string {
+  switch (size) {
+    case "s":  return "14";
+    case "l":  return "36";
+    case "xl": return "48";
+    case "m":
+    default:   return "24";
+  }
+}
+
 export function buildConnectorPayload(
   arrow: RawShape,
   ctx: ConnectorBuilderCtx,
