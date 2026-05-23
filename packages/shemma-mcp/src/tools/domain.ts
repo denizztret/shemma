@@ -329,10 +329,83 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
   );
 
   // ── shemma_import_mermaid ───────────────────────────────────────────────────
-  // Append-only. The MCP layer never sends a mode flag — wiping the canvas is
-  // a separate explicit action that requires user confirmation.
+  // DRW-127: mode param added — "browser" (default, backward-compat), "storage"
+  // (POST /api/schema/create, no WS required), "auto" (storage first, browser fallback).
+
+  /** Extract a human-readable label from the first line of a Mermaid diagram.
+   *  E.g. "graph LR\n  %% My Diagram\n  ..." → "My Diagram".
+   *  Falls back to "Imported schema" when no suitable label found. */
+  function extractMermaidLabel(source: string): string {
+    for (const line of source.split("\n")) {
+      const trimmed = line.trim();
+      // Comment lines: %% Label text
+      if (trimmed.startsWith("%%")) {
+        const label = trimmed.slice(2).trim();
+        if (label.length > 0) return label;
+      }
+      // Named diagram: graph LR "My Diagram" or flowchart TB "Title"
+      const titleMatch = trimmed.match(/^(?:graph|flowchart)\s+\S+\s+"(.+)"/i);
+      if (titleMatch) return titleMatch[1];
+    }
+    return "Imported schema";
+  }
+
+  async function importMermaidStoragePath(
+    c: CanvasClient,
+    source: string,
+    clientOpId: string | undefined,
+    resolved: { room: string; source: string },
+  ): Promise<ToolResult | null> {
+    const label = extractMermaidLabel(source);
+    const clientOpIdFinal = clientOpId ?? crypto.randomUUID();
+    const resp = (await c.createSchema({
+      label,
+      raw: source,
+      clientOpId: clientOpIdFinal,
+    })) as {
+      ok?: boolean;
+      frameId?: string;
+      nodeIds?: string[];
+      version?: number;
+      errors?: Array<{ code?: string; message?: string }>;
+    };
+
+    if (resp.ok) {
+      deps.resolver.recordTouch(resolved.room);
+      return toolResult({
+        ok: true,
+        room: resolved.room,
+        roomSource: resolved.source,
+        version: resp.version,
+        clientOpId: clientOpIdFinal,
+        // Normalise to importMermaid-compatible envelope so callers can treat
+        // both modes identically. frameId + nodeIds are storage-specific extras.
+        shape_ids: resp.nodeIds ?? [],
+        didraw_names: resp.nodeIds ?? [],
+        root_ids: resp.frameId ? [resp.frameId] : [],
+        frameId: resp.frameId,
+        nodeIds: resp.nodeIds ?? [],
+      });
+    }
+
+    const firstError = Array.isArray(resp.errors) && resp.errors.length > 0
+      ? (resp.errors[0] as { code?: string; message?: string })
+      : undefined;
+    // Return null to signal caller to try browser fallback (used in "auto" mode).
+    // Returning null means "storage failed, try next path".
+    return toolResult({
+      ok: false,
+      code: "import-failed",
+      message: firstError?.message ?? firstError?.code ?? "storage import failed",
+      clientOpId: clientOpIdFinal,
+      details: { room: resolved.room, errors: resp.errors },
+    });
+  }
+
   async function importMermaidCall(input: ImportMermaidInput): Promise<ToolResult> {
-    const { room: argRoom, space: argSpace, clientOpId, source, focus } = input;
+    const { room: argRoom, space: argSpace, clientOpId, source, focus, mode } = input;
+    const effectiveMode = mode ?? "browser";
+
     const spaceRes = resolveSpaceOrError(deps, argSpace);
     if ("error" in spaceRes) return spaceRes.error;
 
@@ -346,12 +419,39 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
       });
     }
 
+    const c = new CanvasClient({
+      baseUrl: deps.client.baseUrl,
+      room: resolved.room,
+      space: spaceRes.spaceId,
+    });
+
+    // ── storage mode ──────────────────────────────────────────────────────────
+    if (effectiveMode === "storage") {
+      try {
+        return await importMermaidStoragePath(c, source, clientOpId, resolved) ??
+          toolResult({ ok: false, code: "import-failed", message: "storage import returned null" });
+      } catch (e) {
+        return toolResult({ ...mapFetchError(e) });
+      }
+    }
+
+    // ── auto mode: try storage first, then browser ────────────────────────────
+    if (effectiveMode === "auto") {
+      try {
+        const storageResult = await importMermaidStoragePath(c, source, clientOpId, resolved);
+        // Storage success → done.
+        if (storageResult && (storageResult.structuredContent as { ok?: boolean }).ok) {
+          return storageResult;
+        }
+        // Storage failed → fall through to browser path.
+      } catch {
+        // Storage threw → fall through to browser path.
+      }
+      // Fall through to browser path below.
+    }
+
+    // ── browser mode (default) ────────────────────────────────────────────────
     try {
-      const c = new CanvasClient({
-        baseUrl: deps.client.baseUrl,
-        room: resolved.room,
-        space: spaceRes.spaceId,
-      });
       const resp = (await c.importMermaid({
         source,
         clientOpId,
@@ -404,7 +504,19 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
     "shemma_import_mermaid",
     {
       description:
-        "Imports a Mermaid diagram into the canvas room. APPEND-only — never replaces or deletes existing shapes; preserves user's manual layout edits.\n\nBefore calling: invoke `shemma_context` first to inspect existing element didraw_names — Mermaid node ids that collide with existing names will be auto-deduplicated (e.g. \"api-2\"), so avoid emitting Mermaid labels that already exist as nodes.\n\nRequires a connected WebSocket client on the same room (NOT just an open browser tab — see Troubleshooting below). On 503 \"no client connected\", caller should open the returned room_url (e.g. via a browser/devtools tool) and retry once.\n\nReturns: shape_ids, didraw_names, root_ids — usable for follow-up shemma_connect / shemma_group.\n\nTroubleshooting:\n- no-client-connected: \"Open browser tab\" is necessary but NOT sufficient — the page must establish a WebSocket subscription. Verify via `shemma_active_rooms` (must list the target room with clientCount > 0). After hard-reload the WS reconnects in ~100-500ms; if `active_rooms` stays empty for >2s the bundle is stale — close and reopen the tab through `shemma_open`.\n- Alternative path (no MCP needed): in browser DevTools console, run `await window.shemmaImportMermaid('graph LR\\n  app --> db')`. This is the same code-path the WS command triggers and works regardless of MCP connectivity.\n- Append-only accumulation: repeated imports of similar mermaid produce duplicate shapes + edges. Inspect via `shemma_context` first; consider `shemma_delete` on prior import root_ids before re-importing.\n- Space errors (invalid_space_id / space_not_found / space_required): pass `space=<id>` matching `shemma_rooms_list`-known spaces, or omit if `default` space is registered.",
+        "Imports a Mermaid diagram into the canvas room. APPEND-only — never replaces or deletes existing shapes; preserves user's manual layout edits.\n\n" +
+        "**mode param (DRW-127):**\n" +
+        "- `\"browser\"` (default) — WS-based flow via /api/agent/import-mermaid. Requires an open browser tab with an active WebSocket subscriber. Backward-compatible default.\n" +
+        "- `\"storage\"` — direct storage write via POST /api/schema/create (no WS required). Room auto-upgrades to v2 on first call. Returns `frameId` + `nodeIds` in addition to standard envelope. Fails with `import-failed` for unsupported diagram types (use browser mode as fallback).\n" +
+        "- `\"auto\"` — tries storage first; on storage error falls back to browser. Best-effort: use when WS availability is unknown.\n\n" +
+        "Before calling: invoke `shemma_context` first to inspect existing element didraw_names — Mermaid node ids that collide with existing names will be auto-deduplicated (e.g. \"api-2\"), so avoid emitting Mermaid labels that already exist as nodes.\n\n" +
+        "Returns: shape_ids, didraw_names, root_ids — usable for follow-up shemma_connect / shemma_group. Storage mode also returns frameId, nodeIds.\n\n" +
+        "Troubleshooting:\n" +
+        "- no-client-connected (browser/auto mode): \"Open browser tab\" is necessary but NOT sufficient — the page must establish a WebSocket subscription. Verify via `shemma_active_rooms` (must list the target room with clientCount > 0). After hard-reload the WS reconnects in ~100-500ms; if `active_rooms` stays empty for >2s the bundle is stale — close and reopen the tab through `shemma_open`. Retry with `mode:\"storage\"` if WS unavailable.\n" +
+        "- unsupported-diagram-type (storage mode): non-flowchart diagrams (sequence, class, etc.) are not supported in storage mode. Retry with `mode:\"browser\"` if a WS client is connected.\n" +
+        "- Alternative path (no MCP needed): in browser DevTools console, run `await window.shemmaImportMermaid('graph LR\\n  app --> db')`. This is the same code-path the WS command triggers and works regardless of MCP connectivity.\n" +
+        "- Append-only accumulation: repeated imports of similar mermaid produce duplicate shapes + edges. Inspect via `shemma_context` first; consider `shemma_delete` on prior import root_ids before re-importing.\n" +
+        "- Space errors (invalid_space_id / space_not_found / space_required): pass `space=<id>` matching `shemma_rooms_list`-known spaces, or omit if `default` space is registered.",
       inputSchema: ImportMermaidArgs,
     },
     async (args) => importMermaidCall(args as ImportMermaidInput),

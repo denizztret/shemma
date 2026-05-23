@@ -105,6 +105,18 @@ export const ImportMermaidArgs = {
    * - "none"    — do not change the viewport.
    */
   focus: z.enum(["new", "fit-all", "none"]).optional(),
+  /**
+   * DRW-127: Import transport mode.
+   * - "browser"  (default) — WS-based flow via /api/agent/import-mermaid. Requires
+   *   an open browser tab with an active WebSocket subscriber. Errors with
+   *   `no-client-connected` (503) if no WS client is present.
+   * - "storage"  — direct storage write via POST /api/schema/create (DRW-134 path).
+   *   No browser required. Returns frameId + nodeIds envelope. Room is auto-upgraded
+   *   to v2 on first call. Returns `unsupported-diagram-type` for non-flowchart input.
+   * - "auto"     — try storage first; fallback to browser on storage error.
+   *   Useful when you don't know whether a WS client is connected.
+   */
+  mode: z.enum(["browser", "storage", "auto"]).optional(),
 };
 
 // ── DRW-134: Schema API schemas ────────────────────────────────────────────

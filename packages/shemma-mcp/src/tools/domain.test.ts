@@ -581,6 +581,197 @@ describe("shemma_import_mermaid tool (DRW-083)", () => {
   });
 });
 
+describe("shemma_import_mermaid mode param (DRW-127)", () => {
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  // mode:"storage" → calls POST /api/schema/create, returns frameId+nodeIds envelope
+  it("mode:storage calls createSchema and returns frameId+nodeIds envelope", async () => {
+    let capturedUrl = "";
+    let capturedBody: unknown;
+    mockFetch((url, init) => {
+      capturedUrl = url;
+      capturedBody = JSON.parse(init?.body as string);
+      return {
+        body: { ok: true, frameId: "frame-1", nodeIds: ["n1", "n2"], version: 3 },
+      };
+    });
+    const { handles } = setup({ mode: "direct", room: "test-room" });
+    const r = await handles.importMermaid.call({
+      source: "graph LR\n  A-->B",
+      mode: "storage",
+    });
+    expect(capturedUrl).toContain("/api/schema/create");
+    expect(capturedUrl).toContain("room=test-room");
+    expect((capturedBody as { raw: string }).raw).toBe("graph LR\n  A-->B");
+    expect(r.structuredContent).toMatchObject({
+      ok: true,
+      room: "test-room",
+      frameId: "frame-1",
+      nodeIds: ["n1", "n2"],
+      root_ids: ["frame-1"],
+    });
+    expect(r.isError).toBeUndefined();
+  });
+
+  // mode:"storage" — label is auto-derived from %% comment on first matching line
+  it("mode:storage derives label from %% comment in mermaid source", async () => {
+    let capturedBody: unknown;
+    mockFetch((_, init) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return { body: { ok: true, frameId: "f2", nodeIds: [], version: 1 } };
+    });
+    const { handles } = setup({ mode: "direct", room: "r" });
+    await handles.importMermaid.call({
+      source: "graph LR\n%% My Diagram\n  A-->B",
+      mode: "storage",
+    });
+    expect((capturedBody as { label: string }).label).toBe("My Diagram");
+  });
+
+  // mode:"storage" — fallback label when no comment present
+  it("mode:storage falls back to 'Imported schema' when no label in source", async () => {
+    let capturedBody: unknown;
+    mockFetch((_, init) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return { body: { ok: true, frameId: "f3", nodeIds: [], version: 1 } };
+    });
+    const { handles } = setup({ mode: "direct", room: "r" });
+    await handles.importMermaid.call({
+      source: "graph LR\n  A-->B",
+      mode: "storage",
+    });
+    expect((capturedBody as { label: string }).label).toBe("Imported schema");
+  });
+
+  // mode:"browser" (explicit) → uses existing WS path (/api/agent/import-mermaid)
+  it("mode:browser calls /api/agent/import-mermaid (WS path)", async () => {
+    let capturedUrl = "";
+    mockFetch((url) => {
+      capturedUrl = url;
+      return { body: { ok: true, shape_ids: ["s1"], didraw_names: ["a"], root_ids: ["s1"] } };
+    });
+    const { handles } = setup({ mode: "direct", room: "r" });
+    const r = await handles.importMermaid.call({
+      source: "graph LR\n  A-->B",
+      mode: "browser",
+    });
+    expect(capturedUrl).toContain("/api/agent/import-mermaid");
+    expect(r.structuredContent).toMatchObject({ ok: true, shape_ids: ["s1"] });
+    expect(r.isError).toBeUndefined();
+  });
+
+  // mode undefined (default) → browser behavior (backward compat)
+  it("default mode (undefined) → browser path, same as mode:browser", async () => {
+    let capturedUrl = "";
+    mockFetch((url) => {
+      capturedUrl = url;
+      return { body: { ok: true, shape_ids: ["s2"], didraw_names: ["b"], root_ids: ["s2"] } };
+    });
+    const { handles } = setup({ mode: "direct", room: "r" });
+    const r = await handles.importMermaid.call({ source: "graph LR\n  A-->B" });
+    expect(capturedUrl).toContain("/api/agent/import-mermaid");
+    expect(r.structuredContent).toMatchObject({ ok: true });
+    expect(r.isError).toBeUndefined();
+  });
+
+  // mode:"auto" → storage succeeds → done (browser NOT called)
+  it("mode:auto tries storage first; succeeds → returns storage result", async () => {
+    const calls: string[] = [];
+    mockFetch((url) => {
+      if (url.includes("/api/schema/create")) {
+        calls.push("storage");
+        return { body: { ok: true, frameId: "f4", nodeIds: ["n4"], version: 2 } };
+      }
+      calls.push("browser");
+      return { body: { ok: true, shape_ids: ["s4"], didraw_names: ["d"], root_ids: ["s4"] } };
+    });
+    const { handles } = setup({ mode: "direct", room: "r" });
+    const r = await handles.importMermaid.call({
+      source: "graph LR\n  A-->B",
+      mode: "auto",
+    });
+    expect(calls).toEqual(["storage"]);
+    expect(r.structuredContent).toMatchObject({ ok: true, frameId: "f4" });
+  });
+
+  // mode:"auto" → storage fails → fallback to browser
+  it("mode:auto falls back to browser when storage fails", async () => {
+    const calls: string[] = [];
+    mockFetch((url) => {
+      if (url.includes("/api/schema/create")) {
+        calls.push("storage");
+        return {
+          body: { ok: false, errors: [{ code: "unsupported-diagram-type", message: "unsupported" }] },
+        };
+      }
+      calls.push("browser");
+      return { body: { ok: true, shape_ids: ["s5"], didraw_names: ["e"], root_ids: ["s5"] } };
+    });
+    const { handles } = setup({ mode: "direct", room: "r" });
+    const r = await handles.importMermaid.call({
+      source: "sequenceDiagram\n  A->>B: Hello",
+      mode: "auto",
+    });
+    expect(calls).toEqual(["storage", "browser"]);
+    expect(r.structuredContent).toMatchObject({ ok: true, shape_ids: ["s5"] });
+  });
+
+  // mode:"auto" → storage throws (network error) → fallback to browser
+  it("mode:auto falls back to browser when storage throws network error", async () => {
+    let callCount = 0;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = typeof url === "string" ? url : url.toString();
+      callCount++;
+      if (u.includes("/api/schema/create")) {
+        throw new Error("ECONNREFUSED");
+      }
+      return new Response(
+        JSON.stringify({ ok: true, shape_ids: ["s6"], didraw_names: ["f"], root_ids: ["s6"] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const { handles } = setup({ mode: "direct", room: "r" });
+    const r = await handles.importMermaid.call({
+      source: "graph LR\n  A-->B",
+      mode: "auto",
+    });
+    expect(callCount).toBe(2);
+    expect(r.structuredContent).toMatchObject({ ok: true, shape_ids: ["s6"] });
+  });
+
+  // mode:"storage" → createSchema network error → daemon-unavailable
+  it("mode:storage network error returns daemon-unavailable", async () => {
+    globalThis.fetch = (async () => { throw new Error("ECONNREFUSED"); }) as typeof fetch;
+    const { handles } = setup({ mode: "direct", room: "r" });
+    const r = await handles.importMermaid.call({
+      source: "graph LR\n  A-->B",
+      mode: "storage",
+    });
+    expect(r.structuredContent).toMatchObject({ ok: false, code: "daemon-unavailable" });
+    expect(r.isError).toBe(true);
+  });
+
+  // mode:"storage" → ok:false from backend → import-failed with errors
+  it("mode:storage backend error returns import-failed", async () => {
+    mockFetch(() => ({
+      body: { ok: false, errors: [{ code: "unsupported-diagram-type", message: "not a flowchart" }] },
+    }));
+    const { handles } = setup({ mode: "direct", room: "r" });
+    const r = await handles.importMermaid.call({
+      source: "sequenceDiagram\n  A->>B: hi",
+      mode: "storage",
+    });
+    expect(r.structuredContent).toMatchObject({
+      ok: false,
+      code: "import-failed",
+      message: "not a flowchart",
+    });
+    expect(r.isError).toBe(true);
+  });
+});
+
 describe("shemma_layout_selection tool (DRW-088)", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
