@@ -79,6 +79,50 @@ export function nearestShapeColor(hex: string): string {
   return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
 }
 
+// ---------------------------------------------------------------------------
+// Task 1: tldraw named color → hex
+// ---------------------------------------------------------------------------
+
+/** Type-safe union of all 12 tldraw named colors. */
+export type TldrawNamedColor =
+  | "black"
+  | "grey"
+  | "light-violet"
+  | "violet"
+  | "blue"
+  | "light-blue"
+  | "yellow"
+  | "orange"
+  | "green"
+  | "light-green"
+  | "light-red"
+  | "red";
+
+/** Maps tldraw color names → their representative hex values (v0.4 probe). */
+export const TLDRAW_NAMED_TO_HEX: Record<TldrawNamedColor, string> = {
+  "black": "#1d1d1d",
+  "grey": "#9fa8b2",
+  "light-violet": "#e085f4",
+  "violet": "#ae3ec9",
+  "blue": "#4465e9",
+  "light-blue": "#4ba1f1",
+  "yellow": "#f1ac4b",
+  "orange": "#e16919",
+  "green": "#099268",
+  "light-green": "#4cb05e",
+  "light-red": "#f87777",
+  "red": "#e03131",
+};
+
+/**
+ * Convert a tldraw named color to its hex value.
+ * Unknown / undefined inputs fall back to black ("#1d1d1d").
+ */
+export function tldrawNamedToHex(color: string | undefined): string {
+  if (!color) return TLDRAW_NAMED_TO_HEX["black"];
+  return (TLDRAW_NAMED_TO_HEX as Record<string, string>)[color] ?? TLDRAW_NAMED_TO_HEX["black"];
+}
+
 export function nearestStickyColor(hex: string): string {
   const rgb = parseHex(hex);
   let bestName = "gray";
