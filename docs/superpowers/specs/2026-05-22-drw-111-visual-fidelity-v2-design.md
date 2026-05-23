@@ -1,8 +1,8 @@
 # Visual Fidelity v2 — Miro Export Style Expansion (Design)
 
-**Version:** 0.3
-**Date:** 2026-05-22
-**Status:** draft v0.3 — user review pending
+**Version:** 0.4
+**Date:** 2026-05-23
+**Status:** draft v0.4 — Phase 0 probe outcomes applied; user review pending
 **Target release:** 0.22.0 (MINOR — additive style props + frame-mode change-of-default)
 **Tracking:** Backlog [[DRW-111]]
 **Predecessor:** [[2026-05-19-export-miro-design]] (DRW-103 — structural fidelity, shipped 0.20.x)
@@ -10,6 +10,14 @@
 
 ## Changelog
 
+- v0.4 (2026-05-23) — Phase 0 probe outcomes applied (see `apps/backend/src/export/miro/probe.md` Sections F/G/H/I/J):
+  - **§ 4.1 TLDRAW_NAMED_TO_HEX table updated** — 8 из 12 hex значений отличались от actual tldraw 5.0.0 source (`@tldraw/editor/.../defaultThemes.ts` `colors.light.<name>.solid`). Replaced spec's Mantine-derived values с actual: grey/light-violet/blue/light-blue/yellow/orange/light-green/light-red. Unchanged: black/violet/green/red.
+  - **§ 6.1 tldrawFontToFamily — `draw` mapping changed `open_sans` → `caveat`**. Miro production enum имеет `caveat` (casual flowing script); live-tested 201 OK. Better match для tldraw handwriting feel.
+  - **§ 7.1 tldrawArrowheadToStrokeCap REWRITTEN** — все 4 spec values rejected by Miro (400). Actual enum suffix = `filled_*` not `*_filled`; no `unicode_arrow`, no `rectangle`/`rectangle_filled`. New mapping uses `filled_triangle/filled_oval/filled_diamond/arrow`; `square/bar/pipe` degrade to `none` (Miro нет rectangular caps); `inverted` degrades to `arrow`.
+  - **§ 8.4 Nested groups REJECTED (404 "Item not found")** — locked decision: outer group's items array содержит **flat leaf-item ids only** (skip nested groupIds). Removed the "if accepted" branch — fallback model becomes the sole code path.
+  - **§ 8.6 Group widget — minimum items = 2** confirmed (single-item and empty arrays both return 400 "Group should have at least two items"). Frame с 0 or 1 child → skip POST /groups entirely; no `groups[frameId]` tracking entry.
+  - **§ 14 Q8 (z-order) — resolved**. Miro REST v2 НЕ exposes z-order через REST: no `zIndex`, no `bringToFront`/`bringToBack`. Creation-order semantics — единственный mechanism. Array order = id assignment order = z-order. Spec § 8.5 strategy остаётся valid; PATCH alternative не существует, fallback (if needed in future) — DELETE + re-POST.
+  - **§ 4.6 text widget `color` field** — confirmed via live-test (201 OK with `color`; 400 with `textColor`). No spec change needed.
 - v0.3 (2026-05-22) — review pass against actual code (5 P1/P2 findings + Miro endpoint confirmation):
   - **§12 переписан**: migration story исправлена под фактический **append-only** export (re-export создаёт duplicate Miro items, tracking merges new ids поверх старых; old Miro items остаются на board). Старое утверждение "tracking ids persist, no dupes" было ошибочным.
   - **§8.7 переписан**: tracking schema выровнена с актуальной `MiroExportsMap[boardId]` (`boardName?`, `lastExportedAt`, `items`, `connectors?`); добавляется optional `groups?: Record<elementId, groupId>`. Поля `schemaVersion`/`shapes` (мои выдумки) убраны.
@@ -115,19 +123,23 @@ export type TldrawNamedColor =
   | "black" | "grey" | "light-violet" | "violet" | "blue" | "light-blue"
   | "yellow" | "orange" | "green" | "light-green" | "light-red" | "red";
 
-/** tldraw 5.x light-theme defaults. Values verified against tldraw source. */
+/**
+ * tldraw 5.x light-theme `solid` variant values.
+ * Source: @tldraw/editor 5.0.0 → ThemeManager/defaultThemes.ts → DEFAULT_THEME.colors.light.<name>.solid.
+ * Verified Phase 0 probe (2026-05-23, see probe.md Section H).
+ */
 export const TLDRAW_NAMED_TO_HEX: Record<TldrawNamedColor, string> = {
   "black":        "#1d1d1d",
-  "grey":         "#adb5bd",
-  "light-violet": "#c4a1ff",
+  "grey":         "#9fa8b2",
+  "light-violet": "#e085f4",
   "violet":       "#ae3ec9",
-  "blue":         "#4263eb",
-  "light-blue":   "#4dabf7",
-  "yellow":       "#ffc078",
-  "orange":       "#f76707",
+  "blue":         "#4465e9",
+  "light-blue":   "#4ba1f1",
+  "yellow":       "#f1ac4b",
+  "orange":       "#e16919",
   "green":        "#099268",
-  "light-green":  "#40c057",
-  "light-red":    "#ff8787",
+  "light-green":  "#4cb05e",
+  "light-red":    "#f87777",
   "red":          "#e03131",
 };
 
@@ -137,7 +149,7 @@ export function tldrawNamedToHex(name: string | undefined): string {
 }
 ```
 
-**Implementation note:** точные значения hex для tldraw 5.x палитры верифицируются на implementation step против tldraw source (`@tldraw/tldraw/src/lib/shapes/shared/colors.ts` или эквивалент) — указанные выше — рабочие defaults из памяти, требуют sanity-check'а перед merge.
+**Implementation note:** значения verified против tldraw source в Phase 0 probe (см. `apps/backend/src/export/miro/probe.md` Section H). 8 of 12 values отличались от v0.3 spec и были скорректированы. Source path: `node_modules/.bun/@tldraw+editor@5.0.0+ab629783a4f35bff/node_modules/@tldraw/editor/src/lib/editor/managers/ThemeManager/defaultThemes.ts`.
 
 ### 4.2 Wire в `buildShapePayload`
 
@@ -338,7 +350,7 @@ export type TldrawFont = "draw" | "sans" | "serif" | "mono";
 
 export function tldrawFontToFamily(font: string | undefined): string {
   switch (font) {
-    case "draw":  return "open_sans";       // best-effort match to handwriting feel
+    case "draw":  return "caveat";          // casual flowing script — closest to tldraw handwriting feel
     case "serif": return "times_new_roman";
     case "mono":  return "roboto_mono";
     case "sans":
@@ -347,9 +359,9 @@ export function tldrawFontToFamily(font: string | undefined): string {
 }
 ```
 
-**Verified enum:** значения `open_sans`, `times_new_roman`, `roboto_mono` присутствуют в Miro `shapeStyleForCreate.ts` JSDoc (см. [[miro-sdk-reference]] §3 SDK source). Точный enum-list проверяется на implementation step.
+**Verified enum (Phase 0 probe — see probe.md Section J):** Miro production enum содержит 30 values, включая `open_sans`, `times_new_roman`, `roboto_mono`, `caveat`, `permanent_marker`, `lemon_tuesday`. Live-test'нул `caveat` через POST /items/bulk — HTTP 201 OK, server echoed `"fontFamily": "caveat"`.
 
-**Implementation note about `draw`:** Miro нет hand-written-style font'а в shape style enum. `open_sans` — neutral fallback. Альтернатива — `caveat` (если у Miro есть casual script font; verify на impl step). Решение фиксируется первым PR'ом фазы.
+**`draw` mapping decision:** `caveat` (was `open_sans` in v0.3). `caveat` — Google Fonts script face, имитирует handwriting (close match для tldraw's draw font). `permanent_marker` — heavier alternative, less suitable для general use. Locked для DRW-111.
 
 ### 6.2 Effect
 
@@ -377,20 +389,31 @@ export type TldrawArrowhead =
 export function tldrawArrowheadToStrokeCap(head: string | undefined): string {
   switch (head) {
     case "none":     return "none";
-    case "triangle": return "arrow_filled";   // closest match — Miro нет "triangle"
-    case "square":   return "rectangle_filled";
-    case "dot":      return "oval_filled";
-    case "diamond":  return "diamond_filled";
-    case "inverted": return "unicode_arrow";  // approximate; verify on impl
-    case "bar":      return "rectangle";
-    case "pipe":     return "rectangle";
+    case "triangle": return "filled_triangle";  // tldraw triangle = filled triangle in Miro
+    case "square":   return "none";              // Miro нет rectangular caps — degrade to plain line
+    case "dot":      return "filled_oval";
+    case "diamond":  return "filled_diamond";
+    case "inverted": return "arrow";             // Miro нет backward-facing cap — degrade to plain arrow
+    case "bar":      return "none";              // no bar cap — degrade
+    case "pipe":     return "none";              // no pipe cap — degrade
     case "arrow":
     default:         return "arrow";
   }
 }
 ```
 
-**Miro strokeCap enum** содержит ~15+ значений (verified against `connectorStyle.ts` SDK source, [[miro-sdk-reference]]). Финальная mapping table уточняется на impl step против live SDK enum — выше указаны best-fit guesses.
+**Verified Miro strokeCap enum (Phase 0 probe — see probe.md Section I, 16 values):**
+```
+none, stealth, rounded_stealth,
+diamond, filled_diamond,
+oval, filled_oval,
+arrow, triangle, filled_triangle,
+erd_one, erd_many, erd_only_one, erd_zero_or_one, erd_one_or_many, erd_zero_or_many
+```
+
+**Important — v0.3 spec values rejected:** Все 4 значения из v0.3 (`arrow_filled`, `oval_filled`, `diamond_filled`, `rectangle_filled`, plus `unicode_arrow` и `rectangle`) — INVALID enum members (Miro returns 400). Naming convention = `filled_<shape>` (NOT `<shape>_filled`). New mapping verified live (probe Section I.2).
+
+**Degraded mappings (3 cases):** `square`, `bar`, `pipe` → `none` — Miro не предоставляет rectangular / bar / pipe caps; preserving connector without head is preferred over substituting unrelated cap shape. Release notes должны явно перечислить: "tldraw square/bar/pipe arrowheads exported без head".
 
 ### 7.2 Wire
 
@@ -408,7 +431,7 @@ return {
 
 ### 7.3 Edge case — `inverted`
 
-tldraw `inverted` рисует стрелку, указывающую обратно (start-direction triangle on arrow line). Miro SDK enum не содержит точного эквивалента. **Decision (locked, can revisit):** map to `unicode_arrow` (closest). Если Miro отрендерит plain stroke без head — acceptable; tldraw `inverted` редко используется в архитектурных диаграммах.
+tldraw `inverted` рисует стрелку, указывающую обратно (start-direction triangle on arrow line). Miro SDK enum не содержит cap, который указывает "назад" — все Miro caps directional-forward. **Decision (Phase 0 probe locked):** map to `arrow` (degrade to plain forward-facing arrow). `unicode_arrow` (initial v0.3 guess) — invalid enum value (rejected by server 400). `inverted` редко встречается в architectural diagrams; loss of inversion direction acceptable.
 
 ---
 
@@ -468,15 +491,19 @@ Sequence of API calls:
 1. **Pass A1** — bulk POST `[F1.rect, F2.rect]` (depth-first order). Returns `frameMap = { F1: m_F1, F2: m_F2 }`.
 2. **Pass A2** — bulk POST `[S1, S2]` (non-frames). Returns `itemMap = { S1: m_S1, S2: m_S2 }`.
 3. **Pass C inner first** — `POST /groups` body `{ data: { items: [m_F2, m_S2] } }` → returns `g_F2`.
-4. **Pass C outer** — `POST /groups` body `{ data: { items: [m_F1, g_F2, m_S1] } }` → returns `g_F1`.
+4. **Pass C outer (flat)** — `POST /groups` body `{ data: { items: [m_F1, m_F2, m_S2, m_S1] } }` → returns `g_F1`. **Note:** outer call's items list is **flattened leaf-item ids only** — inner `g_F2` group id НЕ передаётся (см. nested rejection below).
 5. **Tracking commit** — `groups: { F1: g_F1, F2: g_F2 }` через `commitBoardGroupExport`.
 
-**Nested group acceptance** (passing `g_F2` в outer's items array) — Phase 0 probe (§ 14 Q4). Два возможных outcome'а:
+**Nested group acceptance — REJECTED (Phase 0 probe, see probe.md Section F.2):** passing a previously-returned `groupId` среди `data.items` → Miro returns HTTP 404 `"Item not found"`. Group ids НЕ recognized as valid items inside other groups.
 
-- **Если Miro принимает nested groups** (preferred): outer group содержит inner group as single item. Drag F1 в Miro UI → перемещает rectangle F1 + всю inner group g_F2 (rect F2 + S2) + S1. Inner-only drag (F2) → перемещает только g_F2 contents, оставляя F1-rect и S1 на месте. **Это desired UX.**
-- **Если Miro отвергает nested groups**: fallback — outer group содержит **flattened items** `[m_F1, m_F2, m_S2, m_S1]` (skip nested groupId, dereference в children). Trade-off: теряем independent inner drag (drag F1 двигает всё дерево; drag F2 невозможен как отдельное действие), но preserve overall containment + Miro accept.
+**Locked fallback (sole code path):** outer group's items array = **flat list** всех frame rectangles + non-frame children в outer's subtree (skip any nested groupIds). Trade-offs:
+- Lose independent inner-frame drag в Miro UI (drag F1 двигает rect F1 + rect F2 + S2 + S1 как один блок).
+- Inner-only drag of g_F2 (which contains m_F2 + m_S2) — still works через g_F2 selection.
+- Outer group g_F1 doesn't "know" about g_F2; visually структура preserved через rectangle z-order (frame rectangles ниже children — § 8.5).
 
-Code path выбирается dynamically на основе probe outcome (один if-branch в orchestrator). Detection: try nested first; on 400 with specific error code — flatten retry.
+Detection logic не требуется — always use flat list для outer groups; inner groups created normally.
+
+**Edge case — 0 or 1 child:** Group widget requires **minimum 2 items** (probe Section F.3 — empty/single both return 400 "Group should have at least two items"). Frames with empty subtree (just rectangle, no children) → **skip POST /groups call** entirely. Tracking schema: no `groups[frameId]` entry → frame rectangle остаётся as a standalone shape (still rendered, just not group-bound).
 
 ### 8.5 Z-order strategy
 
@@ -499,28 +526,35 @@ function buildFrameRectangles(elements: Element[]): MiroBulkItem[] {
 
 ### 8.6 Group widget API contract
 
-**Endpoint confirmed** через official Miro REST v2 reference (https://developers.miro.com/reference/creategroup, accessed 2026-05-22):
+**Endpoint + body shape locked via Phase 0 probe (see probe.md Section F):**
 
 ```http
 POST /v2/boards/{board_id}/groups
 Content-Type: application/json
 Authorization: Bearer <token>
 
+{ "data": { "items": ["<miroItemId>", ...] } }
+```
+
+**Response (HTTP 201):**
+```json
 {
-  "data": { ... }
+  "id": "<groupId>",
+  "type": "group",
+  "data": { "items": ["<id1>", "<id2>", ...] },
+  "links": { "self": "https://api.miro.com/v2/boards/<board>/groups/<groupId>" }
 }
 ```
 
-Body required field `data` (object). Response status `201 Group created` / `400 Malformed request` / `404 Not found` / `429 Too many requests`.
+**Tracking:** response `id` field используется как Miro group id → `room.meta.miroExports[boardId].groups[frameElementId]`.
 
-**Still to probe (Phase 0 § 14 Q4):**
-- Точная shape `data` object: предположение — `{ items: ["miroId1", "miroId2", ...] }`; альтернатива — `{ itemIds: [...] }` или nested `{ data: { type, items } }`. Resolve через "Try It!" в interactive API explorer (developers.miro.com) или test call.
-- Response body shape — нужен `id` field для tracking (предположение `{ id: "3458...=", type: "group", data: {...} }`).
-- Min/max items per group.
-- **Nested group acceptance** — pass returned `groupId` в outer call's items array. Если accepted → § 8.4 sequence работает; если rejected → fallback to flat list (см. § 8.4).
-- Empty items / single item handling — likely 400 / 201 respectively.
+**Verified constraints:**
+- `data.items` field name (NOT `itemIds`) — wrong field returns 400.
+- `data` wrap REQUIRED — bare `{items: [...]}` returns 400.
+- **Minimum 2 items per group** (empty + single both 400 "Group should have at least two items").
+- **Nested groups REJECTED (404 "Item not found")** — outer group's items must be leaf item ids (shapes/texts/stickies/notes), NOT inner group ids. See § 8.4 flat-list locked path.
 
-Add probe section в `apps/backend/src/export/miro/probe.md` Section F (groups widget).
+No remaining unknowns from § 14 Q4.
 
 ### 8.7 Tracking schema additions
 
@@ -726,18 +760,16 @@ Actual `MiroExportsMap[boardId]` shape **не имеет** `schemaVersion` field
 
 Detailed plan — в отдельном document'е `docs/superpowers/plans/2026-05-22-drw-111-visual-fidelity-plan.md` (Phase 2 of workflow). **Plan не пишется до завершения Phase 0 probe** — assumptions могут потребовать spec revision (v0.3).
 
-### Phase 0 — Pre-impl probe (BLOCKING for plan writing)
+### Phase 0 — Pre-impl probe (DONE, 2026-05-23)
 
-Verify все unknowns **до** написания plan'а. Update spec → v0.3 если обнаружены discrepancies. ~2-3h:
+Все 5 probes выполнены; outcomes applied как spec v0.4. См. `apps/backend/src/export/miro/probe.md` Sections F/G/H/I/J.
 
-0.1. **Group widget API details** (§ 8.6 / § 14 Q4) — endpoint path confirmed; probe details: exact `data` object shape (items field name), response shape (id field), nested groups support, min/max items, empty/single-item handling.
-0.2. **Z-order via bulk POST** (§ 8.5 / § 14 Q8) — confirm Miro bulk creation preserves array index → z-order (later = on top). Если нет — design PATCH/bringToBack alternative.
-0.3. **tldraw 5.x hex palette** (§ 4.1 / § 14 Q1) — verify все 12 named colors против tldraw source. Update `TLDRAW_NAMED_TO_HEX` table.
-0.4. **Miro strokeCap enum** (§ 7.1 / § 14 Q2) — confirm 9 mapping targets все present в production Miro enum. Lock final table.
-0.5. **Miro fontFamily enum** (§ 6.1 / § 14 Q3) — confirm `open_sans`, `times_new_roman`, `roboto_mono` все production-valid.
-0.6. **`draw` font fallback** (§ 6.1 / § 14 Q5) — check if Miro имеет casual script font (e.g. `caveat`). If yes — update mapping.
-
-Outcome: spec v0.3 (если updates) + Section F в `probe.md`.
+0.1. **Group widget API details** (§ 8.6) — DONE. Contract locked.
+0.2. **Z-order via bulk POST** (§ 8.5) — DONE. Creation-order semantics confirmed; no PATCH alternative exists.
+0.3. **tldraw 5.x hex palette** (§ 4.1) — DONE. 8 of 12 values updated.
+0.4. **Miro strokeCap enum** (§ 7.1) — DONE. Mapping rewritten (4 spec values were invalid).
+0.5. **Miro fontFamily enum** (§ 6.1) — DONE. 3 values confirmed.
+0.6. **`draw` font fallback** (§ 6.1) — DONE. `caveat` used.
 
 ### Phase 1 — Implementation (after Phase 0 + plan approval)
 
@@ -754,18 +786,18 @@ Outcome: spec v0.3 (если updates) + Section F в `probe.md`.
 
 ---
 
-## 14. Open questions (verify on impl)
+## 14. Open questions
 
-Все вопросы блокированы Phase 0 probe (§ 13). Updates landing as spec v0.3 if any discrepancy found.
+Все P0/P1 unknowns **resolved via Phase 0 probe** (см. probe.md Sections F/G/H/I/J и v0.4 changelog).
 
-1. **tldraw 5.x exact hex palette** — values в § 4.1 — best-guess defaults. Probe step: open tldraw editor, inspect color picker SVG / source. Update table в spec via v0.3 revision if discrepancy.
-2. **Miro `strokeCap` exact enum** — § 7.1 mapping — guesses based on SDK source observation. Probe step: GET an existing connector after creating each enum value манually in Miro UI. Update table в spec via v0.3 revision if discrepancy.
-3. **Miro `fontFamily` exact list** — § 6.1 — verify `open_sans`, `times_new_roman`, `roboto_mono` все present в Miro production enum. Alternative naming (e.g. `times_roman`) — flag if different.
-4. **POST /v2/boards/{board_id}/groups body/response details** — endpoint path **confirmed** через Miro reference (§ 8.6); body's `data` object shape остаётся probe-required: точное имя поля для items array (предполагается `items`), response shape (`id` field for tracking), nested group acceptance, min/max items, empty/single-item handling.
-5. **`draw` font fallback** — § 6.1 — verify if Miro имеет `caveat`, `permanent_marker`, or другой casual script font. If yes — use that вместо `open_sans` для `draw` mapping (lock decision в impl step #1 above).
-6. **Inverted arrowhead** — § 7.3 — **DECISION LOCKED:** default `unicode_arrow`. Revisit только если Phase 0 probe shows `unicode_arrow` отсутствует в production enum; в таком случае fallback на `arrow` без модификации direction (acceptable graceful degrade).
-7. **Group widget включает label?** — Logical answer: yes, rectangle IS part of the group (its first item). Verify: clicking on label area selects the group в Miro UI. Probe-step.
-8. **Miro bulk-POST z-order** — § 8.5 — assumes order in payload array = z-order (earlier → bottom). Verify в Phase 0: create 3-shape bulk where shape[2] covers shape[0] xy-wise; confirm shape[2] visually on top. Если нет — design PATCH `position.origin: "bringToBack"` flow для frame rectangles или separate POST'ы с явным `zIndex`.
+1. **tldraw 5.x exact hex palette** — RESOLVED. § 4.1 table updated с actual tldraw 5.0.0 values (probe Section H, 8 of 12 differed from v0.3).
+2. **Miro `strokeCap` exact enum** — RESOLVED. § 7.1 mapping rewritten (probe Section I). 4 spec values rejected; naming = `filled_*`; `unicode_arrow`/`rectangle*` отсутствуют.
+3. **Miro `fontFamily` exact list** — RESOLVED. § 6.1 mapping verified (probe Section J). `open_sans` / `times_new_roman` / `roboto_mono` все present. Full enum = 30 values.
+4. **POST /v2/boards/{board_id}/groups body/response details** — RESOLVED. § 8.6 contract locked (probe Section F). Body `{data:{items:[ids]}}`; response `{id, type, data, links}`; min 2 items; nested REJECTED (404).
+5. **`draw` font fallback** — RESOLVED. § 6.1 `draw` → `caveat` (probe Section J.3 live-test 201). Was `open_sans` в v0.3.
+6. **Inverted arrowhead** — RESOLVED. § 7.3 `inverted` → `arrow` (was `unicode_arrow` invalid). Direction inversion lost; acceptable graceful degrade.
+7. **Group widget includes label?** — Logical (untested live, Miro UI verification skipped): yes, rectangle is `items[0]` of the group. Manual smoke test (§ 11.5) подтвердит UX during impl Phase 1.
+8. **Miro bulk-POST z-order** — RESOLVED. § 8.5 strategy valid (probe Section G). REST v2 НЕ exposes z-order endpoints; creation-order semantics — sole mechanism. No PATCH alternative exists.
 
 ---
 
@@ -791,6 +823,6 @@ Spec считается accepted когда user подтверждает:
 - [ ] Block 6 verification step adequate (no code change required если path единый).
 - [ ] § 10.1 — no `frameMode` opt-in в DRW-111 (single default).
 - [ ] § 12.1 migration story (no auto-delete old frames) acceptable.
-- [ ] Open questions § 14 — список комплектен; ни одна "blocking unknown" не пропущена.
+- [ ] Open questions § 14 — все P0/P1 unknowns resolved via Phase 0 probe (v0.4); list комплектен.
 
 После approval: переход в Phase 2 — написание plan'а в `docs/superpowers/plans/2026-05-22-drw-111-visual-fidelity-plan.md` (детальный task breakdown с TDD steps).
