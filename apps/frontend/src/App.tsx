@@ -13,6 +13,7 @@ import {
   type SelectionInfo,
 } from "./canvas/role-picker.ts";
 import { RolePicker } from "./canvas/role-picker.tsx";
+import { installSchemaOverlaySync } from "./canvas/schema-overlay-sync";
 import { AiActivityBadge } from "./chrome/AiActivityBadge";
 import { AppChrome } from "./chrome/AppChrome";
 import { ErrorBanner } from "./chrome/ErrorBanner";
@@ -280,6 +281,7 @@ export function App({
     let syncHandle: ReturnType<typeof startStoreSync> | undefined;
     let focusCleanup: (() => void) | undefined;
     let unsubSel: (() => void) | undefined;
+    let unsubOverlaySync: (() => void) | undefined;
     let camSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
     // DRW-047 + DRW-018: upload our V2 schema (best-effort), then fetch /api/state
@@ -540,12 +542,18 @@ export function App({
 
     void hydrateAndSync();
 
+    // DRW-134 Task 2.7: install overlay-sync listener для user drag/color/rename
+    // на schema-frame children. Listener subscribes к store.listen({source:"user"})
+    // и debounce'ит POST /api/schema/{frameId}/overlay для каждого изменения.
+    unsubOverlaySync = installSchemaOverlaySync(editor, { space, room });
+
     return () => {
       active = false;
       focusCleanup?.();
       focusCleanup = undefined;
       syncHandle?.stop();
       unsubSel?.();
+      unsubOverlaySync?.();
       if (aiZoomTimer !== null) {
         clearTimeout(aiZoomTimer);
         aiZoomTimer = null;

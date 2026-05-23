@@ -112,6 +112,7 @@ export class FilePersistence implements RoomStore {
     };
     if (env.linkedSession !== undefined) state.linkedSession = env.linkedSession;
     if (env.projectDir !== undefined) state.projectDir = env.projectDir;
+    if (env.meta !== undefined) state.meta = env.meta;
     return state;
   }
 
