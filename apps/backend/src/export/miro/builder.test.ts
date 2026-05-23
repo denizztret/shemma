@@ -1,6 +1,5 @@
 import { describe, expect, it } from "bun:test";
 import {
-  buildFramePayload,
   buildShapeForFrame,
   buildShapePayload,
   buildStickyNotePayload,
@@ -131,29 +130,6 @@ describe("buildTextPayload", () => {
   });
 });
 
-describe("buildFramePayload", () => {
-  it("type:'frame' with title from props.name", () => {
-    const s = makeShape({
-      id: "shape:f",
-      type: "frame",
-      props: { w: 400, h: 300, name: "Boundary A" },
-    });
-    const p = buildFramePayload(s, {
-      miroX: 0,
-      miroY: 0,
-    });
-    expect(p.type).toBe("frame");
-    expect(p.data?.title).toBe("Boundary A");
-    expect(p.geometry).toEqual({ width: 400, height: 300 });
-  });
-
-  it("geo with meta.role==='boundary' is treated as frame at the caller level", () => {
-    // builder is dumb: caller decides routing (frame vs shape) by checking
-    // shape.type === "frame" || shape.meta?.role === "boundary".
-    // This test documents that contract (no behavior to assert in builder itself).
-    expect(true).toBe(true);
-  });
-});
 
 describe("expandGroups", () => {
   it("group of 3 shapes: drops group, returns 3 child ids", () => {

@@ -133,24 +133,6 @@ export function buildTextPayload(shape: RawShape, ctx: BuilderCtx): MiroBulkItem
   }, ctx);
 }
 
-/** Build payload for a tldraw frame shape (or geo with meta.role='boundary') → Miro frame. */
-export function buildFramePayload(shape: RawShape, ctx: BuilderCtx): MiroBulkItem {
-  const props = shape.props ?? {};
-  const w = (props.w as number | undefined) ?? 400;
-  const h = (props.h as number | undefined) ?? 300;
-  const title =
-    (props.name as string | undefined) ??
-    (shape.meta?.name as string | undefined) ??
-    (shape.meta?.didrawName as string | undefined) ??
-    "";
-  return applyPositionAndParent({
-    type: "frame",
-    data: { title, type: "freeform" },
-    style: {},
-    geometry: { width: w, height: h },
-  }, ctx);
-}
-
 /**
  * Build payload for a tldraw frame shape → Miro rectangle shape (frame-as-shape mode).
  * Uses absolute page coordinates from resolvePageBounds — no parentMiroId needed.
