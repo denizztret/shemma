@@ -545,4 +545,37 @@ export class CanvasClient {
     );
     return r.json();
   }
+
+  /**
+   * POST /api/schema/:frameId/duplicate — клонирует schema-frame с deep identity remap.
+   * Returns: { ok, newFrameId, nodeIdMap }.
+   */
+  async duplicateSchema(
+    frameId: string,
+    body: { newLabel?: string } = {},
+  ) {
+    const r = await fetch(
+      `${this.base}/api/schema/${encodeURIComponent(frameId)}/duplicate?${this.q()}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    return r.json();
+  }
+
+  /**
+   * DELETE /api/schema/:frameId — удаляет schema-frame и всех его детей.
+   * Returns: { ok } или { ok: false, error, code }.
+   */
+  async deleteSchema(frameId: string) {
+    const r = await fetch(
+      `${this.base}/api/schema/${encodeURIComponent(frameId)}?${this.q()}`,
+      {
+        method: "DELETE",
+      },
+    );
+    return r.json();
+  }
 }

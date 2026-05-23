@@ -13,6 +13,7 @@ import { registerPromptAndActivityTools } from "./tools/prompts";
 import { registerReadOnlyTools } from "./tools/read-only";
 import { registerCanvasViewTool } from "./tools/canvas-view";
 import { registerSchemaWriteTools } from "./tools/schema-write";
+import { registerSchemaDuplicateTools } from "./tools/schema-duplicate";
 import { SHEMMA_MCP_VERSION } from "./version";
 
 export type Profile = "dev" | "release" | "debug";
@@ -88,6 +89,9 @@ export function createShemmaMcpServer(opts: ShemmaMcpServerOpts): ShemmaMcpServe
     client: opts.client,
   });
   registerSchemaWriteTools(server, {
+    client: opts.client,
+  });
+  registerSchemaDuplicateTools(server, {
     client: opts.client,
   });
   registerMcpPrompts(server);
