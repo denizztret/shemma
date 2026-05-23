@@ -374,8 +374,12 @@ export function buildConnectorPayload(
     shape,
     style: {
       strokeStyle: ARROW_DASH[dash] ?? "normal",
-      strokeColor: "#1a1a1a",
-      strokeWidth: "2.0",
+      strokeColor: tldrawNamedToHex(arrow.props?.color as string | undefined),
+      strokeWidth: tldrawSizeToStrokeWidth(arrow.props?.size as string | undefined),
+      fontFamily: tldrawFontToFamily(arrow.props?.font as string | undefined),
+      fontSize: tldrawSizeToFontSize(arrow.props?.size as string | undefined),
+      startStrokeCap: tldrawArrowheadToStrokeCap(arrow.props?.arrowheadStart as string | undefined),
+      endStrokeCap: tldrawArrowheadToStrokeCap(arrow.props?.arrowheadEnd as string | undefined),
     },
     ...(captions ? { captions } : {}),
   };
