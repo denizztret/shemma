@@ -9,8 +9,8 @@ tldraw 5.x frontend + Bun backend (singleton daemon на `:8787` release+debug, 
 - **v0.0.1** (Phase 1 MVP) — shipped.
 - **v0.1.0** (Phase 2.0 persistence hardening) — shipped (tag на `e10174f`).
 - **v0.2.0** (Phase 2.1 Agent v2 domain-first) — shipped (tag на `0af178d`). 255 tests across 4 packages.
-- **v0.3.0** (Phase 2.2 Sync hardening + B1 user-arrows) — shipped. 1321+ tests across 5 packages.
-- **Phase 2.2** (Sync hardening + B1 user-arrows + 2.0/2.1 follow-ups) — spec+plan ready (commit `7b0c4b5`), executor mode pending. Target v0.3.0.
+- **v0.3.0** (Phase 2.2 Sync hardening + B1 user-arrows) — shipped. 1321 tests across 5 packages (root pipeline).
+- **v0.23.0** (Phase 3.0 Canvas-AI bidirectional protocol) — shipped. 1321 root + 206 frontend = 1527+ tests across 6 packages.
 
 ## Git policy — repository is LOCAL-ONLY
 
@@ -114,7 +114,7 @@ Skill спавнит свежий subagent на каждую задачу. **Rev
 ## Debug tooling
 
 - **chrome-devtools MCP** — для visual verification UI.
-- **bun test** — backend, CLI, client, domain, frontend (`bun run test` из корня — 1321+ тестов).
+- **bun test** — backend, CLI, client, domain (`bun run test` из корня — 1321 тестов в 5 packages). Frontend отдельно: `bun test --cwd apps/frontend src` — 206 тестов. Итого 1527+.
 - **Playwright** — пока нет suite, но dependency установлен.
 
 ## Constraints (важно)

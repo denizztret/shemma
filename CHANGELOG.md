@@ -12,6 +12,8 @@ MINOR release: полноценный bidirectional protocol для взаимо
 - **Frame duplication** (`POST /api/schema/:frameId/duplicate`): копирует schema-frame с ID remap (все didrawId в children получают новые unique IDs). `DELETE /api/schema/:frameId` для полного удаления.
 - **Cmd+Shift+K semantic picker** (frontend): UI picker для опционального назначения role/connectionKind на user-drawn shapes.
 - **Storage-only E2E**: `/api/schema/create` работает без браузера (нет WS requirement); verified E2E test.
+
+**Known gaps:** `shemma_import_mermaid` MCP tool сохраняет старый browser-only flow (без `mode` param). AI-driven storage import доступен через `shemma_create_schema` directly; mode-param обёртка перенесена в backlog (отдельная follow-up задача).
 - **Legacy mode preserved**: v1 rooms без `didrawProtocol` marker продолжают работать через `/api/agent/context` + `/api/domain` без изменений. `/api/domain` не трогается.
 
 ### Breaking change — identity model (v2 rooms only)
