@@ -426,3 +426,57 @@ Final tldraw arrowhead → Miro strokeCap:
 `square`/`bar`/`pipe` → `none` chosen over fake mapping: Miro caps available — round, pointed, ER-symbols only; никакая из них visually не соответствует bar/pipe/square. Lose decoration > misleading. Documentation note для release notes: "tldraw `square`/`bar`/`pipe` arrowheads экспортируются без head (Miro не поддерживает rectangular caps)".
 
 `inverted` → `arrow` instead of `stealth`: tldraw `inverted` рисует filled triangle обращённый назад. Miro `stealth` (default) ближе по геометрии, но смотрит вперёд — `arrow` (открытая стрелка) более neutral fallback. Acceptable since `inverted` редко используется в архитектурных диаграммах (per spec § 7.3).
+
+## J. Miro fontFamily + text widget color
+
+### J.1 SDK fontFamily list (30 values)
+
+Source: `https://raw.githubusercontent.com/miroapp/api-clients/main/packages/miro-api/model/shapeStyleForCreate.ts` + `model/textStyle.ts` (identical enum):
+
+```
+arial, abril_fatface, bangers, eb_garamond, georgia, graduate, gravitas_one,
+fredoka_one, nixie_one, open_sans, permanent_marker, pt_sans, pt_sans_narrow,
+pt_serif, rammetto_one, roboto, roboto_condensed, roboto_slab, caveat,
+times_new_roman, titan_one, lemon_tuesday, roboto_mono, noto_sans, plex_sans,
+plex_serif, plex_mono, spoof, tiempos_text, formular
+```
+
+### J.2 Spec § 6.1 values confirmed
+
+- `open_sans` ✓ present
+- `times_new_roman` ✓ present
+- `roboto_mono` ✓ present
+
+### J.3 Casual scripts for `draw` mapping
+
+Available casual / handwriting fonts:
+- `caveat` — flowing script (likely best for `draw` per spec § 6.1 hint)
+- `permanent_marker` — bold marker style
+- `lemon_tuesday` — script
+- `bangers` — comic/poster (less applicable)
+
+Live-test: created shape с `fontFamily: "caveat"` → HTTP 201, server echoed `"fontFamily": "caveat"` без modification. Confirmed производственное значение.
+
+**Recommendation:** `draw` → `caveat` (replace spec's `open_sans` fallback in § 6.1). `caveat` best emotional match для tldraw handwriting feel; `permanent_marker` тоже работает, но slightly heavier.
+
+### J.4 Final fontFamily mapping (4-row)
+
+| tldraw font | Miro fontFamily | Notes |
+|---|---|---|
+| `draw` | `caveat` | handwriting / casual script |
+| `sans` | `open_sans` | default fallback |
+| `serif` | `times_new_roman` | exact |
+| `mono` | `roboto_mono` | exact |
+
+### J.5 Text widget color field
+
+Live-test 2 variants:
+
+| Request | HTTP | Result |
+|---|---|---|
+| `POST /texts {"style":{"color":"#ff0000"}}` | 201 | accepted; response echoes `style.color = "#ff0000"` |
+| `POST /texts {"style":{"textColor":"#ff0000"}}` | 400 | `"Field [style.textColor] is not supported"` |
+
+**Locked: field name = `color`** (for both text widgets AND shape widgets — same SDK type pattern `TextStyle.color` / `ShapeStyleForCreate.color`). Spec § 4.6 prediction `color` (not `textColor`) — CORRECT, no spec change required.
+
+Note: text widget also exposes `fillColor` (background fill); for tldraw `text` shape (no background) — оставляем `fillColor` unset → defaults to transparent (`fillOpacity: 0`).
