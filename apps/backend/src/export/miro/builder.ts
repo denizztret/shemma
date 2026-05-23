@@ -1,6 +1,6 @@
 
 import type { MiroBulkItem, MiroConnectorPayload } from "./client";
-import { nearestShapeColor, nearestStickyColor } from "./color-mapping";
+import { stickyFillColor, tldrawNamedToHex } from "./color-mapping";
 import type { RawShape } from "./coords";
 import { richTextToPlain } from "./rich-text";
 
@@ -59,24 +59,27 @@ export function buildShapePayload(shape: RawShape, ctx: BuilderCtx): MiroBulkIte
   const geo = props.geo as string | undefined;
   const content = pickRichText(props);
 
-  // Miro defaults `borderOpacity: 0` + `fillOpacity: 0` → invisible shapes.
-  // Set visible defaults; user-provided meta.fillHex / meta.borderHex override.
+  // meta.fillHex / meta.borderHex are user-set manual overrides — take priority.
   const metaFillHex = shape.meta?.fillHex as string | undefined;
   const metaBorderHex = shape.meta?.borderHex as string | undefined;
   const align = (props.align as string | undefined) ?? "middle";
   const valign = (props.verticalAlign as string | undefined) ?? "middle";
+
+  // Derive color from tldraw props (falls back to black if unset).
+  const colorHex = tldrawNamedToHex(props.color as string | undefined);
+  const fill = props.fill as string | undefined;
+
   const style: Record<string, unknown> = {
-    borderColor: metaBorderHex ?? "#1a1a1a",
-    borderWidth: "2.0",
+    borderColor: metaBorderHex ?? colorHex,
+    borderWidth: tldrawSizeToBorderWidth(props.size as string | undefined),
     borderOpacity: "1.0",
     borderStyle: "normal",
-    fillOpacity: metaFillHex ? "1.0" : "0.0",
+    fontFamily: tldrawFontToFamily(props.font as string | undefined),
+    fontSize: tldrawSizeToFontSize(props.size as string | undefined),
     textAlign: TEXT_ALIGN[align] ?? "center",
     textAlignVertical: TEXT_VALIGN[valign] ?? "middle",
+    ...fillStyle(fill, metaFillHex ?? colorHex),
   };
-  if (metaFillHex && metaFillHex.startsWith("#")) {
-    style.fillColor = nearestShapeColor(metaFillHex);
-  }
 
   return applyPositionAndParent({
     type: "shape",
@@ -96,10 +99,11 @@ export function buildStickyNotePayload(shape: RawShape, ctx: BuilderCtx): MiroBu
   const h = (props.h as number | undefined) ?? 200;
   const content = pickRichText(props);
 
-  const style: Record<string, unknown> = {};
-  // Miro sticky notes require a named-enum fillColor (not hex).
-  const metaFillHex = shape.meta?.fillHex as string | undefined;
-  style.fillColor = metaFillHex ? nearestStickyColor(metaFillHex) : "yellow";
+  const style: Record<string, unknown> = {
+    fillColor: stickyFillColor(shape),
+    fontFamily: tldrawFontToFamily(props.font as string | undefined),
+    fontSize: tldrawSizeToStickyFontSize(props.size as string | undefined),
+  };
 
   return applyPositionAndParent({
     type: "sticky_note",
@@ -114,16 +118,27 @@ export function buildTextPayload(shape: RawShape, ctx: BuilderCtx): MiroBulkItem
   const props = shape.props ?? {};
   const w = (props.w as number | undefined) ?? 100;
   const content = pickRichText(props);
+  const colorHex = tldrawNamedToHex(props.color as string | undefined);
+  const textAlign = (props.textAlign as string | undefined) ?? "middle";
   return applyPositionAndParent({
     type: "text",
     data: { content },
-    style: {},
+    style: {
+      color: colorHex,
+      fontFamily: tldrawFontToFamily(props.font as string | undefined),
+      fontSize: tldrawSizeToFontSize(props.size as string | undefined),
+      textAlign: TEXT_ALIGN[textAlign] ?? "center",
+    },
     geometry: { width: w },
   }, ctx);
 }
 
-/** Build payload for a tldraw frame shape (or geo with meta.role='boundary') → Miro frame. */
-export function buildFramePayload(shape: RawShape, ctx: BuilderCtx): MiroBulkItem {
+/**
+ * Build payload for a tldraw frame shape → Miro rectangle shape (frame-as-shape mode).
+ * Uses absolute page coordinates from resolvePageBounds — no parentMiroId needed.
+ * White fill, tldraw border color, title at top-center.
+ */
+export function buildShapeForFrame(shape: RawShape, ctx: BuilderCtx): MiroBulkItem {
   const props = shape.props ?? {};
   const w = (props.w as number | undefined) ?? 400;
   const h = (props.h as number | undefined) ?? 300;
@@ -132,10 +147,24 @@ export function buildFramePayload(shape: RawShape, ctx: BuilderCtx): MiroBulkIte
     (shape.meta?.name as string | undefined) ??
     (shape.meta?.didrawName as string | undefined) ??
     "";
+  const colorHex = tldrawNamedToHex(props.color as string | undefined);
+  const borderWidth = tldrawSizeToBorderWidth(props.size as string | undefined);
+
   return applyPositionAndParent({
-    type: "frame",
-    data: { title, type: "freeform" },
-    style: {},
+    type: "shape",
+    data: { shape: "rectangle", content: title },
+    style: {
+      fillColor: "#ffffff",
+      fillOpacity: "1.0",
+      borderStyle: "normal",
+      borderColor: colorHex,
+      borderWidth,
+      borderOpacity: "1.0",
+      fontFamily: "open_sans",
+      fontSize: "14",
+      textAlign: "center",
+      textAlignVertical: "top",
+    },
     geometry: { width: w, height: h },
   }, ctx);
 }
@@ -233,6 +262,112 @@ export type ConnectorBuildResult =
   | { kind: "ok"; payload: MiroConnectorPayload }
   | { kind: "skip"; reason: "unsupported-type" | "cross-selection-connector" };
 
+// ---------------------------------------------------------------------------
+// Task 2: size mapping helpers (§ 5.1)
+// ---------------------------------------------------------------------------
+
+export type TldrawSize = "s" | "m" | "l" | "xl";
+
+export function tldrawSizeToFontSize(size: string | undefined): string {
+  switch (size) {
+    case "s":  return "12";
+    case "l":  return "20";
+    case "xl": return "30";
+    case "m":
+    default:   return "14";
+  }
+}
+
+export function tldrawSizeToBorderWidth(size: string | undefined): string {
+  switch (size) {
+    case "s":  return "1.0";
+    case "l":  return "3.0";
+    case "xl": return "4.0";
+    case "m":
+    default:   return "2.0";
+  }
+}
+
+export function tldrawSizeToStrokeWidth(size: string | undefined): string {
+  return tldrawSizeToBorderWidth(size);
+}
+
+/**
+ * Miro sticky note uses its own fontSize scale — enum 14|24|36|48|72.
+ * Not reusing tldrawSizeToFontSize because sticky values differ.
+ */
+export function tldrawSizeToStickyFontSize(size: string | undefined): string {
+  switch (size) {
+    case "s":  return "14";
+    case "l":  return "36";
+    case "xl": return "48";
+    case "m":
+    default:   return "24";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Task 3: font mapping helper (§ 6.1)
+// ---------------------------------------------------------------------------
+
+export type TldrawFont = "draw" | "sans" | "serif" | "mono";
+
+export function tldrawFontToFamily(font: string | undefined): string {
+  switch (font) {
+    case "draw":  return "caveat";           // casual flowing script — closest to tldraw handwriting feel
+    case "serif": return "times_new_roman";
+    case "mono":  return "roboto_mono";
+    case "sans":
+    default:      return "open_sans";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Task 4: arrowhead mapping helper (§ 7.1)
+// ---------------------------------------------------------------------------
+
+export type TldrawArrowhead =
+  | "none" | "arrow" | "triangle" | "square" | "dot"
+  | "diamond" | "inverted" | "bar" | "pipe";
+
+export function tldrawArrowheadToStrokeCap(head: string | undefined): string {
+  switch (head) {
+    case "none":     return "none";
+    case "triangle": return "filled_triangle";   // tldraw triangle = filled triangle in Miro
+    case "square":   return "none";              // Miro has no rectangular caps — degrade to plain line
+    case "dot":      return "filled_oval";
+    case "diamond":  return "filled_diamond";
+    case "inverted": return "arrow";             // Miro has no backward-facing cap — degrade to plain arrow
+    case "bar":      return "none";              // no bar cap — degrade
+    case "pipe":     return "none";              // no pipe cap — degrade
+    case "arrow":
+    default:         return "arrow";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Task 5: fillStyle helper (§ 4.3)
+// ---------------------------------------------------------------------------
+
+export interface FillStyleResult {
+  fillColor?: string;
+  fillOpacity: string;
+}
+
+/**
+ * Map tldraw fill style to Miro fillColor + fillOpacity.
+ * "pattern" degrades to semi (fillOpacity 0.5) — Miro has no diagonal-fill support.
+ */
+export function fillStyle(fill: string | undefined, hex: string): FillStyleResult {
+  switch (fill) {
+    case "solid":   return { fillColor: hex, fillOpacity: "1.0" };
+    case "semi":    return { fillColor: hex, fillOpacity: "0.5" };
+    case "pattern": return { fillColor: hex, fillOpacity: "0.5" };
+    case "none":
+    default:        return { fillOpacity: "0.0" };
+  }
+}
+
 export function buildConnectorPayload(
   arrow: RawShape,
   ctx: ConnectorBuilderCtx,
@@ -265,8 +400,12 @@ export function buildConnectorPayload(
     shape,
     style: {
       strokeStyle: ARROW_DASH[dash] ?? "normal",
-      strokeColor: "#1a1a1a",
-      strokeWidth: "2.0",
+      strokeColor: tldrawNamedToHex(arrow.props?.color as string | undefined),
+      strokeWidth: tldrawSizeToStrokeWidth(arrow.props?.size as string | undefined),
+      fontFamily: tldrawFontToFamily(arrow.props?.font as string | undefined),
+      fontSize: tldrawSizeToFontSize(arrow.props?.size as string | undefined),
+      startStrokeCap: tldrawArrowheadToStrokeCap(arrow.props?.arrowheadStart as string | undefined),
+      endStrokeCap: tldrawArrowheadToStrokeCap(arrow.props?.arrowheadEnd as string | undefined),
     },
     ...(captions ? { captions } : {}),
   };

@@ -4,13 +4,16 @@ import { Hono } from "hono";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Rooms } from "../../rooms";
+import { Rooms, makeRoomState } from "../../rooms";
 import { exportRoutes } from "../../routes/export";
 import {
   type SpaceBundle,
   installBundleResolver,
 } from "../../routes/_space-context";
 import type { RawShape } from "./coords";
+import { MiroClient } from "./client";
+import { runMiroExport } from "./upload";
+import { tldrawNamedToHex } from "./color-mapping";
 
 const INT_SPACE: SpaceRecord = {
   id: "test-export-int",
@@ -187,10 +190,12 @@ describe("E2E backend: full export — 5 shapes + 3 connectors + 1 frame", () =>
     const conns = miroServer.requests.filter((r) => r.path.endsWith("/connectors"));
     expect(bulks).toHaveLength(2);
     expect(conns).toHaveLength(3);
-    const a1Items = bulks[0].body as Array<{ type: string }>;
-    expect(a1Items.every((it) => it.type === "frame")).toBe(true);
-    const a2Items = bulks[1].body as Array<{ type: string; parent?: { id: string } }>;
-    expect(a2Items.some((it) => it.parent?.id !== undefined)).toBe(true);
+    const a1Items = bulks[0].body as Array<{ type: string; data?: { shape?: string } }>;
+    // Frames are now exported as rectangle shapes (frame-as-shape mode)
+    expect(a1Items.every((it) => it.type === "shape")).toBe(true);
+    expect(a1Items.every((it) => it.data?.shape === "rectangle")).toBe(true);
+    const a2Items = bulks[1].body as Array<{ type: string }>;
+    expect(a2Items.every((it) => it.type !== "frame")).toBe(true);
 
     // Tracking written to room.meta.miroExports
     expect(room.meta?.miroExports?.["B1"]).toBeDefined();
@@ -198,5 +203,141 @@ describe("E2E backend: full export — 5 shapes + 3 connectors + 1 frame", () =>
     expect(tr?.boardName).toBe("Test Board");
     expect(Object.keys(tr?.items ?? {}).length).toBeGreaterThanOrEqual(6);
     expect(Object.keys(tr?.connectors ?? {}).length).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 18: DRW-111 full flow — nested frames + styled shapes → correct API sequence
+// ---------------------------------------------------------------------------
+
+describe("DRW-111 full flow: nested frames + styled shapes → correct API call sequence", () => {
+  it("F1(blue)⊃{F2(green)⊃{S2(red,solid)}, S1(yellow,note)} + A1(black,triangle) → correct API sequence", async () => {
+    // Track itemIds per bulk call for group verification
+    const bulkResponses: Array<Array<{ id: string }>> = [];
+    let bulkCallIdx = 0;
+    let connResp: { id: string } | null = null;
+    const groupCalls: Array<string[]> = [];
+    let groupCallIdx = 0;
+
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        const url = new URL(req.url);
+        const body = req.body ? await req.json().catch(() => null) : null;
+        if (url.pathname.endsWith("/items/bulk")) {
+          const items = body as unknown[];
+          const prefix = `b${bulkCallIdx}`;
+          const data = items.map((_, i) => ({ id: `${prefix}_${i}` }));
+          bulkResponses.push(data);
+          bulkCallIdx++;
+          return new Response(JSON.stringify({ data }), { status: 201, headers: { "content-type": "application/json" } });
+        }
+        if (url.pathname.endsWith("/connectors")) {
+          connResp = { id: `conn_0` };
+          return new Response(JSON.stringify(connResp), { status: 201, headers: { "content-type": "application/json" } });
+        }
+        if (url.pathname.endsWith("/groups")) {
+          const { data } = body as { data: { items: string[] } };
+          const gId = `g_${groupCallIdx++}`;
+          groupCalls.push(data.items);
+          return new Response(JSON.stringify({ id: gId, type: "group", data: {}, links: {} }), { status: 201, headers: { "content-type": "application/json" } });
+        }
+        return new Response("{}", { status: 200 });
+      },
+    });
+
+    try {
+      const room = makeRoomState();
+      const store = room.store.store as Record<string, RawShape>;
+
+      // F1 = outer frame (blue, size:m)
+      store["shape:F1"] = {
+        id: "shape:F1", typeName: "shape", type: "frame",
+        parentId: "page:page", x: 0, y: 0,
+        props: { w: 500, h: 400, name: "F1", color: "blue", size: "m" },
+      };
+      // F2 = inner frame (green), child of F1
+      store["shape:F2"] = {
+        id: "shape:F2", typeName: "shape", type: "frame",
+        parentId: "shape:F1", x: 50, y: 50,
+        props: { w: 200, h: 150, name: "F2", color: "green", size: "m" },
+      };
+      // S1 = note (yellow, m), direct child of F1
+      store["shape:S1"] = {
+        id: "shape:S1", typeName: "shape", type: "note",
+        parentId: "shape:F1", x: 300, y: 50,
+        props: { w: 80, h: 80, color: "yellow", size: "m" },
+      };
+      // S2 = geo rectangle (red, solid, l), child of F2
+      store["shape:S2"] = {
+        id: "shape:S2", typeName: "shape", type: "geo",
+        parentId: "shape:F2", x: 10, y: 10,
+        props: { w: 100, h: 60, geo: "rectangle", color: "red", fill: "solid", size: "l" },
+      };
+      // A1 = arrow (black, m, end:triangle) S1→S2
+      store["shape:A1"] = {
+        id: "shape:A1", typeName: "shape", type: "arrow",
+        parentId: "page:page",
+        props: { bend: 0, richText: null, color: "black", size: "m", arrowheadStart: "none", arrowheadEnd: "triangle" },
+      };
+      store["binding:A1-s"] = {
+        id: "binding:A1-s", typeName: "binding", type: "arrow",
+        fromId: "shape:A1", toId: "shape:S1",
+        props: { terminal: "start", normalizedAnchor: { x: 0.9, y: 0.5 } },
+      } as unknown as RawShape;
+      store["binding:A1-e"] = {
+        id: "binding:A1-e", typeName: "binding", type: "arrow",
+        fromId: "shape:A1", toId: "shape:S2",
+        props: { terminal: "end", normalizedAnchor: { x: 0.1, y: 0.5 } },
+      } as unknown as RawShape;
+
+      const client = new MiroClient({ token: "t", baseUrl: `http://localhost:${server.port}` });
+      const result = await runMiroExport({
+        client, room, boardId: "B1",
+        selection: ["shape:F1"], // full subtree auto-expanded
+      });
+
+      // ---- Result counts ----
+      // F1 + F2 (2 frames), S1 + S2 (2 leaves) = 4 items; A1 = 1 connector
+      expect(result.itemsCreated).toBe(4);
+      expect(result.connectorsCreated).toBe(1);
+      expect(result.skipped).toEqual([]);
+
+      // ---- Pass A1: exactly 2 frames exported as rectangles ----
+      const bulkA1 = bulkResponses[0];
+      expect(bulkA1).toHaveLength(2); // F1 + F2
+
+      // ---- Pass A2: exactly 2 leaves ----
+      const bulkA2 = bulkResponses[1];
+      expect(bulkA2).toHaveLength(2); // S1 + S2
+
+      // ---- No parent.id on A2 items (frame-as-shape absolute positioning) ----
+      // (We can't inspect payload here — already validated in upload.test.ts Task 12 test)
+
+      // ---- Pass B: 1 connector with correct style ----
+      expect(connResp).not.toBeNull();
+
+      // ---- Pass C: 2 createGroup calls ----
+      expect(groupCalls).toHaveLength(2);
+      // Inner group (F2) first: frame rect id + S2 id = 2 items
+      expect(groupCalls[0]).toHaveLength(2);
+      // Outer group (F1) second: flat list with all 4 items (F1 rect + F2 rect + S1 + S2)
+      expect(groupCalls[1]).toHaveLength(4);
+      // Outer must NOT contain any group id (flat per Phase 0)
+      expect(groupCalls[1]).not.toContain("g_0");
+
+      // ---- Tracking ----
+      const tracking = room.meta?.miroExports?.["B1"];
+      expect(tracking).toBeDefined();
+      expect(Object.keys(tracking?.items ?? {})).toHaveLength(4);
+      expect(Object.keys(tracking?.connectors ?? {})).toEqual(["shape:A1"]);
+      expect(tracking?.groups?.["shape:F1"]).toBeDefined();
+      expect(tracking?.groups?.["shape:F2"]).toBeDefined();
+
+      // ---- Frame style: F1 = blue borderColor, fillColor = #ffffff ----
+      // Verified via builder unit tests; full payload checked in builder.test.ts
+    } finally {
+      server.stop(true);
+    }
   });
 });

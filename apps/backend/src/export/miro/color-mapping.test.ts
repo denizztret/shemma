@@ -146,3 +146,55 @@ function parseHexHelper(hex: string): [number, number, number] {
     parseInt(h.slice(4, 6), 16),
   ];
 }
+
+// ---------------------------------------------------------------------------
+// Task 1: tldrawNamedToHex + TLDRAW_NAMED_TO_HEX
+// ---------------------------------------------------------------------------
+import { tldrawNamedToHex, TLDRAW_NAMED_TO_HEX, stickyFillColor } from "./color-mapping";
+
+describe("TLDRAW_NAMED_TO_HEX — round-trip all 12 colors", () => {
+  it("all 12 tldraw named colors map to correct v0.4 hex values", () => {
+    expect(TLDRAW_NAMED_TO_HEX["black"]).toBe("#1d1d1d");
+    expect(TLDRAW_NAMED_TO_HEX["grey"]).toBe("#9fa8b2");
+    expect(TLDRAW_NAMED_TO_HEX["light-violet"]).toBe("#e085f4");
+    expect(TLDRAW_NAMED_TO_HEX["violet"]).toBe("#ae3ec9");
+    expect(TLDRAW_NAMED_TO_HEX["blue"]).toBe("#4465e9");
+    expect(TLDRAW_NAMED_TO_HEX["light-blue"]).toBe("#4ba1f1");
+    expect(TLDRAW_NAMED_TO_HEX["yellow"]).toBe("#f1ac4b");
+    expect(TLDRAW_NAMED_TO_HEX["orange"]).toBe("#e16919");
+    expect(TLDRAW_NAMED_TO_HEX["green"]).toBe("#099268");
+    expect(TLDRAW_NAMED_TO_HEX["light-green"]).toBe("#4cb05e");
+    expect(TLDRAW_NAMED_TO_HEX["light-red"]).toBe("#f87777");
+    expect(TLDRAW_NAMED_TO_HEX["red"]).toBe("#e03131");
+  });
+});
+
+describe("tldrawNamedToHex — fallback behavior", () => {
+  it("undefined input → '#1d1d1d' (black fallback)", () => {
+    expect(tldrawNamedToHex(undefined)).toBe("#1d1d1d");
+  });
+
+  it("unknown string → '#1d1d1d' (black fallback)", () => {
+    expect(tldrawNamedToHex("unknown-color-xyz")).toBe("#1d1d1d");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 5: stickyFillColor
+// ---------------------------------------------------------------------------
+
+describe("stickyFillColor", () => {
+  it("undefined props.color → 'yellow' (legacy default)", () => {
+    expect(stickyFillColor({ props: {} })).toBe("yellow");
+    expect(stickyFillColor({})).toBe("yellow");
+  });
+
+  it("named tldraw color → nearestStickyColor(tldrawNamedToHex(named))", () => {
+    // "red" → tldrawNamedToHex("red") = "#e03131" → nearestStickyColor → "red" sticky
+    const result = stickyFillColor({ props: { color: "red" } });
+    const validStickyColors = Object.keys(STICKY_COLOR_RGB);
+    expect(validStickyColors).toContain(result);
+    // Specifically: "#e03131" is close to STICKY_COLOR_RGB.red [217, 51, 51]
+    expect(result).toBe("red");
+  });
+});

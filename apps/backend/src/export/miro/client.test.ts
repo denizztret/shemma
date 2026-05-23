@@ -146,3 +146,41 @@ describe("MiroClient — postConnector", () => {
     expect(res.id).toBe("c1");
   });
 });
+
+describe("MiroClient.createGroup (DRW-111)", () => {
+  it("POSTs to /v2/boards/{id}/groups with {data:{items:[...]}}", async () => {
+    let capturedBody: unknown = null;
+    let capturedPath = "";
+    mock = startMockMiro(async (req) => {
+      capturedPath = new URL(req.url).pathname;
+      capturedBody = await req.json();
+      return new Response(
+        JSON.stringify({ id: "g_xyz", type: "group", data: { items: ["i1", "i2"] }, links: {} }),
+        { status: 201 },
+      );
+    });
+    const client = new MiroClient({ token: "t", baseUrl: mock.url });
+    const res = await client.createGroup("board1=", ["i1", "i2"]);
+    expect(capturedPath).toContain("/v2/boards/board1%3D/groups");
+    expect(capturedBody).toEqual({ data: { items: ["i1", "i2"] } });
+    expect(res.id).toBe("g_xyz");
+  });
+
+  it("401 → MiroAuthError", async () => {
+    mock = startMockMiro(() => new Response("{}", { status: 401 }));
+    const client = new MiroClient({ token: "bad", baseUrl: mock.url });
+    await expect(client.createGroup("b1", ["i1", "i2"])).rejects.toBeInstanceOf(MiroAuthError);
+  });
+
+  it("404 → MiroNotFoundError", async () => {
+    mock = startMockMiro(() => new Response("{}", { status: 404 }));
+    const client = new MiroClient({ token: "t", baseUrl: mock.url });
+    await expect(client.createGroup("b1", ["i1", "i2"])).rejects.toBeInstanceOf(MiroNotFoundError);
+  });
+
+  it("429 → MiroRateLimitError", async () => {
+    mock = startMockMiro(() => new Response("{}", { status: 429 }));
+    const client = new MiroClient({ token: "t", baseUrl: mock.url, retryDelays: [] });
+    await expect(client.createGroup("b1", ["i1", "i2"])).rejects.toBeInstanceOf(MiroRateLimitError);
+  });
+});

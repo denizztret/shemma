@@ -39,6 +39,7 @@ export type MiroExportsMap = Record<
     lastExportedAt: string;
     items: Record<string, string>;
     connectors?: Record<string, string>;
+    groups?: Record<string, string>;
   }
 >;
 

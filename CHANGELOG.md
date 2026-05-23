@@ -1,3 +1,32 @@
+## 0.24.0 — 2026-05-23 — DRW-111 Visual Fidelity v2
+
+### Changed (default behavior)
+- Miro frame export переключён с `frame` widget на `shape + group` модель (rectangle с label + group widget). Unlimited nesting, whitebox visual.
+- `pattern` fill mode рендерится идентично `semi` (Miro не поддерживает диагональную заливку).
+- Повторный экспорт создаёт новые элементы на Miro доске (append-only; старые элементы не удаляются).
+
+### Added
+- tldraw 12 named colors → Miro hex (`borderColor` / `fillColor` / `strokeColor` / sticky `fillColor`).
+- tldraw 4 sizes → Miro `fontSize` / `borderWidth` / `strokeWidth` + sticky-specific fontSize scale.
+- tldraw 4 fonts → Miro `fontFamily` (`draw` → `caveat` casual script).
+- tldraw 9 arrowheads → Miro `startStrokeCap` / `endStrokeCap`.
+- `POST /v2/boards/{id}/groups` widget creation для frame containers (Phase 0 verified contract).
+- `room.meta.miroExports[boardId].groups` tracking field (optional, additive).
+- Styling propagation для standalone tldraw `text` shape (был inactive в 0.20.x — `style: {}`).
+
+### Known limitations
+- `square` / `bar` / `pipe` arrowheads экспортируются без head (Miro не поддерживает прямоугольные/bar caps).
+- `inverted` arrowhead деградирует до forward `arrow` (Miro не поддерживает backward-facing cap).
+- Nested groups уплощены (Miro Group widget отвергает nested groupIds — verified Phase 0).
+- Frames с 0 children пропускают создание группы (Miro требует мин. 2 элемента на группу).
+
+### Tracked
+- Closes DRW-111.
+
+### Tests
+- +60 unit/integration тестов в 8 файлах `apps/backend/src/export/miro/`.
+- Итого: 804 backend теста, 0 fail.
+
 ## 0.23.2 — 2026-05-23 — DRW-135..141 hotfix cluster
 
 PATCH release bundling 7 fixes accumulated after DRW-134 (0.23.0) testing + 0.23.1 follow-up. No new features; all bug-fixes на live v2 schema-frame flow + tldraw native interop. Cluster shipped per [[feedback-batch-release-cluster]] (one release commit вместо per-task version bumps).

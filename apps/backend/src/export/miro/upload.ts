@@ -4,7 +4,7 @@ import {
   type ArrowEndpoints,
   buildArrowEndpointsIndex,
   buildConnectorPayload,
-  buildFramePayload,
+  buildShapeForFrame,
   buildShapePayload,
   buildStickyNotePayload,
   buildTextPayload,
@@ -13,7 +13,7 @@ import {
 import { MiroAuthError, MiroNotFoundError, MiroRateLimitError } from "./client";
 import type { MiroBulkItem, MiroClient, MiroConnectorPayload } from "./client";
 import { computeCentroid, resolvePageBounds, type RawShape } from "./coords";
-import { commitBoardExport } from "./tracking";
+import { commitBoardExport, commitBoardGroupExport } from "./tracking";
 
 const BULK_CHUNK_SIZE = 20;
 const CONNECTOR_CONCURRENCY = 10;
@@ -133,6 +133,30 @@ function expandImplicitArrows(
   return Array.from(set);
 }
 
+/**
+ * Sort frames outer-first → inner-last (by parent depth).
+ * Frames whose parentId is not in the set are treated as roots (depth 0).
+ * Ensures Miro receives parent frames before their child frames in bulk create.
+ */
+export function framesInDepthFirstOrder<T extends { id: string; parentId?: string }>(
+  frames: T[],
+): T[] {
+  const byId = new Map(frames.map(f => [f.id, f]));
+  const depth = (f: T): number => {
+    let d = 0;
+    let cur: T | undefined = f;
+    const seen = new Set<string>();
+    while (cur?.parentId && byId.has(cur.parentId)) {
+      if (seen.has(cur.id)) break; // cycle guard
+      seen.add(cur.id);
+      d++;
+      cur = byId.get(cur.parentId);
+    }
+    return d;
+  };
+  return [...frames].sort((a, b) => depth(a) - depth(b));
+}
+
 export async function runMiroExport(p: RunExportParams): Promise<RunExportResult> {
   const skipped: SkippedItem[] = [];
   const store = p.room.store.store as Record<string, RawShape>;
@@ -179,15 +203,16 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
   let runError: string | undefined;
 
   if (frames.length > 0) {
-    const payload: Array<{ id: string; item: MiroBulkItem }> = frames
+    const orderedFrameIds = framesInDepthFirstOrder(
+      frames.map(id => ({ id, parentId: store[id]?.parentId as string | undefined })),
+    ).map(f => f.id);
+
+    const payload: Array<{ id: string; item: MiroBulkItem }> = orderedFrameIds
       .map((id) => {
         const s = store[id];
         const pos = miroPos(id);
         if (!s || !pos) return null;
-        const item = buildFramePayload(s, {
-          miroX: pos.x,
-          miroY: pos.y,
-        });
+        const item = buildShapeForFrame(s, { miroX: pos.x, miroY: pos.y });
         item.geometry = { width: pos.w, height: pos.h };
         return { id, item };
       })
@@ -226,24 +251,9 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
         const pos = miroPos(id);
         if (!s || !pos) return null;
 
-        const parentMiroId = s.parentId && frameMap.has(s.parentId)
-          ? frameMap.get(s.parentId)
-          : undefined;
-        let miroX = pos.x;
-        let miroY = pos.y;
-        if (parentMiroId && s.parentId) {
-          // Miro: child position is `relativeTo: "parent_top_left"`. We compute
-          // child page-center − parent page-top-left = child offset inside frame.
-          const parentBounds = bounds(s.parentId);
-          if (parentBounds) {
-            miroX = (pos.x + centroid.x) - parentBounds.x;
-            miroY = (pos.y + centroid.y) - parentBounds.y;
-          }
-        }
-        const ctx = {
-          miroX, miroY,
-          parentMiroId,
-        };
+        // Frame-as-shape mode: resolvePageBounds already returns absolute page
+        // coordinates, so no parent-relative offset math is needed.
+        const ctx = { miroX: pos.x, miroY: pos.y };
         let item: MiroBulkItem;
         if (s.type === "note") item = buildStickyNotePayload(s, ctx);
         else if (s.type === "text") item = buildTextPayload(s, ctx);
@@ -358,7 +368,67 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
   }
 
   const passBError = errors.length > 0 ? `pass-b errors: ${errors.join("; ")}` : undefined;
-  const combinedError = [runError, passBError].filter((e): e is string => Boolean(e)).join(" | ") || undefined;
+
+  // Pass C — group widgets (DRW-111). Per Phase 0 probe (probe.md Section F):
+  // - Body { data: { items: [...] } }; min 2 items; nested groups REJECTED.
+  // - Process deepest-first; each frame's group items = flat list of all
+  //   descendant miroIds (frame rectangle + ALL descendant rectangles/shapes).
+  let passCError: string | undefined;
+  if (frames.length > 0) {
+    const orderedFrames = framesInDepthFirstOrder(
+      frames.map(id => ({ id, parentId: store[id]?.parentId as string | undefined })),
+    );
+    const framesDeepestFirst = [...orderedFrames].reverse();
+
+    const selectionSet = new Set([...frames, ...items]);
+
+    function descendantsOf(rootId: string): string[] {
+      const out: string[] = [];
+      for (const id of selectionSet) {
+        if (id === rootId) continue;
+        let cur: string | undefined = store[id]?.parentId as string | undefined;
+        while (cur) {
+          if (cur === rootId) { out.push(id); break; }
+          cur = store[cur]?.parentId as string | undefined;
+        }
+      }
+      return out;
+    }
+
+    const groupMappings: Array<{ elementId: string; miroGroupId: string }> = [];
+    for (const f of framesDeepestFirst) {
+      const frameMiroId = frameMap.get(f.id);
+      if (!frameMiroId) continue;
+      const descendants = descendantsOf(f.id);
+      if (descendants.length === 0) continue; // skip — no descendants, can't meet Miro min 2 items
+      const descendantMiroIds = descendants
+        .map(d => frameMap.get(d) ?? itemMap.get(d))
+        .filter((id): id is string => Boolean(id));
+      if (descendantMiroIds.length === 0) continue;
+      const itemsPayload = [frameMiroId, ...descendantMiroIds];
+      try {
+        const resp = await p.client.createGroup(p.boardId, itemsPayload);
+        groupMappings.push({ elementId: f.id, miroGroupId: resp.id });
+      } catch (e) {
+        if (
+          e instanceof MiroAuthError ||
+          e instanceof MiroNotFoundError ||
+          e instanceof MiroRateLimitError
+        ) {
+          passCError = `pass-c: ${(e as Error).message}`;
+          break;
+        }
+        const msg = `pass-c group(${f.id}): ${(e as Error).message}`;
+        passCError = passCError ? `${passCError}; ${msg}` : msg;
+      }
+    }
+    if (groupMappings.length > 0) {
+      commitBoardGroupExport(p.room, { boardId: p.boardId, groupMappings });
+      p.onCommit?.(p.room);
+    }
+  }
+
+  const combinedError = [runError, passBError, passCError].filter((e): e is string => Boolean(e)).join(" | ") || undefined;
 
   return {
     itemsCreated: frameMap.size + itemMap.size,
