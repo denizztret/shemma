@@ -186,3 +186,75 @@ Manual verify: shape с `parent.id` + `position: {x: 0, y: 0}` → Miro reports 
 }
 
 ```
+
+---
+
+# DRW-111 Phase 0 probe (2026-05-23)
+
+Live probe — board ID `uXjVHQqmFVo%3D`. Все артефакты cleaned up после каждой секции.
+
+## F. Group widget API contract (`POST /v2/boards/{board_id}/groups`)
+
+### F.1 Happy path — 2 items
+
+Request:
+```http
+POST /v2/boards/uXjVHQqmFVo%3D/groups
+Content-Type: application/json
+
+{"data":{"items":["3458764672959437547","3458764672959437548"]}}
+```
+
+Response (HTTP 201):
+```json
+{
+  "id": "3458764672959437667",
+  "type": "group",
+  "data": {
+    "items": ["3458764672959437547", "3458764672959437548"]
+  },
+  "links": {
+    "self": "https://api.miro.com/v2/boards/uXjVHQqmFVo%3D/groups/3458764672959437667"
+  }
+}
+```
+
+**Confirmed contract:**
+- Body shape: `{"data":{"items":[<itemId>, ...]}}` — wrap field `data` REQUIRED.
+- Items field name: `items` (NOT `itemIds`).
+- Response fields: `id`, `type: "group"`, `data.items`, `links.self`. **No timestamps**, no `createdBy`/`modifiedBy`.
+- `id` поле присутствует — используем для tracking.
+
+### F.2 Nested group — REJECTED (404)
+
+Request: pass an existing `groupId` (`3458764672959437667`) среди items together with a fresh shape id.
+
+Response (HTTP **404**):
+```json
+{
+  "type": "error",
+  "code": "3.0201",
+  "context": {"boardId":{"value":"uXjVHQqmFVo="}},
+  "message": "Item not found",
+  "status": 404
+}
+```
+
+**Conclusion:** Miro **rejects** group ids inside `data.items`. Treats them as non-existent "items" (404, not 400 validation). Nested group flow (§ 8.4 spec) **must use flat fallback** — outer group's items list contains the **flattened** leaf-item ids (frame rectangles + descendant non-frame items), NOT inner group ids.
+
+### F.3 Edge cases
+
+| Case | Body | HTTP | Error |
+|---|---|---|---|
+| Empty items | `{"data":{"items":[]}}` | 400 | `"Group should have at least two items"` |
+| Single item | `{"data":{"items":["<id>"]}}` | 400 | `"Group should have at least two items"` |
+| No `data` wrap | `{"items":[<id>]}` | 400 | `"Field [data] of type [Object] is required"` |
+| `itemIds` field name | `{"data":{"itemIds":[<id>]}}` | 400 | `"Field [data.items] of type [Array] is required"` |
+
+**Minimum items per group: 2.** Frame-as-shape mode must skip group creation для frames с 0 или 1 child (frame rectangle alone не образует group).
+
+### F.4 Implications for spec § 8.3 / § 8.4
+
+- Spec § 8.3 (Pass C creates groups inner-first then outer) — sequence stays, но **outer call's items array** = leaf-items-only (flat). Inner `groupId` НЕ передаётся в outer.
+- Spec § 8.4 `if nested accepted/rejected` — answer locked: **rejected → use flat fallback** (described as second outcome in § 8.4).
+- Edge: if a frame contains exactly 0 or 1 child (frame rectangle alone) — **skip** `POST /groups` call (would 400). Tracking schema: no `groups[frameId]` entry → frame stays as a plain rectangle on the board.
