@@ -539,6 +539,56 @@ describe("applySchemaActions (DRW-134 Task 2.4)", () => {
     expect(result.newOverlays["api-aaaaaa"]!.color).toBe("violet");
   });
 
+  // ---------- In-batch reference handling ----------
+
+  test("Batch [define X, delete X] → success, end-state has 0 X", () => {
+    const frame = makeFrame("shape:frame1", "");
+    const room = makeRoom({ "shape:frame1": frame });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-define", nodeId: "node-aaaaaa", role: "service", label: "Temp" },
+      { kind: "schema-delete-node", nodeId: "node-aaaaaa" },
+    ];
+
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // Net result: node was added then deleted → not in RAW (net-zero diff from empty).
+    expect(result.newRaw).not.toContain("node-aaaaaa");
+    // Both addedNodeIds and removedNodeIds are empty since the diff is against
+    // the original empty state (define+delete is a no-op net diff).
+    expect(result.addedNodeIds).toHaveLength(0);
+    expect(result.removedNodeIds).toHaveLength(0);
+    // No shapes in store change batch.
+    expect(Object.keys(result.batch.added)).toHaveLength(0);
+    expect(Object.keys(result.batch.removed)).toHaveLength(0);
+  });
+
+  test("Batch [define X, define Y, disconnect X→Y added-in-batch] → success, no connection", () => {
+    const frame = makeFrame("shape:frame1", "");
+    const room = makeRoom({ "shape:frame1": frame });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-define", nodeId: "svc-aaaaaa", role: "service", label: "SVC" },
+      { kind: "schema-define", nodeId: "db-bbbbbb", role: "datastore", label: "DB" },
+      { kind: "schema-connect", from: "svc-aaaaaa", to: "db-bbbbbb" },
+      { kind: "schema-disconnect", from: "svc-aaaaaa", to: "db-bbbbbb" },
+    ];
+
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // Connection was added then removed → no --> in RAW.
+    expect(result.newRaw).not.toContain("-->");
+    // Both nodes still present.
+    expect(result.newRaw).toContain("svc-aaaaaa");
+    expect(result.newRaw).toContain("db-bbbbbb");
+  });
+
   // ---------- Collect all errors (atomicity) ----------
 
   test("Multiple invalid actions → all errors collected (not bail on first)", () => {

@@ -16,6 +16,7 @@
  * Collect ALL errors, не bail на первой.
  */
 
+import { randomBytes } from "node:crypto";
 import {
   isValidRole,
   isValidConnectionKind,
@@ -57,16 +58,8 @@ function richText(label: string): unknown {
 
 // ---- Random id helpers ----
 
-let _idCounter = 0;
-
 function rand(): string {
-  // Prefer crypto if available (backend context); fallback to Math.random.
-  try {
-    const { randomBytes } = require("node:crypto") as typeof import("node:crypto");
-    return randomBytes(5).toString("hex");
-  } catch {
-    return Math.random().toString(36).slice(2, 12) + (++_idCounter).toString(36);
-  }
+  return randomBytes(5).toString("hex");
 }
 
 function shapeId(): string {
@@ -188,6 +181,7 @@ function makeGeoShape(opts: {
     },
     meta: {
       didrawId: opts.nodeId,
+      didrawName: opts.nodeId,
       didrawLabel: opts.label,
       didrawSchemaParent: opts.parentId,
     },
@@ -366,14 +360,14 @@ function validateAction(
     }
 
     case "schema-disconnect": {
-      if (!ctx.currentNodes.has(action.from)) {
+      if (!ctx.currentNodes.has(action.from) && !ctx.pendingAdds.has(action.from)) {
         return {
           actionIndex: idx,
           code: "unknown-node",
           message: `Unknown node "${action.from}" in schema-disconnect`,
         };
       }
-      if (!ctx.currentNodes.has(action.to)) {
+      if (!ctx.currentNodes.has(action.to) && !ctx.pendingAdds.has(action.to)) {
         return {
           actionIndex: idx,
           code: "unknown-node",
@@ -384,7 +378,7 @@ function validateAction(
     }
 
     case "schema-delete-node": {
-      if (!ctx.currentNodes.has(action.nodeId)) {
+      if (!ctx.currentNodes.has(action.nodeId) && !ctx.pendingAdds.has(action.nodeId)) {
         return {
           actionIndex: idx,
           code: "unknown-node",
