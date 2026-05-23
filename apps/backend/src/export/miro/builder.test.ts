@@ -17,6 +17,7 @@ import {
   tldrawArrowheadToStrokeCap,
   fillStyle,
 } from "./builder";
+import { tldrawNamedToHex } from "./color-mapping";
 import type { RawShape } from "./coords";
 
 function makeShape(props: Partial<RawShape>): RawShape {
@@ -423,5 +424,184 @@ describe("fillStyle", () => {
     const r = fillStyle(undefined, hex);
     expect(r.fillColor).toBeUndefined();
     expect(r.fillOpacity).toBe("0.0");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 6: buildShapePayload styling (DRW-111)
+// ---------------------------------------------------------------------------
+
+describe("buildShapePayload styling (DRW-111)", () => {
+  it("color:red size:l font:mono fill:solid → full styling applied", () => {
+    const s = makeShape({
+      id: "shape:r1",
+      props: {
+        w: 120,
+        h: 80,
+        geo: "rectangle",
+        color: "red",
+        size: "l",
+        font: "mono",
+        fill: "solid",
+        align: "middle",
+        verticalAlign: "middle",
+      },
+    });
+    const p = buildShapePayload(s, { miroX: 0, miroY: 0 });
+    const style = p.style as Record<string, unknown>;
+    const colorHex = tldrawNamedToHex("red");
+    expect(style.borderColor).toBe(colorHex);
+    expect(style.fillColor).toBe(colorHex);
+    expect(style.fillOpacity).toBe("1.0");
+    expect(style.borderWidth).toBe("3.0");
+    expect(style.fontSize).toBe("20");
+    expect(style.fontFamily).toBe("roboto_mono");
+  });
+
+  it("color:blue fill:none → fillOpacity '0.0', no fillColor", () => {
+    const s = makeShape({
+      id: "shape:r2",
+      props: {
+        w: 100,
+        h: 60,
+        geo: "ellipse",
+        color: "blue",
+        fill: "none",
+      },
+    });
+    const p = buildShapePayload(s, { miroX: 0, miroY: 0 });
+    const style = p.style as Record<string, unknown>;
+    expect(style.fillOpacity).toBe("0.0");
+    expect(style.fillColor).toBeUndefined();
+  });
+
+  it("meta.fillHex override preserved over props-derived hex", () => {
+    const s = makeShape({
+      id: "shape:r3",
+      props: { w: 100, h: 50, geo: "rectangle", color: "red", fill: "solid" },
+      meta: { fillHex: "#aabbcc" },
+    });
+    const p = buildShapePayload(s, { miroX: 0, miroY: 0 });
+    const style = p.style as Record<string, unknown>;
+    expect(style.fillColor).toBe("#aabbcc");
+  });
+
+  it("meta.borderHex override preserved", () => {
+    const s = makeShape({
+      id: "shape:r4",
+      props: { w: 100, h: 50, geo: "rectangle", color: "red" },
+      meta: { borderHex: "#112233" },
+    });
+    const p = buildShapePayload(s, { miroX: 0, miroY: 0 });
+    const style = p.style as Record<string, unknown>;
+    expect(style.borderColor).toBe("#112233");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 7: buildConnectorPayload styling (DRW-111)
+// ---------------------------------------------------------------------------
+
+describe("buildConnectorPayload styling (DRW-111)", () => {
+  it("color/size/font/arrowhead applied", () => {
+    const arrow: RawShape = {
+      id: "shape:arr2",
+      typeName: "shape",
+      type: "arrow",
+      props: {
+        bend: 0,
+        color: "green",
+        size: "xl",
+        font: "sans",
+        arrowheadStart: "diamond",
+        arrowheadEnd: "triangle",
+        dash: "solid",
+      },
+    };
+    const store: Record<string, RawShape> = {
+      [arrow.id]: arrow,
+      "binding:s2": {
+        id: "binding:s2",
+        typeName: "binding",
+        type: "arrow",
+        fromId: "shape:arr2",
+        toId: "shape:X",
+        props: { terminal: "start", normalizedAnchor: { x: 0.9, y: 0.5 } },
+      } as unknown as RawShape,
+      "binding:e2": {
+        id: "binding:e2",
+        typeName: "binding",
+        type: "arrow",
+        fromId: "shape:arr2",
+        toId: "shape:Y",
+        props: { terminal: "end", normalizedAnchor: { x: 0.1, y: 0.5 } },
+      } as unknown as RawShape,
+    };
+    const passAMap = new Map<string, string>([
+      ["shape:X", "miro-X"],
+      ["shape:Y", "miro-Y"],
+    ]);
+    const result = buildConnectorPayload(arrow, { store, passAMap });
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      const style = result.payload.style as Record<string, unknown>;
+      expect(style.strokeColor).toBe(tldrawNamedToHex("green"));
+      expect(style.strokeWidth).toBe("4.0");
+      expect(style.startStrokeCap).toBe("filled_diamond");
+      expect(style.endStrokeCap).toBe("filled_triangle");
+      expect(style.fontFamily).toBe("open_sans");
+      expect(style.fontSize).toBe("30");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 8: buildStickyNotePayload styling (DRW-111)
+// ---------------------------------------------------------------------------
+
+describe("buildStickyNotePayload styling (DRW-111)", () => {
+  it("color:yellow size:l font:serif → fillColor, fontFamily, fontSize", () => {
+    const s = makeShape({
+      id: "shape:sn1",
+      type: "note",
+      props: { w: 200, h: 200, color: "yellow", size: "l", font: "serif" },
+    });
+    const p = buildStickyNotePayload(s, { miroX: 0, miroY: 0 });
+    const style = p.style as Record<string, unknown>;
+    expect(typeof style.fillColor).toBe("string");
+    expect((style.fillColor as string).length).toBeGreaterThan(0);
+    expect(style.fontFamily).toBe("times_new_roman");
+    expect(style.fontSize).toBe("36");
+  });
+
+  it("no props → fillColor 'yellow' fallback", () => {
+    const s = makeShape({
+      id: "shape:sn2",
+      type: "note",
+      props: {},
+    });
+    const p = buildStickyNotePayload(s, { miroX: 0, miroY: 0 });
+    const style = p.style as Record<string, unknown>;
+    expect(style.fillColor).toBe("yellow");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 9: buildTextPayload styling (DRW-111)
+// ---------------------------------------------------------------------------
+
+describe("buildTextPayload styling (DRW-111)", () => {
+  it("color + fontFamily + fontSize + textAlign applied", () => {
+    const text = makeShape({
+      id: "shape:t1",
+      type: "text",
+      props: { color: "red", size: "m", font: "mono", textAlign: "start", w: 100 },
+    });
+    const r = buildTextPayload(text, { miroX: 0, miroY: 0 });
+    const style = r.style as Record<string, unknown>;
+    expect(style.color).toBe(tldrawNamedToHex("red"));
+    expect(style.fontFamily).toBe("roboto_mono");
+    expect(style.fontSize).toBe("14");
+    expect(style.textAlign).toBe("left"); // tldraw "start" → Miro "left"
   });
 });

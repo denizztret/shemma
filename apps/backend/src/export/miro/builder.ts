@@ -1,6 +1,6 @@
 
 import type { MiroBulkItem, MiroConnectorPayload } from "./client";
-import { nearestShapeColor, nearestStickyColor } from "./color-mapping";
+import { nearestShapeColor, nearestStickyColor, stickyFillColor, tldrawNamedToHex } from "./color-mapping";
 import type { RawShape } from "./coords";
 import { richTextToPlain } from "./rich-text";
 
@@ -59,24 +59,27 @@ export function buildShapePayload(shape: RawShape, ctx: BuilderCtx): MiroBulkIte
   const geo = props.geo as string | undefined;
   const content = pickRichText(props);
 
-  // Miro defaults `borderOpacity: 0` + `fillOpacity: 0` → invisible shapes.
-  // Set visible defaults; user-provided meta.fillHex / meta.borderHex override.
+  // meta.fillHex / meta.borderHex are user-set manual overrides — take priority.
   const metaFillHex = shape.meta?.fillHex as string | undefined;
   const metaBorderHex = shape.meta?.borderHex as string | undefined;
   const align = (props.align as string | undefined) ?? "middle";
   const valign = (props.verticalAlign as string | undefined) ?? "middle";
+
+  // Derive color from tldraw props (falls back to black if unset).
+  const colorHex = tldrawNamedToHex(props.color as string | undefined);
+  const fill = props.fill as string | undefined;
+
   const style: Record<string, unknown> = {
-    borderColor: metaBorderHex ?? "#1a1a1a",
-    borderWidth: "2.0",
+    borderColor: metaBorderHex ?? colorHex,
+    borderWidth: tldrawSizeToBorderWidth(props.size as string | undefined),
     borderOpacity: "1.0",
     borderStyle: "normal",
-    fillOpacity: metaFillHex ? "1.0" : "0.0",
+    fontFamily: tldrawFontToFamily(props.font as string | undefined),
+    fontSize: tldrawSizeToFontSize(props.size as string | undefined),
     textAlign: TEXT_ALIGN[align] ?? "center",
     textAlignVertical: TEXT_VALIGN[valign] ?? "middle",
+    ...fillStyle(fill, metaFillHex ?? colorHex),
   };
-  if (metaFillHex && metaFillHex.startsWith("#")) {
-    style.fillColor = nearestShapeColor(metaFillHex);
-  }
 
   return applyPositionAndParent({
     type: "shape",
