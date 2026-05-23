@@ -349,3 +349,80 @@ export const TLDRAW_NAMED_TO_HEX: Record<TldrawNamedColor, string> = {
 ### H.3 Optional follow-up — fill variant
 
 tldraw shapes имеют дополнительные variant: `fill` (часто = `solid`), `semi`, `pattern`, `noteFill`. Для DRW-111 `borderColor` / `strokeColor` использует `solid`. `fillColor` при `fill: "semi"` / `"pattern"` — spec mapping (§ 4.3) использует SAME color hex с opacity 0.5; альтернативно можно использовать tldraw `colors.light.<name>.semi` (precomputed lighter shade). DECISION для DRW-111: остаёмся на solid+opacity (simpler, matches arbitrary-fill semantics, не требует extra table); semi variant — possible future improvement.
+
+## I. Miro strokeCap enum
+
+### I.1 SDK enum list
+
+Source: `https://raw.githubusercontent.com/miroapp/api-clients/main/packages/miro-api/model/connectorStyle.ts` (Miro REST v2 OpenAPI-generated).
+
+`StartStrokeCapEnum` === `EndStrokeCapEnum` (identical), 16 values:
+
+```
+none, stealth, rounded_stealth,
+diamond, filled_diamond,
+oval, filled_oval,
+arrow, triangle, filled_triangle,
+erd_one, erd_many, erd_only_one, erd_zero_or_one, erd_one_or_many, erd_zero_or_many
+```
+
+Plus sentinel `unknown` (SDK only — server returns этого если value не recognized).
+
+### I.2 Live verification — spec values FAIL
+
+Tested 8 connector POSTs (8 cap pairs × 2 caps each = 16 cap usages):
+
+| start | end | HTTP | Reason |
+|---|---|---|---|
+| `diamond_filled` | `arrow_filled` | **400** | spec values — INVALID |
+| `oval_filled` | `rectangle_filled` | **400** | spec values — INVALID |
+| `rectangle` | `none` | **400** | `rectangle` — INVALID |
+| `unicode_arrow` | `arrow` | **400** | `unicode_arrow` — INVALID |
+| `filled_diamond` | `filled_triangle` | 201 | ✓ |
+| `filled_oval` | `stealth` | 201 | ✓ |
+| `diamond` | `triangle` | 201 | ✓ |
+| `oval` | `rounded_stealth` | 201 | ✓ |
+| `none` | `arrow` | 201 | ✓ |
+| `stealth` | `none` | 201 | ✓ |
+| `erd_one` | `erd_many` | 201 | ✓ |
+| `erd_only_one` | `erd_zero_or_one` | 201 | ✓ |
+| `erd_one_or_many` | `erd_zero_or_many` | 201 | ✓ |
+
+**4/8 spec mappings REJECTED.** Server error message подтвердил enum:
+```
+Unexpected value [diamond_filled], expected one of: [none, stealth, rounded_stealth, diamond, filled_diamond, oval, filled_oval, arrow, triangle, filled_triangle, erd_one, erd_many, erd_only_one, erd_zero_or_one, erd_one_or_many, erd_zero_or_many]
+```
+
+### I.3 Spec § 7.1 — REQUIRES REWRITE
+
+Текущая mapping (8 invalid + `bar`/`pipe` неоднозначны):
+
+```ts
+case "triangle": return "arrow_filled";    // ✗ should be "filled_triangle"
+case "square":   return "rectangle_filled"; // ✗ no "rectangle*" in enum — needs different target
+case "dot":      return "oval_filled";      // ✗ should be "filled_oval"
+case "diamond":  return "diamond_filled";   // ✗ should be "filled_diamond"
+case "inverted": return "unicode_arrow";    // ✗ no such value
+case "bar":      return "rectangle";        // ✗ no "rectangle"
+case "pipe":     return "rectangle";        // ✗ no "rectangle"
+```
+
+### I.4 New mapping (verified 9-row table)
+
+Final tldraw arrowhead → Miro strokeCap:
+
+| tldraw | Miro strokeCap | Notes |
+|---|---|---|
+| `none` | `none` | exact |
+| `arrow` | `arrow` | exact |
+| `triangle` | `filled_triangle` | tldraw triangle = filled |
+| `square` | `none` | no square/rectangle cap in Miro; fallback to plain line (`stealth` would imply arrow head — wrong) |
+| `dot` | `filled_oval` | dot = filled circle |
+| `diamond` | `filled_diamond` | exact concept |
+| `inverted` | `arrow` | no inverted-direction cap in Miro; degrade to plain arrow (tldraw inverted = arrow facing backward, visually similar to plain arrow for end users) |
+| `bar` | `none` | no bar cap; degrade to plain line |
+| `pipe` | `none` | no pipe cap; degrade to plain line |
+
+`square`/`bar`/`pipe` → `none` chosen over fake mapping: Miro caps available — round, pointed, ER-symbols only; никакая из них visually не соответствует bar/pipe/square. Lose decoration > misleading. Documentation note для release notes: "tldraw `square`/`bar`/`pipe` arrowheads экспортируются без head (Miro не поддерживает rectangular caps)".
+
+`inverted` → `arrow` instead of `stealth`: tldraw `inverted` рисует filled triangle обращённый назад. Miro `stealth` (default) ближе по геометрии, но смотрит вперёд — `arrow` (открытая стрелка) более neutral fallback. Acceptable since `inverted` редко используется в архитектурных диаграммах (per spec § 7.3).
