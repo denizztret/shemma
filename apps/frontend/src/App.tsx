@@ -26,6 +26,7 @@ import { PromptDrawer } from "./prompts/PromptDrawer";
 import { PromptInput } from "./prompts/PromptInput";
 import { getState, seedSchema } from "./transport/api";
 import { viewportReporter } from "./transport/viewport";
+import { computeTruncatedBackoff } from "./transport/sync-recovery";
 import { type AiActivity, startStoreSync } from "./transport/ws";
 
 /**
@@ -287,6 +288,9 @@ export function App({
     let unsubSel: (() => void) | undefined;
     let unsubOverlaySync: (() => void) | undefined;
     let camSaveTimer: ReturnType<typeof setTimeout> | undefined;
+    // DRW-137: truncated recovery timer — cancel on cleanup to prevent
+    // post-unmount fetches on a room that's been switched away.
+    let truncatedRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
 
     // DRW-047 + DRW-018: upload our V2 schema (best-effort), then fetch /api/state
     // and apply via mergeRemoteChanges. Shared by initial hydrate and truncated-recovery.
@@ -431,60 +435,58 @@ export function App({
       // (middleware off) `space` is the `__legacy__` sentinel and the backend
       // ignores it, preserving single-space semantics.
       const wsUrl = `ws://${location.host}/ws?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room)}`;
-      syncHandle = startStoreSync({
-        editor,
-        wsUrl,
-        room,
-        initialVersion: loaded.version,
-        // DRW-077 + DRW-075: on each AI store-change batch re-trigger growY
-        // for affected geo shapes and schedule a camera fit if the user hasn't
-        // manually navigated.
-        onAiChange: (changedIds) => {
-          if (!active) return;
-          triggerGrowY(editor, changedIds);
-          scheduleAiZoom();
-        },
-        // DRW-083: MCP import-mermaid command — backend routes WS frame here.
-        // Append-only by design — AI must never wipe existing canvas state.
-        // DRW-086: focus param controls viewport behavior after import.
-        onImportMermaid: runMermaidImport,
-        onTruncated: () => {
-          // DRW-018: pause the (now zombie) syncer immediately so any frames
-          // that arrive between this callback and ws.close() — or any straggler
-          // queued in the JS event loop — are dropped instead of applied to
-          // the about-to-be-replaced store. The syncer also marks itself
-          // `stopped` in the 'truncated' handler, but `setPaused(true)` is
-          // belt-and-braces and explicit at the call site.
-          syncHandle?.setPaused(true);
-          // Server says we're too far behind to replay → re-fetch full state.
-          void (async () => {
-            try {
-              const fresh = await fetchAndLoadSnapshot();
-              if (!fresh) return;
-              syncHandle?.stop();
-              syncHandle = startStoreSync({
-                editor,
-                wsUrl,
-                room,
-                initialVersion: fresh.version,
-                onAiChange: (changedIds) => {
-                  if (!active) return;
-                  triggerGrowY(editor, changedIds);
-                  scheduleAiZoom();
-                },
-                // DRW-086: focus param controls viewport behavior after import.
-                onImportMermaid: runMermaidImport,
-                onTruncated: () => {
-                  // Pathological loop — log and stop trying.
-                  console.warn("[shemma] truncated recovery looped, giving up");
-                },
-              });
-            } catch (e) {
-              console.warn("[shemma] truncated recovery failed:", e);
-            }
-          })();
-        },
-      });
+
+      // DRW-137: recursive recovery — truncated → fetch fresh state → reattach.
+      // Exponential backoff между retries (0/1s/2s/4s/8s/16s/30s cap) защищает
+      // от tight loop если backend постоянно отвечает truncated. cleanup useEffect
+      // дропает truncatedTimer чтобы recovery не fired'ил на dead room.
+      const attachStoreSync = (initialVersion: number, retryNumber: number) => {
+        if (!active) return;
+        syncHandle = startStoreSync({
+          editor,
+          wsUrl,
+          room,
+          initialVersion,
+          onAiChange: (changedIds) => {
+            if (!active) return;
+            triggerGrowY(editor, changedIds);
+            scheduleAiZoom();
+          },
+          onImportMermaid: runMermaidImport,
+          onTruncated: () => {
+            if (!active) return;
+            // DRW-018: pause immediately so straggler frames don't apply to
+            // the about-to-be-replaced store.
+            syncHandle?.setPaused(true);
+            const next = retryNumber + 1;
+            const delay = computeTruncatedBackoff(next);
+            console.warn(
+              `[shemma] truncated → reseed in ${delay}ms (retry ${next})`,
+            );
+            const fire = async () => {
+              if (!active) return;
+              try {
+                const fresh = await fetchAndLoadSnapshot();
+                if (!fresh || !active) return;
+                syncHandle?.stop();
+                attachStoreSync(fresh.version, next);
+              } catch (e) {
+                console.warn("[shemma] truncated recovery failed:", e);
+                // Reschedule with longer backoff — never give up while active.
+                const retryDelay = computeTruncatedBackoff(next + 1);
+                truncatedRecoveryTimer = setTimeout(() => {
+                  void fire();
+                }, retryDelay);
+              }
+            };
+            truncatedRecoveryTimer = setTimeout(() => {
+              void fire();
+            }, delay);
+          },
+        });
+      };
+
+      attachStoreSync(loaded.version, 0);
 
       // Wire window focus/blur/beforeunload → board-focus beacon.
       // Each focus change notifies the MCP layer which room the human is on.
@@ -563,6 +565,12 @@ export function App({
       syncHandle?.stop();
       unsubSel?.();
       unsubOverlaySync?.();
+      // DRW-137: cancel any pending truncated-recovery to avoid a stray
+      // fetchAndLoadSnapshot on a room that's been unmounted.
+      if (truncatedRecoveryTimer) {
+        clearTimeout(truncatedRecoveryTimer);
+        truncatedRecoveryTimer = undefined;
+      }
       if (aiZoomTimer !== null) {
         clearTimeout(aiZoomTimer);
         aiZoomTimer = null;
