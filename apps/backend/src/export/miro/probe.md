@@ -258,3 +258,44 @@ Response (HTTP **404**):
 - Spec § 8.3 (Pass C creates groups inner-first then outer) — sequence stays, но **outer call's items array** = leaf-items-only (flat). Inner `groupId` НЕ передаётся в outer.
 - Spec § 8.4 `if nested accepted/rejected` — answer locked: **rejected → use flat fallback** (described as second outcome in § 8.4).
 - Edge: if a frame contains exactly 0 or 1 child (frame rectangle alone) — **skip** `POST /groups` call (would 400). Tracking schema: no `groups[frameId]` entry → frame stays as a plain rectangle on the board.
+
+## G. Z-order via bulk POST
+
+Goal: verify Miro bulk creation preserves array index → z-order (later in array → on top).
+
+### G.1 Live test
+
+Bulk POST'нул `[{content:"bottom", grey 200x200}, {content:"top", red 100x100 inside}]`.
+
+Returned ids:
+- `3458764672959524758` — "bottom" (created first in array)
+- `3458764672959524759` — "top" (created second in array)
+
+`createdAt` для обоих идентичный (`2026-05-23T12:57:38Z`) — Miro assignsне различает microsecond, но id **strictly monotonic** (758 < 759, matches array order).
+
+### G.2 Z-order control endpoints — NONE exposed
+
+Probe results — Miro REST v2 НЕ exposes z-order через REST:
+
+| Attempted | HTTP | Error |
+|---|---|---|
+| `PATCH /shapes/{id}` with `{"position":{"bringToFront":true}}` | 400 | `"Field [position.bringToFront] is not supported"` |
+| `PATCH /shapes/{id}` with `{"zIndex":999}` | 400 | `"Field [zIndex] is not supported"` |
+| `GET /items/{id}` response | n/a | No `zIndex` / `zOrder` field returned |
+
+Item shape (per GET): `{id, type, data, style, geometry, position{x,y,origin,relativeTo}, links, createdAt, createdBy, modifiedAt, modifiedBy}` — z-order entirely absent.
+
+### G.3 Inference
+
+Miro Web UI рендерит items в **creation order** (newer ids on top). Это:
+- Confirmed indirectly через GET `/items` ordering (sorted by `id` ascending).
+- Documented Miro behavior — bulk POST array order = id assignment order = z-order semantics.
+- НЕТ другого endpoint для управления z-order — единственный mechanism это creation sequence.
+
+### G.4 Decision for spec § 8.5
+
+**Array order = creation order = z-order (later = on top).** Pass A1 (frames) BEFORE Pass A2 (children) гарантирует frame rectangles ниже children в z-order. Внутри A1 — **depth-first outer-first** (outer frame создаётся first → ниже) — этого достаточно.
+
+**Fallback PATCH/bringToBack flow НЕ требуется** — endpoint не существует. Если этой стратегии окажется недостаточно в production (frames оказываются поверх children), единственный fallback — **DELETE + re-POST** в правильном порядке (heavyweight, defer как separate task если когда-либо понадобится).
+
+Spec § 8.5 remains valid; § 14 Q8 — **resolved with array-order + creation-order strategy, no PATCH alternative needed (none exists)**.
