@@ -115,6 +115,37 @@ describe("POST /api/schema/create", () => {
     expect(room.meta?.didrawProtocol).toBe("v2");
   });
 
+  test("Mode A: edges + subgraph → arrow shapes + group boundary shapes created", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(app, {
+      label: "Test graph",
+      raw: "graph LR\n  a[A] --> b(B)\n  b --> c[(DB)]\n  subgraph X\n    a\n    b\n  end",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; frameId: string; nodeIds: string[] };
+    expect(body.ok).toBe(true);
+    expect(body.nodeIds.length).toBe(3);
+
+    const room = await rooms.get("schema-test");
+    const allShapes = Object.values(room.store.store).filter((r) => r?.typeName === "shape");
+    const frameChildren = allShapes.filter((r) => r?.parentId === body.frameId);
+
+    const geoShapes = frameChildren.filter((r) => r?.type === "geo");
+    const arrowShapes = frameChildren.filter((r) => r?.type === "arrow");
+
+    // 3 geo nodes + 2 arrows (a→b, b→c) + 1 group boundary = 6 frame children
+    expect(geoShapes.length).toBe(4); // 3 nodes + 1 subgraph boundary
+    expect(arrowShapes.length).toBe(2);
+
+    // Bindings: 2 arrows × 2 bindings = 4 binding records
+    const bindings = Object.values(room.store.store).filter((r) => r?.typeName === "binding");
+    expect(bindings.length).toBe(4);
+
+    // Verify didrawRole is stored on node geo shapes.
+    const nodeGeos = geoShapes.filter((r) => (r?.meta as { didrawId?: unknown })?.didrawId);
+    expect(nodeGeos.every((r) => (r?.meta as { didrawRole?: unknown })?.didrawRole !== undefined)).toBe(true);
+  });
+
   test("Mode A: GET /api/canvas/view после create показывает frame", async () => {
     const { app } = makeApp({ inMemory: true });
     const createRes = await postCreate(app, {

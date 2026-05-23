@@ -144,11 +144,11 @@ describe("DRW-134 storage-only path — AC-11 (closes DRW-127)", () => {
     expect((frameRecord?.meta as { didrawSchemaFrame?: boolean })?.didrawSchemaFrame).toBe(true);
     expect((frameRecord?.meta as { mermaidSource?: string })?.mermaidSource).toContain("API");
 
-    // Children exist in store.
+    // Children exist in store: 2 geo nodes + 1 arrow for the edge.
     const children = Object.values(room.store.store).filter(
       (r) => r?.typeName === "shape" && r.parentId === createBody.frameId,
     );
-    expect(children.length).toBe(2);
+    expect(children.length).toBe(3);
 
     // Step 4: GET /api/canvas/view returns the frame.
     const viewRes = await getCanvasView(app);

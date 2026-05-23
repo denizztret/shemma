@@ -183,6 +183,7 @@ function makeGeoShape(opts: {
       didrawId: opts.nodeId,
       didrawName: opts.nodeId,
       didrawLabel: opts.label,
+      didrawRole: opts.role,
       didrawSchemaParent: opts.parentId,
     },
   } as TLRecord;

@@ -13,6 +13,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { connectionPreset } from "@shemma/domain";
 import type { OverlayEntry, SchemaAction } from "@shemma/domain";
 import type { NodeId } from "@shemma/domain";
 import { Hono } from "hono";
@@ -87,6 +88,137 @@ function frameShapeId(): string {
 
 function childShapeId(): string {
   return `shape:${randHex()}`;
+}
+
+function arrowShapeId(): string {
+  return `shape:${randHex()}`;
+}
+
+function bindingRecordId(): string {
+  return `binding:${randHex()}`;
+}
+
+// ---- Build arrow shape ----
+
+function makeArrowShapeLocal(opts: {
+  id: string;
+  dash: "draw" | "dashed";
+  label: string;
+  meta: Record<string, unknown>;
+  parentId: string;
+}): TLRecord {
+  const richTextVal = opts.label
+    ? {
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text: opts.label }] }],
+      }
+    : { type: "doc", content: [{ type: "paragraph" }] };
+  return {
+    id: opts.id,
+    typeName: "shape",
+    type: "arrow",
+    x: 0,
+    y: 0,
+    parentId: opts.parentId,
+    index: "a1",
+    isLocked: false,
+    opacity: 1,
+    rotation: 0,
+    props: {
+      kind: "arc",
+      color: "black",
+      labelColor: "black",
+      fill: "none",
+      dash: opts.dash,
+      size: "m",
+      arrowheadStart: "none",
+      arrowheadEnd: "arrow",
+      font: "draw",
+      start: { x: 0, y: 0 },
+      end: { x: 0, y: 0 },
+      bend: 0,
+      elbowMidPoint: 0.5,
+      labelPosition: 0.5,
+      scale: 1,
+      richText: richTextVal,
+    },
+    meta: opts.meta,
+  } as TLRecord;
+}
+
+// ---- Build arrow bindings ----
+
+function makeArrowBindingsLocal(
+  arrowId: string,
+  fromShapeId: string,
+  toShapeId: string,
+): { start: TLRecord; end: TLRecord } {
+  const mk = (terminal: "start" | "end", toId: string): TLRecord =>
+    ({
+      id: bindingRecordId(),
+      typeName: "binding",
+      type: "arrow",
+      fromId: arrowId,
+      toId,
+      props: {
+        terminal,
+        normalizedAnchor: { x: 0.5, y: 0.5 },
+        isExact: false,
+        isPrecise: false,
+        snap: "none",
+      },
+      meta: {},
+    }) as TLRecord;
+  return { start: mk("start", fromShapeId), end: mk("end", toShapeId) };
+}
+
+// ---- Build boundary (group) shape for subgraph ----
+
+function makeGroupBoundaryShape(opts: {
+  name: string;
+  parentId: string;
+}): TLRecord {
+  const id = childShapeId();
+  const richTextVal = opts.name
+    ? {
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text: opts.name }] }],
+      }
+    : { type: "doc", content: [{ type: "paragraph" }] };
+  return {
+    id,
+    typeName: "shape",
+    type: "geo",
+    x: 0,
+    y: 0,
+    parentId: opts.parentId,
+    index: "a1",
+    isLocked: false,
+    opacity: 1,
+    rotation: 0,
+    props: {
+      w: 300,
+      h: 200,
+      geo: "rectangle",
+      color: "grey",
+      labelColor: "black",
+      fill: "semi",
+      dash: "dashed",
+      size: "m",
+      font: "draw",
+      align: "middle",
+      verticalAlign: "start",
+      growY: 0,
+      url: "",
+      scale: 1,
+      richText: richTextVal,
+    },
+    meta: {
+      didrawSubgraph: true,
+      didrawSubgraphName: opts.name,
+      didrawSchemaParent: opts.parentId,
+    },
+  } as TLRecord;
 }
 
 // ---- Frame positioning helper ----
@@ -206,6 +338,7 @@ function makeChildShape(opts: {
       didrawId: opts.nodeId,
       didrawName: opts.nodeId,
       didrawLabel: opts.label,
+      didrawRole: opts.role,
       didrawSchemaParent: opts.parentId,
     },
   } as TLRecord;
@@ -401,6 +534,9 @@ export function schemaRoutes(bus: StoreChangeBus) {
       const nodeIds: NodeId[] = [];
       const nodeDefs = extractNodeDefs(parsedActions);
 
+      // nodeId → tldraw shape id map (for arrow binding resolution).
+      const nodeIdToShapeId = new Map<NodeId, string>();
+
       for (const def of nodeDefs) {
         const childShape = makeChildShape({
           nodeId: def.nodeId,
@@ -410,6 +546,41 @@ export function schemaRoutes(bus: StoreChangeBus) {
         });
         batch.added[childShape.id] = childShape;
         nodeIds.push(def.nodeId);
+        nodeIdToShapeId.set(def.nodeId, childShape.id);
+      }
+
+      // Create arrow shapes for each schema-connect action.
+      for (const action of parsedActions) {
+        if (action.kind !== "schema-connect") continue;
+        const fromShapeId = nodeIdToShapeId.get(action.from);
+        const toShapeId = nodeIdToShapeId.get(action.to);
+        if (!fromShapeId || !toShapeId) continue;
+
+        const ck = action.connectionKind ?? "sync";
+        const preset = connectionPreset(ck);
+        const aid = arrowShapeId();
+        const arrow = makeArrowShapeLocal({
+          id: aid,
+          dash: preset.dashed ? "dashed" : "draw",
+          label: action.label ?? preset.defaultLabel ?? "",
+          meta: { connectionKind: ck },
+          parentId: frameId,
+        });
+        const { start, end } = makeArrowBindingsLocal(aid, fromShapeId, toShapeId);
+        batch.added[aid] = arrow;
+        batch.added[start.id] = start;
+        batch.added[end.id] = end;
+      }
+
+      // Create boundary (group) shapes for each schema-group action.
+      for (const action of parsedActions) {
+        if (action.kind !== "schema-group") continue;
+        if (!action.name) continue;
+        const groupShape = makeGroupBoundaryShape({
+          name: action.label ?? action.name,
+          parentId: frameId,
+        });
+        batch.added[groupShape.id] = groupShape;
       }
 
       // Auto-upgrade: set room.meta.didrawProtocol = "v2" if not already v2.
