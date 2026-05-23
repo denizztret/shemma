@@ -422,6 +422,37 @@ describe("runMiroExport — partial commit when Pass A2 fatally aborts", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Task 12: Pass A2 does NOT pass parent.id (DRW-111)
+// ---------------------------------------------------------------------------
+
+describe("runMiroExport — Pass A2 не передаёт parent.id (DRW-111)", () => {
+  it("child of frame in A2: payload has no parent field", async () => {
+    const mock = startMockMiro();
+    try {
+      const room = makeRoomState();
+      const store = room.store.store as Record<string, RawShape>;
+      store["shape:F"] = frameShape("shape:F", 0, 0, 200, 200, "Frame");
+      store["shape:S1"] = { ...geoShape("shape:S1", 50, 50, 50, 50), parentId: "shape:F" };
+
+      const client = new MiroClient({ token: "t", baseUrl: mock.url });
+      await runMiroExport({
+        client, room, boardId: "B1",
+        selection: ["shape:F", "shape:S1"],
+      });
+
+      const bulkCalls = mock.requests.filter((r) => r.path.endsWith("/items/bulk"));
+      expect(bulkCalls).toHaveLength(2); // A1 (frame) + A2 (child)
+
+      const a2Body = bulkCalls[1].body as Array<{ parent?: unknown }>;
+      expect(a2Body).toHaveLength(1);
+      expect(a2Body[0].parent).toBeUndefined();
+    } finally {
+      mock.stop();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Task 11: framesInDepthFirstOrder (DRW-111)
 // ---------------------------------------------------------------------------
 

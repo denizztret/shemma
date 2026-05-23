@@ -251,24 +251,9 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
         const pos = miroPos(id);
         if (!s || !pos) return null;
 
-        const parentMiroId = s.parentId && frameMap.has(s.parentId)
-          ? frameMap.get(s.parentId)
-          : undefined;
-        let miroX = pos.x;
-        let miroY = pos.y;
-        if (parentMiroId && s.parentId) {
-          // Miro: child position is `relativeTo: "parent_top_left"`. We compute
-          // child page-center − parent page-top-left = child offset inside frame.
-          const parentBounds = bounds(s.parentId);
-          if (parentBounds) {
-            miroX = (pos.x + centroid.x) - parentBounds.x;
-            miroY = (pos.y + centroid.y) - parentBounds.y;
-          }
-        }
-        const ctx = {
-          miroX, miroY,
-          parentMiroId,
-        };
+        // Frame-as-shape mode: resolvePageBounds already returns absolute page
+        // coordinates, so no parent-relative offset math is needed.
+        const ctx = { miroX: pos.x, miroY: pos.y };
         let item: MiroBulkItem;
         if (s.type === "note") item = buildStickyNotePayload(s, ctx);
         else if (s.type === "text") item = buildTextPayload(s, ctx);
