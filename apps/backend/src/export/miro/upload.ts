@@ -4,7 +4,7 @@ import {
   type ArrowEndpoints,
   buildArrowEndpointsIndex,
   buildConnectorPayload,
-  buildFramePayload,
+  buildShapeForFrame,
   buildShapePayload,
   buildStickyNotePayload,
   buildTextPayload,
@@ -133,6 +133,30 @@ function expandImplicitArrows(
   return Array.from(set);
 }
 
+/**
+ * Sort frames outer-first → inner-last (by parent depth).
+ * Frames whose parentId is not in the set are treated as roots (depth 0).
+ * Ensures Miro receives parent frames before their child frames in bulk create.
+ */
+export function framesInDepthFirstOrder<T extends { id: string; parentId?: string }>(
+  frames: T[],
+): T[] {
+  const byId = new Map(frames.map(f => [f.id, f]));
+  const depth = (f: T): number => {
+    let d = 0;
+    let cur: T | undefined = f;
+    const seen = new Set<string>();
+    while (cur?.parentId && byId.has(cur.parentId)) {
+      if (seen.has(cur.id)) break; // cycle guard
+      seen.add(cur.id);
+      d++;
+      cur = byId.get(cur.parentId);
+    }
+    return d;
+  };
+  return [...frames].sort((a, b) => depth(a) - depth(b));
+}
+
 export async function runMiroExport(p: RunExportParams): Promise<RunExportResult> {
   const skipped: SkippedItem[] = [];
   const store = p.room.store.store as Record<string, RawShape>;
@@ -179,15 +203,16 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
   let runError: string | undefined;
 
   if (frames.length > 0) {
-    const payload: Array<{ id: string; item: MiroBulkItem }> = frames
+    const orderedFrameIds = framesInDepthFirstOrder(
+      frames.map(id => ({ id, parentId: store[id]?.parentId as string | undefined })),
+    ).map(f => f.id);
+
+    const payload: Array<{ id: string; item: MiroBulkItem }> = orderedFrameIds
       .map((id) => {
         const s = store[id];
         const pos = miroPos(id);
         if (!s || !pos) return null;
-        const item = buildFramePayload(s, {
-          miroX: pos.x,
-          miroY: pos.y,
-        });
+        const item = buildShapeForFrame(s, { miroX: pos.x, miroY: pos.y });
         item.geometry = { width: pos.w, height: pos.h };
         return { id, item };
       })

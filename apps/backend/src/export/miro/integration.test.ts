@@ -187,10 +187,12 @@ describe("E2E backend: full export — 5 shapes + 3 connectors + 1 frame", () =>
     const conns = miroServer.requests.filter((r) => r.path.endsWith("/connectors"));
     expect(bulks).toHaveLength(2);
     expect(conns).toHaveLength(3);
-    const a1Items = bulks[0].body as Array<{ type: string }>;
-    expect(a1Items.every((it) => it.type === "frame")).toBe(true);
-    const a2Items = bulks[1].body as Array<{ type: string; parent?: { id: string } }>;
-    expect(a2Items.some((it) => it.parent?.id !== undefined)).toBe(true);
+    const a1Items = bulks[0].body as Array<{ type: string; data?: { shape?: string } }>;
+    // Frames are now exported as rectangle shapes (frame-as-shape mode)
+    expect(a1Items.every((it) => it.type === "shape")).toBe(true);
+    expect(a1Items.every((it) => it.data?.shape === "rectangle")).toBe(true);
+    const a2Items = bulks[1].body as Array<{ type: string }>;
+    expect(a2Items.every((it) => it.type !== "frame")).toBe(true);
 
     // Tracking written to room.meta.miroExports
     expect(room.meta?.miroExports?.["B1"]).toBeDefined();

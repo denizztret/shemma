@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { makeRoomState } from "../../rooms";
 import { MiroClient } from "./client";
-import { runMiroExport } from "./upload";
+import { framesInDepthFirstOrder, runMiroExport } from "./upload";
 import type { RawShape } from "./coords";
 
 /**
@@ -102,7 +102,7 @@ describe("runMiroExport — happy path (5 shapes + 3 connectors, no frame)", () 
 });
 
 describe("runMiroExport — Pass A1 / A2 split with frame + children", () => {
-  it("creates frame in A1, children in A2 with parent.id", async () => {
+  it("creates frame-as-shape in A1, children in A2", async () => {
     const mock = startMockMiro();
     try {
       const room = makeRoomState();
@@ -118,15 +118,16 @@ describe("runMiroExport — Pass A1 / A2 split with frame + children", () => {
       });
 
       const bulkCalls = mock.requests.filter((r) => r.path.endsWith("/items/bulk"));
-      expect(bulkCalls).toHaveLength(2); // A1 (frame) + A2 (children)
+      expect(bulkCalls).toHaveLength(2); // A1 (frame-as-shape) + A2 (children)
 
-      const a1Body = bulkCalls[0].body as Array<{ type: string }>;
-      expect(a1Body.every((it) => it.type === "frame")).toBe(true);
-      const a2Body = bulkCalls[1].body as Array<{ type: string; parent?: { id: string } }>;
+      const a1Body = bulkCalls[0].body as Array<{ type: string; data?: { shape?: string } }>;
+      // Frame is now exported as a rectangle shape, not a Miro frame widget
+      expect(a1Body.every((it) => it.type === "shape")).toBe(true);
+      expect(a1Body.every((it) => it.data?.shape === "rectangle")).toBe(true);
+      const a2Body = bulkCalls[1].body as Array<{ type: string }>;
       expect(a2Body.every((it) => it.type !== "frame")).toBe(true);
-      expect(a2Body.every((it) => it.parent?.id !== undefined)).toBe(true);
 
-      expect(result.itemsCreated).toBe(3); // 1 frame + 2 children
+      expect(result.itemsCreated).toBe(3); // 1 frame-as-shape + 2 children
     } finally {
       mock.stop();
     }
@@ -417,5 +418,30 @@ describe("runMiroExport — partial commit when Pass A2 fatally aborts", () => {
     } finally {
       server.stop(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 11: framesInDepthFirstOrder (DRW-111)
+// ---------------------------------------------------------------------------
+
+describe("framesInDepthFirstOrder (DRW-111)", () => {
+  it("returns frames outer-first → inner-last by parent depth", () => {
+    const frames = [
+      { id: "F2", parentId: "F1" },
+      { id: "F1", parentId: undefined },
+      { id: "F3", parentId: "F2" },
+    ];
+    const ordered = framesInDepthFirstOrder(frames);
+    expect(ordered.map(f => f.id)).toEqual(["F1", "F2", "F3"]);
+  });
+
+  it("frames with parents outside set are treated as roots", () => {
+    const frames = [
+      { id: "F1", parentId: "page:p1" },  // page parent → depth 0
+      { id: "F2", parentId: "F1" },
+    ];
+    const ordered = framesInDepthFirstOrder(frames);
+    expect(ordered.map(f => f.id)).toEqual(["F1", "F2"]);
   });
 });
