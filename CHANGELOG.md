@@ -2,6 +2,15 @@
 
 PATCH-уровневые фиксы поверх 0.23.1; накапливаются на `main` без per-task release commits ([[feedback-batch-release-cluster]]).
 
+### DRW-137 — WS truncated recovery loop без cap
+
+После двух последовательных `truncated` frame'ов frontend сдавался (`onTruncated` второго уровня просто логировал «giving up»), WS оставался `stopped`, и любые user-change (новые shapes) уже не отправлялись в backend. На v2 schema-frame rooms drag существующих shape'ов продолжал работать через overlay POST (HTTP), создавая иллюзию нормального persist; новые shapes тихо терялись при reload.
+
+- **Новый модуль** `apps/frontend/src/transport/sync-recovery.ts`: pure helper `computeTruncatedBackoff(retryNumber)` с экспоненциальным backoff (0/1s/2s/4s/8s/16s/30s cap). 11 unit tests.
+- **Refactor `onTruncated`** в `apps/frontend/src/App.tsx`: extract'нут `attachStoreSync(initialVersion, retryNumber)`, `onTruncated` теперь recursive — fetch fresh state → reattach syncer → increment retry; defensive try/catch reschedule'ит на longer backoff при сбое fetch. Indefinite retry, пока `active` flag в useEffect не сброшен.
+- **Cleanup safety**: `truncatedRecoveryTimer` cancel'ится в useEffect cleanup, чтобы recovery не дёргалось после room switch / unmount.
+- Real-board reproducibility: при daemon restart / version-gap WS теперь самостоятельно reseed'ится; user shape creates снова дореходят до backend.
+
 ### DRW-136 — role picker UX/functional fixes
 
 1. **PromptInput overlap с picker** (App.tsx ⌘K handler): handler не проверял `shiftKey`, поэтому ⌘+Shift+K (picker hotkey) одновременно toggle'ил PromptInput. Добавлен `!e.shiftKey` guard.
