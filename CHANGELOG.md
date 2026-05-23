@@ -1,4 +1,6 @@
-## Unreleased
+## 0.23.1 — 2026-05-23 — DRW-127 follow-up: `shemma_import_mermaid` mode param
+
+PATCH release closing the «Known gap» from 0.23.0. Additive MCP param, default `browser` preserves backward compat for all existing callers.
 
 ### DRW-127 follow-up: shemma_import_mermaid mode param
 
