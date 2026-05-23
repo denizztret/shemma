@@ -1,3 +1,6 @@
+import { generateNodeId, slugify } from "@shemma/domain";
+import type { NodeId, SchemaCreateResponse } from "@shemma/domain";
+import { LEGACY_SPACE_ID } from "../transport/api";
 import {
   type Editor,
   type TLShape,
@@ -14,7 +17,10 @@ export type BoundsLike = { x: number; y: number; w: number; h: number };
  * inside, slack=0). Используется чтобы skip auto-zoom после Tidy, когда
  * affected shapes уже видны в текущем viewport.
  */
-export function isBoundsContained(inner: BoundsLike, outer: BoundsLike): boolean {
+export function isBoundsContained(
+  inner: BoundsLike,
+  outer: BoundsLike,
+): boolean {
   return (
     inner.x >= outer.x &&
     inner.y >= outer.y &&
@@ -28,7 +34,10 @@ export function isBoundsContained(inner: BoundsLike, outer: BoundsLike): boolean
  * Iterates `editor.getShapePageBounds(id)` and unions all results.
  * Returns null if shapeIds is empty or no shape has bounds.
  */
-export function unionBoundsOf(editor: Editor, shapeIds: TLShapeId[]): BoundsLike | null {
+export function unionBoundsOf(
+  editor: Editor,
+  shapeIds: TLShapeId[],
+): BoundsLike | null {
   if (shapeIds.length === 0) return null;
   let minX = Infinity;
   let minY = Infinity;
@@ -48,11 +57,71 @@ export function unionBoundsOf(editor: Editor, shapeIds: TLShapeId[]): BoundsLike
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
 
-// Phase 3.0: mermaid import пишет shapes напрямую в tldraw store через
-// createMermaidDiagram(editor, source). Эти мутации идут как source:'user' →
-// startStoreSync (transport/ws.ts) автоматически шлёт их батчем в backend.
-// Нет промежуточного "build ops → sendPatch" — store сам и есть транспортный
-// слой.
+// ---------------------------------------------------------------------------
+// DRW-134 Task 2.6: v2 protocol — POST /api/schema/create path
+// ---------------------------------------------------------------------------
+
+// slugify re-exported from @shemma/domain (replaces local copy).
+export { slugify };
+
+/**
+ * DRW-134 Task 2.6: HTTP request к backend `POST /api/schema/create`.
+ * Auto-upgrade flow: backend создаёт frame + child shapes в v2 room;
+ * реальные tldraw records приходят через WS broadcast.
+ *
+ * Принимает `space` и `room` из текущего window.location (или overrides
+ * через `opts`). Frontend не пишет shapes напрямую в store.
+ *
+ * @returns response body из backend (`{ok, frameId, nodeIds, version}`)
+ * @throws Error если backend вернул non-2xx или `{ok:false}`
+ */
+export async function createSchemaViaBackend(opts: {
+  label: string;
+  raw: string;
+  space?: string;
+  room?: string;
+}): Promise<SchemaCreateResponse> {
+  const space =
+    opts.space ??
+    (typeof location !== "undefined"
+      ? (new URLSearchParams(location.search).get("space") ?? LEGACY_SPACE_ID)
+      : LEGACY_SPACE_ID);
+  const room =
+    opts.room ??
+    (typeof location !== "undefined"
+      ? (new URLSearchParams(location.search).get("room") ?? "default")
+      : "default");
+
+  const qs = new URLSearchParams({ space, room }).toString();
+  const r = await fetch(`/api/schema/create?${qs}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ label: opts.label, raw: opts.raw }),
+  });
+
+  if (!r.ok) {
+    let msg = `POST /api/schema/create failed: ${r.status}`;
+    try {
+      const body = (await r.json()) as { error?: string };
+      if (body.error) msg = body.error;
+    } catch {
+      // ignore parse failure
+    }
+    throw new Error(msg);
+  }
+
+  const body = (await r.json()) as SchemaCreateResponse;
+  if (!body.ok) {
+    throw new Error(
+      `schema/create error: ${JSON.stringify((body as { errors?: unknown }).errors)}`,
+    );
+  }
+  return body;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy path helpers (v1 fallback — used when backend endpoint is unavailable)
+// ---------------------------------------------------------------------------
 
 // Lazy-load @tldraw/mermaid — pulls in mermaid + heavy deps; only paid когда
 // пользователь реально импортирует.
@@ -68,41 +137,136 @@ function plaintextLabel(editor: Editor, s: TLShape): string | undefined {
   return text || undefined;
 }
 
-/** Slugify shape label / type into a stable didrawName candidate. Same idea как
- * у backend identifiers: lowercase, dash-separated, ascii-safe.
- * Без коллизий: caller (importMermaid) дописывает индекс при дубликате. */
-function slugify(s: string): string {
-  return (
-    s
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 40) || "shape"
-  );
+/**
+ * DRW-134 Task 2.6: Heuristic — is this tldraw `group` shape a cosmetic wrapper?
+ *
+ * Cosmetic groups are intermediate wrappers emitted by `createMermaidDiagram`
+ * that carry no semantic meaning (no `meta.role`, no `meta.didrawName` / `didrawId`).
+ * Boundary groups (from subgraph blocks) have `meta.role === "boundary"`.
+ *
+ * Rule: cosmetic iff:
+ *   - shape.type === "group"
+ *   - meta.role is absent or not "boundary"
+ *   - meta.didrawId is absent
+ *   - meta.didrawName is absent (was never assigned by legacy importer)
+ *
+ * False-negative (keeping a boundary group as group) is safer than
+ * false-positive (unwittingly ungrouping a semantic subgraph).
+ */
+export function isCosmeticGroup(shape: TLShape): boolean {
+  if (shape.type !== "group") return false;
+  // biome-ignore lint/suspicious/noExplicitAny: tldraw meta is untyped
+  const m = (shape as any).meta as Record<string, unknown> | undefined;
+  if (!m) return true; // no meta at all → cosmetic
+  if (m.role === "boundary") return false; // semantic boundary group
+  if (m.didrawId !== undefined) return false; // already assigned v2 identity
+  if (m.didrawName !== undefined) return false; // assigned legacy identity
+  return true;
 }
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 
 export type MermaidImportResult = {
   ok: true;
+  /** v2 path: backend-assigned frameId. v1 path: first root frame id or empty. */
+  frameId?: string;
+  /** v2 path: backend-assigned nodeIds. v1 path: empty. */
+  nodeIds?: NodeId[];
   shapeIds: TLShapeId[];
   /** Subset of shapeIds где сохранён meta.mermaidSource (root frame'ы импорта). */
   sourceTargetIds: TLShapeId[];
 };
 
 /**
- * Импортировать Mermaid diagram в editor store. createMermaidDiagram мутирует
- * store напрямую (добавляет shapes / arrow bindings); мы лишь:
- *   1) запоминаем set'ы до/после, чтобы знать какие записи добавлены;
- *   2) проставляем meta.didrawName на новых shapes (через updateShapes) —
- *      backend rebuild'ит didrawIndex из этих имён;
- *   3) сохраняем meta.mermaidSource на root frame'ах (или, если frame'а нет,
- *      на всех новых root shapes) — foundation для future edit UI (DRW-053);
- *   4) даём caller'у список новых shape id (для zoom-to / debug).
+ * DRW-134 Task 2.6: Импортировать Mermaid diagram в editor.
  *
- * Сами WS-фреймы шлёт startStoreSync — ничего вручную здесь не нужно.
+ * **v2 path (default):** вызывает `POST /api/schema/create` с raw mermaid source.
+ * Backend создаёт schema-frame (v2 protocol), auto-upgrade room в v2, возвращает
+ * `{frameId, nodeIds}`. Реальные tldraw records приходят через WS broadcast.
+ * Frontend shapes напрямую НЕ пишутся. Возвращает `{ok:true, frameId, nodeIds,
+ * shapeIds:[], sourceTargetIds:[]}` — caller зум'ит по frameId после WS settle.
  *
- * Throws MermaidDiagramError на невалидный source.
+ * **v1 fallback path (когда `opts.forceV1 === true` или endpoint 404/503):**
+ * Старый flow через `createMermaidDiagram` + local shape writes:
+ *   1) записываем shape'ы локально (meta.didrawName + identity v2-fields);
+ *   2) auto-ungroup cosmetic tldraw group wrappers (если есть);
+ *   3) frame получает `meta.didrawSchemaFrame=true` + v2 marker fields.
+ * WS-фреймы шлёт startStoreSync автоматически.
+ *
+ * Throws на невалидный source.
  */
 export async function importMermaid(
+  editor: Editor,
+  source: string,
+  opts: {
+    /** label для schema-frame. Default — первая непустая строка source или "Imported diagram". */
+    label?: string;
+    /** Пространство для backend call. Default из location.search. */
+    space?: string;
+    /** Room для backend call. Default из location.search. */
+    room?: string;
+    /** Принудительно использовать legacy v1 path. */
+    forceV1?: boolean;
+  } = {},
+): Promise<MermaidImportResult> {
+  // Derive label from first meaningful line of source (e.g. "graph LR" → skip; look for text)
+  const _inferredLabel =
+    source
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(
+        (l) => l && !l.startsWith("graph ") && !l.startsWith("flowchart "),
+      )
+      .at(0)
+      ?.replace(/^subgraph\s+\S*\s*\[?([^\]]*)\]?/, "$1")
+      .trim() || "Imported diagram";
+  const label = opts.label ?? _inferredLabel;
+
+  if (!opts.forceV1) {
+    try {
+      const resp = await createSchemaViaBackend({
+        label,
+        raw: source,
+        space: opts.space,
+        room: opts.room,
+      });
+      // v2 path — shapes arrive via WS; return immediately with backend IDs.
+      return {
+        ok: true,
+        frameId: (resp as { ok: true; frameId: string }).frameId,
+        nodeIds: (resp as { ok: true; nodeIds: NodeId[] }).nodeIds,
+        shapeIds: [],
+        sourceTargetIds: [],
+      };
+    } catch (err) {
+      // Fallback to v1 if backend unavailable (e.g. 404 before Task 2.5 shipped).
+      // Log but don't rethrow — legacy path below.
+      console.warn(
+        "[mermaid-import] v2 backend call failed, falling back to v1 path:",
+        err,
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // v1 legacy path (fallback / forceV1)
+  // ---------------------------------------------------------------------------
+  return importMermaidLegacy(editor, source);
+}
+
+/**
+ * Legacy v1 import path: createMermaidDiagram + local shape writes.
+ * Kept for fallback and test compatibility. Internal; not exported from module
+ * index, but exported here for direct test injection via mocking.
+ *
+ * DRW-134 Task 2.6 auto-ungroup: after createMermaidDiagram, any cosmetic
+ * tldraw `group` shape that wraps frame children is detected and dissolved —
+ * its children are re-parented directly to the frame, and the group is deleted.
+ * Boundary groups (`meta.role === "boundary"`) are preserved.
+ */
+export async function importMermaidLegacy(
   editor: Editor,
   source: string,
 ): Promise<MermaidImportResult> {
@@ -114,10 +278,7 @@ export async function importMermaid(
     editor.getCurrentPageShapes().map((s) => s.id as unknown as string),
   );
 
-  // DRW-093: source passes through as-is. `@tldraw/mermaid@5.0.0` does NOT call
-  // `mermaid.registerLayoutLoaders` and `@mermaid-js/layout-elk` is not bundled,
-  // so any `config: layout: elk` frontmatter silently degrades to DAGRE. Use
-  // `shemma_layout` / `shemma_layout_selection` after import for ELK output.
+  // DRW-093: source passes through as-is.
   await mermaidMod.createMermaidDiagram(editor, source);
 
   const after = editor.getCurrentPageShapes();
@@ -129,28 +290,17 @@ export async function importMermaid(
     throw new Error("mermaid produced no shapes");
   }
 
-  // Определяем root shape'ы среди новых: те, чей parentId — page (а не другой
-  // shape). Это либо single frame/group-обёртка (типичный случай), либо набор
-  // top-level фигур (на flat-диаграммах без group). meta.mermaidSource ставим
-  // на root'ы — для edit UI важно знать "от какого узла этот импорт".
   const pageId = editor.getCurrentPageId() as unknown as string;
   // biome-ignore lint/suspicious/noExplicitAny: tldraw shape parentId not typed publicly
   const isRoot = (s: TLShape) => (s as any).parentId === pageId;
-  // Если есть frame'ы среди roots — предпочитаем их (контейнер импорта).
-  // Иначе — все root shape'ы.
   const rootFrames = newShapes.filter((s) => isRoot(s) && s.type === "frame");
-  const sourceTargets = rootFrames.length > 0 ? rootFrames : newShapes.filter(isRoot);
+  const sourceTargets =
+    rootFrames.length > 0 ? rootFrames : newShapes.filter(isRoot);
   const sourceTargetIds = new Set<string>(
     sourceTargets.map((s) => s.id as unknown as string),
   );
-  // Безопасно: даже если нет ни одного root (createMermaidDiagram странно
-  // переподцепил всё к чему-то pre-existing), не запишем mermaidSource нигде —
-  // и это лучше, чем дублировать его на все 50 child-нод.
 
-  // DRW-084 hotfix: detect geo container shapes (subgraphs) by heuristic.
-  // A geo shape is a container if at least one new shape has parentId === this shape's id.
-  // Such shapes get meta.role = "boundary" so that domain context.ts exposes them
-  // as type:"group", role:"boundary". Frame shapes retain same logic for backward compat.
+  // DRW-084: detect geo container shapes (subgraphs) — get role="boundary".
   const newShapeIds = new Set<string>(
     newShapes.map((s) => s.id as unknown as string),
   );
@@ -158,39 +308,109 @@ export async function importMermaid(
     if (s.type !== "geo") return false;
     return newShapes.some(
       // biome-ignore lint/suspicious/noExplicitAny: tldraw shape parentId not typed publicly
-      (c) => (c as any).parentId === s.id && newShapeIds.has(c.id as unknown as string),
+      (c) =>
+        (c as any).parentId === s.id &&
+        newShapeIds.has(c.id as unknown as string),
     );
   };
 
-  // Назначим meta.didrawName для добавленных shapes. Берём label / shape.type,
-  // дедуплицируем суффиксами -2, -3, … per-import. Параллельно — meta.mermaidSource
-  // на root frame'ах.
-  const usedNames = new Set<string>();
+  // DRW-134 Task 2.6: auto-ungroup cosmetic tldraw `group` shapes.
+  // After createMermaidDiagram, detect root groups that are cosmetic wrappers
+  // (no semantic meta). Re-parent their children to the frame / page, then delete.
+  const cosmeticGroups = newShapes.filter(isCosmeticGroup);
+  if (cosmeticGroups.length > 0) {
+    for (const group of cosmeticGroups) {
+      // biome-ignore lint/suspicious/noExplicitAny: tldraw parentId not typed publicly
+      const groupId = group.id as unknown as string;
+      // Find parent of this group to re-parent children to it.
+      // biome-ignore lint/suspicious/noExplicitAny: tldraw parentId not typed publicly
+      const groupParentId = (group as any).parentId as string;
+      // Find children of this cosmetic group among new shapes.
+      const children = newShapes.filter(
+        // biome-ignore lint/suspicious/noExplicitAny: tldraw parentId not typed publicly
+        (c) =>
+          (c as any).parentId === groupId &&
+          newShapeIds.has(c.id as unknown as string),
+      );
+      if (children.length > 0) {
+        // Re-parent children to the group's parent (frame or page).
+        // biome-ignore lint/suspicious/noExplicitAny: tldraw updateShapes accepts partial shape types
+        // biome-ignore lint/suspicious/noExplicitAny: tldraw updateShapes accepts partial shape
+        const reparentUpdates: any[] = children.map((c) => ({
+          id: c.id,
+          type: c.type,
+          parentId: groupParentId,
+          meta: { ...c.meta },
+        }));
+        editor.updateShapes(reparentUpdates);
+      }
+      // Delete the cosmetic group shape.
+      // biome-ignore lint/suspicious/noExplicitAny: editor.deleteShape not typed publicly
+      (editor as any).deleteShape?.(group.id);
+    }
+    // Re-read shapes after group dissolution.
+    const afterUngroup = editor.getCurrentPageShapes();
+    newShapes.length = 0;
+    for (const s of afterUngroup) {
+      if (!beforeIds.has(s.id as unknown as string)) {
+        newShapes.push(s);
+      }
+    }
+  }
+
+  // DRW-134 Task 2.6: Assign v2 identity fields (didrawId, didrawLabel) in addition
+  // to legacy didrawName for backward compat. Use slugify from @shemma/domain.
+  const usedIds = new Set<NodeId>();
   // biome-ignore lint/suspicious/noExplicitAny: tldraw partial update types verbose; safe by id+type
   const updates: any[] = [];
   for (const s of newShapes) {
-    const base =
+    const labelText =
       s.type === "arrow"
-        ? `edge-${slugify(plaintextLabel(editor, s) ?? "arrow")}`
-        : slugify(plaintextLabel(editor, s) ?? s.type);
-    let candidate = base;
-    let n = 2;
-    while (usedNames.has(candidate)) {
-      candidate = `${base}-${n++}`;
-    }
-    usedNames.add(candidate);
+        ? (plaintextLabel(editor, s) ?? "arrow")
+        : (plaintextLabel(editor, s) ?? s.type);
+    const slug = labelText ? slugify(labelText) : "";
+    const nodeId = generateNodeId({ slug, existingIds: usedIds });
+    usedIds.add(nodeId);
+
     const meta: Record<string, unknown> = {
       ...s.meta,
-      didrawName: candidate,
+      // v2 fields (DRW-134):
+      didrawId: nodeId,
+      didrawLabel: labelText,
+      // Legacy field (backward compat — v1 consumers still read didrawName):
+      didrawName: nodeId,
     };
-    // DRW-084 hotfix: geo containers (subgraphs) detected by heuristic get role="boundary".
-    // Also handles legacy frame shapes for backward compatibility.
+
+    // DRW-084: geo containers (subgraphs) + legacy frame shapes → role="boundary".
     if (isContainer(s) || s.type === "frame") {
       meta.role = "boundary";
     }
+
     if (sourceTargetIds.has(s.id as unknown as string)) {
       meta.mermaidSource = source;
+      // DRW-134 Task 2.6: mark frame as schema-frame with v2 protocol fields.
+      if (s.type === "frame") {
+        meta.didrawSchemaFrame = true;
+        meta.didrawProtocol = "v2";
+        meta.schemaProtocolVersion = "1.0";
+        meta.didrawOverlays = {};
+      }
     }
+
+    // didrawSchemaParent on children — set to the first source frame's id.
+    const firstFrameId = Array.from(sourceTargetIds)[0];
+    if (
+      firstFrameId &&
+      !sourceTargetIds.has(s.id as unknown as string) &&
+      s.type !== "arrow"
+    ) {
+      // biome-ignore lint/suspicious/noExplicitAny: parentId not typed publicly
+      const parentId = (s as any).parentId as string;
+      if (parentId && parentId !== pageId) {
+        meta.didrawSchemaParent = parentId;
+      }
+    }
+
     updates.push({
       id: s.id,
       type: s.type,
@@ -207,4 +427,3 @@ export async function importMermaid(
     sourceTargetIds: Array.from(sourceTargetIds) as unknown as TLShapeId[],
   };
 }
-
