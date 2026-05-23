@@ -149,4 +149,13 @@ export class MiroClient {
       payload,
     );
   }
+
+  async createGroup(boardId: string, itemIds: string[]): Promise<{ id: string }> {
+    const encoded = this.encodeBoardId(boardId);
+    return this.request<{ id: string }>(
+      "POST",
+      `/v2/boards/${encoded}/groups`,
+      { data: { items: itemIds } },
+    );
+  }
 }
