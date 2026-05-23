@@ -118,10 +118,17 @@ export function buildTextPayload(shape: RawShape, ctx: BuilderCtx): MiroBulkItem
   const props = shape.props ?? {};
   const w = (props.w as number | undefined) ?? 100;
   const content = pickRichText(props);
+  const colorHex = tldrawNamedToHex(props.color as string | undefined);
+  const textAlign = (props.textAlign as string | undefined) ?? "middle";
   return applyPositionAndParent({
     type: "text",
     data: { content },
-    style: {},
+    style: {
+      color: colorHex,
+      fontFamily: tldrawFontToFamily(props.font as string | undefined),
+      fontSize: tldrawSizeToFontSize(props.size as string | undefined),
+      textAlign: TEXT_ALIGN[textAlign] ?? "center",
+    },
     geometry: { width: w },
   }, ctx);
 }
