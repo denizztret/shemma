@@ -746,3 +746,133 @@ describe("importMermaid — v2 backend path (DRW-134 Task 2.6)", () => {
     }
   });
 });
+
+// --- DRW-141: inferMermaidLabel — frame name derivation ----------------------
+
+describe("inferMermaidLabel (DRW-141)", () => {
+  test("falls back to \"Imported schema\" for bare flowchart with bracketed nodes", async () => {
+    const { inferMermaidLabel } = await import("./mermaid-import");
+    // Pre-fix this yielded "x[Browser X]" — the leaked raw mermaid identifier.
+    expect(
+      inferMermaidLabel("graph TD\n  x[Browser X]\n  y[Browser Y]\n  x --> y"),
+    ).toBe("Browser X");
+  });
+
+  test("returns \"Imported schema\" for graph header with no labelled nodes", async () => {
+    const { inferMermaidLabel } = await import("./mermaid-import");
+    expect(inferMermaidLabel("graph LR\nA-->B")).toBe("Imported schema");
+  });
+
+  test("%% comment wins over node label", async () => {
+    const { inferMermaidLabel } = await import("./mermaid-import");
+    expect(
+      inferMermaidLabel("graph TD\n%% My Diagram\n  x[Node] --> y[Other]"),
+    ).toBe("My Diagram");
+  });
+
+  test("quoted graph title is used as label", async () => {
+    const { inferMermaidLabel } = await import("./mermaid-import");
+    expect(inferMermaidLabel('graph LR "Architecture"\nA-->B')).toBe(
+      "Architecture",
+    );
+    expect(inferMermaidLabel('flowchart TB "Pipelines"\nA-->B')).toBe(
+      "Pipelines",
+    );
+  });
+
+  test("subgraph display label is preferred over first node", async () => {
+    const { inferMermaidLabel } = await import("./mermaid-import");
+    expect(
+      inferMermaidLabel(
+        "graph TD\nsubgraph backend [Backend Services]\n  api[API] --> db[Database]\nend",
+      ),
+    ).toBe("Backend Services");
+  });
+
+  test("returns first node label when no header metadata present", async () => {
+    const { inferMermaidLabel } = await import("./mermaid-import");
+    expect(inferMermaidLabel("api[API Gateway]\ndb[(Postgres)]")).toBe(
+      "API Gateway",
+    );
+  });
+
+  test("empty source → fallback", async () => {
+    const { inferMermaidLabel } = await import("./mermaid-import");
+    expect(inferMermaidLabel("")).toBe("Imported schema");
+  });
+
+  test("opts.label override beats inference (v2 backend path)", async () => {
+    const PAGE = "page:page";
+    const editor = makeFakeEditor(PAGE);
+
+    const originalFetch = globalThis.fetch;
+    let captured: { label?: string } = {};
+    globalThis.fetch = (async (
+      _url: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      captured = init?.body
+        ? (JSON.parse(String(init.body)) as { label?: string })
+        : {};
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          frameId: "shape:f_x",
+          nodeIds: [],
+          version: 1,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const { importMermaid } = await import("./mermaid-import");
+      await importMermaid(editor as never, "graph TD\n  x[Browser X]", {
+        space: "__test__",
+        room: "r1",
+        label: "Explicit Title",
+      });
+      expect(captured.label).toBe("Explicit Title");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("v2 backend path receives inferred label, not raw identifier", async () => {
+    const PAGE = "page:page";
+    const editor = makeFakeEditor(PAGE);
+
+    const originalFetch = globalThis.fetch;
+    let captured: { label?: string } = {};
+    globalThis.fetch = (async (
+      _url: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      captured = init?.body
+        ? (JSON.parse(String(init.body)) as { label?: string })
+        : {};
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          frameId: "shape:f_x",
+          nodeIds: ["browser_x-aaaaaa"],
+          version: 1,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const { importMermaid } = await import("./mermaid-import");
+      await importMermaid(
+        editor as never,
+        "graph TD\n  x[Browser X]\n  y[Browser Y]\n  x --> y",
+        { space: "__test__", room: "r1" },
+      );
+      // Pre-fix this was "x[Browser X]" (leaked identifier line).
+      expect(captured.label).toBe("Browser X");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

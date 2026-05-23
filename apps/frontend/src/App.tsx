@@ -340,6 +340,37 @@ export function App({
       focus: "new" | "fit-all" | "none" = "new",
     ) => {
       const result = await importMermaid(editor, source);
+
+      // DRW-141: v2 path returns {frameId, nodeIds, shapeIds:[]} because the
+      // backend writes shapes server-side and WS broadcasts them; the editor
+      // store may not yet contain those records when we reply. Surface the
+      // backend-assigned identifiers so AI gets a non-empty response and can
+      // chain follow-up tool calls (shemma_connect / shemma_patch_schema).
+      const isV2 = result.frameId !== undefined;
+      if (isV2) {
+        const nodeIds = (result.nodeIds ?? []) as unknown as string[];
+        // v2: animate to the new frame via fit-all if it's already loaded (WS
+        // broadcast might race the reply). Skip per-shape bounds — tldraw IDs
+        // aren't known to us in this branch.
+        if (
+          focus !== "none" &&
+          !userHasManuallyPanned.current &&
+          (focus === "fit-all" || result.frameId)
+        ) {
+          inProgrammaticCameraOp.current = true;
+          editor.zoomToFit({ animation: { duration: 200 } });
+          setTimeout(() => {
+            inProgrammaticCameraOp.current = false;
+          }, 300);
+        }
+        return {
+          ok: result.ok,
+          shapeIds: nodeIds,
+          didrawNames: nodeIds,
+          rootIds: result.frameId ? [result.frameId as unknown as string] : [],
+        };
+      }
+
       const didrawNames = result.shapeIds.map((id) => {
         const shape = editor.getShape(id);
         const name = (shape?.meta as Record<string, unknown> | undefined)?.didrawName;
