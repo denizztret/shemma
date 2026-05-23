@@ -642,6 +642,79 @@ describe("Pass C — group widget (DRW-111)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Task 17: expandImplicitArrows produces styled connectors (DRW-111)
+// ---------------------------------------------------------------------------
+
+describe("runMiroExport — expandImplicitArrows styled connectors (DRW-111)", () => {
+  it("arrow NOT in initial selection but both endpoints are → auto-included + styled", async () => {
+    const connectorBodies: unknown[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        const url = new URL(req.url);
+        const body = req.body ? await req.json().catch(() => null) : null;
+        if (url.pathname.endsWith("/items/bulk")) {
+          const items = body as unknown[];
+          return new Response(JSON.stringify({ data: items.map((_, i) => ({ id: `m-${i}` })) }), { status: 201 });
+        }
+        if (url.pathname.endsWith("/connectors")) {
+          connectorBodies.push(body);
+          return new Response(JSON.stringify({ id: "c-1" }), { status: 201 });
+        }
+        if (url.pathname.endsWith("/groups")) {
+          return new Response(JSON.stringify({ id: "g-1", type: "group", data: {}, links: {} }), { status: 201 });
+        }
+        return new Response("{}", { status: 200 });
+      },
+    });
+    try {
+      const room = makeRoomState();
+      const store = room.store.store as Record<string, RawShape>;
+      // S1, S2 = leaf shapes; A1 = styled arrow (red, size:l, start:none, end:triangle)
+      store["shape:S1"] = geoShape("shape:S1", 0, 0);
+      store["shape:S2"] = geoShape("shape:S2", 200, 0);
+      // Arrow with explicit style props
+      store["shape:A1"] = {
+        id: "shape:A1", typeName: "shape", type: "arrow",
+        parentId: "page:page",
+        props: { bend: 0, richText: null, color: "red", size: "l", arrowheadStart: "none", arrowheadEnd: "triangle" },
+      };
+      // Bindings
+      store["binding:A1-s"] = {
+        id: "binding:A1-s", typeName: "binding", type: "arrow",
+        fromId: "shape:A1", toId: "shape:S1",
+        props: { terminal: "start", normalizedAnchor: { x: 0.9, y: 0.5 } },
+      } as unknown as RawShape;
+      store["binding:A1-e"] = {
+        id: "binding:A1-e", typeName: "binding", type: "arrow",
+        fromId: "shape:A1", toId: "shape:S2",
+        props: { terminal: "end", normalizedAnchor: { x: 0.1, y: 0.5 } },
+      } as unknown as RawShape;
+
+      const client = new MiroClient({ token: "t", baseUrl: `http://localhost:${server.port}` });
+      // A1 is NOT in the initial selection — only S1 and S2 are
+      const result = await runMiroExport({
+        client, room, boardId: "B1",
+        selection: ["shape:S1", "shape:S2"],
+      });
+
+      // Arrow should be auto-included via expandImplicitArrows
+      expect(result.connectorsCreated).toBe(1);
+
+      // Connector payload should carry the styled properties
+      expect(connectorBodies).toHaveLength(1);
+      const payload = connectorBodies[0] as { style?: Record<string, string> };
+      expect(payload.style?.strokeColor).toBe("#e03131"); // tldrawNamedToHex("red")
+      expect(payload.style?.strokeWidth).toBe("3.0");     // size "l"
+      expect(payload.style?.startStrokeCap).toBe("none"); // arrowheadStart "none"
+      expect(payload.style?.endStrokeCap).toBe("filled_triangle"); // arrowheadEnd "triangle"
+    } finally {
+      server.stop(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Task 11: framesInDepthFirstOrder (DRW-111)
 // ---------------------------------------------------------------------------
 
