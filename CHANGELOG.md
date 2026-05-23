@@ -1,3 +1,24 @@
+## Unreleased — post-0.23.1 hotfixes
+
+PATCH-уровневые фиксы поверх 0.23.1; накапливаются на `main` без per-task release commits ([[feedback-batch-release-cluster]]).
+
+### DRW-135 — schema-overlay не применялся на hydrate
+
+После reload Postgres (или любая schema-child) возвращался в RAW mermaid position, игнорируя сохранённый user-overlay. Persistence работал (POST landed, диск flush'нул, `canvas_view` возвращал overlay), но frontend не applying overlays поверх backend store при hydrate — overlay-sync был write-only.
+
+- **Новый модуль** `apps/frontend/src/canvas/schema-overlay-hydrate.ts`: pure helpers `collectOverlayApplications`, `findChildByNodeId`, `computeShapeUpdateFromOverlay` + `applyOverlaysToShapes(editor)`.
+- **Wire** в `App.tsx` → `fetchAndLoadSnapshot`: call `applyOverlaysToShapes(editor)` внутри `editor.store.mergeRemoteChanges(() => { ... })` сразу после `editor.loadSnapshot(snapshot)`. Anti-loop: scope `source:"user"` overlay-sync listener'а не triggered (changes идут как remote).
+- **Overlay fields mapping**: `position.x/y` → `shape.x / shape.y`; `color` → `shape.props.color`; `role / pinned / styleOwnedBy` → `shape.meta.*`. `label` overlay deferred (требует rewrite richText; pending).
+- **20 новых unit tests** (`schema-overlay-hydrate.test.ts`).
+- Real-board verified: drag Postgres → reload → position restored.
+
+### DRW-134 follow-up (commit `5b88590`)
+
+- **`installSchemaOverlaySync` wire-up gap** (`apps/frontend/src/App.tsx`): listener был создан но не подписан на editor; user drag не отправлял overlay POST. Added import + install + cleanup.
+- **`persistence.ts:load()` теряло `state.meta`**: после daemon restart `room.meta.didrawProtocol` сбрасывался → v2 rooms показывались как v1 в `canvas_view`. Восстановлено сериализованное `env.meta`.
+
+---
+
 ## 0.23.1 — 2026-05-23 — DRW-127 follow-up: `shemma_import_mermaid` mode param
 
 PATCH release closing the «Known gap» from 0.23.0. Additive MCP param, default `browser` preserves backward compat for all existing callers.
