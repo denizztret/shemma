@@ -42,6 +42,7 @@ import type { ParseResult, MermaidDirection } from "./mermaid-parser";
 import { generateMermaid } from "./mermaid-generator";
 import { diffSchemas } from "./diff";
 import { generateNodeIdServer } from "./identity";
+import { assignBatchIndices } from "./index-key";
 
 // ---- Rich text helper (mirrors compile.ts) ----
 
@@ -962,6 +963,11 @@ export function applySchemaActions(opts: {
 
   const addedNodeIds = diff.added.map((n) => n.nodeId);
   const removedNodeIds = [...diff.removed];
+
+  // DRW-141: assign unique fractional indices so newly added shapes don't all
+  // collide on the hardcoded "a1" (which breaks native tldraw duplicate with
+  // `Error: a1 >= a1`). Must run AFTER batch is fully built and BEFORE return.
+  assignBatchIndices(batch, store);
 
   return {
     ok: true,

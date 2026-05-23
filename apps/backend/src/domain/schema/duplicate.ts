@@ -20,6 +20,7 @@ import { slugify } from "@shemma/domain";
 import type { TLRecord, StoreChangeBatch } from "../../store-types";
 import type { RoomState } from "../../types";
 import { generateNodeIdServer } from "./identity";
+import { assignBatchIndices } from "./index-key";
 
 // ---- Random id helpers ----
 
@@ -33,6 +34,78 @@ function frameShapeId(): string {
 
 function childShapeId(): string {
   return `shape:${randHex()}`;
+}
+
+function bindingId(): string {
+  return `binding:${randHex()}`;
+}
+
+// ---- Arrow / binding remap helpers (DRW-140) ----
+
+/**
+ * Remap `props.start.boundShapeId` / `props.end.boundShapeId` для arrow shape'ов.
+ * Cloned arrow всё ещё ссылается на старые endpoint shape ids — без этой замены
+ * tldraw рендерит arrow как orphan (визуально не привязан к фигурам).
+ */
+function remapArrowProps(
+  shape: TLRecord,
+  shapeIdMap: Map<string, string>,
+): TLRecord {
+  if (shape.type !== "arrow") return shape;
+  // biome-ignore lint/suspicious/noExplicitAny: tldraw shape props are untyped
+  const oldProps = ((shape as any).props ?? {}) as Record<string, unknown>;
+  const newProps: Record<string, unknown> = { ...oldProps };
+  let dirty = false;
+  for (const key of ["start", "end"] as const) {
+    const endpoint = oldProps[key] as Record<string, unknown> | undefined;
+    if (!endpoint || typeof endpoint !== "object") continue;
+    const boundShapeId = endpoint.boundShapeId;
+    if (typeof boundShapeId !== "string") continue;
+    const newBound = shapeIdMap.get(boundShapeId);
+    if (newBound) {
+      newProps[key] = { ...endpoint, boundShapeId: newBound };
+      dirty = true;
+    }
+  }
+  if (!dirty) return shape;
+  return { ...shape, props: newProps } as TLRecord;
+}
+
+/**
+ * Clone bindings, ссылающиеся на любой shape из shapeIdMap (либо `fromId`,
+ * либо `toId` — клонированный shape).
+ *
+ * Binding клонируется только если ОБА endpoint'а тоже клонированы — иначе
+ * получили бы binding ссылку с одной стороны на оригинал, что воссоздало бы
+ * tldraw split-state (один shape в двух местах). Bindings, которые "только
+ * частично" попадают во frame, пропускаем.
+ */
+function buildClonedBindings(
+  store: Record<string, TLRecord | undefined>,
+  shapeIdMap: Map<string, string>,
+): TLRecord[] {
+  const out: TLRecord[] = [];
+  for (const id in store) {
+    const r = store[id];
+    if (!r || r.typeName !== "binding") continue;
+    const b = r as unknown as { fromId?: unknown; toId?: unknown };
+    const oldFromId = typeof b.fromId === "string" ? b.fromId : undefined;
+    const oldToId = typeof b.toId === "string" ? b.toId : undefined;
+    if (!oldFromId || !oldToId) continue;
+    const newFromId = shapeIdMap.get(oldFromId);
+    const newToId = shapeIdMap.get(oldToId);
+    // Both endpoints must be cloned — otherwise the binding would dangle
+    // between original and replica subtrees.
+    if (!newFromId || !newToId) continue;
+    const newId = bindingId();
+    out.push({
+      ...r,
+      id: newId,
+      fromId: newFromId,
+      toId: newToId,
+    } as TLRecord);
+  }
+  return out;
 }
 
 // ---- Find all direct/indirect children of a frame ----
@@ -205,27 +278,41 @@ export function duplicateSchemaFrame(opts: {
   } as TLRecord;
 
   // 7. Создаём клоны дочерних shapes с новыми nodeId'ами
+  //
+  // DRW-140: shapeIdMap (oldShapeId → newShapeId) включает И frame, И всех
+  // children — нужен чтобы (а) remap'ить boundShapeId в cloned arrow props,
+  // (б) клонировать bindings между новыми endpoint'ами. Без этого arrow shapes
+  // остаются как orphan'ы и стрелок визуально нет.
   const batch: StoreChangeBatch = { added: {}, updated: {}, removed: {} };
   batch.added[newFrameId] = newFrame;
+  const shapeIdMap = new Map<string, string>();
+  shapeIdMap.set(oldFrame.id, newFrameId);
 
+  // 7a. First pass — clone all children, build shapeIdMap. We have to defer
+  // arrow `props` remap to a second pass because arrows may reference geo
+  // siblings that haven't been cloned yet (insertion order isn't guaranteed).
+  const arrowsToFix: TLRecord[] = [];
   for (const child of children) {
     const oldId = child.meta?.didrawId;
+    const newChildId = childShapeId();
+    shapeIdMap.set(child.id, newChildId);
+
     if (typeof oldId !== "string") {
-      // Ребёнок без didrawId (стрелки и т.п.) — клонируем as-is с новым shape id
-      const newChildId = childShapeId();
+      // Ребёнок без didrawId (arrow и т.п.) — клонируем as-is + parentId.
+      // Arrow `props.start/end.boundShapeId` ремапим во втором проходе.
       const clonedChild: TLRecord = {
         ...child,
         id: newChildId,
         parentId: newFrameId,
       } as TLRecord;
       batch.added[newChildId] = clonedChild;
+      if (child.type === "arrow") arrowsToFix.push(clonedChild);
       continue;
     }
 
     const newNodeId = nodeIdMap[oldId];
     if (!newNodeId) continue; // не должно случиться
 
-    const newChildId = childShapeId();
     const childMeta = (child.meta ?? {}) as Record<string, unknown>;
     const clonedChild: TLRecord = {
       ...child,
@@ -240,6 +327,24 @@ export function duplicateSchemaFrame(opts: {
     } as TLRecord;
     batch.added[newChildId] = clonedChild;
   }
+
+  // 7b. Second pass — remap arrow props.start/end.boundShapeId.
+  for (const arrow of arrowsToFix) {
+    const remapped = remapArrowProps(arrow, shapeIdMap);
+    if (remapped !== arrow) batch.added[arrow.id] = remapped;
+  }
+
+  // 7c. Clone bindings whose both endpoints are in the cloned subtree.
+  for (const cloned of buildClonedBindings(store, shapeIdMap)) {
+    batch.added[cloned.id] = cloned;
+  }
+
+  // DRW-141: assign unique fractional indices to the cloned children so that
+  // a native tldraw `Cmd+D` on the replica doesn't collide on identical "a1"
+  // indices. Existing siblings of `newFrameId` should be none (frame is brand
+  // new), but using `store` as the prior snapshot stays consistent with other
+  // call sites and handles edge cases gracefully.
+  assignBatchIndices(batch, store);
 
   // Проверяем что оригинальный frame НЕ попал в batch.updated/removed
   // (инвариант из spec §Frame duplication)
