@@ -165,6 +165,7 @@ describe("read-only tools", () => {
   });
 
   it("shemma_context returns data and echoes room", async () => {
+    // Both canvas/view and /api/agent/context calls return same mock.
     mockFetch(() => ({ body: { ok: true, version: 1, elements: [] } }));
     const { handles } = setup();
     const r = await handles.context.call({ room: "custom-room" });
@@ -176,6 +177,60 @@ describe("read-only tools", () => {
     const { handles } = setup();
     const r = await handles.context.call({});
     expect(r.structuredContent).toMatchObject({ ok: true, room: "default" });
+  });
+
+  // DRW-134 Task 2.8: polymorphic alias tests.
+
+  it("shemma_context on v1 room → returns legacy shape unchanged (no deprecation field)", async () => {
+    // canvas/view returns v1; legacy context returns domain elements.
+    let callCount = 0;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      callCount++;
+      const u = typeof url === "string" ? url : url.toString();
+      if (u.includes("/api/canvas/view")) {
+        return new Response(
+          JSON.stringify({ schemaVersion: "v1", legacy: { ok: true, version: 3, elements: [] }, hint: "" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      // Fallback to legacy context.
+      return new Response(
+        JSON.stringify({ ok: true, version: 3, elements: [{ id: "e1" }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    const { handles } = setup();
+    const r = await handles.context.call({ room: "v1-room" });
+    expect(r.structuredContent).toMatchObject({ ok: true, room: "v1-room" });
+    const content = r.structuredContent as { data?: { deprecation?: string } };
+    // No deprecation field on v1 rooms.
+    expect(content.data?.deprecation).toBeUndefined();
+  });
+
+  it("shemma_context on v2 room → returns canvas-view shape + deprecation field set", async () => {
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = typeof url === "string" ? url : url.toString();
+      if (u.includes("/api/canvas/view")) {
+        return new Response(
+          JSON.stringify({
+            schemaVersion: "v2",
+            frames: [{ id: "shape:f_xyz", label: "Auth", bbox: {}, raw: "", overlays: {} }],
+            free: [],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const { handles } = setup();
+    const r = await handles.context.call({ room: "v2-room" });
+    expect(r.structuredContent).toMatchObject({ ok: true, room: "v2-room" });
+    const content = r.structuredContent as { data?: { schemaVersion?: string; deprecation?: string } };
+    expect(content.data?.schemaVersion).toBe("v2");
+    expect(typeof content.data?.deprecation).toBe("string");
+    expect(content.data?.deprecation).toContain("shemma_canvas_view");
   });
 
   it("shemma_prompts_list defaults to pending", async () => {
