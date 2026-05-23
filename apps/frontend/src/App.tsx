@@ -13,6 +13,7 @@ import {
   type SelectionInfo,
 } from "./canvas/role-picker.ts";
 import { RolePicker } from "./canvas/role-picker.tsx";
+import { applyOverlaysToShapes } from "./canvas/schema-overlay-hydrate";
 import { installSchemaOverlaySync } from "./canvas/schema-overlay-sync";
 import { AiActivityBadge } from "./chrome/AiActivityBadge";
 import { AppChrome } from "./chrome/AppChrome";
@@ -297,6 +298,11 @@ export function App({
       const snapshot = { ...s.store, store: backfillStoreRecords(s.store?.store) };
       editor.store.mergeRemoteChanges(() => {
         editor.loadSnapshot(snapshot);
+        // DRW-135: backend store содержит RAW positions; user overlays лежат
+        // в frame.meta.didrawOverlays и должны быть применены поверх RAW.
+        // Внутри mergeRemoteChanges чтобы overlay-sync listener (source:"user")
+        // не отправил POST обратно.
+        applyOverlaysToShapes(editor);
       });
       return { version: s.version };
     };
