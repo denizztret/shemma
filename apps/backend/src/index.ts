@@ -28,6 +28,7 @@ import { aiRoutes } from "./routes/ai";
 import { canvasViewRoutes } from "./routes/canvas-view";
 import { contextRoutes } from "./routes/context";
 import { schemaRoutes } from "./routes/schema";
+import { schemaDuplicateRoutes } from "./routes/schema-duplicate";
 import { domainRoutes } from "./routes/domain";
 import { exportRoutes } from "./routes/export";
 import { makeHealthRoutes } from "./routes/health";
@@ -298,6 +299,7 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", viewportRoutes());
   app.route("/", domainRoutes(bus));
   app.route("/", schemaRoutes(bus));
+  app.route("/", schemaDuplicateRoutes(bus));
   app.route("/", contextRoutes());
   app.route("/", canvasViewRoutes());
   app.route("/", importMermaidRoutes(bus));
