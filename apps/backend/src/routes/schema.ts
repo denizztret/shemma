@@ -12,6 +12,7 @@
  * Frame positioning: (100,100) если комната пустая; иначе — правее последнего frame + 40px.
  */
 
+import { randomBytes } from "node:crypto";
 import type { OverlayEntry, SchemaAction } from "@shemma/domain";
 import type { NodeId } from "@shemma/domain";
 import { Hono } from "hono";
@@ -23,6 +24,7 @@ import { parseMermaidFlowchart } from "../domain/schema/mermaid-parser";
 import type { MermaidDirection } from "../domain/schema/mermaid-parser";
 import { generateMermaid } from "../domain/schema/mermaid-generator";
 import { buildCanvasView } from "../domain/schema/view";
+import { runLayout } from "../domain/layout";
 import { pushOpLog, resolveRoomId } from "../rooms";
 import {
   applyStoreChanges,
@@ -76,12 +78,7 @@ function richText(label: string): unknown {
 // ---- Random id helpers ----
 
 function randHex(): string {
-  try {
-    const { randomBytes } = require("node:crypto") as typeof import("node:crypto");
-    return randomBytes(5).toString("hex");
-  } catch {
-    return Math.random().toString(36).slice(2, 12);
-  }
+  return randomBytes(5).toString("hex");
 }
 
 function frameShapeId(): string {
@@ -111,7 +108,7 @@ function computeFramePosition(
     if (!r || r.typeName !== "shape") continue;
     if (r.meta?.didrawSchemaFrame !== true) continue;
     const x = typeof r.x === "number" ? r.x : 0;
-    const props = (r.props ?? {}) as { w?: unknown; y?: unknown };
+    const props = (r.props ?? {}) as { w?: unknown };
     const w = typeof props.w === "number" ? props.w : 640;
     const right = x + w;
     if (!found || right > maxRight) {
@@ -207,6 +204,7 @@ function makeChildShape(opts: {
     },
     meta: {
       didrawId: opts.nodeId,
+      didrawName: opts.nodeId,
       didrawLabel: opts.label,
       didrawSchemaParent: opts.parentId,
     },
@@ -255,10 +253,11 @@ type SchemaCreateResponse = {
   version: number;
 };
 
+type SchemaErrorEntry = { code: string; message: string; actionIndex?: number };
+
 type SchemaCreateErrorResponse = {
   ok: false;
-  error?: string;
-  errors?: Array<{ actionIndex: number; code: string; message: string }>;
+  errors: SchemaErrorEntry[];
 };
 
 type SchemaPatchResponse = {
@@ -273,8 +272,7 @@ type SchemaPatchResponse = {
 
 type SchemaPatchErrorResponse = {
   ok: false;
-  error?: string;
-  errors?: Array<{ actionIndex: number; code: string; message: string }>;
+  errors: SchemaErrorEntry[];
 };
 
 // ---- Route factory ----
@@ -295,7 +293,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
     // =========================================================================
     .post("/api/schema/create", async (c) => {
       const rv = resolveRoomId(c.req.query("room"));
-      if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
+      if (!rv.ok) return c.json({ ok: false, errors: [{ code: "invalid-room", message: rv.reason }] } satisfies SchemaCreateErrorResponse, 422);
       const id = rv.id;
 
       const body = (await c.req.json().catch(() => null)) as {
@@ -307,7 +305,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
 
       if (!body) {
         return c.json(
-          { ok: false, error: "expected JSON body {label, raw?} or {label, actions?}" } satisfies SchemaCreateErrorResponse,
+          { ok: false, errors: [{ code: "bad-request", message: "expected JSON body {label, raw?} or {label, actions?}" }] } satisfies SchemaCreateErrorResponse,
           400,
         );
       }
@@ -328,7 +326,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
         // Mode A: parse mermaid RAW.
         if (typeof body.raw !== "string" || body.raw.trim().length === 0) {
           return c.json(
-            { ok: false, error: "field 'raw' must be a non-empty mermaid string" } satisfies SchemaCreateErrorResponse,
+            { ok: false, errors: [{ code: "bad-request", message: "field 'raw' must be a non-empty mermaid string" }] } satisfies SchemaCreateErrorResponse,
             400,
           );
         }
@@ -345,7 +343,6 @@ export function schemaRoutes(bus: StoreChangeBus) {
           return c.json(
             {
               ok: false,
-              error: parseResult.code,
               errors: [
                 {
                   actionIndex: -1,
@@ -364,7 +361,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
         // Mode B: caller-provided actions.
         if (!Array.isArray(body.actions)) {
           return c.json(
-            { ok: false, error: "field 'actions' must be an array" } satisfies SchemaCreateErrorResponse,
+            { ok: false, errors: [{ code: "bad-request", message: "field 'actions' must be an array" }] } satisfies SchemaCreateErrorResponse,
             400,
           );
         }
@@ -382,7 +379,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
         });
       } else {
         return c.json(
-          { ok: false, error: "body must contain either 'raw' (mermaid string) or 'actions' array" } satisfies SchemaCreateErrorResponse,
+          { ok: false, errors: [{ code: "bad-request", message: "body must contain either 'raw' (mermaid string) or 'actions' array" }] } satisfies SchemaCreateErrorResponse,
           400,
         );
       }
@@ -441,6 +438,39 @@ export function schemaRoutes(bus: StoreChangeBus) {
         });
       }
 
+      // Run layout post-apply (spec §Write semantics step 9).
+      // Default layout mode for new schema-frames: layered-lr (mermaid graph LR default).
+      try {
+        const affectedIds = new Set<string>(Object.keys(batch.added).filter((k) => {
+          const r = room.store.store[k];
+          return r?.typeName === "shape";
+        }));
+        const lr = await runLayout(
+          room.store,
+          { mode: "layered-lr", scope: "affected", affectedIds },
+          room.didrawIndex,
+        );
+        if (!isEmptyBatch(lr.batch)) {
+          room.store = applyStoreChanges(room.store, lr.batch);
+          room.didrawIndex = rebuildDidrawIndex(room.store);
+          room.version += 1;
+          pushOpLog(
+            room,
+            { ops: lr.batch, source: "ai", version: room.version, at: Date.now() },
+            config.opLogMaxSize,
+          );
+          room.dirty = true;
+          scheduleSave(id, room);
+          bus.publish(spaceId, id, {
+            changes: lr.batch,
+            source: "ai",
+            version: room.version,
+          });
+        }
+      } catch {
+        // Layout failure is non-fatal; shapes remain at (0,0).
+      }
+
       return c.json({
         ok: true,
         frameId,
@@ -456,7 +486,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
     // =========================================================================
     .post("/api/schema/:frameId/patch", async (c) => {
       const rv = resolveRoomId(c.req.query("room"));
-      if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
+      if (!rv.ok) return c.json({ ok: false, errors: [{ code: "invalid-room", message: rv.reason }] } satisfies SchemaPatchErrorResponse, 422);
       const id = rv.id;
       const frameId = c.req.param("frameId");
 
@@ -467,7 +497,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
 
       if (!body || !Array.isArray(body.actions)) {
         return c.json(
-          { ok: false, error: "expected {actions: SchemaAction[], clientOpId?}" } satisfies SchemaPatchErrorResponse,
+          { ok: false, errors: [{ code: "bad-request", message: "expected {actions: SchemaAction[], clientOpId?}" }] } satisfies SchemaPatchErrorResponse,
           400,
         );
       }
@@ -485,7 +515,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
       // v2 check.
       if (!isV2Room(room)) {
         return c.json(
-          { ok: false, error: "legacy-room-not-v2" } satisfies SchemaPatchErrorResponse,
+          { ok: false, errors: [{ code: "legacy-room-not-v2", message: "room is not a v2 schema room; create a schema-frame first" }] } satisfies SchemaPatchErrorResponse,
           422,
         );
       }
@@ -495,13 +525,13 @@ export function schemaRoutes(bus: StoreChangeBus) {
       const frame = store[frameId];
       if (!frame || frame.typeName !== "shape") {
         return c.json(
-          { ok: false, error: "frame-not-found" } satisfies SchemaPatchErrorResponse,
+          { ok: false, errors: [{ code: "frame-not-found", message: `schema-frame '${frameId}' not found` }] } satisfies SchemaPatchErrorResponse,
           404,
         );
       }
       if (frame.meta?.didrawSchemaFrame !== true) {
         return c.json(
-          { ok: false, error: "not-schema-frame" } satisfies SchemaPatchErrorResponse,
+          { ok: false, errors: [{ code: "not-schema-frame", message: `shape '${frameId}' exists but is not a schema-frame` }] } satisfies SchemaPatchErrorResponse,
           422,
         );
       }
@@ -568,6 +598,45 @@ export function schemaRoutes(bus: StoreChangeBus) {
         });
       }
 
+      // Run layout post-apply (spec §Write semantics step 9).
+      // Re-use prior frame's layout mode from meta if available, else default layered-lr.
+      try {
+        const frameMeta = (frame.meta ?? {}) as Record<string, unknown>;
+        const layoutMode = (typeof frameMeta.layoutMode === "string"
+          ? frameMeta.layoutMode
+          : "layered-lr") as import("@shemma/domain").LayoutMode;
+        const affectedIds = new Set<string>(Object.keys(frameBatch.added).filter((k) => {
+          const r = room.store.store[k];
+          return r?.typeName === "shape";
+        }));
+        if (affectedIds.size > 0) {
+          const lr = await runLayout(
+            room.store,
+            { mode: layoutMode, scope: "affected", affectedIds },
+            room.didrawIndex,
+          );
+          if (!isEmptyBatch(lr.batch)) {
+            room.store = applyStoreChanges(room.store, lr.batch);
+            room.didrawIndex = rebuildDidrawIndex(room.store);
+            room.version += 1;
+            pushOpLog(
+              room,
+              { ops: lr.batch, source: "ai", version: room.version, at: Date.now() },
+              config.opLogMaxSize,
+            );
+            room.dirty = true;
+            scheduleSave(id, room);
+            bus.publish(spaceId, id, {
+              changes: lr.batch,
+              source: "ai",
+              version: room.version,
+            });
+          }
+        }
+      } catch {
+        // Layout failure is non-fatal; shapes remain at their computed positions.
+      }
+
       const resp: SchemaPatchResponse = {
         ok: true,
         frameId,
@@ -593,7 +662,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
     // =========================================================================
     .post("/api/schema/:frameId/overlay", async (c) => {
       const rv = resolveRoomId(c.req.query("room"));
-      if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
+      if (!rv.ok) return c.json({ ok: false, errors: [{ code: "invalid-room", message: rv.reason }] }, 422);
       const id = rv.id;
       const frameId = c.req.param("frameId");
 
@@ -604,7 +673,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
       } | null;
 
       if (!body || typeof body.nodeId !== "string" || !body.overlay || typeof body.overlay !== "object") {
-        return c.json({ ok: false, error: "expected {nodeId: string, overlay: OverlayEntry, clientOpId?}" }, 400);
+        return c.json({ ok: false, errors: [{ code: "bad-request", message: "expected {nodeId: string, overlay: OverlayEntry, clientOpId?}" }] }, 400);
       }
 
       const { nodeId, overlay, clientOpId } = body;
@@ -615,17 +684,17 @@ export function schemaRoutes(bus: StoreChangeBus) {
 
       // v2 check.
       if (!isV2Room(room)) {
-        return c.json({ ok: false, error: "legacy-room-not-v2" }, 422);
+        return c.json({ ok: false, errors: [{ code: "legacy-room-not-v2", message: "room is not a v2 schema room" }] }, 422);
       }
 
       // Lookup frame.
       const store = room.store.store as Record<string, TLRecord | undefined>;
       const frame = store[frameId];
       if (!frame || frame.typeName !== "shape") {
-        return c.json({ ok: false, error: "frame-not-found" }, 404);
+        return c.json({ ok: false, errors: [{ code: "frame-not-found", message: `schema-frame '${frameId}' not found` }] }, 404);
       }
       if (frame.meta?.didrawSchemaFrame !== true) {
-        return c.json({ ok: false, error: "not-schema-frame" }, 422);
+        return c.json({ ok: false, errors: [{ code: "not-schema-frame", message: `shape '${frameId}' is not a schema-frame` }] }, 422);
       }
 
       // Get current overlays.
@@ -637,7 +706,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
         existing?.styleOwnedBy === "user" &&
         (overlay as OverlayEntry).styleOwnedBy !== "user"
       ) {
-        return c.json({ ok: false, error: "overlay-user-owned" }, 422);
+        return c.json({ ok: false, errors: [{ code: "overlay-user-owned", message: `overlay for node '${nodeId}' is user-owned; pass styleOwnedBy:"user" to override` }] }, 422);
       }
 
       // Deep-merge overlay.

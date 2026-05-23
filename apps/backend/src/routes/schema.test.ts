@@ -141,9 +141,9 @@ describe("POST /api/schema/create", () => {
       raw: "sequenceDiagram\n  A->>B: Hi",
     });
     expect(res.status).toBe(422);
-    const body = (await res.json()) as { ok: boolean; error: string };
+    const body = (await res.json()) as { ok: boolean; errors: Array<{ code: string }> };
     expect(body.ok).toBe(false);
-    expect(body.error).toBe("unsupported-diagram-type");
+    expect(body.errors[0]?.code).toBe("unsupported-diagram-type");
   });
 
   test("Mode B: valid actions → frame created, RAW generated correctly", async () => {
@@ -330,9 +330,9 @@ describe("POST /api/schema/:frameId/patch", () => {
       { actions: [{ kind: "schema-define", role: "service", label: "X" }] },
     );
     expect(res.status).toBe(404);
-    const body = (await res.json()) as { ok: boolean; error: string };
+    const body = (await res.json()) as { ok: boolean; errors: Array<{ code: string }> };
     expect(body.ok).toBe(false);
-    expect(body.error).toBe("frame-not-found");
+    expect(body.errors[0]?.code).toBe("frame-not-found");
   });
 
   test("legacy-room-not-v2 → 422", async () => {
@@ -344,9 +344,9 @@ describe("POST /api/schema/:frameId/patch", () => {
       { actions: [{ kind: "schema-define", role: "service", label: "X" }] },
     );
     expect(res.status).toBe(422);
-    const body = (await res.json()) as { ok: boolean; error: string };
+    const body = (await res.json()) as { ok: boolean; errors: Array<{ code: string }> };
     expect(body.ok).toBe(false);
-    expect(body.error).toBe("legacy-room-not-v2");
+    expect(body.errors[0]?.code).toBe("legacy-room-not-v2");
   });
 
   test("AC-6: schema-delete-node для node с overlay → orphanedOverlays: 1, entry preserved", async () => {
@@ -484,9 +484,9 @@ describe("POST /api/schema/:frameId/overlay", () => {
       "overlay-room",
     );
     expect(aiRes.status).toBe(422);
-    const body = (await aiRes.json()) as { ok: boolean; error: string };
+    const body = (await aiRes.json()) as { ok: boolean; errors: Array<{ code: string }> };
     expect(body.ok).toBe(false);
-    expect(body.error).toBe("overlay-user-owned");
+    expect(body.errors[0]?.code).toBe("overlay-user-owned");
   });
 
   test("ownership guard: user write поверх user-owned → 200 OK (user может перезаписать)", async () => {
@@ -524,9 +524,9 @@ describe("POST /api/schema/:frameId/overlay", () => {
       { nodeId: "some-node", overlay: { color: "red" } },
     );
     expect(res.status).toBe(404);
-    const body = (await res.json()) as { ok: boolean; error: string };
+    const body = (await res.json()) as { ok: boolean; errors: Array<{ code: string }> };
     expect(body.ok).toBe(false);
-    expect(body.error).toBe("frame-not-found");
+    expect(body.errors[0]?.code).toBe("frame-not-found");
   });
 
   test("invalid body → 400", async () => {
