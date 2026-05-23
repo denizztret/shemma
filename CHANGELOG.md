@@ -1,3 +1,18 @@
+## Unreleased
+
+### DRW-127 follow-up: shemma_import_mermaid mode param
+
+- **`shemma_import_mermaid` mode param**: добавлен опциональный параметр `mode?: "browser" | "storage" | "auto"`.
+  - `"browser"` (default) — прежний WS-based flow через `/api/agent/import-mermaid`; backward-compatible дефолт, поведение не изменилось.
+  - `"storage"` — прямой storage write через `POST /api/schema/create` (DRW-134 path); не требует открытого браузера / WS. Возвращает `frameId` + `nodeIds` в дополнение к стандартному envelope (`shape_ids`, `root_ids`). Unsupported diagram types → `import-failed`.
+  - `"auto"` — пробует storage первым; при ошибке storage автоматически fallback на browser path.
+- **Схема**: `ImportMermaidArgs.mode` в `schemas.ts`.
+- **Label derivation** (storage mode): извлекает label из первого `%% Comment` в Mermaid source; fallback `"Imported schema"`.
+- **11 новых тестов** (`domain.test.ts`, describe "shemma_import_mermaid mode param (DRW-127)").
+- Закрывает known gap из 0.23.0 changelog: «`shemma_import_mermaid` MCP tool сохраняет старый browser-only flow (без `mode` param)».
+
+---
+
 ## 0.23.0 — 2026-05-23 — DRW-134 Canvas-AI bidirectional protocol (RAW+overlay в schema-frame)
 
 MINOR release: полноценный bidirectional protocol для взаимодействия AI ↔ canvas через schema-frame как единицу обмена. Additive API, breaking change в identity model gated через `room.meta.didrawProtocol === "v2"` marker — legacy v1 rooms работают без изменений. DRW-127 (storage-only mermaid import) закрывается как часть этого release'а.
@@ -13,7 +28,7 @@ MINOR release: полноценный bidirectional protocol для взаимо
 - **Cmd+Shift+K semantic picker** (frontend): UI picker для опционального назначения role/connectionKind на user-drawn shapes.
 - **Storage-only E2E**: `/api/schema/create` работает без браузера (нет WS requirement); verified E2E test.
 
-**Known gaps:** `shemma_import_mermaid` MCP tool сохраняет старый browser-only flow (без `mode` param). AI-driven storage import доступен через `shemma_create_schema` directly; mode-param обёртка перенесена в backlog (отдельная follow-up задача).
+**Known gaps (closed):** `shemma_import_mermaid` MCP tool получил `mode` param (browser/storage/auto) в Unreleased follow-up над этим release'ом. AI-driven storage import теперь доступен как через `shemma_create_schema` напрямую, так и через `shemma_import_mermaid` с `mode:"storage"`.
 - **Legacy mode preserved**: v1 rooms без `didrawProtocol` marker продолжают работать через `/api/agent/context` + `/api/domain` без изменений. `/api/domain` не трогается.
 
 ### Breaking change — identity model (v2 rooms only)
