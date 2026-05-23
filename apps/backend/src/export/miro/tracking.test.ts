@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { makeRoomState } from "../../rooms";
 import {
   commitBoardExport,
+  commitBoardGroupExport,
   getLastUsedBoardId,
   readBoardItems,
   readBoardTracking,
@@ -103,6 +104,36 @@ describe("getLastUsedBoardId", () => {
       },
     };
     expect(getLastUsedBoardId(room)).toBe("recent");
+  });
+});
+
+describe("commitBoardGroupExport (DRW-111)", () => {
+  it("merges groups field on existing board entry", () => {
+    const room = { meta: { miroExports: { b1: { lastExportedAt: "2026-01-01", items: {} } } } } as never;
+    commitBoardGroupExport(room, { boardId: "b1", groupMappings: [
+      { elementId: "F1", miroGroupId: "g_F1" },
+      { elementId: "F2", miroGroupId: "g_F2" },
+    ]});
+    expect((room.meta.miroExports as any).b1.groups).toEqual({ F1: "g_F1", F2: "g_F2" });
+  });
+
+  it("overwrites existing group ids (idempotent re-export)", () => {
+    const room = { meta: { miroExports: { b1: { lastExportedAt: "x", items: {}, groups: { F1: "old" } } } } } as never;
+    commitBoardGroupExport(room, { boardId: "b1", groupMappings: [{ elementId: "F1", miroGroupId: "new" }] });
+    expect((room.meta.miroExports as any).b1.groups).toEqual({ F1: "new" });
+  });
+
+  it("no-op when boardId not present in miroExports", () => {
+    const room = { meta: { miroExports: {} } } as never;
+    commitBoardGroupExport(room, { boardId: "absent", groupMappings: [{ elementId: "F1", miroGroupId: "g" }] });
+    expect((room.meta.miroExports as any).absent).toBeUndefined();
+  });
+
+  it("updates lastExportedAt timestamp", async () => {
+    const room = { meta: { miroExports: { b1: { lastExportedAt: "old", items: {} } } } } as never;
+    await new Promise((r) => setTimeout(r, 5));
+    commitBoardGroupExport(room, { boardId: "b1", groupMappings: [{ elementId: "F1", miroGroupId: "g" }] });
+    expect((room.meta.miroExports as any).b1.lastExportedAt).not.toBe("old");
   });
 });
 
