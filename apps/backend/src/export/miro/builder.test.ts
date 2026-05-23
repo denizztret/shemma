@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   buildFramePayload,
+  buildShapeForFrame,
   buildShapePayload,
   buildStickyNotePayload,
   buildTextPayload,
@@ -603,5 +604,41 @@ describe("buildTextPayload styling (DRW-111)", () => {
     expect(style.fontFamily).toBe("roboto_mono");
     expect(style.fontSize).toBe("14");
     expect(style.textAlign).toBe("left"); // tldraw "start" → Miro "left"
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 10: buildShapeForFrame helper (DRW-111 Block 5)
+// ---------------------------------------------------------------------------
+
+describe("buildShapeForFrame (DRW-111 Block 5)", () => {
+  it("returns rectangle with white fill + tldraw border color + title", () => {
+    const frame = { typeName: "shape", type: "frame", id: "shape:F1",
+      props: { name: "Backend", color: "blue", size: "m", w: 400, h: 300 } };
+    const r = buildShapeForFrame(frame as never, { miroX: 100, miroY: 100 });
+    expect(r.type).toBe("shape");
+    expect((r.data as any)?.shape).toBe("rectangle");
+    expect((r.data as any)?.content).toBe("Backend");
+    expect((r.style as any)?.fillColor).toBe("#ffffff");
+    expect((r.style as any)?.fillOpacity).toBe("1.0");
+    expect((r.style as any)?.borderStyle).toBe("normal");
+    expect((r.style as any)?.borderColor).toBe(tldrawNamedToHex("blue"));
+    expect((r.style as any)?.borderWidth).toBe("2.0");
+    expect((r.style as any)?.textAlign).toBe("center");
+    expect((r.style as any)?.textAlignVertical).toBe("top");
+  });
+
+  it("frame без color → black border", () => {
+    const frame = { typeName: "shape", type: "frame", id: "shape:F2",
+      props: { name: "Default", w: 200, h: 200 } };
+    const r = buildShapeForFrame(frame as never, { miroX: 0, miroY: 0 });
+    expect((r.style as any)?.borderColor).toBe(tldrawNamedToHex("black"));
+  });
+
+  it("frame falls back to meta.didrawName when props.name absent", () => {
+    const frame = { typeName: "shape", type: "frame", id: "shape:F3",
+      props: { w: 100, h: 100 }, meta: { didrawName: "fallback-name" } };
+    const r = buildShapeForFrame(frame as never, { miroX: 0, miroY: 0 });
+    expect((r.data as any)?.content).toBe("fallback-name");
   });
 });

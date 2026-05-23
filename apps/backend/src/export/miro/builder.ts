@@ -151,6 +151,42 @@ export function buildFramePayload(shape: RawShape, ctx: BuilderCtx): MiroBulkIte
   }, ctx);
 }
 
+/**
+ * Build payload for a tldraw frame shape → Miro rectangle shape (frame-as-shape mode).
+ * Uses absolute page coordinates from resolvePageBounds — no parentMiroId needed.
+ * White fill, tldraw border color, title at top-center.
+ */
+export function buildShapeForFrame(shape: RawShape, ctx: BuilderCtx): MiroBulkItem {
+  const props = shape.props ?? {};
+  const w = (props.w as number | undefined) ?? 400;
+  const h = (props.h as number | undefined) ?? 300;
+  const title =
+    (props.name as string | undefined) ??
+    (shape.meta?.name as string | undefined) ??
+    (shape.meta?.didrawName as string | undefined) ??
+    "";
+  const colorHex = tldrawNamedToHex(props.color as string | undefined);
+  const borderWidth = tldrawSizeToBorderWidth(props.size as string | undefined);
+
+  return applyPositionAndParent({
+    type: "shape",
+    data: { shape: "rectangle", content: title },
+    style: {
+      fillColor: "#ffffff",
+      fillOpacity: "1.0",
+      borderStyle: "normal",
+      borderColor: colorHex,
+      borderWidth,
+      borderOpacity: "1.0",
+      fontFamily: "open_sans",
+      fontSize: "14",
+      textAlign: "center",
+      textAlignVertical: "top",
+    },
+    geometry: { width: w, height: h },
+  }, ctx);
+}
+
 export interface ArrowEndpoint {
   toId: string;
   normalizedAnchor: { x: number; y: number };
