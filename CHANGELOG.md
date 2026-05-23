@@ -2,6 +2,13 @@
 
 PATCH-уровневые фиксы поверх 0.23.1; накапливаются на `main` без per-task release commits ([[feedback-batch-release-cluster]]).
 
+### DRW-136 — role picker UX/functional fixes
+
+1. **PromptInput overlap с picker** (App.tsx ⌘K handler): handler не проверял `shiftKey`, поэтому ⌘+Shift+K (picker hotkey) одновременно toggle'ил PromptInput. Добавлен `!e.shiftKey` guard — PromptInput теперь не реагирует на picker shortcut.
+2. **Picker не закрывался на click role/kind** (role-picker.tsx `pick` callback): любая ошибка внутри `editor.run(() => ...)` блокировала `onClose()`. Refactor: `try { build updates + editor.updateShapes } catch { warn } finally { onClose() }` — picker MUST закрыться даже если apply throws. Singular `editor.updateShape` (per-shape вызов в loop) заменён на plural `editor.updateShapes(updates)` — каноничный path в tldraw 5.x.
+3. **Visual feedback "Service highlighted на click"**: implicitly resolved через #2 — picker теперь закрывается мгновенно после pick.
+4. **DRW-137 spawn'нут** как отдельная задача для WS sync resilience (truncated recovery loop / auto-reconnect). User-shape (Controller) и frame resize не sync'ятся в backend после daemon restart — sync stops после first `truncated` consecutive event. Это preexisting fragility, не DRW-134 regression.
+
 ### DRW-135 — schema-overlay не применялся на hydrate
 
 После reload Postgres (или любая schema-child) возвращался в RAW mermaid position, игнорируя сохранённый user-overlay. Persistence работал (POST landed, диск flush'нул, `canvas_view` возвращал overlay), но frontend не applying overlays поверх backend store при hydrate — overlay-sync был write-only.

@@ -90,23 +90,36 @@ export function RolePicker({ open, info, editor, onClose }: RolePickerProps): JS
 
   const pick = useCallback(
     (choice: { type: "role"; value: Role } | { type: "kind"; value: ConnectionKind }) => {
-      const patches = applyPickerChoice(info, choice);
-      if (patches.length > 0) {
-        editor.run(() => {
+      try {
+        const patches = applyPickerChoice(info, choice);
+        if (patches.length > 0) {
+          // DRW-136 #3: build full updates upfront and apply через plural
+          // updateShapes — singular updateShape less defensive, и любой throw
+          // внутри editor.run раньше блокировал onClose.
+          // biome-ignore lint/suspicious/noExplicitAny: tldraw updateShapes accepts partials
+          const updates: any[] = [];
           for (const { id, meta } of patches) {
             // biome-ignore lint/suspicious/noExplicitAny: tldraw id typing
             const shape = editor.getShape(id as any);
             if (!shape) continue;
-            editor.updateShape({
+            updates.push({
               id: shape.id,
               type: shape.type,
-              // biome-ignore lint/suspicious/noExplicitAny: meta is Record<string,unknown> per tldraw JsonObject
-              meta: { ...shape.meta, ...(meta as any) },
+              meta: { ...shape.meta, ...(meta as Record<string, unknown>) },
             });
           }
-        });
+          if (updates.length > 0) {
+            editor.updateShapes(updates);
+          }
+        }
+      } catch (e) {
+        // Best-effort — даже если applyPickerChoice/updateShapes падает,
+        // picker MUST закрыться, иначе user застревает с не-dismiss'абельным
+        // overlay (см. DRW-136 #3 user report).
+        console.warn("[shemma] role picker apply failed:", e);
+      } finally {
+        onClose();
       }
-      onClose();
     },
     [info, editor, onClose],
   );

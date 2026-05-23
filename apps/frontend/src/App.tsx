@@ -133,7 +133,10 @@ export function App({
   // ⌘K / ⌘M / Esc keyboard handler.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "k") {
+        // DRW-136 #1: !shiftKey guard — без него ⌘+Shift+K (semantic picker)
+        // одновременно toggle'ил PromptInput, и два overlay'а конкурировали
+        // за внимание. Picker сам wired в отдельном useEffect ниже.
         e.preventDefault();
         setPromptOpen((v) => !v);
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "m") {
