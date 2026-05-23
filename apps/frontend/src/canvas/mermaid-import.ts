@@ -65,6 +65,61 @@ export function unionBoundsOf(
 export { slugify };
 
 /**
+ * DRW-141: derive a human-readable label for the schema-frame from a Mermaid
+ * source string.
+ *
+ * Aligns with `extractMermaidLabel` in `packages/shemma-mcp/src/tools/domain.ts`
+ * so that browser-mode and storage-mode imports produce equivalent frame names.
+ *
+ * Resolution order:
+ *   1) `%% Comment label`              — explicit metadata wins.
+ *   2) `graph LR "Title"` / `flowchart TB "Title"` — quoted diagram title.
+ *   3) `subgraph <id> [Label]`         — first subgraph display label.
+ *   4) `<id>[Label]` / `<id>(Label)`   — first node display label.
+ *   5) `"Imported schema"`             — final fallback.
+ *
+ * Pre-DRW-141 behaviour leaked the raw mermaid identifier line (e.g.
+ * `"x[Browser X]"`) into `frame.props.name`. The first-node-label step
+ * keeps that case useful while ensuring the bracketed identifier is parsed
+ * rather than written back verbatim.
+ */
+export function inferMermaidLabel(source: string): string {
+  const lines = source.split("\n");
+  for (const raw of lines) {
+    const trimmed = raw.trim();
+    if (trimmed === "") continue;
+
+    if (trimmed.startsWith("%%")) {
+      const label = trimmed.slice(2).trim();
+      if (label.length > 0) return label;
+      continue;
+    }
+
+    const titleMatch = trimmed.match(/^(?:graph|flowchart)\s+\S+\s+"(.+)"/i);
+    if (titleMatch?.[1]) return titleMatch[1];
+
+    const subgraphMatch = trimmed.match(/^subgraph\s+\S+\s*\[([^\]]+)\]/i);
+    if (subgraphMatch?.[1]) return subgraphMatch[1].trim();
+
+    // Skip graph/flowchart header lines that didn't quote-match above; they
+    // never carry a label themselves.
+    if (/^(?:graph|flowchart)\b/i.test(trimmed)) continue;
+
+    // First node with display label: `id[Label]`, `id(Label)`, `id{Label}`,
+    // also stadium `id([Label])` / `id[[Label]]`. We accept any opening
+    // bracket variant and take everything up to the matching close.
+    const nodeMatch = trimmed.match(
+      /^[A-Za-z0-9_-]+\s*[\[\(\{]+\s*"?([^\]\)\}"]+?)"?\s*[\]\)\}]+/,
+    );
+    if (nodeMatch?.[1]) {
+      const label = nodeMatch[1].trim();
+      if (label.length > 0) return label;
+    }
+  }
+  return "Imported schema";
+}
+
+/**
  * DRW-134 Task 2.6: HTTP request к backend `POST /api/schema/create`.
  * Auto-upgrade flow: backend создаёт frame + child shapes в v2 room;
  * реальные tldraw records приходят через WS broadcast.
@@ -211,18 +266,9 @@ export async function importMermaid(
     forceV1?: boolean;
   } = {},
 ): Promise<MermaidImportResult> {
-  // Derive label from first meaningful line of source (e.g. "graph LR" → skip; look for text)
-  const _inferredLabel =
-    source
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(
-        (l) => l && !l.startsWith("graph ") && !l.startsWith("flowchart "),
-      )
-      .at(0)
-      ?.replace(/^subgraph\s+\S*\s*\[?([^\]]*)\]?/, "$1")
-      .trim() || "Imported diagram";
-  const label = opts.label ?? _inferredLabel;
+  // DRW-141: aligned with MCP `extractMermaidLabel`; fixes browser-mode leaking
+  // the raw mermaid identifier line (e.g. `"x[Browser X]"`) into frame.props.name.
+  const label = opts.label ?? inferMermaidLabel(source);
 
   if (!opts.forceV1) {
     try {

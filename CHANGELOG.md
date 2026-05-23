@@ -2,6 +2,15 @@
 
 PATCH-уровневые фиксы поверх 0.23.1; накапливаются на `main` без per-task release commits ([[feedback-batch-release-cluster]]).
 
+### DRW-141 (Backlog DRW-141) — `shemma_import_mermaid mode=browser` пустой ответ + raw mermaid identifier в frame label
+
+Browser-mode flow `shemma_import_mermaid` возвращал `{ok:true, shape_ids:[], didraw_names:[], root_ids:[]}` несмотря на фактическое создание schema-frame; AI не мог chain'ить follow-up `shemma_connect` / `shemma_patch_schema` без `canvas_view` round-trip. Параллельно frame `props.name` устанавливался в первую non-header строку source — например `"x[Browser X]"` для `graph TD\n  x[Browser X]\n  ...`, leaking raw mermaid identifier line вместо отображаемого label.
+
+- **Bug A — empty arrays:** `runMermaidImport` в `apps/frontend/src/App.tsx` после DRW-134 v2 redesign'а получал `MermaidImportResult` с `frameId + nodeIds + shapeIds:[] + sourceTargetIds:[]` (v2 path не пишет shapes локально — они приходят через WS broadcast), но reply formatter всё ещё мапил `result.shapeIds` (пустой) в `shape_ids` ответа. Fix: ветка `isV2 = result.frameId !== undefined` возвращает `shape_ids = didraw_names = result.nodeIds`, `root_ids = [result.frameId]`. v1 fallback path untouched. Auto-zoom для v2 заменён на `editor.zoomToFit` (per-shape bounds недоступны без tldraw IDs).
+- **Bug B — frame label:** `_inferredLabel` в `apps/frontend/src/canvas/mermaid-import.ts` использовал narrow regex `^subgraph\s+\S*\s*\[?([^\]]*)\]?` который не matches `x[Browser X]` → возвращал raw строку as-is. Extract'нут `inferMermaidLabel(source)` aligned с MCP `extractMermaidLabel` (`packages/shemma-mcp/src/tools/domain.ts`): resolution order = `%%` comment → quoted `graph LR "Title"` → `subgraph <id> [Label]` → first node `<id>[Label]` / `(Label)` / `{Label}` / stadium → fallback `"Imported schema"`. Бывший fallback `"Imported diagram"` уступил каноническому `"Imported schema"` для cross-mode consistency.
+- **8 новых unit tests** в `apps/frontend/src/canvas/mermaid-import.test.ts` покрывают: bracketed nodes без header → first-node label, bare `graph LR` → fallback, `%%` comment приоритет, quoted title, subgraph label, `opts.label` override beats inference, v2 backend path получает inferred label not raw identifier.
+- **Real-board verify** на `manual-test-2026-05-23` после rebuild + cache-bust reload: browser mode `graph TD\n  drw141a[Browser A]\n  drw141b[Browser B]\n  drw141a --> drw141b` → `shape_ids=["browser-a-34d43x","browser-b-qo8wvh"]`, `root_ids=["shape:f_5278feedab"]`, `frame.props.name = "Browser A"`. Auto mode (storage path): `shape_ids` populated, `frame.props.name = "Imported schema"` (storage `extractMermaidLabel` не делает node-label inference — приемлемо).
+
 ### DRW-141 — native tldraw Cmd+D crashed on schema-frame (`Error: a1 >= a1`)
 
 При нажатии Cmd+D на любом созданном через `shemma_create_schema` / `shemma_duplicate_schema` schema-frame'е tldraw валился в error boundary `Something went wrong`. Stack: `Error: a1 >= a1` — все children frame'а имели одинаковый hardcoded `index: "a1"`, и tldraw fractional indexing не мог вычислить новый `between(low, high)` когда `low === high`.
