@@ -1,6 +1,6 @@
-## Unreleased — post-0.23.1 hotfixes
+## 0.23.2 — 2026-05-23 — DRW-135..141 hotfix cluster
 
-PATCH-уровневые фиксы поверх 0.23.1; накапливаются на `main` без per-task release commits ([[feedback-batch-release-cluster]]).
+PATCH release bundling 7 fixes accumulated after DRW-134 (0.23.0) testing + 0.23.1 follow-up. No new features; all bug-fixes на live v2 schema-frame flow + tldraw native interop. Cluster shipped per [[feedback-batch-release-cluster]] (one release commit вместо per-task version bumps).
 
 ### DRW-141 (Backlog DRW-141) — `shemma_import_mermaid mode=browser` пустой ответ + raw mermaid identifier в frame label
 
