@@ -467,4 +467,82 @@ export class CanvasClient {
     });
     return r.json();
   }
+
+  // ── DRW-134 Schema API ────────────────────────────────────────────────────
+
+  /**
+   * GET /api/canvas/view — polymorphic canvas view.
+   * v1 rooms → { schemaVersion:"v1", legacy:{...} }.
+   * v2 rooms → { schemaVersion:"v2", frames:[...], free:[...] }.
+   */
+  async getCanvasView(opts: { space?: string } = {}) {
+    const params = new URLSearchParams({
+      space: opts.space ?? this.space,
+      room: this.room,
+    });
+    const r = await fetch(`${this.base}/api/canvas/view?${params.toString()}`);
+    return r.json();
+  }
+
+  /**
+   * POST /api/schema/create — создать новый schema-frame.
+   * Mode A: { label, raw } — mermaid RAW.
+   * Mode B: { label, actions } — SchemaAction[].
+   */
+  async createSchema(body: {
+    label: string;
+    raw?: string;
+    actions?: unknown[];
+    clientOpId?: string;
+  }) {
+    const r = await fetch(`${this.base}/api/schema/create?${this.q()}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return r.json();
+  }
+
+  /**
+   * POST /api/schema/:frameId/patch — apply SchemaAction[] к schema-frame.
+   */
+  async patchSchema(
+    frameId: string,
+    body: {
+      actions: unknown[];
+      clientOpId?: string;
+    },
+  ) {
+    const r = await fetch(
+      `${this.base}/api/schema/${encodeURIComponent(frameId)}/patch?${this.q()}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    return r.json();
+  }
+
+  /**
+   * POST /api/schema/:frameId/overlay — write single overlay entry.
+   */
+  async setOverlay(
+    frameId: string,
+    body: {
+      nodeId: string;
+      overlay: Record<string, unknown>;
+      clientOpId?: string;
+    },
+  ) {
+    const r = await fetch(
+      `${this.base}/api/schema/${encodeURIComponent(frameId)}/overlay?${this.q()}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    return r.json();
+  }
 }

@@ -243,6 +243,47 @@ describe("CanvasClient space param — room-management endpoints", () => {
   });
 });
 
+describe("CanvasClient schema API methods (DRW-134 Task 2.8)", () => {
+  it("getCanvasView includes space and room in URL", async () => {
+    const c = new CanvasClient({ baseUrl: "http://x", space: "sc-1", room: "r-sc-1" });
+    await c.getCanvasView();
+    expect(capturedUrls[0]).toContain("space=sc-1");
+    expect(capturedUrls[0]).toContain("room=r-sc-1");
+    expect(capturedUrls[0]).toContain("/api/canvas/view");
+  });
+
+  it("getCanvasView accepts space override", async () => {
+    const c = new CanvasClient({ baseUrl: "http://x", space: "default-space", room: "r1" });
+    await c.getCanvasView({ space: "override-space" });
+    expect(capturedUrls[0]).toContain("space=override-space");
+    expect(capturedUrls[0]).not.toContain("space=default-space");
+  });
+
+  it("createSchema includes space and room in URL", async () => {
+    const c = new CanvasClient({ baseUrl: "http://x", space: "sc-2", room: "r-sc-2" });
+    await c.createSchema({ label: "L", raw: "graph LR\n  a[A]" });
+    expect(capturedUrls[0]).toContain("space=sc-2");
+    expect(capturedUrls[0]).toContain("room=r-sc-2");
+    expect(capturedUrls[0]).toContain("/api/schema/create");
+  });
+
+  it("patchSchema includes frameId in URL path", async () => {
+    const c = new CanvasClient({ baseUrl: "http://x", space: "sc-3", room: "r-sc-3" });
+    await c.patchSchema("shape:f_abc", { actions: [] });
+    expect(capturedUrls[0]).toContain("shape%3Af_abc");
+    expect(capturedUrls[0]).toContain("/patch");
+    expect(capturedUrls[0]).toContain("space=sc-3");
+  });
+
+  it("setOverlay includes frameId in URL path", async () => {
+    const c = new CanvasClient({ baseUrl: "http://x", space: "sc-4", room: "r-sc-4" });
+    await c.setOverlay("shape:f_xyz", { nodeId: "node-1", overlay: { color: "blue" } });
+    expect(capturedUrls[0]).toContain("shape%3Af_xyz");
+    expect(capturedUrls[0]).toContain("/overlay");
+    expect(capturedUrls[0]).toContain("space=sc-4");
+  });
+});
+
 describe("CanvasClient space param — non-room methods unaffected", () => {
   it("health does NOT include space in URL", async () => {
     // health() calls /healthz — simple probe, no space
