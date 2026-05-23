@@ -99,10 +99,11 @@ export function buildStickyNotePayload(shape: RawShape, ctx: BuilderCtx): MiroBu
   const h = (props.h as number | undefined) ?? 200;
   const content = pickRichText(props);
 
-  const style: Record<string, unknown> = {};
-  // Miro sticky notes require a named-enum fillColor (not hex).
-  const metaFillHex = shape.meta?.fillHex as string | undefined;
-  style.fillColor = metaFillHex ? nearestStickyColor(metaFillHex) : "yellow";
+  const style: Record<string, unknown> = {
+    fillColor: stickyFillColor(shape),
+    fontFamily: tldrawFontToFamily(props.font as string | undefined),
+    fontSize: tldrawSizeToStickyFontSize(props.size as string | undefined),
+  };
 
   return applyPositionAndParent({
     type: "sticky_note",
