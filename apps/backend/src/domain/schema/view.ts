@@ -153,10 +153,10 @@ export function buildCanvasView(room: RoomState): CanvasViewResponse {
   }
 
   // Первый проход: находим все schema-frames.
-  const frameShaoes = allShapes.filter(
+  const frameShapes = allShapes.filter(
     (s) => s.meta?.didrawSchemaFrame === true,
   );
-  const frameIds = new Set(frameShaoes.map((f) => f.id));
+  const frameIds = new Set(frameShapes.map((f) => f.id));
 
   // Строим индекс children per frame (прямые children).
   const directChildrenByFrame = new Map<string, TLRecord[]>();
@@ -190,7 +190,7 @@ export function buildCanvasView(room: RoomState): CanvasViewResponse {
   }
 
   // Строим frames[].
-  const frames: CanvasViewResponse["frames"] = frameShaoes.map((frame) => {
+  const frames: CanvasViewResponse["frames"] = frameShapes.map((frame) => {
     const frameMeta = (frame.meta ?? {}) as Record<string, unknown>;
     const raw =
       typeof frameMeta.mermaidSource === "string"
