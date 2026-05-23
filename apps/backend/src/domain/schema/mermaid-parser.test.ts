@@ -7,7 +7,7 @@ import type { NodeId } from "@shemma/domain";
 
 /** Deterministic ID generator: returns "<slug>-aaaaaa" */
 function makeTestGenerator() {
-  return function generateId(slug: string, _existing: ReadonlySet<NodeId>): NodeId {
+  return function generateId(slug: string, _existing: ReadonlySet<NodeId>, _mermaidId: string): NodeId {
     if (slug === "" || slug === "shape") return `e-aaaaaa`;
     return `${slug}-aaaaaa`;
   };

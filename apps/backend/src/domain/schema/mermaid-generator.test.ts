@@ -15,7 +15,7 @@ import type { ConnectionKind } from "@shemma/domain";
 
 /** Deterministic ID generator for round-trip tests */
 function makeTestGenerator() {
-  return function generateId(slug: string, _existing: ReadonlySet<NodeId>): NodeId {
+  return function generateId(slug: string, _existing: ReadonlySet<NodeId>, _mermaidId: string): NodeId {
     if (slug === "" || slug === "shape") return `e-aaaaaa`;
     return `${slug}-aaaaaa`;
   };

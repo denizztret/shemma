@@ -91,7 +91,14 @@ export function parseMermaidFlowchart(
   opts: {
     suffixLen: number;
     existingIds?: ReadonlySet<NodeId>;
-    generateId: (slug: string, existing: ReadonlySet<NodeId>) => NodeId;
+    /**
+     * ID generator callback.
+     * @param slug       - normalized slug from label (or mermaid id if no label)
+     * @param existing   - set of already-used NodeIds (for collision avoidance)
+     * @param mermaidId  - raw mermaid identifier from diagram (e.g. "api-aaaaaa")
+     *                     For storage-mode RAW, this IS the NodeId; callback can return it directly.
+     */
+    generateId: (slug: string, existing: ReadonlySet<NodeId>, mermaidId: string) => NodeId;
   },
 ): ParseResult {
   const { generateId } = opts;
@@ -187,7 +194,7 @@ export function parseMermaidFlowchart(
     const effectiveLabel = label !== undefined ? label : mermaidId;
     const slug =
       effectiveLabel === "" ? "" : slugify(effectiveLabel);
-    const nodeId = generateId(slug, allIds);
+    const nodeId = generateId(slug, allIds, mermaidId);
     idMap.set(mermaidId, nodeId);
     allIds.add(nodeId);
     return nodeId;
