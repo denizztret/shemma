@@ -107,6 +107,98 @@ export const ImportMermaidArgs = {
   focus: z.enum(["new", "fit-all", "none"]).optional(),
 };
 
+// ── DRW-134: Schema API schemas ────────────────────────────────────────────
+
+/** Overlay entry schema for shemma_set_overlay. */
+export const OverlayEntrySchema = z.object({
+  position: z.object({ x: z.number(), y: z.number() }).optional(),
+  color: z.string().optional(),
+  label: z.string().optional(),
+  role: RoleEnum.optional(),
+  pinned: z.boolean().optional(),
+  styleOwnedBy: z.literal("user").optional(),
+});
+
+/** SchemaAction discriminated union — zod schema matching @shemma/domain SchemaAction. */
+export const SchemaActionSchema: z.ZodType<Record<string, unknown>> = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("schema-define"),
+    nodeId: z.string().optional(),
+    role: RoleEnum,
+    label: z.string().optional(),
+    in: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("schema-connect"),
+    from: z.string(),
+    to: z.string(),
+    connectionKind: ConnectionKindEnum.optional(),
+    label: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("schema-rename"),
+    nodeId: z.string(),
+    label: z.string(),
+  }),
+  z.object({
+    kind: z.literal("schema-set-role"),
+    nodeId: z.string(),
+    role: RoleEnum,
+  }),
+  z.object({
+    kind: z.literal("schema-group"),
+    nodeIds: z.array(z.string()).min(1),
+    as: z.enum(["boundary", "network"]),
+    name: z.string().optional(),
+    label: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("schema-disconnect"),
+    from: z.string(),
+    to: z.string(),
+  }),
+  z.object({
+    kind: z.literal("schema-delete-node"),
+    nodeId: z.string(),
+  }),
+  z.object({
+    kind: z.literal("schema-set-overlay"),
+    nodeId: z.string(),
+    overlay: OverlayEntrySchema,
+  }),
+]);
+
+export const CanvasViewArgs = {
+  room: z.string().optional(),
+  space: z.string().optional(),
+};
+
+export const CreateSchemaArgs = {
+  label: z.string(),
+  raw: z.string().optional(),
+  actions: z.array(SchemaActionSchema).optional(),
+  room: z.string().optional(),
+  space: z.string().optional(),
+  clientOpId: z.string().optional(),
+};
+
+export const PatchSchemaArgs = {
+  frameId: z.string().optional(),
+  actions: z.array(SchemaActionSchema),
+  clientOpId: z.string().optional(),
+  room: z.string().optional(),
+  space: z.string().optional(),
+};
+
+export const SetOverlayArgs = {
+  frameId: z.string(),
+  nodeId: z.string(),
+  overlay: OverlayEntrySchema,
+  clientOpId: z.string().optional(),
+  room: z.string().optional(),
+  space: z.string().optional(),
+};
+
 export const ExportMiroArgs = {
   boardId: z
     .string()

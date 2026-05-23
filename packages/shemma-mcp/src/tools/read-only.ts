@@ -151,13 +151,49 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
   );
 
   // ── shemma_context ─────────────────────────────────────────────────────────
+  // DRW-134 Task 2.8: polymorphic alias.
+  // If room is v2 (schemaVersion:"v2") → delegates to canvas-view response + deprecation hint.
+  // If room is v1 (schemaVersion:"v1") → returns legacy domain JSON unchanged (current behaviour).
   async function contextCall(input: { room?: string; space?: string; since?: number; viewport?: string; select?: string[] }): Promise<ToolResult> {
     const spaceRes = resolveSpaceOrError(deps, input.space);
     if ("error" in spaceRes) return spaceRes.error;
+    const room = input.room ?? deps.defaultRoom;
+
+    // Try canvas-view first to detect v2 rooms.
     try {
-      const client = clientForRoom(deps.client, input.room, spaceRes.spaceId);
+      const client = clientForRoom(deps.client, room, spaceRes.spaceId);
+      const viewData = await client.getCanvasView() as {
+        schemaVersion?: string;
+        legacy?: unknown;
+        hint?: string;
+        frames?: unknown;
+        free?: unknown;
+      };
+
+      if (viewData.schemaVersion === "v2") {
+        // v2 room: return canvas-view payload with deprecation hint.
+        return toolResult({
+          ok: true,
+          room,
+          data: {
+            ...viewData,
+            deprecation:
+              "shemma_context → shemma_canvas_view: this room uses v2 protocol. " +
+              "Prefer shemma_canvas_view for full schema-frame access. " +
+              "shemma_context will continue to work as an alias.",
+          },
+        });
+      }
+
+      // v1 room: fall through to legacy context path.
+    } catch {
+      // canvas-view unavailable — fall through to legacy path.
+    }
+
+    // Legacy v1 path: return domain context unchanged.
+    try {
+      const client = clientForRoom(deps.client, room, spaceRes.spaceId);
       const data = await client.getContext({ since: input.since, viewport: input.viewport, select: input.select });
-      const room = input.room ?? deps.defaultRoom;
       return toolResult({ ok: true, room, data });
     } catch (e) {
       return toolResult(mapFetchError(e));
@@ -167,7 +203,12 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
   server.registerTool(
     "shemma_context",
     {
-      description: "Token-cheap domain context for a room. Optional: since=<version> for diff; viewport=x,y,w,h; select=<comma-separated ids>.",
+      description:
+        "Token-cheap domain context for a room. Polymorphic alias: " +
+        "v1 rooms → legacy domain JSON (elements, version, pendingPrompts); " +
+        "v2 rooms → canvas-view shape ({frames, free}) + deprecation hint recommending shemma_canvas_view. " +
+        "Optional (v1 only): since=<version> for diff; viewport=x,y,w,h; select=<comma-separated ids>. " +
+        "For v2 rooms prefer shemma_canvas_view (non-polymorphic, always returns v2 shape).",
       inputSchema: {
         room: z.string().optional(),
         space: z.string().optional(),

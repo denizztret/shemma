@@ -1,3 +1,32 @@
+## 0.23.0 — 2026-05-23 — DRW-134 Canvas-AI bidirectional protocol (RAW+overlay в schema-frame)
+
+MINOR release: полноценный bidirectional protocol для взаимодействия AI ↔ canvas через schema-frame как единицу обмена. Additive API, breaking change в identity model gated через `room.meta.didrawProtocol === "v2"` marker — legacy v1 rooms работают без изменений. DRW-127 (storage-only mermaid import) закрывается как часть этого release'а.
+
+- **Identity v2** (`@shemma/domain`): `generateNodeId` (`<slug>-<6char-base36>` / `e-<6char>` для anonymous), `slugify`, `nodeIdRegex(suffixLen)`, `isValidNodeId`. Backend-side crypto RNG wrapper (`generateNodeIdServer`). Identity stable + immutable на весь lifetime shape'а.
+- **Schema types** (`@shemma/domain`): `SchemaFrameMeta`, `SchemaChildMeta`, `OverlayEntry`, `SchemaAction` discriminated union (define / connect / disconnect / delete-node / group / rename / set-overlay).
+- **v2 read API**: `GET /api/canvas/view` — polymorphic response: v1 rooms → legacy domain summary (byte-identical к `GET /api/agent/context`); v2 rooms → `{frames: SchemaFrameView[], free: FreeShapeView[]}`.
+- **v2 write API**: `POST /api/schema/create` (snapshot — raw mermaid или actions array), `POST /api/schema/:frameId/patch` (incremental SchemaAction batch), `POST /api/schema/:frameId/overlay` (shortcut для overlay-only update). Atomicity: rollback order enforced per spec.
+- **Mermaid storage-mode parser** (bespoke, zero new deps): flowchart/graph subset → `SchemaAction[]` mapping table. Generator: `SchemaAction[]` → canonical mermaid string для RAW persistence.
+- **Frontend rewrite** (`mermaid-import.ts`): на v2 rooms — write protocol marker + assign `meta.didrawId` + auto-ungroup. Frontend overlay-sync listener: user drag → `POST /api/schema/:frameId/overlay`.
+- **MCP tools**: `shemma_canvas_view` (read, polymorphic — v1 legacy + v2 schema-frames), `shemma_create_schema`, `shemma_patch_schema`, `shemma_set_overlay`, `shemma_duplicate_schema`, `shemma_delete_schema`. `shemma_context` → polymorphic alias (v2 rooms получают deprecation warning; v1 — byte-identical legacy shape).
+- **Frame duplication** (`POST /api/schema/:frameId/duplicate`): копирует schema-frame с ID remap (все didrawId в children получают новые unique IDs). `DELETE /api/schema/:frameId` для полного удаления.
+- **Cmd+Shift+K semantic picker** (frontend): UI picker для опционального назначения role/connectionKind на user-drawn shapes.
+- **Storage-only E2E**: `/api/schema/create` работает без браузера (нет WS requirement); verified E2E test.
+
+**Known gaps:** `shemma_import_mermaid` MCP tool сохраняет старый browser-only flow (без `mode` param). AI-driven storage import доступен через `shemma_create_schema` directly; mode-param обёртка перенесена в backlog (отдельная follow-up задача).
+- **Legacy mode preserved**: v1 rooms без `didrawProtocol` marker продолжают работать через `/api/agent/context` + `/api/domain` без изменений. `/api/domain` не трогается.
+
+### Breaking change — identity model (v2 rooms only)
+
+v2 rooms используют `meta.didrawId` (`<slug>-<6char>`) как canonical identity вместо `meta.didrawName` (legacy). `meta.didrawName` сохранён для backward compat v1. AI callers должны использовать `shemma_canvas_view` (не `shemma_context`) для v2 rooms; `shemma_context` сохранён как alias на 1 minor version с deprecation field.
+
+### Closes
+
+- **DRW-134** — Canvas-AI bidirectional protocol umbrella.
+- **DRW-127** — Mermaid storage-only import (covered by `/api/schema/create` raw mode).
+
+---
+
 ## 0.22.0 — 2026-05-23 — DRW-124 cluster close (MCP feedback resolved, ex DRW-127)
 
 MINOR release consolidating DRW-129/130/131/132/133 from the DRW-124 MCP-feedback cluster. Five additive, backward-compatible improvements; no breaking changes. DRW-127 (P0.3 Mermaid storage-only fallback) was originally scheduled into this cluster but its scope expanded during 2026-05-22..23 brainstorm into a larger redesign — tracked separately as **DRW-134** (Canvas-AI bidirectional protocol — RAW+overlay in schema-frame); ADR-0004 draft (`docs/decisions/0004-mermaid-storage-only-import.md`) is committed as a frozen brainstorm artifact and superseded by DRW-134.

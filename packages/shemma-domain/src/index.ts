@@ -4,3 +4,6 @@ export * from "./layout-modes";
 export * from "./role-preset";
 export * from "./connection-preset";
 export * from "./validation";
+export * from "./identity";
+export * from "./schema-meta";
+export * from "./schema-actions";

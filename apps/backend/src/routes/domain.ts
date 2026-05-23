@@ -71,6 +71,57 @@ export function domainRoutes(bus: StoreChangeBus) {
     const spaceId = space.id;
     const room = await rooms.get(id);
 
+    // Outside-frame guard (DRW-134 Task 2.8): reject actions targeting shapes
+    // that belong to a schema-frame (meta.didrawSchemaParent set). These shapes
+    // must be mutated through /api/schema/:frameId/patch, not /api/domain.
+    // Free shapes (no didrawSchemaParent) pass through unchanged.
+    for (const [i, a] of body.actions.entries()) {
+      // Only check actions that reference existing shapes by name/id.
+      const actionKind = typeof a.kind === "string" ? a.kind : "";
+      // Actions that target named elements (define creates new, so skip).
+      if (actionKind === "define") continue;
+      // Extract target names: for connect (from/to), for delete (ids), for note/group (name).
+      const targetNames: string[] = [];
+      if (typeof a.from === "string") targetNames.push(a.from);
+      if (typeof a.to === "string") targetNames.push(a.to);
+      if (typeof a.name === "string") targetNames.push(a.name);
+      if (Array.isArray(a.ids)) {
+        for (const id of a.ids) {
+          if (typeof id === "string") targetNames.push(id);
+        }
+      }
+      if (Array.isArray(a.children)) {
+        for (const ch of a.children) {
+          if (typeof ch === "string") targetNames.push(ch);
+        }
+      }
+
+      for (const nm of targetNames) {
+        const recId = room.didrawIndex.get(nm);
+        if (!recId) continue;
+        const rec = room.store.store[recId];
+        if (!rec) continue;
+        const meta = (rec as { meta?: Record<string, unknown> }).meta;
+        if (meta && typeof meta.didrawSchemaParent === "string" && meta.didrawSchemaParent !== "") {
+          return c.json(
+            {
+              ok: false,
+              errors: [
+                {
+                  actionIndex: i,
+                  code: "outside-frame-not-allowed" as const,
+                  message:
+                    `shape '${nm}' belongs to schema-frame '${meta.didrawSchemaParent}'; ` +
+                    "use /api/schema/:frameId/patch to mutate schema-frame shapes",
+                },
+              ],
+            },
+            422,
+          );
+        }
+      }
+    }
+
     // Cascade pre-check (before validate). Container = shape with type=frame.
     // Children = shapes with parentId === frame.id.
     for (const [i, a] of body.actions.entries()) {

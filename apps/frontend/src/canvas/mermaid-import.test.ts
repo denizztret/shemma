@@ -1,12 +1,18 @@
-// Tests for mermaid-import meta-tagging logic (DRW-053, DRW-084).
+// Tests for mermaid-import meta-tagging logic (DRW-053, DRW-084, DRW-134 Task 2.6).
 //
 // Scope:
 //   - sourceTargetIds correctly identifies root-frame(s) of an import.
 //   - Falls back to all root shapes when no frame is among roots.
 //   - meta.mermaidSource is set on sourceTargetIds, NOT on child shapes.
-//   - meta.didrawName uniquely assigned per-shape across the import.
+//   - meta.didrawId + meta.didrawLabel assigned per-shape (DRW-134 v2 identity).
+//   - meta.didrawName mirrors NodeId for backward compat.
 //   - DRW-084: subgraph nodes → frame shapes with parentId set on children.
 //   - DRW-093: source passes through to createMermaidDiagram unchanged.
+//   - DRW-134 Task 2.6: auto-ungroup cosmetic tldraw `group` shapes.
+//   - DRW-134 Task 2.6: isCosmeticGroup heuristic.
+//
+// Legacy path tests use `forceV1: true` to skip v2 HTTP call (no server in tests).
+// v2 path tests use mocked fetch.
 //
 // We mock createMermaidDiagram через monkey-patching the @tldraw/mermaid module
 // доступа в runtime. Editor — минимальный fake без tldraw — только нужный
@@ -24,7 +30,12 @@ type FakeShape = {
   props: { richText?: { type: "doc"; content: unknown[] } };
 };
 
-function makeShape(id: string, type: string, parentId: string, label?: string): FakeShape {
+function makeShape(
+  id: string,
+  type: string,
+  parentId: string,
+  label?: string,
+): FakeShape {
   return {
     id: `shape:${id}`,
     typeName: "shape",
@@ -50,11 +61,25 @@ function makeFakeEditor(pageId: string) {
     getCurrentPageShapes: () => shapes.slice(),
     getShape: (id: string) => shapes.find((s) => s.id === id),
     // biome-ignore lint/suspicious/noExplicitAny: fake editor
-    updateShapes: (updates: Array<{ id: string; type: string; meta: any }>) => {
+    updateShapes: (
+      updates: Array<{
+        id: string;
+        type: string;
+        parentId?: string;
+        meta: any;
+      }>,
+    ) => {
       for (const u of updates) {
         const s = shapes.find((x) => x.id === u.id);
-        if (s) s.meta = { ...s.meta, ...u.meta };
+        if (s) {
+          s.meta = { ...s.meta, ...u.meta };
+          if (u.parentId !== undefined) s.parentId = u.parentId;
+        }
       }
+    },
+    // DRW-134 Task 2.6: deleteShape support for auto-ungroup.
+    deleteShape: (id: unknown) => {
+      shapes = shapes.filter((s) => s.id !== id);
     },
     // Internal helper for tests (not on real Editor).
     _setShapes: (s: FakeShape[]) => {
@@ -114,7 +139,8 @@ describe("importMermaid — meta.mermaidSource", () => {
 
     const { importMermaid } = await import("./mermaid-import");
     const source = "graph TD\nA-->B";
-    const res = await importMermaid(editor as never, source);
+    // DRW-134: forceV1 skips v2 HTTP call (no server in tests).
+    const res = await importMermaid(editor as never, source, { forceV1: true });
 
     expect(res.ok).toBe(true);
     expect(res.shapeIds.length).toBe(4);
@@ -125,9 +151,16 @@ describe("importMermaid — meta.mermaidSource", () => {
     const node1 = editor._shapes().find((s) => s.id === "shape:node1");
     expect(frame?.meta.mermaidSource).toBe(source);
     expect(node1?.meta.mermaidSource).toBeUndefined();
-    // didrawName is set on every new shape.
-    expect(frame?.meta.didrawName).toBeDefined();
-    expect(node1?.meta.didrawName).toBe("alpha");
+    // DRW-134 Task 2.6: didrawId is now a NodeId (<slug>-<6char>), not a plain slug.
+    // didrawName mirrors didrawId for backward compat.
+    expect(frame?.meta.didrawId).toBeDefined();
+    expect(node1?.meta.didrawId).toBeDefined();
+    // didrawId starts with label-derived slug.
+    expect(String(node1?.meta.didrawId)).toMatch(/^alpha-/);
+    // didrawLabel stores original text.
+    expect(node1?.meta.didrawLabel).toBe("Alpha");
+    // didrawName mirrors didrawId (backward compat).
+    expect(node1?.meta.didrawName).toBe(node1?.meta.didrawId);
   });
 
   test("falls back to all root shapes when no frame present", async () => {
@@ -143,7 +176,7 @@ describe("importMermaid — meta.mermaidSource", () => {
 
     const { importMermaid } = await import("./mermaid-import");
     const source = "graph LR\nA-->B";
-    const res = await importMermaid(editor as never, source);
+    const res = await importMermaid(editor as never, source, { forceV1: true });
 
     expect(res.sourceTargetIds.length).toBe(3);
     for (const s of editor._shapes()) {
@@ -163,13 +196,13 @@ describe("importMermaid — meta.mermaidSource", () => {
     });
 
     const { importMermaid } = await import("./mermaid-import");
-    await importMermaid(editor as never, "graph TD\nA-->B");
+    await importMermaid(editor as never, "graph TD\nA-->B", { forceV1: true });
 
     const existing = editor._shapes().find((s) => s.id === "shape:existing");
     expect(existing?.meta.mermaidSource).toBeUndefined();
   });
 
-  test("dedupes didrawName across duplicate labels", async () => {
+  test("dedupes didrawId across duplicate labels (all NodeIds unique)", async () => {
     const PAGE = "page:page";
     const editor = makeFakeEditor(PAGE);
     mockMermaidCreates((ed) => {
@@ -181,13 +214,16 @@ describe("importMermaid — meta.mermaidSource", () => {
     });
 
     const { importMermaid } = await import("./mermaid-import");
-    await importMermaid(editor as never, "graph TD\nA-->B");
+    await importMermaid(editor as never, "graph TD\nA-->B", { forceV1: true });
 
-    const names = editor._shapes().map((s) => s.meta.didrawName);
-    expect(new Set(names).size).toBe(3); // unique
-    expect(names).toContain("same");
-    expect(names).toContain("same-2");
-    expect(names).toContain("same-3");
+    // DRW-134 Task 2.6: didrawId collision prevention via generateNodeId retry × 8.
+    // With random RNG, all 3 NodeIds should be unique (collision probability negligible).
+    const ids = editor._shapes().map((s) => s.meta.didrawId);
+    expect(new Set(ids).size).toBe(3); // unique NodeIds
+    // All start with slug derived from "Same".
+    for (const id of ids) {
+      expect(String(id)).toMatch(/^same-/);
+    }
   });
 
   test("throws when mermaid produces no shapes", async () => {
@@ -198,9 +234,9 @@ describe("importMermaid — meta.mermaidSource", () => {
     });
 
     const { importMermaid } = await import("./mermaid-import");
-    await expect(importMermaid(editor as never, "")).rejects.toThrow(
-      "mermaid produced no shapes",
-    );
+    await expect(
+      importMermaid(editor as never, "", { forceV1: true }),
+    ).rejects.toThrow("mermaid produced no shapes");
   });
 });
 
@@ -227,7 +263,10 @@ describe("importMermaid — DRW-084: subgraph remains geo with meta.role='bounda
       createMermaidDiagram: async (ed: any, _source: string, opts: any) => {
         // Verify that mapNodeToRenderSpec hook is NOT passed (no frame override).
         const mapper = opts?.blueprintRender?.mapNodeToRenderSpec;
-        if (mapper) throw new Error("mapNodeToRenderSpec hook must NOT be passed in hybrid strategy");
+        if (mapper)
+          throw new Error(
+            "mapNodeToRenderSpec hook must NOT be passed in hybrid strategy",
+          );
 
         // Library default: subgraph → geo, children get parentId = subgraph geo id.
         ed._addShapes([
@@ -241,7 +280,7 @@ describe("importMermaid — DRW-084: subgraph remains geo with meta.role='bounda
 
     const { importMermaid } = await import("./mermaid-import");
     const source = "graph TD\nsubgraph SL[Service Layer]\n  API-->DB\nend";
-    const res = await importMermaid(editor as never, source);
+    const res = await importMermaid(editor as never, source, { forceV1: true });
 
     expect(res.ok).toBe(true);
     expect(res.shapeIds.length).toBe(4);
@@ -279,7 +318,7 @@ describe("importMermaid — DRW-084: subgraph remains geo with meta.role='bounda
     }));
 
     const { importMermaid } = await import("./mermaid-import");
-    await importMermaid(editor as never, "graph LR\nA-->B");
+    await importMermaid(editor as never, "graph LR\nA-->B", { forceV1: true });
 
     for (const s of editor._shapes()) {
       expect(s.meta.role).toBeUndefined();
@@ -302,7 +341,11 @@ describe("importMermaid — DRW-084: subgraph remains geo with meta.role='bounda
     }));
 
     const { importMermaid } = await import("./mermaid-import");
-    const res = await importMermaid(editor as never, "graph TD\nsubgraph O\nsubgraph I\nLeaf\nend\nend");
+    const res = await importMermaid(
+      editor as never,
+      "graph TD\nsubgraph O\nsubgraph I\nLeaf\nend\nend",
+      { forceV1: true },
+    );
 
     expect(res.ok).toBe(true);
     const outer = editor._shapes().find((s) => s.id === "shape:outer");
@@ -334,14 +377,22 @@ describe("unionBoundsOf (DRW-086)", () => {
     const PAGE = "page:page";
     const editor = makeFakeEditor(PAGE);
     // Augment fake editor with getShapePageBounds
-    const boundsMap: Record<string, { x: number; y: number; w: number; h: number }> = {
+    const boundsMap: Record<
+      string,
+      { x: number; y: number; w: number; h: number }
+    > = {
       "shape:a": makeBox(0, 0, 100, 50),
       "shape:b": makeBox(200, 100, 80, 60),
     };
-    (editor as unknown as Record<string, unknown>).getShapePageBounds = (id: string) => boundsMap[id] ?? undefined;
+    (editor as unknown as Record<string, unknown>).getShapePageBounds = (
+      id: string,
+    ) => boundsMap[id] ?? undefined;
 
     const { unionBoundsOf } = await import("./mermaid-import");
-    const result = unionBoundsOf(editor as never, ["shape:a" as never, "shape:b" as never]);
+    const result = unionBoundsOf(editor as never, [
+      "shape:a" as never,
+      "shape:b" as never,
+    ]);
     // Union of (0,0,100,50) and (200,100,80,60) should produce (0,0,280,160)
     expect(result).not.toBeNull();
     expect(result!.x).toBe(0);
@@ -353,7 +404,9 @@ describe("unionBoundsOf (DRW-086)", () => {
   test("returns null when no shapes have bounds", async () => {
     const PAGE = "page:page";
     const editor = makeFakeEditor(PAGE);
-    (editor as unknown as Record<string, unknown>).getShapePageBounds = (_id: string) => undefined;
+    (editor as unknown as Record<string, unknown>).getShapePageBounds = (
+      _id: string,
+    ) => undefined;
 
     const { unionBoundsOf } = await import("./mermaid-import");
     const result = unionBoundsOf(editor as never, ["shape:a" as never]);
@@ -363,7 +416,9 @@ describe("unionBoundsOf (DRW-086)", () => {
   test("returns null for empty shapeIds array", async () => {
     const PAGE = "page:page";
     const editor = makeFakeEditor(PAGE);
-    (editor as unknown as Record<string, unknown>).getShapePageBounds = (_id: string) => undefined;
+    (editor as unknown as Record<string, unknown>).getShapePageBounds = (
+      _id: string,
+    ) => undefined;
 
     const { unionBoundsOf } = await import("./mermaid-import");
     const result = unionBoundsOf(editor as never, []);
@@ -373,7 +428,9 @@ describe("unionBoundsOf (DRW-086)", () => {
   test("returns single box when only one shape", async () => {
     const PAGE = "page:page";
     const editor = makeFakeEditor(PAGE);
-    (editor as unknown as Record<string, unknown>).getShapePageBounds = (id: string) => {
+    (editor as unknown as Record<string, unknown>).getShapePageBounds = (
+      id: string,
+    ) => {
       if (id === "shape:solo") return makeBox(10, 20, 50, 30);
       return undefined;
     };
@@ -394,28 +451,40 @@ describe("isBoundsContained (DRW-096)", () => {
   test("inner fully inside outer → true", async () => {
     const { isBoundsContained } = await import("./mermaid-import");
     expect(
-      isBoundsContained({ x: 10, y: 10, w: 20, h: 20 }, { x: 0, y: 0, w: 100, h: 100 }),
+      isBoundsContained(
+        { x: 10, y: 10, w: 20, h: 20 },
+        { x: 0, y: 0, w: 100, h: 100 },
+      ),
     ).toBe(true);
   });
 
   test("inner overlaps but extends beyond outer → false", async () => {
     const { isBoundsContained } = await import("./mermaid-import");
     expect(
-      isBoundsContained({ x: 80, y: 0, w: 50, h: 50 }, { x: 0, y: 0, w: 100, h: 100 }),
+      isBoundsContained(
+        { x: 80, y: 0, w: 50, h: 50 },
+        { x: 0, y: 0, w: 100, h: 100 },
+      ),
     ).toBe(false);
   });
 
   test("inner completely outside outer → false", async () => {
     const { isBoundsContained } = await import("./mermaid-import");
     expect(
-      isBoundsContained({ x: 200, y: 200, w: 50, h: 50 }, { x: 0, y: 0, w: 100, h: 100 }),
+      isBoundsContained(
+        { x: 200, y: 200, w: 50, h: 50 },
+        { x: 0, y: 0, w: 100, h: 100 },
+      ),
     ).toBe(false);
   });
 
   test("inner touches edge but stays inside → true", async () => {
     const { isBoundsContained } = await import("./mermaid-import");
     expect(
-      isBoundsContained({ x: 0, y: 0, w: 100, h: 100 }, { x: 0, y: 0, w: 100, h: 100 }),
+      isBoundsContained(
+        { x: 0, y: 0, w: 100, h: 100 },
+        { x: 0, y: 0, w: 100, h: 100 },
+      ),
     ).toBe(true);
   });
 });
@@ -436,8 +505,244 @@ describe("importMermaid — DRW-093: source passes through unchanged", () => {
 
     const { importMermaid } = await import("./mermaid-import");
     const bare = "graph TD\nA-->B";
-    await importMermaid(editor as never, bare);
+    await importMermaid(editor as never, bare, { forceV1: true });
 
     expect(capturedSource).toBe(bare);
+  });
+});
+
+// --- DRW-134 Task 2.6: isCosmeticGroup heuristic ---------------------------------
+
+describe("isCosmeticGroup (DRW-134 Task 2.6)", () => {
+  test("group without meta → cosmetic", async () => {
+    const { isCosmeticGroup } = await import("./mermaid-import");
+    const shape = makeShape("g1", "group", "page:page");
+    expect(isCosmeticGroup(shape as never)).toBe(true);
+  });
+
+  test("group with meta.role='boundary' → NOT cosmetic (semantic)", async () => {
+    const { isCosmeticGroup } = await import("./mermaid-import");
+    const shape = makeShape("g1", "group", "page:page");
+    shape.meta.role = "boundary";
+    expect(isCosmeticGroup(shape as never)).toBe(false);
+  });
+
+  test("group with meta.didrawId → NOT cosmetic (v2 identity assigned)", async () => {
+    const { isCosmeticGroup } = await import("./mermaid-import");
+    const shape = makeShape("g1", "group", "page:page");
+    shape.meta.didrawId = "auth-abc123";
+    expect(isCosmeticGroup(shape as never)).toBe(false);
+  });
+
+  test("group with meta.didrawName → NOT cosmetic (legacy identity assigned)", async () => {
+    const { isCosmeticGroup } = await import("./mermaid-import");
+    const shape = makeShape("g1", "group", "page:page");
+    shape.meta.didrawName = "auth-service";
+    expect(isCosmeticGroup(shape as never)).toBe(false);
+  });
+
+  test("non-group shape → NOT cosmetic", async () => {
+    const { isCosmeticGroup } = await import("./mermaid-import");
+    const shape = makeShape("s1", "geo", "page:page");
+    expect(isCosmeticGroup(shape as never)).toBe(false);
+  });
+});
+
+// --- DRW-134 Task 2.6: auto-ungroup cosmetic tldraw group shapes ---------------
+
+describe("importMermaid v1 path — auto-ungroup cosmetic tldraw group (DRW-134 Task 2.6)", () => {
+  test("cosmetic group dissolved: children re-parented to frame, group deleted", async () => {
+    const PAGE = "page:page";
+    const editor = makeFakeEditor(PAGE);
+
+    // createMermaidDiagram creates: frame → cosmetic group → 2 children
+    mock.module("@tldraw/mermaid", () => ({
+      createMermaidDiagram: async (ed: any, _source: string) => {
+        ed._addShapes([
+          makeShape("frame1", "frame", PAGE),
+          // cosmetic group wrapping — no semantic meta
+          makeShape("cg1", "group", "shape:frame1"),
+          makeShape("node1", "geo", "shape:cg1", "API"),
+          makeShape("node2", "geo", "shape:cg1", "DB"),
+        ]);
+      },
+    }));
+
+    const { importMermaid } = await import("./mermaid-import");
+    const res = await importMermaid(editor as never, "graph LR\nA-->B", {
+      forceV1: true,
+    });
+
+    expect(res.ok).toBe(true);
+    // Cosmetic group (cg1) should be deleted.
+    const shapes = editor._shapes();
+    expect(shapes.find((s) => s.id === "shape:cg1")).toBeUndefined();
+    // Children should be re-parented to the frame (group's parent).
+    const node1 = shapes.find((s) => s.id === "shape:node1");
+    const node2 = shapes.find((s) => s.id === "shape:node2");
+    expect(node1?.parentId).toBe("shape:frame1");
+    expect(node2?.parentId).toBe("shape:frame1");
+  });
+
+  test("boundary group (meta.role=boundary) is preserved — NOT ungrouped", async () => {
+    const PAGE = "page:page";
+    const editor = makeFakeEditor(PAGE);
+
+    mock.module("@tldraw/mermaid", () => ({
+      createMermaidDiagram: async (ed: any, _source: string) => {
+        ed._addShapes([
+          makeShape("frame1", "frame", PAGE),
+          // semantic group — has role=boundary (subgraph)
+          {
+            ...makeShape("sg1", "group", "shape:frame1"),
+            meta: { role: "boundary" },
+          },
+          makeShape("node1", "geo", "shape:sg1", "API"),
+        ]);
+      },
+    }));
+
+    const { importMermaid } = await import("./mermaid-import");
+    await importMermaid(editor as never, "graph LR\nsubgraph SL\nA\nend", {
+      forceV1: true,
+    });
+
+    const shapes = editor._shapes();
+    // Semantic group preserved.
+    const sg1 = shapes.find((s) => s.id === "shape:sg1");
+    expect(sg1).toBeDefined();
+    // Child still parented to group.
+    const node1 = shapes.find((s) => s.id === "shape:node1");
+    expect(node1?.parentId).toBe("shape:sg1");
+  });
+});
+
+// --- DRW-134 Task 2.6: v2 frame meta assignment (legacy path) ----------------
+
+describe("importMermaid v1 path — v2 frame meta (DRW-134 Task 2.6)", () => {
+  test("root frame gets didrawSchemaFrame, didrawProtocol, didrawOverlays", async () => {
+    const PAGE = "page:page";
+    const editor = makeFakeEditor(PAGE);
+    mockMermaidCreates((ed) => {
+      ed._addShapes([
+        makeShape("frame1", "frame", PAGE),
+        makeShape("child1", "geo", "shape:frame1", "API"),
+      ]);
+    });
+
+    const { importMermaid } = await import("./mermaid-import");
+    await importMermaid(editor as never, "graph LR\nA-->B", { forceV1: true });
+
+    const frame = editor._shapes().find((s) => s.id === "shape:frame1");
+    expect(frame?.meta.didrawSchemaFrame).toBe(true);
+    expect(frame?.meta.didrawProtocol).toBe("v2");
+    expect(frame?.meta.schemaProtocolVersion).toBe("1.0");
+    expect(frame?.meta.didrawOverlays).toEqual({});
+  });
+
+  test("all didrawId values unique within import", async () => {
+    const PAGE = "page:page";
+    const editor = makeFakeEditor(PAGE);
+    mockMermaidCreates((ed) => {
+      ed._addShapes([
+        makeShape("frame1", "frame", PAGE),
+        makeShape("n1", "geo", "shape:frame1", "Alpha"),
+        makeShape("n2", "geo", "shape:frame1", "Beta"),
+        makeShape("n3", "geo", "shape:frame1", "Gamma"),
+      ]);
+    });
+
+    const { importMermaid } = await import("./mermaid-import");
+    await importMermaid(editor as never, "graph LR\nA-->B-->C", {
+      forceV1: true,
+    });
+
+    const shapes = editor._shapes();
+    const ids = shapes.map((s) => s.meta.didrawId as string).filter(Boolean);
+    expect(ids.length).toBe(4); // frame + 3 nodes
+    expect(new Set(ids).size).toBe(4); // all unique
+  });
+});
+
+// --- DRW-134 Task 2.6: v2 backend path (HTTP call) ---------------------------
+
+describe("importMermaid — v2 backend path (DRW-134 Task 2.6)", () => {
+  test("calls POST /api/schema/create and returns frameId + nodeIds on success", async () => {
+    const PAGE = "page:page";
+    const editor = makeFakeEditor(PAGE);
+
+    // Mock global fetch for v2 path.
+    const originalFetch = globalThis.fetch;
+    let capturedRequest: { url: string; body: unknown } | undefined;
+    globalThis.fetch = (async (
+      url: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      capturedRequest = {
+        url: String(url),
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      };
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          frameId: "shape:f_test123",
+          nodeIds: ["api-aaaaaa", "db-bbbbbb"],
+          version: 1,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const { importMermaid } = await import("./mermaid-import");
+      const source = "graph LR\napi[API] --> db[Database]";
+      const res = await importMermaid(editor as never, source, {
+        space: "__test__",
+        room: "room1",
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.frameId).toBe("shape:f_test123");
+      expect(res.nodeIds).toEqual(["api-aaaaaa", "db-bbbbbb"]);
+      // v2 path: no local shapes written.
+      expect(res.shapeIds).toEqual([]);
+      expect(res.sourceTargetIds).toEqual([]);
+
+      // Verify HTTP call was made.
+      expect(capturedRequest).toBeDefined();
+      expect(capturedRequest?.url).toContain("/api/schema/create");
+      expect(capturedRequest?.url).toContain("space=__test__");
+      expect(capturedRequest?.url).toContain("room=room1");
+      expect(capturedRequest?.body).toMatchObject({ raw: source });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("falls back to v1 legacy path when backend returns error", async () => {
+    const PAGE = "page:page";
+    const editor = makeFakeEditor(PAGE);
+
+    // Mock fetch to return 503.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ error: "service unavailable" }), {
+        status: 503,
+      })) as unknown as typeof fetch;
+
+    mockMermaidCreates((ed) => {
+      ed._addShapes([makeShape("n1", "geo", PAGE, "A")]);
+    });
+
+    try {
+      const { importMermaid } = await import("./mermaid-import");
+      // Should fall back to v1 — no throw.
+      const res = await importMermaid(editor as never, "graph LR\nA-->B");
+      expect(res.ok).toBe(true);
+      // v1 path: shapes written locally.
+      expect(res.shapeIds.length).toBeGreaterThan(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

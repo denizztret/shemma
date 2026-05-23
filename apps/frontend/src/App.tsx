@@ -7,6 +7,12 @@ import { importMermaid, isBoundsContained, unionBoundsOf } from "./canvas/mermai
 import { backfillStoreRecords } from "./canvas/schema-placeholder";
 import { makeExportHotkeyHandler } from "./canvas/export-hotkey";
 import { makeTidyHotkeyHandler, tidyLayout } from "./canvas/tidy-layout";
+import {
+  classifySelection,
+  makeRolePickerHandler,
+  type SelectionInfo,
+} from "./canvas/role-picker.ts";
+import { RolePicker } from "./canvas/role-picker.tsx";
 import { AiActivityBadge } from "./chrome/AiActivityBadge";
 import { AppChrome } from "./chrome/AppChrome";
 import { ErrorBanner } from "./chrome/ErrorBanner";
@@ -95,6 +101,14 @@ export function App({
   const [mermaidOpen, setMermaidOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [aiActivity, setAiActivity] = useState<AiActivity | null>(null);
+  // DRW-134 Task 3.2: Cmd+Shift+K semantic picker state.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerInfo, setPickerInfo] = useState<SelectionInfo>({
+    hasSelection: false,
+    mode: "none",
+    shapeIds: [],
+    arrowIds: [],
+  });
 
   // tldraw requires `components` prop to be memoized (or defined outside the
   // component) to avoid re-mounting the editor on every render.
@@ -168,6 +182,34 @@ export function App({
         if (ids.length === 0) return;
         setExportOpen(true);
       },
+    );
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [editor]);
+
+  // DRW-134 Task 3.2: Cmd+Shift+K / Ctrl+Shift+K — semantic picker.
+  // Classifies the current selection (shapes vs arrows), then opens the picker modal.
+  useEffect(() => {
+    const handler = makeRolePickerHandler(
+      () => {
+        if (!editor) return { hasSelection: false, mode: "none", shapeIds: [], arrowIds: [] };
+        const ids = editor.getSelectedShapeIds() as unknown as string[];
+        return classifySelection(ids, (id) => {
+          // biome-ignore lint/suspicious/noExplicitAny: tldraw id typing
+          return editor.getShape(id as any)?.type === "arrow";
+        });
+      },
+      () => {
+        if (!editor) return;
+        const ids = editor.getSelectedShapeIds() as unknown as string[];
+        const info = classifySelection(ids, (id) => {
+          // biome-ignore lint/suspicious/noExplicitAny: tldraw id typing
+          return editor.getShape(id as any)?.type === "arrow";
+        });
+        setPickerInfo(info);
+        setPickerOpen(true);
+      },
+      // onEmpty — no-op: no toast, just ignore (spec: silent no-op on empty selection)
     );
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -555,6 +597,15 @@ export function App({
               room={room}
               selectedIds={selection}
               onClose={() => setExportOpen(false)}
+            />
+          )}
+          {/* DRW-134 Task 3.2: Cmd+Shift+K semantic picker */}
+          {editor && pickerOpen && (
+            <RolePicker
+              open={pickerOpen}
+              info={pickerInfo}
+              editor={editor}
+              onClose={() => setPickerOpen(false)}
             />
           )}
           <PromptDrawer space={space} room={room} tick={promptsTick} />
