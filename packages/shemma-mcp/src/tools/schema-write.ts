@@ -13,7 +13,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
-import { mapFetchError, mapHttpResponse, toolResult, type ToolResult } from "../errors";
+import { mapFetchError, toolResult, type ToolResult } from "../errors";
 import { resolveSpaceOrError, type ResolveSpaceFn } from "../space-resolver";
 import { CreateSchemaArgs, PatchSchemaArgs, SetOverlayArgs, type OverlayEntrySchema } from "../schemas";
 import type { z as ZodType } from "zod";
@@ -158,8 +158,7 @@ export function registerSchemaWriteTools(
         frameId?: string;
         nodeIds?: string[];
         version?: number;
-        error?: string;
-        errors?: unknown[];
+        errors?: Array<{ code?: string; message?: string }>;
       };
 
       if (resp.ok) {
@@ -176,10 +175,13 @@ export function registerSchemaWriteTools(
         });
       }
 
+      const firstCreateError = Array.isArray(resp.errors) && resp.errors.length > 0
+        ? (resp.errors[0] as { code?: string; message?: string })
+        : undefined;
       return toolResult({
         ok: false,
         code: "validation-error",
-        message: resp.error ?? "schema create failed",
+        message: firstCreateError?.message ?? firstCreateError?.code ?? "schema create failed",
         clientOpId: clientOpIdFinal,
         details: { errors: resp.errors },
       });
@@ -248,8 +250,7 @@ export function registerSchemaWriteTools(
         removedNodeIds?: string[];
         destructiveScore?: number;
         idempotent?: boolean;
-        error?: string;
-        errors?: unknown[];
+        errors?: Array<{ code?: string; message?: string }>;
       };
 
       if (resp.ok) {
@@ -269,10 +270,13 @@ export function registerSchemaWriteTools(
         });
       }
 
+      const firstError = Array.isArray(resp.errors) && resp.errors.length > 0
+        ? (resp.errors[0] as { code?: string; message?: string })
+        : undefined;
       return toolResult({
         ok: false,
         code: "validation-error",
-        message: resp.error ?? "patch failed",
+        message: firstError?.message ?? firstError?.code ?? "patch failed",
         clientOpId: clientOpIdFinal,
         details: { errors: resp.errors },
       });

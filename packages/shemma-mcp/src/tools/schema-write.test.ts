@@ -125,7 +125,7 @@ describe("shemma_create_schema", () => {
 
   it("backend returns unsupported-diagram-type → surfaced as validation-error", async () => {
     mockFetch(() => ({
-      body: { ok: false, error: "unsupported-diagram-type", errors: [{ actionIndex: -1, code: "unsupported-diagram-type", message: "..." }] },
+      body: { ok: false, errors: [{ actionIndex: -1, code: "unsupported-diagram-type", message: "unsupported diagram type" }] },
       status: 422,
     }));
 
