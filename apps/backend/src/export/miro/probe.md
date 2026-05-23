@@ -299,3 +299,53 @@ Miro Web UI рендерит items в **creation order** (newer ids on top). Э�
 **Fallback PATCH/bringToBack flow НЕ требуется** — endpoint не существует. Если этой стратегии окажется недостаточно в production (frames оказываются поверх children), единственный fallback — **DELETE + re-POST** в правильном порядке (heavyweight, defer как separate task если когда-либо понадобится).
 
 Spec § 8.5 remains valid; § 14 Q8 — **resolved with array-order + creation-order strategy, no PATCH alternative needed (none exists)**.
+
+## H. tldraw 5.x named-color hex palette
+
+**Source file:** `node_modules/.bun/@tldraw+editor@5.0.0+ab629783a4f35bff/node_modules/@tldraw/editor/src/lib/editor/managers/ThemeManager/defaultThemes.ts` (DEFAULT_THEME, exported by `tldraw` package).
+
+Extracted `colors.light.<name>.solid` (the strict equivalent of "stroke/border color" в tldraw shapes; matches `getColorValue(_, name, 'solid')` documented behavior).
+
+### H.1 Diff vs spec § 4.1
+
+| Color | Spec v0.3 | tldraw 5.0.0 actual | Match | Notes |
+|---|---|---|---|---|
+| black | `#1d1d1d` | `#1d1d1d` | ✓ | — |
+| grey | `#adb5bd` | `#9fa8b2` | ✗ | spec значение похоже на Mantine palette grey-4; tldraw cooler grey |
+| light-violet | `#c4a1ff` | `#e085f4` | ✗ | spec from Mantine violet-3; tldraw — magenta-leaning pink |
+| violet | `#ae3ec9` | `#ae3ec9` | ✓ | — |
+| blue | `#4263eb` | `#4465e9` | ✗ | very close (≤6 in each channel), но не identical |
+| light-blue | `#4dabf7` | `#4ba1f1` | ✗ | small delta (≤10 channels) |
+| yellow | `#ffc078` | `#f1ac4b` | ✗ | tldraw желтее/насыщеннее (orange undertone) |
+| orange | `#f76707` | `#e16919` | ✗ | tldraw less saturated orange |
+| green | `#099268` | `#099268` | ✓ | — |
+| light-green | `#40c057` | `#4cb05e` | ✗ | tldraw чуть mut'нее |
+| light-red | `#ff8787` | `#f87777` | ✗ | tldraw чуть darker |
+| red | `#e03131` | `#e03131` | ✓ | — |
+
+8/12 mismatches. Spec значения — clearly Mantine-derived (pre-tldraw-5.0 palette); actual tldraw 5.0.0 — independent palette.
+
+### H.2 Recommendation
+
+**UPDATE `TLDRAW_NAMED_TO_HEX` table in spec § 4.1** to the actual tldraw 5.0.0 light-theme `solid` values:
+
+```ts
+export const TLDRAW_NAMED_TO_HEX: Record<TldrawNamedColor, string> = {
+  "black":        "#1d1d1d",
+  "grey":         "#9fa8b2",
+  "light-violet": "#e085f4",
+  "violet":       "#ae3ec9",
+  "blue":         "#4465e9",
+  "light-blue":   "#4ba1f1",
+  "yellow":       "#f1ac4b",
+  "orange":       "#e16919",
+  "green":        "#099268",
+  "light-green":  "#4cb05e",
+  "light-red":    "#f87777",
+  "red":          "#e03131",
+};
+```
+
+### H.3 Optional follow-up — fill variant
+
+tldraw shapes имеют дополнительные variant: `fill` (часто = `solid`), `semi`, `pattern`, `noteFill`. Для DRW-111 `borderColor` / `strokeColor` использует `solid`. `fillColor` при `fill: "semi"` / `"pattern"` — spec mapping (§ 4.3) использует SAME color hex с opacity 0.5; альтернативно можно использовать tldraw `colors.light.<name>.semi` (precomputed lighter shade). DECISION для DRW-111: остаёмся на solid+opacity (simpler, matches arbitrary-fill semantics, не требует extra table); semi variant — possible future improvement.
