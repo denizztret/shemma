@@ -23,6 +23,10 @@
 ### Tracked
 - Closes DRW-111.
 
+### Hotfix (post-merge, pre-tag)
+- Miro connector style does not support `fontFamily`/`fontSize` (returns 400 code 2.0703). Removed from `buildConnectorPayload`. Affects all connectors.
+- Pass C respects Miro's "widget belongs to at most one group" constraint: outer group items = frame rect + descendants NOT already claimed by inner group (NOT all transitive descendants). Example: F1 ⊃ {F2 ⊃ {S2}, S1} → outer group gets `[m_F1, m_S1]`, not `[m_F1, m_F2, m_S2, m_S1]`.
+
 ### Tests
 - +60 unit/integration тестов в 8 файлах `apps/backend/src/export/miro/`.
 - Итого: 804 backend теста, 0 fail.

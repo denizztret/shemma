@@ -518,9 +518,10 @@ describe("Pass C — group widget (DRW-111)", () => {
     }
   });
 
-  it("nested frames → 2 createGroup calls, outer is FLAT (no nested groupId)", async () => {
+  it("nested frames → 2 createGroup calls, outer respects at-most-one-group constraint", async () => {
     const groupCalls: Array<{ itemIds: string[] }> = [];
     const groupCallIdx = { n: 0 };
+    let bulkCallIdx = 0;
     const server = Bun.serve({
       port: 0,
       fetch: async (req) => {
@@ -528,8 +529,9 @@ describe("Pass C — group widget (DRW-111)", () => {
         const body = req.body ? await req.json().catch(() => null) : null;
         if (url.pathname.endsWith("/items/bulk")) {
           const items = body as unknown[];
-          // Return sequential miroIds so we can track them
-          return new Response(JSON.stringify({ data: items.map((_, i) => ({ id: `m-bulk${groupCalls.length}-${i}` })) }), { status: 201 });
+          // Use a monotonic bulk call index so each bulk produces globally-unique miroIds
+          const prefix = `b${bulkCallIdx++}`;
+          return new Response(JSON.stringify({ data: items.map((_, i) => ({ id: `${prefix}_${i}` })) }), { status: 201 });
         }
         if (url.pathname.endsWith("/groups")) {
           const { data } = body as { data: { items: string[] } };
@@ -558,11 +560,13 @@ describe("Pass C — group widget (DRW-111)", () => {
       const innerItems = groupCalls[0].itemIds;
       expect(innerItems).toHaveLength(2);
 
-      // Outer group (F1): flat list — must NOT contain any group id (g_0)
+      // Outer group (F1): must NOT contain any group id (g_0)
       const outerItems = groupCalls[1].itemIds;
       expect(outerItems).not.toContain("g_0");
-      // Outer flat list: frame rect + ALL descendants (F2 rect + S1 + S2) = 4 items
-      expect(outerItems).toHaveLength(4);
+      // Outer items: frame rect (m_F1) + only descendants NOT already in inner group.
+      // m_F2 and m_S2 are already in g_0 (inner group) → excluded.
+      // Remaining: m_F1 rect + m_S1 = 2 items.
+      expect(outerItems).toHaveLength(2);
 
       expect(room.meta?.miroExports?.["B1"]?.groups?.["shape:F1"]).toBeDefined();
       expect(room.meta?.miroExports?.["B1"]?.groups?.["shape:F2"]).toBeDefined();

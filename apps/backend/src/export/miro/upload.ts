@@ -369,10 +369,12 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
 
   const passBError = errors.length > 0 ? `pass-b errors: ${errors.join("; ")}` : undefined;
 
-  // Pass C — group widgets (DRW-111). Per Phase 0 probe (probe.md Section F):
-  // - Body { data: { items: [...] } }; min 2 items; nested groups REJECTED.
-  // - Process deepest-first; each frame's group items = flat list of all
-  //   descendant miroIds (frame rectangle + ALL descendant rectangles/shapes).
+  // Pass C — group widgets (DRW-111).
+  // Miro constraint: each widget belongs to AT MOST one group.
+  // Process frames deepest-first; outer groups skip widgets already claimed by
+  // inner groups (otherwise 400 "Widgets are already grouped").
+  // Outer group items = frame rectangle + descendants NOT yet in alreadyGrouped set.
+  // Skip createGroup call when result has < 2 items (Miro min).
   let passCError: string | undefined;
   if (frames.length > 0) {
     const orderedFrames = framesInDepthFirstOrder(
@@ -396,19 +398,23 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
     }
 
     const groupMappings: Array<{ elementId: string; miroGroupId: string }> = [];
+    const alreadyGrouped = new Set<string>();
     for (const f of framesDeepestFirst) {
       const frameMiroId = frameMap.get(f.id);
       if (!frameMiroId) continue;
       const descendants = descendantsOf(f.id);
-      if (descendants.length === 0) continue; // skip — no descendants, can't meet Miro min 2 items
       const descendantMiroIds = descendants
         .map(d => frameMap.get(d) ?? itemMap.get(d))
-        .filter((id): id is string => Boolean(id));
-      if (descendantMiroIds.length === 0) continue;
+        .filter((id): id is string => Boolean(id))
+        .filter(id => !alreadyGrouped.has(id)); // skip widgets already claimed by inner groups
+      if (descendantMiroIds.length === 0) continue; // need ≥1 ungrouped child + frame rect to reach Miro min 2
       const itemsPayload = [frameMiroId, ...descendantMiroIds];
       try {
         const resp = await p.client.createGroup(p.boardId, itemsPayload);
         groupMappings.push({ elementId: f.id, miroGroupId: resp.id });
+        // Mark all included widgets as grouped so outer frames skip them
+        alreadyGrouped.add(frameMiroId);
+        for (const id of descendantMiroIds) alreadyGrouped.add(id);
       } catch (e) {
         if (
           e instanceof MiroAuthError ||

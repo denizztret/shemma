@@ -321,9 +321,11 @@ describe("DRW-111 full flow: nested frames + styled shapes → correct API call 
       expect(groupCalls).toHaveLength(2);
       // Inner group (F2) first: frame rect id + S2 id = 2 items
       expect(groupCalls[0]).toHaveLength(2);
-      // Outer group (F1) second: flat list with all 4 items (F1 rect + F2 rect + S1 + S2)
-      expect(groupCalls[1]).toHaveLength(4);
-      // Outer must NOT contain any group id (flat per Phase 0)
+      // Outer group (F1) second: respects Miro at-most-one-group constraint.
+      // F2 rect + S2 are already in inner group (g_0) → excluded from outer.
+      // Outer items: F1 rect + S1 only = 2 items.
+      expect(groupCalls[1]).toHaveLength(2);
+      // Outer must NOT contain any group id (no nested groupIds)
       expect(groupCalls[1]).not.toContain("g_0");
 
       // ---- Tracking ----

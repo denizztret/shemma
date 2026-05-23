@@ -402,8 +402,6 @@ export function buildConnectorPayload(
       strokeStyle: ARROW_DASH[dash] ?? "normal",
       strokeColor: tldrawNamedToHex(arrow.props?.color as string | undefined),
       strokeWidth: tldrawSizeToStrokeWidth(arrow.props?.size as string | undefined),
-      fontFamily: tldrawFontToFamily(arrow.props?.font as string | undefined),
-      fontSize: tldrawSizeToFontSize(arrow.props?.size as string | undefined),
       startStrokeCap: tldrawArrowheadToStrokeCap(arrow.props?.arrowheadStart as string | undefined),
       endStrokeCap: tldrawArrowheadToStrokeCap(arrow.props?.arrowheadEnd as string | undefined),
     },

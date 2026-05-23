@@ -526,8 +526,9 @@ describe("buildConnectorPayload styling (DRW-111)", () => {
       expect(style.strokeWidth).toBe("4.0");
       expect(style.startStrokeCap).toBe("filled_diamond");
       expect(style.endStrokeCap).toBe("filled_triangle");
-      expect(style.fontFamily).toBe("open_sans");
-      expect(style.fontSize).toBe("30");
+      // fontFamily + fontSize are NOT supported on Miro connectors (returns 400 code 2.0703)
+      expect(style.fontFamily).toBeUndefined();
+      expect(style.fontSize).toBeUndefined();
     }
   });
 });

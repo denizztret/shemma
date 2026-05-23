@@ -1,14 +1,18 @@
 # Visual Fidelity v2 — Miro Export Style Expansion (Design)
 
-**Version:** 0.4
+**Version:** 0.5
 **Date:** 2026-05-23
-**Status:** draft v0.4 — Phase 0 probe outcomes applied; user review pending
+**Status:** v0.5 — post-release real-Miro hotfix (connector style enum + at-most-one-group)
 **Target release:** 0.22.0 (MINOR — additive style props + frame-mode change-of-default)
 **Tracking:** Backlog [[DRW-111]]
 **Predecessor:** [[2026-05-19-export-miro-design]] (DRW-103 — structural fidelity, shipped 0.20.x)
 **Related:** [[feedback-product-vision-bidirectional]] (bidirectional sync — visual fidelity снижает manual-cleanup при reverse-import)
 
 ## Changelog
+
+- v0.5 (2026-05-23) — Post-release real-Miro hotfix:
+  - **§ 4.4 + § 7.2 — connector style does NOT support `fontFamily`/`fontSize`** (Miro returns 400 code 2.0703). Phase 0 probe verified `fontFamily` on shapes/stickies/text, but did NOT test connector style enum separately — spec incorrectly assumed parity. Both fields removed from `buildConnectorPayload`. Connector style supported fields: `strokeColor`, `strokeWidth`, `strokeStyle`, `startStrokeCap`, `endStrokeCap`, `textOrientation`, `color`.
+  - **§ 8.4 — Miro constraint clarified: each widget belongs to AT MOST one group.** Outer group's items = frame rectangle + descendants NOT yet claimed by inner groups (NOT all transitive descendants). Phase 0 probe found "nested groupIds rejected (404)", but the deeper constraint surfaced only in production: outer group POST returns 400 "Widgets are already grouped" when items include widgets already in an inner group. New algorithm: track `alreadyGrouped: Set<string>`; deepest-first; outer group items = `[frameMiroId, ...descendantMiroIds.filter(id => !alreadyGrouped.has(id))]`. Example for F1 ⊃ {F2 ⊃ {S2}, S1}: outer items = `[m_F1, m_S1]` (2 items, not 4).
 
 - v0.4 (2026-05-23) — Phase 0 probe outcomes applied (see `apps/backend/src/export/miro/probe.md` Sections F/G/H/I/J):
   - **§ 4.1 TLDRAW_NAMED_TO_HEX table updated** — 8 из 12 hex значений отличались от actual tldraw 5.0.0 source (`@tldraw/editor/.../defaultThemes.ts` `colors.light.<name>.solid`). Replaced spec's Mantine-derived values с actual: grey/light-violet/blue/light-blue/yellow/orange/light-green/light-red. Unchanged: black/violet/green/red.
@@ -202,6 +206,8 @@ function fillStyle(fill: string, hex: string): Partial<ShapeStyle> {
 
 ### 4.4 Wire в `buildConnectorPayload`
 
+**Note (v0.5 hotfix):** Miro connector style enum does NOT include `fontFamily` or `fontSize` (returns 400 code 2.0703). Connector style supports: `strokeColor`, `strokeWidth`, `strokeStyle`, `startStrokeCap`, `endStrokeCap`, `textOrientation`, `color`. Both fields removed.
+
 ```ts
 const colorHex = tldrawNamedToHex(arrow.props.color);
 return {
@@ -210,8 +216,7 @@ return {
     ...existing.style,
     strokeColor: colorHex,
     strokeWidth: tldrawSizeToStrokeWidth(arrow.props.size), // Block 2
-    fontFamily:  tldrawFontToFamily(arrow.props.font),       // Block 3 — label font on connector
-    fontSize:    tldrawSizeToFontSize(arrow.props.size),     // Block 2
+    // fontFamily + fontSize NOT supported on Miro connectors (400 code 2.0703)
   },
 };
 ```
@@ -368,7 +373,7 @@ export function tldrawFontToFamily(font: string | undefined): string {
 Wire'ится в:
 - `buildShapePayload.style.fontFamily` (§ 4.2)
 - `buildStickyNotePayload.style.fontFamily` (§ 4.5)
-- `buildConnectorPayload.style.fontFamily` (§ 4.4 — для label text на стрелке; Miro connector style supports fontFamily)
+- `buildConnectorPayload.style.fontFamily` — **REMOVED (v0.5):** Miro connector style does NOT support fontFamily (400 code 2.0703). See § 4.4.
 - `buildTextPayload.style.fontFamily` (§ 4.6 — standalone text widgets)
 
 ### 6.3 Text widget font wire
@@ -491,17 +496,20 @@ Sequence of API calls:
 1. **Pass A1** — bulk POST `[F1.rect, F2.rect]` (depth-first order). Returns `frameMap = { F1: m_F1, F2: m_F2 }`.
 2. **Pass A2** — bulk POST `[S1, S2]` (non-frames). Returns `itemMap = { S1: m_S1, S2: m_S2 }`.
 3. **Pass C inner first** — `POST /groups` body `{ data: { items: [m_F2, m_S2] } }` → returns `g_F2`.
-4. **Pass C outer (flat)** — `POST /groups` body `{ data: { items: [m_F1, m_F2, m_S2, m_S1] } }` → returns `g_F1`. **Note:** outer call's items list is **flattened leaf-item ids only** — inner `g_F2` group id НЕ передаётся (см. nested rejection below).
+4. **Pass C outer (at-most-one-group)** — `POST /groups` body `{ data: { items: [m_F1, m_S1] } }` → returns `g_F1`. **Note (v0.5 hotfix):** outer items = frame rect + descendants NOT already in inner groups. m_F2 and m_S2 are already in g_F2 → excluded. Result: 2 items only.
 5. **Tracking commit** — `groups: { F1: g_F1, F2: g_F2 }` через `commitBoardGroupExport`.
 
-**Nested group acceptance — REJECTED (Phase 0 probe, see probe.md Section F.2):** passing a previously-returned `groupId` среди `data.items` → Miro returns HTTP 404 `"Item not found"`. Group ids НЕ recognized as valid items inside other groups.
+**Miro constraint (v0.5 — surfaced in real-Miro export):** each widget belongs to **AT MOST one group**. Outer group POST returns 400 "Widgets are already grouped" when items include widgets that are already in an inner group. Phase 0 probe only found "nested groupIds rejected (404)" — the deeper per-widget constraint was not probed.
 
-**Locked fallback (sole code path):** outer group's items array = **flat list** всех frame rectangles + non-frame children в outer's subtree (skip any nested groupIds). Trade-offs:
-- Lose independent inner-frame drag в Miro UI (drag F1 двигает rect F1 + rect F2 + S2 + S1 как один блок).
-- Inner-only drag of g_F2 (which contains m_F2 + m_S2) — still works через g_F2 selection.
-- Outer group g_F1 doesn't "know" about g_F2; visually структура preserved через rectangle z-order (frame rectangles ниже children — § 8.5).
+**Algorithm (locked v0.5):** Track `alreadyGrouped: Set<string>` across frames (deepest-first order). For each frame F:
+- `descendantMiroIds = allDescendants(F).map(toMiroId).filter(id => !alreadyGrouped.has(id))`
+- If `descendantMiroIds.length === 0` → skip (no ungrouped descendants; combined with frame rect = 1 item, below Miro min 2).
+- Else `POST /groups` with `[frameMiroId, ...descendantMiroIds]` → add all to `alreadyGrouped`.
 
-Detection logic не требуется — always use flat list для outer groups; inner groups created normally.
+Trade-offs:
+- F1's group contains only F1 rect + S1 (direct children not in inner groups).
+- F2 and S2 stay exclusively in g_F2 — can be dragged independently as g_F2.
+- Visual containment still communicated через z-order (Pass A1 before A2 — § 8.5).
 
 **Edge case — 0 or 1 child:** Group widget requires **minimum 2 items** (probe Section F.3 — empty/single both return 400 "Group should have at least two items"). Frames with empty subtree (just rectangle, no children) → **skip POST /groups call** entirely. Tracking schema: no `groups[frameId]` entry → frame rectangle остаётся as a standalone shape (still rendered, just not group-bound).
 
