@@ -92,7 +92,7 @@ export function RolePicker({ open, info, editor, onClose }: RolePickerProps): JS
     (choice: { type: "role"; value: Role } | { type: "kind"; value: ConnectionKind }) => {
       const patches = applyPickerChoice(info, choice);
       if (patches.length > 0) {
-        editor.batch(() => {
+        editor.run(() => {
           for (const { id, meta } of patches) {
             // biome-ignore lint/suspicious/noExplicitAny: tldraw id typing
             const shape = editor.getShape(id as any);
@@ -100,7 +100,8 @@ export function RolePicker({ open, info, editor, onClose }: RolePickerProps): JS
             editor.updateShape({
               id: shape.id,
               type: shape.type,
-              meta: { ...shape.meta, ...meta },
+              // biome-ignore lint/suspicious/noExplicitAny: meta is Record<string,unknown> per tldraw JsonObject
+              meta: { ...shape.meta, ...(meta as any) },
             });
           }
         });

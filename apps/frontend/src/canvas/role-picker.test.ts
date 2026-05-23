@@ -77,13 +77,13 @@ describe("buildRolePatches", () => {
   });
 
   test("actor role patch", () => {
-    const [patch] = buildRolePatches(["shape:x"], "actor");
-    expect(patch.meta.didrawRole).toBe("actor");
+    const patches = buildRolePatches(["shape:x"], "actor");
+    expect(patches[0]!.meta.didrawRole).toBe("actor");
   });
 
   test("datastore role patch", () => {
-    const [patch] = buildRolePatches(["shape:x"], "datastore");
-    expect(patch.meta.didrawRole).toBe("datastore");
+    const patches = buildRolePatches(["shape:x"], "datastore");
+    expect(patches[0]!.meta.didrawRole).toBe("datastore");
   });
 });
 
@@ -99,8 +99,8 @@ describe("buildKindPatches", () => {
   });
 
   test("dep kind patch", () => {
-    const [patch] = buildKindPatches(["shape:d"], "dep");
-    expect(patch.meta.didrawConnectionKind).toBe("dep");
+    const patches = buildKindPatches(["shape:d"], "dep");
+    expect(patches[0]!.meta.didrawConnectionKind).toBe("dep");
   });
 
   test("empty ids → empty patches", () => {
@@ -129,8 +129,8 @@ describe("applyPickerChoice", () => {
   test("type=kind → patches arrowIds only", () => {
     const patches = applyPickerChoice(info, { type: "kind", value: "data" });
     expect(patches).toHaveLength(1);
-    expect(patches[0].meta.didrawConnectionKind).toBe("data");
-    expect(patches[0].id).toBe("shape:arr");
+    expect(patches[0]!.meta.didrawConnectionKind).toBe("data");
+    expect(patches[0]!.id).toBe("shape:arr");
   });
 
   test("role-only info with role choice", () => {
@@ -142,7 +142,7 @@ describe("applyPickerChoice", () => {
     };
     const patches = applyPickerChoice(roleInfo, { type: "role", value: "note" });
     expect(patches).toHaveLength(1);
-    expect(patches[0].meta.didrawRole).toBe("note");
+    expect(patches[0]!.meta.didrawRole).toBe("note");
   });
 });
 

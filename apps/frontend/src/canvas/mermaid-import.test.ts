@@ -674,7 +674,7 @@ describe("importMermaid — v2 backend path (DRW-134 Task 2.6)", () => {
     // Mock global fetch for v2 path.
     const originalFetch = globalThis.fetch;
     let capturedRequest: { url: string; body: unknown } | undefined;
-    globalThis.fetch = async (
+    globalThis.fetch = (async (
       url: string | URL | Request,
       init?: RequestInit,
     ) => {
@@ -691,7 +691,7 @@ describe("importMermaid — v2 backend path (DRW-134 Task 2.6)", () => {
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
-    };
+    }) as typeof fetch;
 
     try {
       const { importMermaid } = await import("./mermaid-import");
@@ -725,10 +725,10 @@ describe("importMermaid — v2 backend path (DRW-134 Task 2.6)", () => {
 
     // Mock fetch to return 503.
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () =>
+    globalThis.fetch = (async () =>
       new Response(JSON.stringify({ error: "service unavailable" }), {
         status: 503,
-      });
+      })) as unknown as typeof fetch;
 
     mockMermaidCreates((ed) => {
       ed._addShapes([makeShape("n1", "geo", PAGE, "A")]);

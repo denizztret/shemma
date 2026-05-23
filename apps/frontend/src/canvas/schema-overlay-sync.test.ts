@@ -299,10 +299,10 @@ describe("installSchemaOverlaySync", () => {
     await new Promise((r) => setTimeout(r, 30));
 
     expect(calls.length).toBe(1);
-    expect(calls[0].frameId).toBe("shape:frame1");
-    expect(calls[0].nodeId).toBe("api-abc123");
-    expect((calls[0].overlay as { position?: unknown }).position).toEqual({ x: 150, y: 250 });
-    expect((calls[0].overlay as { styleOwnedBy?: string }).styleOwnedBy).toBe("user");
+    expect(calls[0]!.frameId).toBe("shape:frame1");
+    expect(calls[0]!.nodeId).toBe("api-abc123");
+    expect((calls[0]!.overlay as { position?: unknown }).position).toEqual({ x: 150, y: 250 });
+    expect((calls[0]!.overlay as { styleOwnedBy?: string }).styleOwnedBy).toBe("user");
 
     dispose();
   });
@@ -375,7 +375,7 @@ describe("installSchemaOverlaySync", () => {
 
     // Should be exactly 1 call (coalesced), with the last position.
     expect(calls.length).toBe(1);
-    expect((calls[0].overlay as { position?: unknown }).position).toEqual({ x: 160, y: 260 });
+    expect((calls[0]!.overlay as { position?: unknown }).position).toEqual({ x: 160, y: 260 });
 
     dispose();
   });
