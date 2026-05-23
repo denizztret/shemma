@@ -10,6 +10,8 @@ import {
   buildRolePatches,
   buildKindPatches,
   applyPickerChoice,
+  deriveCurrentKind,
+  deriveCurrentRole,
   makeRolePickerHandler,
   type SelectionInfo,
 } from "./role-picker.ts";
@@ -178,6 +180,84 @@ const emptyInfo: SelectionInfo = {
   shapeIds: [],
   arrowIds: [],
 };
+
+// ---------------------------------------------------------------------------
+// deriveCurrentRole / deriveCurrentKind (DRW-136 #2)
+// ---------------------------------------------------------------------------
+
+describe("deriveCurrentRole", () => {
+  test("empty list → undefined", () => {
+    expect(deriveCurrentRole([])).toBeUndefined();
+  });
+
+  test("single meta с didrawRole → that role", () => {
+    expect(deriveCurrentRole([{ didrawRole: "service" }])).toBe("service");
+  });
+
+  test("multiple metas с same didrawRole → that role", () => {
+    expect(
+      deriveCurrentRole([
+        { didrawRole: "datastore" },
+        { didrawRole: "datastore" },
+      ]),
+    ).toBe("datastore");
+  });
+
+  test("mixed didrawRole values → undefined", () => {
+    expect(
+      deriveCurrentRole([{ didrawRole: "actor" }, { didrawRole: "service" }]),
+    ).toBeUndefined();
+  });
+
+  test("meta без didrawRole → undefined", () => {
+    expect(deriveCurrentRole([{}])).toBeUndefined();
+    expect(deriveCurrentRole([{ didrawRole: "actor" }, {}])).toBeUndefined();
+  });
+
+  test("meta undefined → undefined", () => {
+    expect(deriveCurrentRole([undefined])).toBeUndefined();
+  });
+
+  test("didrawRole не string → undefined", () => {
+    expect(
+      deriveCurrentRole([{ didrawRole: 123 } as Record<string, unknown>]),
+    ).toBeUndefined();
+  });
+});
+
+describe("deriveCurrentKind", () => {
+  test("empty list → undefined", () => {
+    expect(deriveCurrentKind([])).toBeUndefined();
+  });
+
+  test("single meta с didrawConnectionKind → that kind", () => {
+    expect(deriveCurrentKind([{ didrawConnectionKind: "async" }])).toBe(
+      "async",
+    );
+  });
+
+  test("multiple matching → that kind", () => {
+    expect(
+      deriveCurrentKind([
+        { didrawConnectionKind: "data" },
+        { didrawConnectionKind: "data" },
+      ]),
+    ).toBe("data");
+  });
+
+  test("mixed kinds → undefined", () => {
+    expect(
+      deriveCurrentKind([
+        { didrawConnectionKind: "sync" },
+        { didrawConnectionKind: "dep" },
+      ]),
+    ).toBeUndefined();
+  });
+
+  test("meta без didrawConnectionKind → undefined", () => {
+    expect(deriveCurrentKind([{}])).toBeUndefined();
+  });
+});
 
 describe("makeRolePickerHandler", () => {
   test("fires onOpen on Cmd+Shift+K (Mac) with selection", () => {

@@ -2,6 +2,16 @@
 
 PATCH-уровневые фиксы поверх 0.23.1; накапливаются на `main` без per-task release commits ([[feedback-batch-release-cluster]]).
 
+### DRW-136 — role picker UX/functional fixes
+
+1. **PromptInput overlap с picker** (App.tsx ⌘K handler): handler не проверял `shiftKey`, поэтому ⌘+Shift+K (picker hotkey) одновременно toggle'ил PromptInput. Добавлен `!e.shiftKey` guard.
+2. **Picker не закрывался на click role/kind** (role-picker.tsx `pick`): любая ошибка внутри `editor.run` блокировала `onClose()`. Refactor: `try { plural editor.updateShapes } catch { warn } finally { onClose() }` — picker MUST закрыться. Singular `editor.updateShape` заменён на plural — каноничный tldraw 5.x.
+3. **Highlight current role/kind на re-open picker**: pure helpers `deriveCurrentRole` / `deriveCurrentKind` в role-picker.ts; component читает meta через `editor.getShape` и подсвечивает кнопку с current role (accent border + light-green fill + bold). 12 новых unit tests.
+4. **Picked flash на ~120ms перед close**: transient `pickedRole`/`pickedKind` state — клик-кнопка показывает full accent fill + ✓ маркер с disable других кнопок на 120ms прежде чем picker закроется. Визуальный отклик на click.
+5. **Focus alignment**: focus на open идёт на current-role button (если есть), иначе на dialog div сам — раньше всегда фокусировалась первая кнопка (Actor), и focus-visible outline визуально путал с currentRole highlight. Для frame'ов без role теперь ни одна кнопка не подсвечена при open.
+6. **Hover / active feedback**: button stylez переписаны с inline на `<style>` block + `className="rp-btn"` чтобы получить нормальные `:hover` / `:active` pseudo-class эффекты (inline styles не поддерживают). Hover → light-bg + accent border; press → accent fill; release-outside-while-pressed → no click (browser default).
+7. **DRW-137 spawn'нут** как отдельная задача для WS sync resilience (truncated recovery loop / auto-reconnect). User-shape (Controller) и frame resize не sync'ятся после daemon restart — sync stops после first `truncated` consecutive. Preexisting fragility, не DRW-134 regression.
+
 ### DRW-135 — schema-overlay не применялся на hydrate
 
 После reload Postgres (или любая schema-child) возвращался в RAW mermaid position, игнорируя сохранённый user-overlay. Persistence работал (POST landed, диск flush'нул, `canvas_view` возвращал overlay), но frontend не applying overlays поверх backend store при hydrate — overlay-sync был write-only.

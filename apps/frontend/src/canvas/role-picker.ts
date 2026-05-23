@@ -118,6 +118,56 @@ export function applyPickerChoice(
 }
 
 // ---------------------------------------------------------------------------
+// Current-role / current-kind derivation (DRW-136 #2 follow-up)
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive the "current" role from a list of shape metas.
+ *
+ * Used by the picker UI to highlight the role already assigned to the selection
+ * (so re-opening the picker shows what's currently set instead of always
+ * focusing Actor by default).
+ *
+ * Rule:
+ *   - empty list → undefined
+ *   - all metas share the same `didrawRole` string → that role
+ *   - any meta missing role, or roles differ → undefined (mixed / unset)
+ *
+ * Pure: takes plain meta objects so the helper has no tldraw import.
+ */
+export function deriveCurrentRole(
+  shapeMetas: Array<Record<string, unknown> | undefined>,
+): Role | undefined {
+  if (shapeMetas.length === 0) return undefined;
+  let single: string | undefined;
+  for (const meta of shapeMetas) {
+    const r = meta?.didrawRole;
+    if (typeof r !== "string") return undefined;
+    if (single === undefined) single = r;
+    else if (single !== r) return undefined;
+  }
+  return single as Role | undefined;
+}
+
+/**
+ * Derive the "current" connectionKind from a list of arrow metas. Same rules
+ * as `deriveCurrentRole` but reads `didrawConnectionKind`.
+ */
+export function deriveCurrentKind(
+  arrowMetas: Array<Record<string, unknown> | undefined>,
+): ConnectionKind | undefined {
+  if (arrowMetas.length === 0) return undefined;
+  let single: string | undefined;
+  for (const meta of arrowMetas) {
+    const k = meta?.didrawConnectionKind;
+    if (typeof k !== "string") return undefined;
+    if (single === undefined) single = k;
+    else if (single !== k) return undefined;
+  }
+  return single as ConnectionKind | undefined;
+}
+
+// ---------------------------------------------------------------------------
 // Keyboard handler factory (mirrors makeExportHotkeyHandler pattern)
 // ---------------------------------------------------------------------------
 
