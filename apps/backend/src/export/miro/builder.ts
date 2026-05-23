@@ -1,6 +1,6 @@
 
 import type { MiroBulkItem, MiroConnectorPayload } from "./client";
-import { nearestShapeColor, nearestStickyColor, stickyFillColor, tldrawNamedToHex } from "./color-mapping";
+import { stickyFillColor, tldrawNamedToHex } from "./color-mapping";
 import type { RawShape } from "./coords";
 import { richTextToPlain } from "./rich-text";
 
