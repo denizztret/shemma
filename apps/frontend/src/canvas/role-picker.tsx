@@ -9,7 +9,7 @@
  * separately. Visual verification via `verify` skill post-task.
  */
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { Editor } from "tldraw";
 import type { Role, ConnectionKind } from "@shemma/domain";
 import { ALL_ROLES, ALL_KINDS } from "@shemma/domain";
@@ -17,6 +17,8 @@ import { tokens } from "../design-tokens";
 import {
   type SelectionInfo,
   applyPickerChoice,
+  deriveCurrentKind,
+  deriveCurrentRole,
 } from "./role-picker";
 
 // ---------------------------------------------------------------------------
@@ -124,6 +126,28 @@ export function RolePicker({ open, info, editor, onClose }: RolePickerProps): JS
     [info, editor, onClose],
   );
 
+  // DRW-136 #2: при re-open picker подсветить уже назначенную role/kind для
+  // current selection, чтобы user видел actual state (вместо «всегда Actor focused»).
+  const currentRole = useMemo(() => {
+    if (!open) return undefined;
+    const metas = info.shapeIds.map((id) => {
+      // biome-ignore lint/suspicious/noExplicitAny: tldraw id typing
+      const shape = editor.getShape(id as any);
+      return (shape?.meta ?? undefined) as Record<string, unknown> | undefined;
+    });
+    return deriveCurrentRole(metas);
+  }, [open, info.shapeIds, editor]);
+
+  const currentKind = useMemo(() => {
+    if (!open) return undefined;
+    const metas = info.arrowIds.map((id) => {
+      // biome-ignore lint/suspicious/noExplicitAny: tldraw id typing
+      const shape = editor.getShape(id as any);
+      return (shape?.meta ?? undefined) as Record<string, unknown> | undefined;
+    });
+    return deriveCurrentKind(metas);
+  }, [open, info.arrowIds, editor]);
+
   if (!open || info.mode === "none") return null;
 
   const showRoles = info.mode === "role" || info.mode === "mixed";
@@ -189,6 +213,14 @@ export function RolePicker({ open, info, editor, onClose }: RolePickerProps): JS
     color: tokens.color.text,
   };
 
+  // DRW-136 #2: highlight для current role/kind на re-open.
+  const btnCurrent: React.CSSProperties = {
+    ...btn,
+    borderColor: tokens.color.accent,
+    background: tokens.color.bgOverlay,
+    fontWeight: 600,
+  };
+
   return (
     // Backdrop — click outside → close
     // biome-ignore lint/a11y/useKeyWithClickEvents: backdrop close via Esc handled above
@@ -218,10 +250,12 @@ export function RolePicker({ open, info, editor, onClose }: RolePickerProps): JS
                 <button
                   key={role}
                   type="button"
-                  style={btn}
+                  style={role === currentRole ? btnCurrent : btn}
+                  aria-pressed={role === currentRole}
                   onClick={() => pick({ type: "role", value: role })}
                 >
                   {ROLE_LABELS[role]}
+                  {role === currentRole ? " ●" : ""}
                 </button>
               ))}
             </div>
@@ -238,10 +272,12 @@ export function RolePicker({ open, info, editor, onClose }: RolePickerProps): JS
                 <button
                   key={kind}
                   type="button"
-                  style={btn}
+                  style={kind === currentKind ? btnCurrent : btn}
+                  aria-pressed={kind === currentKind}
                   onClick={() => pick({ type: "kind", value: kind })}
                 >
                   {KIND_LABELS[kind]}
+                  {kind === currentKind ? " ●" : ""}
                 </button>
               ))}
             </div>
