@@ -136,3 +136,18 @@ export function nearestStickyColor(hex: string): string {
   }
   return bestName;
 }
+
+// ---------------------------------------------------------------------------
+// Task 5: stickyFillColor (§ 4.5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Determine the Miro sticky note fillColor from a tldraw note shape.
+ * Falls back to "yellow" when props.color is absent (preserves legacy default —
+ * sticky without explicit color should be yellow per whiteboard convention).
+ */
+export function stickyFillColor(note: { props?: { color?: string } }): string {
+  const named = note.props?.color;
+  if (!named) return "yellow";
+  return nearestStickyColor(tldrawNamedToHex(named));
+}

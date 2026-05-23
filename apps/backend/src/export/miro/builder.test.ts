@@ -15,6 +15,7 @@ import {
   tldrawSizeToStickyFontSize,
   tldrawFontToFamily,
   tldrawArrowheadToStrokeCap,
+  fillStyle,
 } from "./builder";
 import type { RawShape } from "./coords";
 
@@ -390,4 +391,37 @@ describe("tldrawArrowheadToStrokeCap", () => {
   it("pipe → 'none' (degrade)", () => expect(tldrawArrowheadToStrokeCap("pipe")).toBe("none"));
   it("arrow → 'arrow'", () => expect(tldrawArrowheadToStrokeCap("arrow")).toBe("arrow"));
   it("undefined → 'arrow' (default)", () => expect(tldrawArrowheadToStrokeCap(undefined)).toBe("arrow"));
+});
+
+// ---------------------------------------------------------------------------
+// Task 5: fillStyle helper
+// ---------------------------------------------------------------------------
+
+describe("fillStyle", () => {
+  const hex = "#4465e9";
+  it("solid → fillColor set + fillOpacity '1.0'", () => {
+    const r = fillStyle("solid", hex);
+    expect(r.fillColor).toBe(hex);
+    expect(r.fillOpacity).toBe("1.0");
+  });
+  it("semi → fillColor set + fillOpacity '0.5'", () => {
+    const r = fillStyle("semi", hex);
+    expect(r.fillColor).toBe(hex);
+    expect(r.fillOpacity).toBe("0.5");
+  });
+  it("pattern → fillColor set + fillOpacity '0.5' (degrade to semi, Miro no diag-fill)", () => {
+    const r = fillStyle("pattern", hex);
+    expect(r.fillColor).toBe(hex);
+    expect(r.fillOpacity).toBe("0.5");
+  });
+  it("none → no fillColor + fillOpacity '0.0'", () => {
+    const r = fillStyle("none", hex);
+    expect(r.fillColor).toBeUndefined();
+    expect(r.fillOpacity).toBe("0.0");
+  });
+  it("undefined → no fillColor + fillOpacity '0.0'", () => {
+    const r = fillStyle(undefined, hex);
+    expect(r.fillColor).toBeUndefined();
+    expect(r.fillOpacity).toBe("0.0");
+  });
 });

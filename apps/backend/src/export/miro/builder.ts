@@ -316,6 +316,29 @@ export function tldrawArrowheadToStrokeCap(head: string | undefined): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Task 5: fillStyle helper (§ 4.3)
+// ---------------------------------------------------------------------------
+
+export interface FillStyleResult {
+  fillColor?: string;
+  fillOpacity: string;
+}
+
+/**
+ * Map tldraw fill style to Miro fillColor + fillOpacity.
+ * "pattern" degrades to semi (fillOpacity 0.5) — Miro has no diagonal-fill support.
+ */
+export function fillStyle(fill: string | undefined, hex: string): FillStyleResult {
+  switch (fill) {
+    case "solid":   return { fillColor: hex, fillOpacity: "1.0" };
+    case "semi":    return { fillColor: hex, fillOpacity: "0.5" };
+    case "pattern": return { fillColor: hex, fillOpacity: "0.5" };
+    case "none":
+    default:        return { fillOpacity: "0.0" };
+  }
+}
+
 export function buildConnectorPayload(
   arrow: RawShape,
   ctx: ConnectorBuilderCtx,

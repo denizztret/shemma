@@ -150,7 +150,7 @@ function parseHexHelper(hex: string): [number, number, number] {
 // ---------------------------------------------------------------------------
 // Task 1: tldrawNamedToHex + TLDRAW_NAMED_TO_HEX
 // ---------------------------------------------------------------------------
-import { tldrawNamedToHex, TLDRAW_NAMED_TO_HEX } from "./color-mapping";
+import { tldrawNamedToHex, TLDRAW_NAMED_TO_HEX, stickyFillColor } from "./color-mapping";
 
 describe("TLDRAW_NAMED_TO_HEX — round-trip all 12 colors", () => {
   it("all 12 tldraw named colors map to correct v0.4 hex values", () => {
@@ -176,5 +176,25 @@ describe("tldrawNamedToHex — fallback behavior", () => {
 
   it("unknown string → '#1d1d1d' (black fallback)", () => {
     expect(tldrawNamedToHex("unknown-color-xyz")).toBe("#1d1d1d");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 5: stickyFillColor
+// ---------------------------------------------------------------------------
+
+describe("stickyFillColor", () => {
+  it("undefined props.color → 'yellow' (legacy default)", () => {
+    expect(stickyFillColor({ props: {} })).toBe("yellow");
+    expect(stickyFillColor({})).toBe("yellow");
+  });
+
+  it("named tldraw color → nearestStickyColor(tldrawNamedToHex(named))", () => {
+    // "red" → tldrawNamedToHex("red") = "#e03131" → nearestStickyColor → "red" sticky
+    const result = stickyFillColor({ props: { color: "red" } });
+    const validStickyColors = Object.keys(STICKY_COLOR_RGB);
+    expect(validStickyColors).toContain(result);
+    // Specifically: "#e03131" is close to STICKY_COLOR_RGB.red [217, 51, 51]
+    expect(result).toBe("red");
   });
 });
