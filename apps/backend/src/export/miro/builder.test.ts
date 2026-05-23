@@ -14,6 +14,7 @@ import {
   tldrawSizeToStrokeWidth,
   tldrawSizeToStickyFontSize,
   tldrawFontToFamily,
+  tldrawArrowheadToStrokeCap,
 } from "./builder";
 import type { RawShape } from "./coords";
 
@@ -372,4 +373,21 @@ describe("tldrawFontToFamily", () => {
   it("mono → 'roboto_mono'", () => expect(tldrawFontToFamily("mono")).toBe("roboto_mono"));
   it("undefined → 'open_sans'", () => expect(tldrawFontToFamily(undefined)).toBe("open_sans"));
   it("unknown string → 'open_sans'", () => expect(tldrawFontToFamily("comic-sans")).toBe("open_sans"));
+});
+
+// ---------------------------------------------------------------------------
+// Task 4: arrowhead mapping helper
+// ---------------------------------------------------------------------------
+
+describe("tldrawArrowheadToStrokeCap", () => {
+  it("none → 'none'", () => expect(tldrawArrowheadToStrokeCap("none")).toBe("none"));
+  it("triangle → 'filled_triangle'", () => expect(tldrawArrowheadToStrokeCap("triangle")).toBe("filled_triangle"));
+  it("square → 'none' (degrade, no rectangular cap in Miro)", () => expect(tldrawArrowheadToStrokeCap("square")).toBe("none"));
+  it("dot → 'filled_oval'", () => expect(tldrawArrowheadToStrokeCap("dot")).toBe("filled_oval"));
+  it("diamond → 'filled_diamond'", () => expect(tldrawArrowheadToStrokeCap("diamond")).toBe("filled_diamond"));
+  it("inverted → 'arrow' (degrade, no backward cap in Miro)", () => expect(tldrawArrowheadToStrokeCap("inverted")).toBe("arrow"));
+  it("bar → 'none' (degrade)", () => expect(tldrawArrowheadToStrokeCap("bar")).toBe("none"));
+  it("pipe → 'none' (degrade)", () => expect(tldrawArrowheadToStrokeCap("pipe")).toBe("none"));
+  it("arrow → 'arrow'", () => expect(tldrawArrowheadToStrokeCap("arrow")).toBe("arrow"));
+  it("undefined → 'arrow' (default)", () => expect(tldrawArrowheadToStrokeCap(undefined)).toBe("arrow"));
 });

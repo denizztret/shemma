@@ -293,6 +293,29 @@ export function tldrawFontToFamily(font: string | undefined): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Task 4: arrowhead mapping helper (§ 7.1)
+// ---------------------------------------------------------------------------
+
+export type TldrawArrowhead =
+  | "none" | "arrow" | "triangle" | "square" | "dot"
+  | "diamond" | "inverted" | "bar" | "pipe";
+
+export function tldrawArrowheadToStrokeCap(head: string | undefined): string {
+  switch (head) {
+    case "none":     return "none";
+    case "triangle": return "filled_triangle";   // tldraw triangle = filled triangle in Miro
+    case "square":   return "none";              // Miro has no rectangular caps — degrade to plain line
+    case "dot":      return "filled_oval";
+    case "diamond":  return "filled_diamond";
+    case "inverted": return "arrow";             // Miro has no backward-facing cap — degrade to plain arrow
+    case "bar":      return "none";              // no bar cap — degrade
+    case "pipe":     return "none";              // no pipe cap — degrade
+    case "arrow":
+    default:         return "arrow";
+  }
+}
+
 export function buildConnectorPayload(
   arrow: RawShape,
   ctx: ConnectorBuilderCtx,
