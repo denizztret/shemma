@@ -11,6 +11,7 @@ import type { RawShape } from "./coords";
 function startMockMiro(opts: {
   bulkResponder?: (items: unknown[]) => unknown[];
   connectorResponder?: (body: unknown) => unknown;
+  groupResponder?: (body: unknown) => unknown;
   rateLimitFirstN?: number;
 } = {}) {
   const requests: Array<{ path: string; method: string; body: unknown }> = [];
@@ -32,6 +33,10 @@ function startMockMiro(opts: {
       }
       if (url.pathname.endsWith("/connectors")) {
         const responder = opts.connectorResponder ?? ((_b) => ({ id: `c-${requests.length}` }));
+        return new Response(JSON.stringify(responder(body)), { status: 201 });
+      }
+      if (url.pathname.endsWith("/groups")) {
+        const responder = opts.groupResponder ?? ((_b) => ({ id: `g-${requests.length}`, type: "group", data: {}, links: {} }));
         return new Response(JSON.stringify(responder(body)), { status: 201 });
       }
       return new Response("{}", { status: 200 });
@@ -298,8 +303,25 @@ describe("runMiroExport — tracking persistence", () => {
     }
   });
 
-  it("fires onCommit after A1, every A2 chunk, and Pass B", async () => {
-    const mock = startMockMiro();
+  it("fires onCommit after A1, every A2 chunk, Pass B, and Pass C", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        const url = new URL(req.url);
+        const body = req.body ? await req.json().catch(() => null) : null;
+        if (url.pathname.endsWith("/items/bulk")) {
+          const items = body as unknown[];
+          return new Response(JSON.stringify({ data: items.map((_, i) => ({ id: `m-${i}` })) }), { status: 201 });
+        }
+        if (url.pathname.endsWith("/connectors")) {
+          return new Response(JSON.stringify({ id: `c-1` }), { status: 201 });
+        }
+        if (url.pathname.endsWith("/groups")) {
+          return new Response(JSON.stringify({ id: "g-1", type: "group", data: {}, links: {} }), { status: 201 });
+        }
+        return new Response("{}", { status: 200 });
+      },
+    });
     try {
       const room = makeRoomState();
       const store = room.store.store as Record<string, RawShape>;
@@ -308,17 +330,17 @@ describe("runMiroExport — tracking persistence", () => {
       store["shape:c2"] = { ...geoShape("shape:c2", 60, 60), parentId: "shape:F" };
       arrowShape("shape:arr", "shape:c1", "shape:c2").forEach((r) => { store[r.id] = r; });
 
-      const client = new MiroClient({ token: "t", baseUrl: mock.url });
+      const client = new MiroClient({ token: "t", baseUrl: `http://localhost:${server.port}` });
       let commitCount = 0;
       await runMiroExport({
         client, room, boardId: "B1",
         selection: ["shape:F", "shape:c1", "shape:c2", "shape:arr"],
         onCommit: () => { commitCount += 1; },
       });
-      // A1 (1) + A2 chunk (1) + Pass B (1) = 3.
-      expect(commitCount).toBe(3);
+      // A1 (1) + A2 chunk (1) + Pass B (1) + Pass C group (1) = 4.
+      expect(commitCount).toBe(4);
     } finally {
-      mock.stop();
+      server.stop(true);
     }
   });
 });
@@ -448,6 +470,173 @@ describe("runMiroExport — Pass A2 не передаёт parent.id (DRW-111)", 
       expect(a2Body[0].parent).toBeUndefined();
     } finally {
       mock.stop();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 16: Pass C — group widget (DRW-111)
+// ---------------------------------------------------------------------------
+
+describe("Pass C — group widget (DRW-111)", () => {
+  it("single frame + 2 children → 1 createGroup call with [frame_rect, c1, c2]", async () => {
+    const groupCalls: Array<{ boardId: string; itemIds: string[] }> = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        const url = new URL(req.url);
+        const body = req.body ? await req.json().catch(() => null) : null;
+        if (url.pathname.endsWith("/items/bulk")) {
+          const items = body as unknown[];
+          return new Response(JSON.stringify({ data: items.map((_, i) => ({ id: `m-${i}` })) }), { status: 201 });
+        }
+        if (url.pathname.endsWith("/groups")) {
+          const { data } = body as { data: { items: string[] } };
+          groupCalls.push({ boardId: "B1", itemIds: data.items });
+          return new Response(JSON.stringify({ id: "g_F1", type: "group", data: {}, links: {} }), { status: 201 });
+        }
+        return new Response("{}", { status: 200 });
+      },
+    });
+    try {
+      const room = makeRoomState();
+      const store = room.store.store as Record<string, RawShape>;
+      store["shape:F1"] = frameShape("shape:F1", 0, 0, 300, 200, "F1");
+      store["shape:S1"] = { ...geoShape("shape:S1", 10, 10, 50, 50), parentId: "shape:F1" };
+      store["shape:S2"] = { ...geoShape("shape:S2", 80, 10, 50, 50), parentId: "shape:F1" };
+
+      const client = new MiroClient({ token: "t", baseUrl: `http://localhost:${server.port}` });
+      await runMiroExport({ client, room, boardId: "B1", selection: ["shape:F1"] });
+
+      expect(groupCalls).toHaveLength(1);
+      // frame rect miroId is index 0 of A1 bulk → "m-0"; children S1→"m-0", S2→"m-1" in A2 bulk (req 2)
+      // All 3 miro ids must be present in the group items array
+      expect(groupCalls[0].itemIds).toHaveLength(3);
+      expect(room.meta?.miroExports?.["B1"]?.groups?.["shape:F1"]).toBe("g_F1");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("nested frames → 2 createGroup calls, outer is FLAT (no nested groupId)", async () => {
+    const groupCalls: Array<{ itemIds: string[] }> = [];
+    const groupCallIdx = { n: 0 };
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        const url = new URL(req.url);
+        const body = req.body ? await req.json().catch(() => null) : null;
+        if (url.pathname.endsWith("/items/bulk")) {
+          const items = body as unknown[];
+          // Return sequential miroIds so we can track them
+          return new Response(JSON.stringify({ data: items.map((_, i) => ({ id: `m-bulk${groupCalls.length}-${i}` })) }), { status: 201 });
+        }
+        if (url.pathname.endsWith("/groups")) {
+          const { data } = body as { data: { items: string[] } };
+          groupCalls.push({ itemIds: data.items });
+          const gId = `g_${groupCallIdx.n++}`;
+          return new Response(JSON.stringify({ id: gId, type: "group", data: {}, links: {} }), { status: 201 });
+        }
+        return new Response("{}", { status: 200 });
+      },
+    });
+    try {
+      const room = makeRoomState();
+      const store = room.store.store as Record<string, RawShape>;
+      // F1 ⊃ { F2 ⊃ { S2 }, S1 }
+      store["shape:F1"] = frameShape("shape:F1", 0, 0, 400, 300, "F1");
+      store["shape:F2"] = { ...frameShape("shape:F2", 50, 50, 200, 150, "F2"), parentId: "shape:F1" };
+      store["shape:S1"] = { ...geoShape("shape:S1", 10, 10, 50, 50), parentId: "shape:F1" };
+      store["shape:S2"] = { ...geoShape("shape:S2", 60, 60, 50, 50), parentId: "shape:F2" };
+
+      const client = new MiroClient({ token: "t", baseUrl: `http://localhost:${server.port}` });
+      await runMiroExport({ client, room, boardId: "B1", selection: ["shape:F1"] });
+
+      expect(groupCalls).toHaveLength(2);
+
+      // Inner group (F2) processed first (deepest-first): must contain [m_F2, m_S2]
+      const innerItems = groupCalls[0].itemIds;
+      expect(innerItems).toHaveLength(2);
+
+      // Outer group (F1): flat list — must NOT contain any group id (g_0)
+      const outerItems = groupCalls[1].itemIds;
+      expect(outerItems).not.toContain("g_0");
+      // Outer flat list: frame rect + ALL descendants (F2 rect + S1 + S2) = 4 items
+      expect(outerItems).toHaveLength(4);
+
+      expect(room.meta?.miroExports?.["B1"]?.groups?.["shape:F1"]).toBeDefined();
+      expect(room.meta?.miroExports?.["B1"]?.groups?.["shape:F2"]).toBeDefined();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("frame with 0 children → no createGroup call (skip when 0 descendants)", async () => {
+    const groupCalls: number[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        const url = new URL(req.url);
+        const body = req.body ? await req.json().catch(() => null) : null;
+        if (url.pathname.endsWith("/items/bulk")) {
+          const items = body as unknown[];
+          return new Response(JSON.stringify({ data: items.map((_, i) => ({ id: `m-${i}` })) }), { status: 201 });
+        }
+        if (url.pathname.endsWith("/groups")) {
+          groupCalls.push(1);
+          return new Response(JSON.stringify({ id: "g_x" }), { status: 201 });
+        }
+        return new Response("{}", { status: 200 });
+      },
+    });
+    try {
+      const room = makeRoomState();
+      const store = room.store.store as Record<string, RawShape>;
+      store["shape:F1"] = frameShape("shape:F1", 0, 0, 300, 200, "F1"); // no children
+
+      const client = new MiroClient({ token: "t", baseUrl: `http://localhost:${server.port}` });
+      await runMiroExport({ client, room, boardId: "B1", selection: ["shape:F1"] });
+
+      expect(groupCalls).toHaveLength(0); // no group call
+      expect(room.meta?.miroExports?.["B1"]?.groups?.["shape:F1"]).toBeUndefined();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("frame with 1 child → createGroup called (frame rect + 1 child = 2 items meets Miro min)", async () => {
+    const groupCalls: Array<{ itemIds: string[] }> = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        const url = new URL(req.url);
+        const body = req.body ? await req.json().catch(() => null) : null;
+        if (url.pathname.endsWith("/items/bulk")) {
+          const items = body as unknown[];
+          return new Response(JSON.stringify({ data: items.map((_, i) => ({ id: `m-${i}` })) }), { status: 201 });
+        }
+        if (url.pathname.endsWith("/groups")) {
+          const { data } = body as { data: { items: string[] } };
+          groupCalls.push({ itemIds: data.items });
+          return new Response(JSON.stringify({ id: "g_F1" }), { status: 201 });
+        }
+        return new Response("{}", { status: 200 });
+      },
+    });
+    try {
+      const room = makeRoomState();
+      const store = room.store.store as Record<string, RawShape>;
+      store["shape:F1"] = frameShape("shape:F1", 0, 0, 300, 200, "F1");
+      store["shape:S1"] = { ...geoShape("shape:S1", 10, 10, 50, 50), parentId: "shape:F1" };
+
+      const client = new MiroClient({ token: "t", baseUrl: `http://localhost:${server.port}` });
+      await runMiroExport({ client, room, boardId: "B1", selection: ["shape:F1"] });
+
+      expect(groupCalls).toHaveLength(1); // frame + 1 child = 2 items, valid
+      expect(groupCalls[0].itemIds).toHaveLength(2);
+      expect(room.meta?.miroExports?.["B1"]?.groups?.["shape:F1"]).toBe("g_F1");
+    } finally {
+      server.stop(true);
     }
   });
 });

@@ -13,7 +13,7 @@ import {
 import { MiroAuthError, MiroNotFoundError, MiroRateLimitError } from "./client";
 import type { MiroBulkItem, MiroClient, MiroConnectorPayload } from "./client";
 import { computeCentroid, resolvePageBounds, type RawShape } from "./coords";
-import { commitBoardExport } from "./tracking";
+import { commitBoardExport, commitBoardGroupExport } from "./tracking";
 
 const BULK_CHUNK_SIZE = 20;
 const CONNECTOR_CONCURRENCY = 10;
@@ -368,7 +368,67 @@ export async function runMiroExport(p: RunExportParams): Promise<RunExportResult
   }
 
   const passBError = errors.length > 0 ? `pass-b errors: ${errors.join("; ")}` : undefined;
-  const combinedError = [runError, passBError].filter((e): e is string => Boolean(e)).join(" | ") || undefined;
+
+  // Pass C — group widgets (DRW-111). Per Phase 0 probe (probe.md Section F):
+  // - Body { data: { items: [...] } }; min 2 items; nested groups REJECTED.
+  // - Process deepest-first; each frame's group items = flat list of all
+  //   descendant miroIds (frame rectangle + ALL descendant rectangles/shapes).
+  let passCError: string | undefined;
+  if (frames.length > 0) {
+    const orderedFrames = framesInDepthFirstOrder(
+      frames.map(id => ({ id, parentId: store[id]?.parentId as string | undefined })),
+    );
+    const framesDeepestFirst = [...orderedFrames].reverse();
+
+    const selectionSet = new Set([...frames, ...items]);
+
+    function descendantsOf(rootId: string): string[] {
+      const out: string[] = [];
+      for (const id of selectionSet) {
+        if (id === rootId) continue;
+        let cur: string | undefined = store[id]?.parentId as string | undefined;
+        while (cur) {
+          if (cur === rootId) { out.push(id); break; }
+          cur = store[cur]?.parentId as string | undefined;
+        }
+      }
+      return out;
+    }
+
+    const groupMappings: Array<{ elementId: string; miroGroupId: string }> = [];
+    for (const f of framesDeepestFirst) {
+      const frameMiroId = frameMap.get(f.id);
+      if (!frameMiroId) continue;
+      const descendants = descendantsOf(f.id);
+      if (descendants.length === 0) continue; // skip — no descendants, can't meet Miro min 2 items
+      const descendantMiroIds = descendants
+        .map(d => frameMap.get(d) ?? itemMap.get(d))
+        .filter((id): id is string => Boolean(id));
+      if (descendantMiroIds.length === 0) continue;
+      const itemsPayload = [frameMiroId, ...descendantMiroIds];
+      try {
+        const resp = await p.client.createGroup(p.boardId, itemsPayload);
+        groupMappings.push({ elementId: f.id, miroGroupId: resp.id });
+      } catch (e) {
+        if (
+          e instanceof MiroAuthError ||
+          e instanceof MiroNotFoundError ||
+          e instanceof MiroRateLimitError
+        ) {
+          passCError = `pass-c: ${(e as Error).message}`;
+          break;
+        }
+        const msg = `pass-c group(${f.id}): ${(e as Error).message}`;
+        passCError = passCError ? `${passCError}; ${msg}` : msg;
+      }
+    }
+    if (groupMappings.length > 0) {
+      commitBoardGroupExport(p.room, { boardId: p.boardId, groupMappings });
+      p.onCommit?.(p.room);
+    }
+  }
+
+  const combinedError = [runError, passBError, passCError].filter((e): e is string => Boolean(e)).join(" | ") || undefined;
 
   return {
     itemsCreated: frameMap.size + itemMap.size,
