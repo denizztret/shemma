@@ -21,6 +21,7 @@ import { config } from "../config";
 import { applySchemaActions } from "../domain/schema/apply";
 import { isV2Room, roomSuffixLength } from "../domain/schema/detect";
 import { generateNodeIdServer, nodeIdFromLabel } from "../domain/schema/identity";
+import { assignBatchIndices } from "../domain/schema/index-key";
 import { parseMermaidFlowchart } from "../domain/schema/mermaid-parser";
 import type { MermaidDirection } from "../domain/schema/mermaid-parser";
 import { generateMermaid } from "../domain/schema/mermaid-generator";
@@ -588,6 +589,10 @@ export function schemaRoutes(bus: StoreChangeBus) {
       if (!isV2Room(room)) {
         room.meta = { ...(room.meta ?? {}), didrawProtocol: "v2" };
       }
+
+      // DRW-141: assign unique fractional indices to all newly added shapes
+      // so native tldraw `Cmd+D` doesn't collide on shared "a1" sibling index.
+      assignBatchIndices(batch, room.store.store as Record<string, TLRecord | undefined>);
 
       // Persist batch.
       if (!isEmptyBatch(batch)) {

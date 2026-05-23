@@ -2,6 +2,25 @@
 
 PATCH-уровневые фиксы поверх 0.23.1; накапливаются на `main` без per-task release commits ([[feedback-batch-release-cluster]]).
 
+### DRW-141 — native tldraw Cmd+D crashed on schema-frame (`Error: a1 >= a1`)
+
+При нажатии Cmd+D на любом созданном через `shemma_create_schema` / `shemma_duplicate_schema` schema-frame'е tldraw валился в error boundary `Something went wrong`. Stack: `Error: a1 >= a1` — все children frame'а имели одинаковый hardcoded `index: "a1"`, и tldraw fractional indexing не мог вычислить новый `between(low, high)` когда `low === high`.
+
+- **Root cause:** `apps/backend/src/domain/schema/apply.ts` `makeGeoShape` / `makeArrowShape`, `apps/backend/src/routes/schema.ts` `makeArrowShapeLocal` / `makeGroupBoundaryShape` — все хардкодили `index: "a1"` на всех новых shapes. Mermaid-import path вёл себя так же. Один frame с >1 children = data corruption для tldraw native ops.
+- **Fix:** новый pure helper `apps/backend/src/domain/schema/index-key.ts` → `assignBatchIndices(batch, priorStore)` post-processing'ом назначает unique fractional indices каждому newly-added shape, сгруппировано по `parentId`. Format: `a<3-char base36>z` (`a000z`, `a001z`, ..., `a00fz`, `a00gz`, ...). Suffix `"z"` критичен — tldraw `IndexKey` validator отвергает trailing `"0"` (как `a000`, `a010`).
+- **Wired in:** `applySchemaActions`, `duplicateSchemaFrame`, `POST /api/schema/create` — все three call sites вызывают `assignBatchIndices` перед persist.
+- **Regex parser** в helper'е намеренно матчит только наш own format `^a[0-9a-z]{3}z$` — tldraw-native indices (`a4q9xb6V`, `a10ydSfkl`) не парсятся как base36 → no overflow.
+- **10 unit tests** в `index-key.test.ts` покрывают: пустой batch, single/multi children, uniqueness, independent ranges per parent, append after siblings, ignore other parents, skip non-shapes, ignore native long indices, lex order.
+- **Real-board verify:** `manual-test-2026-05-23` — после fix создан frame "DRW-141 verify" с 5 children → все имеют unique indices `a000z..a004z` → native Cmd+D отрабатывает без crash, создаёт duplicate frame с tldraw-native indices.
+
+### DRW-140 — `shemma_duplicate_schema` не клонировал arrows + bindings
+
+`shemma_duplicate_schema` deep-clone'ил mermaidSource + overlays + geo nodes с identity remap, но arrow shapes клонировались `as-is` (без remap'а `props.start/end.boundShapeId`), а bindings (`typeName="binding"` top-level records) не клонировались вообще. Результат: визуально стрелок в replica нет — frontend видит arrow shapes без bindings ⇒ tldraw не привязывает их к target geo nodes.
+
+- **Fix** в `apps/backend/src/domain/schema/duplicate.ts`: добавлен `shapeIdMap: oldShapeId → newShapeId` (frame + all children), helper `remapArrowProps(shape, shapeIdMap)` обновляет `props.start.boundShapeId` / `props.end.boundShapeId` cloned arrow shapes, helper `buildClonedBindings(store, shapeIdMap)` клонирует bindings оба endpoint которых в cloned subtree (anti-dangle: если binding ссылается на shape outside frame, skip).
+- **4 new unit tests** покрывают: arrow props remap, bindings cloned with remapped endpoints, anti-dangle (binding с outside endpoint skipped), free-hand arrows (no boundShapeId) клонируются untouched.
+- **Real-board verify:** replica frame теперь содержит 2 arrow shapes + 4 bindings внутри replica subtree (все fromId/toId указывают на cloned geo nodes, не оригинал).
+
 ### DRW-138 — WS handshake landing в legacy bundle вместо space bundle
 
 `resolveWsSpace` в `apps/backend/src/index.ts` читал `opts.enableSpaceMiddleware` напрямую (undefined когда callers полагаются на daemonMode default), в то время как HTTP path внутри `makeApp` использовал `opts.enableSpaceMiddleware ?? daemonMode` (= true). В результате WS upgrade silently fall back'ил в legacy bundle, в то время как HTTP корректно резолвил в space bundle — split-brain persistence для одной и той же `(space, room)` pair.

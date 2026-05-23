@@ -325,6 +325,202 @@ describe("duplicateSchemaFrame", () => {
   });
 });
 
+// ---- DRW-140: arrows + bindings clone ----
+
+function makeArrow(id: string, parentId: string, startShape: string, endShape: string): TLRecord {
+  return {
+    id,
+    typeName: "shape",
+    type: "arrow",
+    x: 0,
+    y: 0,
+    parentId,
+    index: "a2",
+    isLocked: false,
+    opacity: 1,
+    rotation: 0,
+    props: {
+      start: { x: 0, y: 0, boundShapeId: startShape, normalizedAnchor: { x: 0.5, y: 0.5 }, isExact: false, isPrecise: true },
+      end: { x: 0, y: 0, boundShapeId: endShape, normalizedAnchor: { x: 0.5, y: 0.5 }, isExact: false, isPrecise: true },
+      color: "black",
+      size: "m",
+      kind: "arc",
+      elbowMidPoint: 0.5,
+    },
+    meta: {},
+  } as TLRecord;
+}
+
+function makeBinding(id: string, arrowId: string, targetShape: string, terminal: "start" | "end"): TLRecord {
+  return {
+    id,
+    typeName: "binding",
+    type: "arrow",
+    fromId: arrowId,
+    toId: targetShape,
+    props: { terminal, isPrecise: true, isExact: false, normalizedAnchor: { x: 0.5, y: 0.5 }, snap: "none" },
+    meta: {},
+  } as unknown as TLRecord;
+}
+
+describe("DRW-140 — duplicate arrows + bindings (visual stretch)", () => {
+  test("arrow props.start/end.boundShapeId remapped to cloned shape ids", () => {
+    const raw = "graph LR\n  a-aaaaaa --> b-bbbbbb";
+    const frame = makeFrame("shape:frame1", 0, 0, 640, 480, raw);
+    const childA = makeChild("shape:nodeA", "shape:frame1", "a-aaaaaa", "A");
+    const childB = makeChild("shape:nodeB", "shape:frame1", "b-bbbbbb", "B");
+    const arrow = makeArrow("shape:arr1", "shape:frame1", "shape:nodeA", "shape:nodeB");
+    const store = makeStore([frame, childA, childB, arrow]);
+    const room = makeRoom(store);
+
+    const result = duplicateSchemaFrame({
+      room,
+      oldFrame: frame,
+      newLabel: "Copy",
+      suffixLen: 6,
+    });
+
+    // Find cloned arrow in batch
+    const clonedArrow = Object.values(result.batch.added).find(
+      (r) => r && r.type === "arrow",
+    );
+    expect(clonedArrow).toBeDefined();
+    // biome-ignore lint/suspicious/noExplicitAny: arrow props are untyped in tldraw
+    const props = (clonedArrow as any).props as Record<string, unknown>;
+    const start = props.start as Record<string, unknown>;
+    const end = props.end as Record<string, unknown>;
+    // Must NOT reference original shape ids
+    expect(start.boundShapeId).not.toBe("shape:nodeA");
+    expect(end.boundShapeId).not.toBe("shape:nodeB");
+    // Must reference some new shape id from the batch
+    expect(typeof start.boundShapeId).toBe("string");
+    expect(Object.keys(result.batch.added)).toContain(start.boundShapeId as string);
+    expect(Object.keys(result.batch.added)).toContain(end.boundShapeId as string);
+  });
+
+  test("bindings cloned with both endpoints remapped", () => {
+    const raw = "graph LR\n  a-aaaaaa --> b-bbbbbb";
+    const frame = makeFrame("shape:frame1", 0, 0, 640, 480, raw);
+    const childA = makeChild("shape:nodeA", "shape:frame1", "a-aaaaaa", "A");
+    const childB = makeChild("shape:nodeB", "shape:frame1", "b-bbbbbb", "B");
+    const arrow = makeArrow("shape:arr1", "shape:frame1", "shape:nodeA", "shape:nodeB");
+    const bindStart = makeBinding("binding:bs1", "shape:arr1", "shape:nodeA", "start");
+    const bindEnd = makeBinding("binding:be1", "shape:arr1", "shape:nodeB", "end");
+    const store = makeStore([frame, childA, childB, arrow, bindStart, bindEnd]);
+    const room = makeRoom(store);
+
+    const result = duplicateSchemaFrame({
+      room,
+      oldFrame: frame,
+      newLabel: "Copy",
+      suffixLen: 6,
+    });
+
+    const clonedBindings = Object.values(result.batch.added).filter(
+      (r) => r && r.typeName === "binding",
+    );
+    expect(clonedBindings).toHaveLength(2);
+    for (const b of clonedBindings) {
+      expect(b!.id).toMatch(/^binding:/);
+      expect(b!.id).not.toBe("binding:bs1");
+      expect(b!.id).not.toBe("binding:be1");
+      // biome-ignore lint/suspicious/noExplicitAny: binding shape is untyped
+      const fromId = (b as any).fromId;
+      // biome-ignore lint/suspicious/noExplicitAny: binding shape is untyped
+      const toId = (b as any).toId;
+      expect(fromId).not.toBe("shape:arr1");
+      expect(toId).not.toBe("shape:nodeA");
+      expect(toId).not.toBe("shape:nodeB");
+      // Both endpoints must be in the cloned batch
+      expect(Object.keys(result.batch.added)).toContain(fromId);
+      expect(Object.keys(result.batch.added)).toContain(toId);
+    }
+  });
+
+  test("binding referencing shape OUTSIDE frame is skipped (no dangle)", () => {
+    const raw = "graph LR\n  a-aaaaaa[A]";
+    const frame = makeFrame("shape:frame1", 0, 0, 640, 480, raw);
+    const childA = makeChild("shape:nodeA", "shape:frame1", "a-aaaaaa", "A");
+    const outsideShape = makeChild("shape:outside", "page:page", "outside-zzzzzz", "Outside");
+    // Arrow inside frame; one endpoint points OUTSIDE the frame.
+    const arrow = makeArrow("shape:arr1", "shape:frame1", "shape:nodeA", "shape:outside");
+    const bindStart = makeBinding("binding:bs1", "shape:arr1", "shape:nodeA", "start");
+    const bindEnd = makeBinding("binding:be1", "shape:arr1", "shape:outside", "end");
+    const store = makeStore([frame, childA, outsideShape, arrow, bindStart, bindEnd]);
+    const room = makeRoom(store);
+
+    const result = duplicateSchemaFrame({
+      room,
+      oldFrame: frame,
+      newLabel: "Copy",
+      suffixLen: 6,
+    });
+
+    // Only the binding with both endpoints inside the frame gets cloned.
+    // bindStart (arrow → nodeA) — both cloned → cloned.
+    // bindEnd (arrow → outside) — outside isn't in shapeIdMap → skipped to avoid
+    // a dangling binding between the replica arrow and the original outside shape.
+    const clonedBindings = Object.values(result.batch.added).filter(
+      (r) => r && r.typeName === "binding",
+    );
+    expect(clonedBindings).toHaveLength(1);
+    // biome-ignore lint/suspicious/noExplicitAny: binding shape is untyped
+    const survivor = clonedBindings[0] as any;
+    // Cloned binding must NOT reference any original shape id.
+    expect(survivor.fromId).not.toBe("shape:arr1");
+    expect(survivor.toId).not.toBe("shape:nodeA");
+    expect(survivor.toId).not.toBe("shape:outside");
+  });
+
+  test("arrows without boundShapeId (free-hand) clone untouched", () => {
+    const raw = "graph LR";
+    const frame = makeFrame("shape:frame1", 0, 0, 640, 480, raw);
+    // Free-hand arrow — no boundShapeId
+    const freeArrow: TLRecord = {
+      id: "shape:freearr",
+      typeName: "shape",
+      type: "arrow",
+      x: 0,
+      y: 0,
+      parentId: "shape:frame1",
+      index: "a2",
+      isLocked: false,
+      opacity: 1,
+      rotation: 0,
+      props: {
+        start: { x: 10, y: 10 },
+        end: { x: 100, y: 100 },
+        color: "black",
+        size: "m",
+        kind: "arc",
+        elbowMidPoint: 0.5,
+      },
+      meta: {},
+    } as TLRecord;
+    const store = makeStore([frame, freeArrow]);
+    const room = makeRoom(store);
+
+    const result = duplicateSchemaFrame({
+      room,
+      oldFrame: frame,
+      newLabel: "Copy",
+      suffixLen: 6,
+    });
+
+    const clonedArrow = Object.values(result.batch.added).find(
+      (r) => r && r.type === "arrow",
+    );
+    expect(clonedArrow).toBeDefined();
+    // biome-ignore lint/suspicious/noExplicitAny: arrow props are untyped
+    const props = (clonedArrow as any).props as Record<string, unknown>;
+    const start = props.start as Record<string, unknown>;
+    expect(start.x).toBe(10);
+    expect(start.y).toBe(10);
+    // No boundShapeId to remap — preserved as-is
+    expect(start.boundShapeId).toBeUndefined();
+  });
+});
+
 describe("buildDeleteSchemaFrameBatch", () => {
   test("deletes frame and all its children", () => {
     const frame = makeFrame("shape:frame1");
