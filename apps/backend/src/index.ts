@@ -417,10 +417,19 @@ export async function startServer(opts: AppOpts = {}) {
   // middleware off (compat preserved). The `enableSpaceMiddleware` flag in
   // `opts` (if a future caller passes it explicitly) wins over the
   // daemonMode-derived default.
+  //
+  // DRW-138: compute the effective value ONCE so that both the HTTP path
+  // (via makeApp → spaceMiddleware) and the WS path (via resolveWsSpace below)
+  // agree on whether the registry is authoritative. Reading `opts.enable…`
+  // directly inside `resolveWsSpace` silently dropped to `undefined` and
+  // landed every WS upgrade in the legacy bundle, while HTTP correctly used
+  // the daemonMode-derived `true` — splitting persistence into two
+  // in-memory states for the same (space, room).
+  const effectiveSpaceMiddleware = opts.enableSpaceMiddleware ?? daemonMode;
   const { app, bus, persistence, bundleForSpace, legacyBundle } = makeApp({
     ...opts,
     idle,
-    enableSpaceMiddleware: opts.enableSpaceMiddleware ?? daemonMode,
+    enableSpaceMiddleware: effectiveSpaceMiddleware,
     onSpaceResolved: debouncedTouch
       ? (s) => debouncedTouch.touch(s.id)
       : undefined,
@@ -461,7 +470,10 @@ export async function startServer(opts: AppOpts = {}) {
       // tracker default (Task 11 fix); it is a separate concept.
       return { spaceId: legacyBundle.space.id, bundle: legacyBundle };
     }
-    if (opts.enableSpaceMiddleware) {
+    // DRW-138: use the effective flag computed in the outer scope (NOT
+    // `opts.enableSpaceMiddleware`, which is undefined when callers rely on
+    // the daemonMode default — that's the bug we're fixing).
+    if (effectiveSpaceMiddleware) {
       if (!SPACE_ID_PATTERN.test(rawSpaceId)) return null;
       const record = findSpaceById(rawSpaceId);
       if (!record) return null;

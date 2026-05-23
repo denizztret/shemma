@@ -2,6 +2,16 @@
 
 PATCH-уровневые фиксы поверх 0.23.1; накапливаются на `main` без per-task release commits ([[feedback-batch-release-cluster]]).
 
+### DRW-138 — WS handshake landing в legacy bundle вместо space bundle
+
+`resolveWsSpace` в `apps/backend/src/index.ts` читал `opts.enableSpaceMiddleware` напрямую (undefined когда callers полагаются на daemonMode default), в то время как HTTP path внутри `makeApp` использовал `opts.enableSpaceMiddleware ?? daemonMode` (= true). В результате WS upgrade silently fall back'ил в legacy bundle, в то время как HTTP корректно резолвил в space bundle — split-brain persistence для одной и той же `(space, room)` pair.
+
+Симптом: drag existing in-frame shape работал (overlay POST → HTTP → space bundle → project disk), но новые shapes user-add'ил тихо терялись при reload (WS user-change → legacy bundle → legacy disk → HTTP reload читал project disk без новых shapes).
+
+- **Fix** (`apps/backend/src/index.ts`): extract `const effectiveSpaceMiddleware = opts.enableSpaceMiddleware ?? daemonMode` ОДИН раз; передать его в `makeApp({...})` и использовать в `resolveWsSpace` вместо raw `opts.enableSpaceMiddleware`.
+- **Regression test** (`apps/backend/tests/ws-daemon-mode-middleware.test.ts`): 2 теста проверяют что при `daemonMode=true` без explicit `enableSpaceMiddleware` opt — WS upgrade (а) reject'ит unknown space с 400, (б) accept'ит registered space; ровно как HTTP path.
+- **End-to-end verify**: добавление rectangle через UI на v2 room `manual-test-2026-05-23` → version 18→19, project disk lastTouched updated, legacy disk не trogan'нут, shape пережил reload.
+
 ### DRW-137 — WS truncated recovery loop без cap
 
 После двух последовательных `truncated` frame'ов frontend сдавался (`onTruncated` второго уровня просто логировал «giving up»), WS оставался `stopped`, и любые user-change (новые shapes) уже не отправлялись в backend. На v2 schema-frame rooms drag существующих shape'ов продолжал работать через overlay POST (HTTP), создавая иллюзию нормального persist; новые shapes тихо терялись при reload.
