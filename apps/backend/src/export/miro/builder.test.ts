@@ -13,6 +13,7 @@ import {
   tldrawSizeToBorderWidth,
   tldrawSizeToStrokeWidth,
   tldrawSizeToStickyFontSize,
+  tldrawFontToFamily,
 } from "./builder";
 import type { RawShape } from "./coords";
 
@@ -358,4 +359,17 @@ describe("tldrawSizeToStickyFontSize", () => {
   it("l → '36'", () => expect(tldrawSizeToStickyFontSize("l")).toBe("36"));
   it("xl → '48'", () => expect(tldrawSizeToStickyFontSize("xl")).toBe("48"));
   it("undefined → '24' (default = m)", () => expect(tldrawSizeToStickyFontSize(undefined)).toBe("24"));
+});
+
+// ---------------------------------------------------------------------------
+// Task 3: font mapping helper
+// ---------------------------------------------------------------------------
+
+describe("tldrawFontToFamily", () => {
+  it("draw → 'caveat'", () => expect(tldrawFontToFamily("draw")).toBe("caveat"));
+  it("sans → 'open_sans'", () => expect(tldrawFontToFamily("sans")).toBe("open_sans"));
+  it("serif → 'times_new_roman'", () => expect(tldrawFontToFamily("serif")).toBe("times_new_roman"));
+  it("mono → 'roboto_mono'", () => expect(tldrawFontToFamily("mono")).toBe("roboto_mono"));
+  it("undefined → 'open_sans'", () => expect(tldrawFontToFamily(undefined)).toBe("open_sans"));
+  it("unknown string → 'open_sans'", () => expect(tldrawFontToFamily("comic-sans")).toBe("open_sans"));
 });

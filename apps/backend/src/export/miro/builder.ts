@@ -277,6 +277,22 @@ export function tldrawSizeToStickyFontSize(size: string | undefined): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Task 3: font mapping helper (§ 6.1)
+// ---------------------------------------------------------------------------
+
+export type TldrawFont = "draw" | "sans" | "serif" | "mono";
+
+export function tldrawFontToFamily(font: string | undefined): string {
+  switch (font) {
+    case "draw":  return "caveat";           // casual flowing script — closest to tldraw handwriting feel
+    case "serif": return "times_new_roman";
+    case "mono":  return "roboto_mono";
+    case "sans":
+    default:      return "open_sans";
+  }
+}
+
 export function buildConnectorPayload(
   arrow: RawShape,
   ctx: ConnectorBuilderCtx,
