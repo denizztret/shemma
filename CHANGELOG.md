@@ -1,3 +1,17 @@
+## Unreleased — DRW-157 + DRW-158 (visual-fidelity continuation)
+
+### Fixed
+
+- **DRW-158** — Mermaid `subgraph X\ndirection LR\n A\n B\nend` где A и B не имеют edges между собой (только external incoming/outgoing) — ELK раскладывал их вертикально (default behavior для disconnected components в layered direction mode). Reproduced на user-схеме 2026-05-24 (subgraphs "Доставка" и "Потребители" из EventDispatch flow).
+  - **Fix:** в `runPassA` после `buildEdges` детектируем connected components — если direction override задан и компонент > 1 — добавляются virtual chain edges (`v_chain_<i>`) по declaration order. ELK respects direction; edge geometry мы не читаем (только node positions).
+  - `countConnectedComponents` utility в `apps/backend/src/domain/layout.ts`.
+- **DRW-157** — `isContainerShape` теперь детектит mermaid subgraph wrappers через `meta.didrawSubgraph === true` (DRW-156 followup, ранее unreleased на main).
+
+### Tests
+
+- **+2 теста** DRW-158-A/B в `layout.test.ts` — LR/TB subgraphs с 2 children без internal edges. Backend layout suite 20 pass.
+- Full backend 1487 + frontend 262 = 1749 tests, 0 fail.
+
 ## 0.25.3 — 2026-05-24 — DRW-156 Services parented to subgraph wrappers
 
 ### Fixed
