@@ -102,9 +102,13 @@ function isLayoutCandidate(r: ShapeRec): boolean {
 // DRW-098: container = tldraw frame ИЛИ geo+role=boundary (DRW-084 Mermaid
 // subgraphs рендерятся как geo с meta.role="boundary" а не как frame —
 // layout должен трактовать их как compound contаiner identical to frame).
+// DRW-157: storage-mode mermaid wrappers исторически писали meta.didrawSubgraph
+// без meta.role — также считаем containers для совместимости (новые шейпы
+// пишут оба поля, но старые комнаты могут содержать только didrawSubgraph).
 function isContainerShape(r: ShapeRec): boolean {
   if (r.type === "frame") return true;
   if (r.type === "geo" && r.meta?.role === "boundary") return true;
+  if (r.type === "geo" && r.meta?.didrawSubgraph === true) return true;
   return false;
 }
 
