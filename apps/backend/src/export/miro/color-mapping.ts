@@ -123,6 +123,40 @@ export function tldrawNamedToHex(color: string | undefined): string {
   return (TLDRAW_NAMED_TO_HEX as Record<string, string>)[color] ?? TLDRAW_NAMED_TO_HEX["black"];
 }
 
+// ---------------------------------------------------------------------------
+// DRW-153: hex → nearest tldraw named color
+// ---------------------------------------------------------------------------
+
+/** Pre-built palette array for nearest-neighbor lookup (12 entries, stable order). */
+export const TLDRAW_COLOR_PALETTE: Array<{ name: TldrawNamedColor; rgb: RGB }> = (
+  Object.entries(TLDRAW_NAMED_TO_HEX) as Array<[TldrawNamedColor, string]>
+).map(([name, hex]) => ({ name, rgb: parseHex(hex) }));
+
+/**
+ * Map an arbitrary hex color to the nearest tldraw named color using
+ * Euclidean RGB distance. Returns `undefined` for invalid/empty input
+ * (instead of throwing) so callers can safely ignore missing styles.
+ */
+export function hexToTldrawColor(hex: string): TldrawNamedColor | undefined {
+  if (!hex || typeof hex !== "string") return undefined;
+  let rgb: RGB;
+  try {
+    rgb = parseHex(hex);
+  } catch {
+    return undefined;
+  }
+  let bestName: TldrawNamedColor = "black";
+  let bestDist = Infinity;
+  for (const entry of TLDRAW_COLOR_PALETTE) {
+    const d = euclidean(rgb, entry.rgb);
+    if (d < bestDist) {
+      bestDist = d;
+      bestName = entry.name;
+    }
+  }
+  return bestName;
+}
+
 export function nearestStickyColor(hex: string): string {
   const rgb = parseHex(hex);
   let bestName = "gray";
