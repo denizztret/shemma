@@ -115,6 +115,34 @@ describe("POST /api/schema/create", () => {
     expect(room.meta?.didrawProtocol).toBe("v2");
   });
 
+  // DRW-159: tldraw v5 TLFrameShape.props.color стал required. Без него
+  // mergeRemoteChanges/applyDiff на frontend бросает ValidationError и блокирует
+  // apply всего WS batch'а. Regression test проверяет что schema-frame создаётся
+  // с valid props per tldraw v5 schema.
+  test("DRW-159: created schema-frame has valid tldraw v5 props (color set)", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(app, {
+      label: "v5 frame test",
+      raw: "graph LR\n  a --> b",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { frameId: string };
+    const room = await rooms.get("schema-test");
+    const frame = room.store.store[body.frameId] as
+      | { type?: string; props?: { color?: string; name?: string; w?: number; h?: number } }
+      | undefined;
+    expect(frame?.type).toBe("frame");
+    expect(frame?.props?.color).toBeDefined();
+    // tldraw v5 valid TLDefaultColorStyle values
+    expect([
+      "black", "grey", "light-violet", "violet", "blue", "light-blue",
+      "yellow", "orange", "green", "light-green", "light-red", "red", "white",
+    ]).toContain(frame?.props?.color);
+    expect(typeof frame?.props?.name).toBe("string");
+    expect(typeof frame?.props?.w).toBe("number");
+    expect(typeof frame?.props?.h).toBe("number");
+  });
+
   test("Mode A: edges + subgraph → arrow shapes + group boundary shapes created", async () => {
     const { app, rooms } = makeApp({ inMemory: true });
     const res = await postCreate(app, {
