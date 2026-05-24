@@ -139,7 +139,7 @@ describe("runLayout", () => {
   });
 
   test("frame containers become ELK compound nodes — children laid out inside parent", async () => {
-    const frame = makeShape("shape:e_vpc", "vpc", { type: "frame", w: 400, h: 200, meta: { didrawIsGroup: true, role: "boundary" } });
+    const frame = makeShape("shape:e_vpc", "vpc", { type: "frame", w: 400, h: 200, meta: { role: "boundary" } });
     const a = makeShape("shape:e_a", "a", { parentId: "shape:e_vpc", meta: { role: "service" } });
     const b = makeShape("shape:e_b", "b", { parentId: "shape:e_vpc", meta: { role: "service" } });
     const { arrow, b1, b2 } = makeArrow("shape:c_0", "shape:e_a", "shape:e_b");
@@ -249,8 +249,8 @@ describe("runLayout", () => {
   test("DRW-082: frame children stored with parent-relative coords", async () => {
     // 2 frames чтобы поймать кейс где первый frame случайно покрывает диапазон
     // child'а — нужен второй frame в стороне от origin.
-    const frameA = makeShape("shape:e_fa", "fa", { type: "frame", w: 300, h: 200, meta: { didrawIsGroup: true, role: "boundary" } });
-    const frameB = makeShape("shape:e_fb", "fb", { type: "frame", w: 300, h: 200, meta: { didrawIsGroup: true, role: "boundary" } });
+    const frameA = makeShape("shape:e_fa", "fa", { type: "frame", w: 300, h: 200, meta: { role: "boundary" } });
+    const frameB = makeShape("shape:e_fb", "fb", { type: "frame", w: 300, h: 200, meta: { role: "boundary" } });
     const a1 = makeShape("shape:e_a1", "a1", { parentId: "shape:e_fa", meta: { role: "service" } });
     const a2 = makeShape("shape:e_a2", "a2", { parentId: "shape:e_fa", meta: { role: "service" } });
     const b1c = makeShape("shape:e_b1", "b1", { parentId: "shape:e_fb", meta: { role: "service" } });

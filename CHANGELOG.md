@@ -1,3 +1,23 @@
+## [Unreleased] — DRW-148 Remove legacy v1 mermaid import path
+
+### BREAKING CHANGE
+
+- **`importMermaid()` больше не делает тихий fallback на v1 legacy path** при недоступности backend. Если `POST /api/schema/create` возвращает ошибку — функция throws. Используй `importMermaidLegacy()` напрямую если нужен legacy-путь.
+- **`forceV1` опция удалена** из `importMermaid()` в `apps/frontend/src/canvas/mermaid-import.ts`.
+- **`meta.didrawIsGroup` поле удалено** из shape meta, которое записывалось в `domain/compile.ts` (action type:group) и в `migrate-v2.ts` (envelope v2→v3 migrator). Поле никогда не читалось runtime-кодом — только присутствовало как dead field.
+
+### Changed
+- `apps/backend/src/domain/compile.ts` — `group` DomainAction frame meta: удалено `didrawIsGroup: true` (dead field).
+- `apps/backend/src/migrate-v2.ts` — `groupToFrame()`: удалено `didrawIsGroup: true` (dead field).
+- `apps/frontend/src/canvas/mermaid-import.ts` — `importMermaid()`: удалена опция `forceV1`, удалён тихий v1-фоллбек.
+
+### Backward compatibility
+- Существующие v1 rooms (`frame+didrawIsGroup` shapes) продолжают загружаться и рендериться — нет migration, нет краша daemon.
+- `importMermaidLegacy()` остаётся доступна для тестов и возможного unit-использования.
+- Оба mode (`browser` и `storage`) в `shemma_import_mermaid` всегда производят v2 модель.
+
+---
+
 ## 0.25.0 — 2026-05-24 — DRW-149 Autolayout в schema-frame
 
 ### Added

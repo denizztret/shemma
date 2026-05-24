@@ -217,7 +217,7 @@ describe("DRW-003: layout pin discipline + no-collision", () => {
 
 describe("DRW-004: group bbox writeback", () => {
   test("frame + children + layout → frame получает w/h в props (>0)", async () => {
-    const frame = makeShape("shape:frame1", 0, 0, "sys1", { didrawIsGroup: true, role: "boundary" }, {}, "frame");
+    const frame = makeShape("shape:frame1", 0, 0, "sys1", { role: "boundary" }, {}, "frame");
     const a = makeShape("shape:a", 0, 0, "a", {}, {}, "geo", "shape:frame1");
     const b = makeShape("shape:b", 0, 0, "b", {}, {}, "geo", "shape:frame1");
     const s = snapshotWithShapes([frame, a, b]);
@@ -235,7 +235,7 @@ describe("DRW-004: group bbox writeback", () => {
 
 describe("DRW-005: children coords внутри group bbox (absolute)", () => {
   test("group + 2 children + layout → children внутри frame bbox", async () => {
-    const frame = makeShape("shape:frame1", 0, 0, "sys", { didrawIsGroup: true, role: "boundary" }, {}, "frame");
+    const frame = makeShape("shape:frame1", 0, 0, "sys", { role: "boundary" }, {}, "frame");
     const a = makeShape("shape:a", 0, 0, "a", {}, {}, "geo", "shape:frame1");
     const b = makeShape("shape:b", 0, 0, "b", {}, {}, "geo", "shape:frame1");
     const s = snapshotWithShapes([frame, a, b]);
@@ -261,7 +261,7 @@ describe("DRW-005: children coords внутри group bbox (absolute)", () => {
   });
 
   test("group с children + независимая node — независимая снаружи bbox группы", async () => {
-    const frame = makeShape("shape:frame1", 0, 0, "async-side", { didrawIsGroup: true, role: "boundary" }, {}, "frame");
+    const frame = makeShape("shape:frame1", 0, 0, "async-side", { role: "boundary" }, {}, "frame");
     const worker = makeShape("shape:w", 0, 0, "worker", {}, {}, "geo", "shape:frame1");
     const queue = makeShape("shape:q", 0, 0, "queue", { role: "queue" }, {}, "geo", "shape:frame1");
     const api = makeShape("shape:api", 0, 0, "api");

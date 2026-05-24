@@ -285,7 +285,7 @@ function groupToFrame(g: V2Group, id: string): TLRecord {
       h: g.h ?? 300,
       name: g.label ?? "",
     },
-    meta: { didrawName, didrawIsGroup: true },
+    meta: { didrawName },
   } as any;
 }
 

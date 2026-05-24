@@ -97,7 +97,7 @@ describe("context view-builder", () => {
       id: "shape:f",
       typeName: "shape",
       type: "frame",
-      meta: { didrawName: "core", didrawIsGroup: true, role: "boundary" },
+      meta: { didrawName: "core", role: "boundary" },
     } as any;
     s.store["shape:a"] = {
       id: "shape:a",

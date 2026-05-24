@@ -48,7 +48,7 @@ function makeFrame(
     y: opts.y ?? 0,
     parentId: opts.parentId ?? "page:page",
     props: { w: opts.w ?? 400, h: opts.h ?? 300, name },
-    meta: { didrawName: name, didrawIsGroup: true, role: "boundary" },
+    meta: { didrawName: name, role: "boundary" },
   } as TLRecord;
 }
 
