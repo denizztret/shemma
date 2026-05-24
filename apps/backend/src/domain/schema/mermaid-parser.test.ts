@@ -710,3 +710,70 @@ describe("parseMermaidFlowchart — DRW-152 per-subgraph direction", () => {
     expect(groups[0]!.direction).toBeUndefined();
   });
 });
+
+describe("parseMermaidFlowchart — DRW-155 multi-line quoted labels", () => {
+  test("collapses \\n inside [\"...\"] into a space", () => {
+    const raw = `graph TB
+  A["line one
+  line two"]
+  B["single"]
+  A --> B`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const defines = r.actions.filter((a) => a.kind === "schema-define");
+    expect(defines).toHaveLength(2);
+    const aDef = defines.find((d: { kind: "schema-define"; label?: string }) =>
+      d.label?.startsWith("line one"),
+    );
+    expect(aDef).toBeDefined();
+    // continuation line is joined with a space, leading indentation preserved
+    expect(aDef?.label).toContain("line two");
+    expect(aDef?.label).not.toContain("\n");
+  });
+
+  test("handles 3+ line label", () => {
+    const raw = `graph TB
+  ED["EventDispatch
+  AnalyticsPayload
+  DelegatePayload"]
+  ED --> X`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const ed = r.actions.find(
+      (a) => a.kind === "schema-define" && a.label?.includes("EventDispatch"),
+    );
+    expect(ed).toBeDefined();
+    expect((ed as { label?: string }).label).toContain("AnalyticsPayload");
+    expect((ed as { label?: string }).label).toContain("DelegatePayload");
+  });
+
+  test("inline node def at edge target accepts multi-line label", () => {
+    const raw = `graph TB
+  A["A"]
+  A --> B["multi
+  line target"]`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const b = r.actions.find(
+      (a) =>
+        a.kind === "schema-define" && (a as { label?: string }).label?.includes("multi"),
+    );
+    expect(b).toBeDefined();
+    expect((b as { label?: string }).label).toContain("line target");
+  });
+
+  test("single-line quoted labels are unaffected (regression guard)", () => {
+    const raw = `graph TB
+  A["just one line"]
+  B["another"]
+  A --> B`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const defines = r.actions.filter((a) => a.kind === "schema-define");
+    expect(defines).toHaveLength(2);
+  });
+});

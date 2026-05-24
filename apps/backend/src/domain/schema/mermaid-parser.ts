@@ -134,6 +134,13 @@ export function parseMermaidFlowchart(
     }
   }
 
+  // DRW-155: collapse newlines inside double-quoted strings into spaces.
+  // Mermaid labels (e.g. `A["multi\nline"]`) are visually multi-line in the
+  // editor but logically one token; line-by-line split would otherwise treat
+  // continuation lines as garbage. Single-quotes are not treated as label
+  // delimiters in our subset.
+  src = collapseQuotedNewlines(src);
+
   // Split into lines, strip comments (%%) and blank lines
   const lines = src
     .split("\n")
@@ -338,6 +345,32 @@ export function parseMermaidFlowchart(
  * Returns `null` if the input is empty or contains no recognisable properties.
  * Individual unrecognised properties are silently skipped (graceful degradation).
  */
+/**
+ * Collapse newlines inside double-quoted strings into spaces.
+ * Mermaid renderers tolerate multi-line labels like `A["line1\nline2"]`, but
+ * our line-by-line parser would treat continuation lines as syntax errors.
+ * State machine toggles `inQuote` on each unescaped `"` and replaces `\n`
+ * with a single space while inside quotes.
+ */
+function collapseQuotedNewlines(src: string): string {
+  let result = "";
+  let inQuote = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === '"') {
+      inQuote = !inQuote;
+      result += c;
+      continue;
+    }
+    if (inQuote && c === "\n") {
+      result += " ";
+      continue;
+    }
+    result += c;
+  }
+  return result;
+}
+
 function parseMermaidStyleString(styleStr: string): MermaidNodeStyle | null {
   if (!styleStr || !styleStr.trim()) return null;
 
