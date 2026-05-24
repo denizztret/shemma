@@ -49,6 +49,11 @@ export type ParseResult =
       direction: MermaidDirection;
       /** Parsed `style NAME ...` directives — keyed by raw mermaid identifier. */
       nodeStyles: Map<string, MermaidNodeStyle>;
+      /**
+       * Same data as `nodeStyles` but keyed by resolved NodeId (for easy lookup in schema.ts).
+       * Only includes nodes that appear in both a node/edge line and a style directive.
+       */
+      nodeStylesByNodeId: Map<NodeId, MermaidNodeStyle>;
     }
   | {
       ok: false;
@@ -309,7 +314,19 @@ export function parseMermaidFlowchart(
     }
   }
 
-  return { ok: true, actions, direction, nodeStyles };
+  // Build nodeStylesByNodeId by resolving mermaid IDs → NodeIds via idMap.
+  // Nodes referenced only in style directives (not in any edge/node line) won't be in idMap;
+  // those entries are retained in nodeStyles (by mermaid ID) for completeness but
+  // not included in nodeStylesByNodeId.
+  const nodeStylesByNodeId = new Map<NodeId, MermaidNodeStyle>();
+  for (const [mermaidId, style] of nodeStyles) {
+    const nodeId = idMap.get(mermaidId);
+    if (nodeId !== undefined) {
+      nodeStylesByNodeId.set(nodeId, style);
+    }
+  }
+
+  return { ok: true, actions, direction, nodeStyles, nodeStylesByNodeId };
 }
 
 // ---- Style string parsing ----
