@@ -1,4 +1,4 @@
-## [Unreleased] — 0.25.3 — DRW-156 Services parented to subgraph wrappers
+## 0.25.3 — 2026-05-24 — DRW-156 Services parented to subgraph wrappers
 
 ### Fixed
 
