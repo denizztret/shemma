@@ -1,4 +1,4 @@
-// Tests for mermaid-import meta-tagging logic (DRW-053, DRW-084, DRW-134 Task 2.6).
+// Tests for mermaid-import meta-tagging logic (DRW-053, DRW-084, DRW-134 Task 2.6, DRW-148).
 //
 // Scope:
 //   - sourceTargetIds correctly identifies root-frame(s) of an import.
@@ -10,8 +10,10 @@
 //   - DRW-093: source passes through to createMermaidDiagram unchanged.
 //   - DRW-134 Task 2.6: auto-ungroup cosmetic tldraw `group` shapes.
 //   - DRW-134 Task 2.6: isCosmeticGroup heuristic.
+//   - DRW-148: legacy path tested via importMermaidLegacy directly.
+//             importMermaid() throws when backend fails (no silent v1 fallback).
 //
-// Legacy path tests use `forceV1: true` to skip v2 HTTP call (no server in tests).
+// Legacy path tests call `importMermaidLegacy` directly (no v2 HTTP call).
 // v2 path tests use mocked fetch.
 //
 // We mock createMermaidDiagram через monkey-patching the @tldraw/mermaid module
@@ -124,7 +126,7 @@ function mockMermaidCreates(addShapes: (editor: any) => void) {
 
 // --- Tests -------------------------------------------------------------------
 
-describe("importMermaid — meta.mermaidSource", () => {
+describe("importMermaidLegacy — meta.mermaidSource", () => {
   test("saves mermaidSource on root frame when one exists", async () => {
     const PAGE = "page:page";
     const editor = makeFakeEditor(PAGE);
@@ -137,10 +139,10 @@ describe("importMermaid — meta.mermaidSource", () => {
       ]);
     });
 
-    const { importMermaid } = await import("./mermaid-import");
+    // DRW-148: test legacy path directly via importMermaidLegacy.
+    const { importMermaidLegacy } = await import("./mermaid-import");
     const source = "graph TD\nA-->B";
-    // DRW-134: forceV1 skips v2 HTTP call (no server in tests).
-    const res = await importMermaid(editor as never, source, { forceV1: true });
+    const res = await importMermaidLegacy(editor as never, source);
 
     expect(res.ok).toBe(true);
     expect(res.shapeIds.length).toBe(4);
@@ -174,9 +176,9 @@ describe("importMermaid — meta.mermaidSource", () => {
       ]);
     });
 
-    const { importMermaid } = await import("./mermaid-import");
+    const { importMermaidLegacy } = await import("./mermaid-import");
     const source = "graph LR\nA-->B";
-    const res = await importMermaid(editor as never, source, { forceV1: true });
+    const res = await importMermaidLegacy(editor as never, source);
 
     expect(res.sourceTargetIds.length).toBe(3);
     for (const s of editor._shapes()) {
@@ -195,8 +197,8 @@ describe("importMermaid — meta.mermaidSource", () => {
       ]);
     });
 
-    const { importMermaid } = await import("./mermaid-import");
-    await importMermaid(editor as never, "graph TD\nA-->B", { forceV1: true });
+    const { importMermaidLegacy } = await import("./mermaid-import");
+    await importMermaidLegacy(editor as never, "graph TD\nA-->B");
 
     const existing = editor._shapes().find((s) => s.id === "shape:existing");
     expect(existing?.meta.mermaidSource).toBeUndefined();
@@ -213,8 +215,8 @@ describe("importMermaid — meta.mermaidSource", () => {
       ]);
     });
 
-    const { importMermaid } = await import("./mermaid-import");
-    await importMermaid(editor as never, "graph TD\nA-->B", { forceV1: true });
+    const { importMermaidLegacy } = await import("./mermaid-import");
+    await importMermaidLegacy(editor as never, "graph TD\nA-->B");
 
     // DRW-134 Task 2.6: didrawId collision prevention via generateNodeId retry × 8.
     // With random RNG, all 3 NodeIds should be unique (collision probability negligible).
@@ -233,9 +235,9 @@ describe("importMermaid — meta.mermaidSource", () => {
       // no-op — produce nothing.
     });
 
-    const { importMermaid } = await import("./mermaid-import");
+    const { importMermaidLegacy } = await import("./mermaid-import");
     await expect(
-      importMermaid(editor as never, "", { forceV1: true }),
+      importMermaidLegacy(editor as never, ""),
     ).rejects.toThrow("mermaid produced no shapes");
   });
 });
@@ -248,10 +250,10 @@ describe("importMermaid — meta.mermaidSource", () => {
 // Such containers get meta.role = 'boundary'. Children parentId is handled by
 // renderBlueprint automatically from blueprint node.parentId.
 
-describe("importMermaid — DRW-084: subgraph remains geo with meta.role='boundary'", () => {
+describe("importMermaidLegacy — DRW-084: subgraph remains geo with meta.role='boundary'", () => {
   // Simulate what @tldraw/mermaid does without mapNodeToRenderSpec hook:
   // subgraph nodes are created as default 'geo' shapes, children get parentId = subgraph geo id.
-  // We test that importMermaid does NOT pass mapNodeToRenderSpec and that
+  // We test that importMermaidLegacy does NOT pass mapNodeToRenderSpec and that
   // after import the subgraph shape has type "geo" + meta.role="boundary",
   // and children have the correct parentId.
   test("subgraph remains geo with meta.role='boundary'", async () => {
@@ -278,9 +280,10 @@ describe("importMermaid — DRW-084: subgraph remains geo with meta.role='bounda
       },
     }));
 
-    const { importMermaid } = await import("./mermaid-import");
+    // DRW-148: test legacy path directly via importMermaidLegacy.
+    const { importMermaidLegacy } = await import("./mermaid-import");
     const source = "graph TD\nsubgraph SL[Service Layer]\n  API-->DB\nend";
-    const res = await importMermaid(editor as never, source, { forceV1: true });
+    const res = await importMermaidLegacy(editor as never, source);
 
     expect(res.ok).toBe(true);
     expect(res.shapeIds.length).toBe(4);
@@ -317,8 +320,8 @@ describe("importMermaid — DRW-084: subgraph remains geo with meta.role='bounda
       },
     }));
 
-    const { importMermaid } = await import("./mermaid-import");
-    await importMermaid(editor as never, "graph LR\nA-->B", { forceV1: true });
+    const { importMermaidLegacy } = await import("./mermaid-import");
+    await importMermaidLegacy(editor as never, "graph LR\nA-->B");
 
     for (const s of editor._shapes()) {
       expect(s.meta.role).toBeUndefined();
@@ -340,11 +343,10 @@ describe("importMermaid — DRW-084: subgraph remains geo with meta.role='bounda
       },
     }));
 
-    const { importMermaid } = await import("./mermaid-import");
-    const res = await importMermaid(
+    const { importMermaidLegacy } = await import("./mermaid-import");
+    const res = await importMermaidLegacy(
       editor as never,
       "graph TD\nsubgraph O\nsubgraph I\nLeaf\nend\nend",
-      { forceV1: true },
     );
 
     expect(res.ok).toBe(true);
@@ -491,7 +493,7 @@ describe("isBoundsContained (DRW-096)", () => {
 
 // --- DRW-093: source passes through unchanged ---------------------------------
 
-describe("importMermaid — DRW-093: source passes through unchanged", () => {
+describe("importMermaidLegacy — DRW-093: source passes through unchanged", () => {
   test("source is not modified before reaching createMermaidDiagram", async () => {
     const PAGE = "page:page";
     const editor = makeFakeEditor(PAGE);
@@ -503,9 +505,10 @@ describe("importMermaid — DRW-093: source passes through unchanged", () => {
       },
     }));
 
-    const { importMermaid } = await import("./mermaid-import");
+    // DRW-148: test legacy path directly via importMermaidLegacy.
+    const { importMermaidLegacy } = await import("./mermaid-import");
     const bare = "graph TD\nA-->B";
-    await importMermaid(editor as never, bare, { forceV1: true });
+    await importMermaidLegacy(editor as never, bare);
 
     expect(capturedSource).toBe(bare);
   });
@@ -550,7 +553,7 @@ describe("isCosmeticGroup (DRW-134 Task 2.6)", () => {
 
 // --- DRW-134 Task 2.6: auto-ungroup cosmetic tldraw group shapes ---------------
 
-describe("importMermaid v1 path — auto-ungroup cosmetic tldraw group (DRW-134 Task 2.6)", () => {
+describe("importMermaidLegacy — auto-ungroup cosmetic tldraw group (DRW-134 Task 2.6)", () => {
   test("cosmetic group dissolved: children re-parented to frame, group deleted", async () => {
     const PAGE = "page:page";
     const editor = makeFakeEditor(PAGE);
@@ -568,10 +571,9 @@ describe("importMermaid v1 path — auto-ungroup cosmetic tldraw group (DRW-134 
       },
     }));
 
-    const { importMermaid } = await import("./mermaid-import");
-    const res = await importMermaid(editor as never, "graph LR\nA-->B", {
-      forceV1: true,
-    });
+    // DRW-148: test legacy path directly via importMermaidLegacy.
+    const { importMermaidLegacy } = await import("./mermaid-import");
+    const res = await importMermaidLegacy(editor as never, "graph LR\nA-->B");
 
     expect(res.ok).toBe(true);
     // Cosmetic group (cg1) should be deleted.
@@ -602,10 +604,8 @@ describe("importMermaid v1 path — auto-ungroup cosmetic tldraw group (DRW-134 
       },
     }));
 
-    const { importMermaid } = await import("./mermaid-import");
-    await importMermaid(editor as never, "graph LR\nsubgraph SL\nA\nend", {
-      forceV1: true,
-    });
+    const { importMermaidLegacy } = await import("./mermaid-import");
+    await importMermaidLegacy(editor as never, "graph LR\nsubgraph SL\nA\nend");
 
     const shapes = editor._shapes();
     // Semantic group preserved.
@@ -619,7 +619,7 @@ describe("importMermaid v1 path — auto-ungroup cosmetic tldraw group (DRW-134 
 
 // --- DRW-134 Task 2.6: v2 frame meta assignment (legacy path) ----------------
 
-describe("importMermaid v1 path — v2 frame meta (DRW-134 Task 2.6)", () => {
+describe("importMermaidLegacy — v2 frame meta (DRW-134 Task 2.6)", () => {
   test("root frame gets didrawSchemaFrame, didrawProtocol, didrawOverlays", async () => {
     const PAGE = "page:page";
     const editor = makeFakeEditor(PAGE);
@@ -630,8 +630,9 @@ describe("importMermaid v1 path — v2 frame meta (DRW-134 Task 2.6)", () => {
       ]);
     });
 
-    const { importMermaid } = await import("./mermaid-import");
-    await importMermaid(editor as never, "graph LR\nA-->B", { forceV1: true });
+    // DRW-148: test legacy path directly via importMermaidLegacy.
+    const { importMermaidLegacy } = await import("./mermaid-import");
+    await importMermaidLegacy(editor as never, "graph LR\nA-->B");
 
     const frame = editor._shapes().find((s) => s.id === "shape:frame1");
     expect(frame?.meta.didrawSchemaFrame).toBe(true);
@@ -652,10 +653,8 @@ describe("importMermaid v1 path — v2 frame meta (DRW-134 Task 2.6)", () => {
       ]);
     });
 
-    const { importMermaid } = await import("./mermaid-import");
-    await importMermaid(editor as never, "graph LR\nA-->B-->C", {
-      forceV1: true,
-    });
+    const { importMermaidLegacy } = await import("./mermaid-import");
+    await importMermaidLegacy(editor as never, "graph LR\nA-->B-->C");
 
     const shapes = editor._shapes();
     const ids = shapes.map((s) => s.meta.didrawId as string).filter(Boolean);
@@ -719,7 +718,8 @@ describe("importMermaid — v2 backend path (DRW-134 Task 2.6)", () => {
     }
   });
 
-  test("falls back to v1 legacy path when backend returns error", async () => {
+  // DRW-148: v2 is the ONLY path — no silent fallback to v1 on backend failure.
+  test("throws when backend returns error (no silent v1 fallback)", async () => {
     const PAGE = "page:page";
     const editor = makeFakeEditor(PAGE);
 
@@ -730,17 +730,12 @@ describe("importMermaid — v2 backend path (DRW-134 Task 2.6)", () => {
         status: 503,
       })) as unknown as typeof fetch;
 
-    mockMermaidCreates((ed) => {
-      ed._addShapes([makeShape("n1", "geo", PAGE, "A")]);
-    });
-
     try {
       const { importMermaid } = await import("./mermaid-import");
-      // Should fall back to v1 — no throw.
-      const res = await importMermaid(editor as never, "graph LR\nA-->B");
-      expect(res.ok).toBe(true);
-      // v1 path: shapes written locally.
-      expect(res.shapeIds.length).toBeGreaterThan(0);
+      // DRW-148: must throw — no fallback.
+      await expect(
+        importMermaid(editor as never, "graph LR\nA-->B"),
+      ).rejects.toThrow();
     } finally {
       globalThis.fetch = originalFetch;
     }

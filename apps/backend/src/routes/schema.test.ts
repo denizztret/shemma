@@ -574,3 +574,140 @@ describe("POST /api/schema/:frameId/overlay", () => {
     expect(res.status).toBe(400);
   });
 });
+
+// ---- DRW-153: mermaid style directives → shape props ----
+
+describe("POST /api/schema/create — DRW-153 mermaid style directives applied to shapes", () => {
+  test("style fill:#e3f2fd on node → shape props.fill is not 'none' (solid/semi) and color is mapped", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(app, {
+      label: "Styled",
+      raw: `graph LR
+  api[API Gateway]
+  style api fill:#e3f2fd,stroke:#1565c0`,
+    }, "drw153-style-test");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; frameId: string; nodeIds: string[] };
+    expect(body.ok).toBe(true);
+
+    const room = await rooms.get("drw153-style-test");
+    const allShapes = Object.values(room.store.store);
+    const apiNode = allShapes.find(
+      (s) => s?.typeName === "shape" && s?.type === "geo" &&
+        (s?.meta as { didrawLabel?: unknown })?.didrawLabel === "API Gateway"
+    ) as { props?: { fill?: string; color?: string; labelColor?: string } } | undefined;
+
+    expect(apiNode).toBeDefined();
+    // fill style should be non-none (solid/semi) because mermaid fill was set
+    expect(apiNode?.props?.fill).not.toBe("none");
+    // color should be a valid tldraw named color (mapped from the hex)
+    const validTldrawColors = ["black", "grey", "light-violet", "violet", "blue", "light-blue", "yellow", "orange", "green", "light-green", "light-red", "red"];
+    expect(validTldrawColors).toContain(apiNode?.props?.color);
+  });
+
+  test("style fill without stroke → fill applied, color from fill mapping", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(app, {
+      label: "FillOnly",
+      raw: `graph TD
+  EventRouter[Event Router]
+  style EventRouter fill:#fff3e0`,
+    }, "drw153-fillonly");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; frameId: string };
+    expect(body.ok).toBe(true);
+
+    const room = await rooms.get("drw153-fillonly");
+    const allShapes = Object.values(room.store.store);
+    const node = allShapes.find(
+      (s) => s?.typeName === "shape" && s?.type === "geo" &&
+        (s?.meta as { didrawLabel?: unknown })?.didrawLabel === "Event Router"
+    ) as { props?: { fill?: string; color?: string } } | undefined;
+
+    expect(node).toBeDefined();
+    expect(node?.props?.fill).toBe("solid"); // fill was set → solid mode
+  });
+
+  test("style color (text) → shape labelColor mapped from hex", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(app, {
+      label: "TextColor",
+      raw: `graph LR
+  svc[Service]
+  style svc fill:#e8f5e9,color:#1b5e20`,
+    }, "drw153-textcolor");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+
+    const room = await rooms.get("drw153-textcolor");
+    const allShapes = Object.values(room.store.store);
+    const node = allShapes.find(
+      (s) => s?.typeName === "shape" && s?.type === "geo" &&
+        (s?.meta as { didrawLabel?: unknown })?.didrawLabel === "Service"
+    ) as { props?: { labelColor?: string } } | undefined;
+
+    expect(node).toBeDefined();
+    // labelColor should be a valid tldraw named color
+    const validTldrawColors = ["black", "grey", "light-violet", "violet", "blue", "light-blue", "yellow", "orange", "green", "light-green", "light-red", "red"];
+    expect(validTldrawColors).toContain(node?.props?.labelColor);
+    // color #1b5e20 is a dark color — it maps to a valid tldraw color (nearest-neighbor)
+    // (nearest by RGB; green/black family depending on exact tldraw palette)
+    expect(node?.props?.labelColor).toBeDefined();
+  });
+
+  test("node without style directive → default preset color/fill unchanged", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(app, {
+      label: "NoStyle",
+      raw: `graph LR
+  a[Service A] --> b[Service B]`,
+    }, "drw153-nostyle");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+
+    const room = await rooms.get("drw153-nostyle");
+    const allShapes = Object.values(room.store.store);
+    const nodeA = allShapes.find(
+      (s) => s?.typeName === "shape" && s?.type === "geo" &&
+        (s?.meta as { didrawLabel?: unknown })?.didrawLabel === "Service A"
+    ) as { props?: { fill?: string; labelColor?: string } } | undefined;
+
+    expect(nodeA).toBeDefined();
+    // Without style directive, labelColor defaults to "black"
+    expect(nodeA?.props?.labelColor).toBe("black");
+  });
+
+  test("mixed styled and unstyled nodes in same diagram", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(app, {
+      label: "Mixed",
+      raw: `graph LR
+  a[API] --> b[(DB)] --> c[Cache]
+  style a fill:#e3f2fd,stroke:#1565c0`,
+    }, "drw153-mixed");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; nodeIds: string[] };
+    expect(body.ok).toBe(true);
+    expect(body.nodeIds).toHaveLength(3);
+
+    const room = await rooms.get("drw153-mixed");
+    const allShapes = Object.values(room.store.store);
+    const nodeA = allShapes.find(
+      (s) => s?.typeName === "shape" && s?.type === "geo" &&
+        (s?.meta as { didrawLabel?: unknown })?.didrawLabel === "API"
+    ) as { props?: { fill?: string } } | undefined;
+    const nodeC = allShapes.find(
+      (s) => s?.typeName === "shape" && s?.type === "geo" &&
+        (s?.meta as { didrawLabel?: unknown })?.didrawLabel === "Cache"
+    ) as { props?: { fill?: string } } | undefined;
+
+    expect(nodeA).toBeDefined();
+    expect(nodeC).toBeDefined();
+    // 'a' was styled with fill → solid
+    expect(nodeA?.props?.fill).toBe("solid");
+    // 'c' was not styled → default fill from rolePreset (service preset uses "semi")
+    expect(nodeC?.props?.fill).toBe("semi");
+  });
+});

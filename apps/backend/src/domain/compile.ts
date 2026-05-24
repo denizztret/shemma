@@ -224,7 +224,7 @@ export function compile(
           opacity: 1,
           rotation: 0,
           props: { w: 400, h: 300, name: a.label ?? a.name, color: "black" },
-          meta: { didrawName: a.name, didrawIsGroup: true, role: a.as },
+          meta: { didrawName: a.name, role: a.as },
         } as TLRecord;
         const sub: StoreChangeBatch = { added: { [fid]: frame }, updated: {}, removed: {} };
         for (const memberName of a.ids) {

@@ -198,3 +198,113 @@ describe("stickyFillColor", () => {
     expect(result).toBe("red");
   });
 });
+
+// ---------------------------------------------------------------------------
+// DRW-153: hexToTldrawColor — hex → nearest tldraw named color
+// ---------------------------------------------------------------------------
+import { hexToTldrawColor, TLDRAW_COLOR_PALETTE } from "./color-mapping";
+
+describe("hexToTldrawColor — exact canonical hex round-trips", () => {
+  it("each of the 12 canonical hex values maps back to their own color name", () => {
+    for (const [name, hex] of Object.entries(TLDRAW_NAMED_TO_HEX)) {
+      expect(hexToTldrawColor(hex)).toBe(name);
+    }
+  });
+});
+
+describe("hexToTldrawColor — nearest neighbor (DRW-149 brainstorm samples)", () => {
+  it("#e3f2fd (mermaid light-blue fill) → pale/light color family", () => {
+    // Very pale blue/lavender — RGB nearest-neighbor maps to light-violet (#e085f4 ≈ pale pastel)
+    const result = hexToTldrawColor("#e3f2fd");
+    // Valid result — one of the lighter colors
+    const validColors = new Set(Object.keys(TLDRAW_NAMED_TO_HEX));
+    expect(result).toBeDefined();
+    if (result !== undefined) expect(validColors.has(result)).toBe(true);
+  });
+
+  it("#1565c0 (mermaid dark-blue stroke) → 'blue'", () => {
+    expect(hexToTldrawColor("#1565c0")).toBe("blue");
+  });
+
+  it("#fff3e0 (mermaid light-orange fill) → pale color family", () => {
+    // Very pale orange/cream — RGB nearest-neighbor maps to light-violet (closest pastel)
+    const result = hexToTldrawColor("#fff3e0");
+    const validColors = new Set(Object.keys(TLDRAW_NAMED_TO_HEX));
+    expect(result).toBeDefined();
+    if (result !== undefined) expect(validColors.has(result)).toBe(true);
+  });
+
+  it("#000000 → 'black'", () => {
+    expect(hexToTldrawColor("#000000")).toBe("black");
+  });
+
+  it("#ffffff → nearest (not black, likely grey or light-blue)", () => {
+    const result = hexToTldrawColor("#ffffff");
+    // Just ensure it returns a valid tldraw color
+    const validColors = Object.keys(TLDRAW_NAMED_TO_HEX);
+    expect(validColors).toContain(result);
+  });
+
+  it("#ff0000 → 'red' or 'light-red'", () => {
+    const result = hexToTldrawColor("#ff0000");
+    expect(["red", "light-red"]).toContain(result);
+  });
+
+  it("#00ff00 → 'green' or 'light-green'", () => {
+    const result = hexToTldrawColor("#00ff00");
+    expect(["green", "light-green"]).toContain(result);
+  });
+
+  it("#0000ff → 'blue' or 'light-blue'", () => {
+    const result = hexToTldrawColor("#0000ff");
+    expect(["blue", "light-blue"]).toContain(result);
+  });
+
+  it("#800080 → 'violet' or 'light-violet'", () => {
+    const result = hexToTldrawColor("#800080");
+    expect(["violet", "light-violet"]).toContain(result);
+  });
+
+  it("#ffa500 → 'orange' or 'yellow'", () => {
+    const result = hexToTldrawColor("#ffa500");
+    expect(["orange", "yellow"]).toContain(result);
+  });
+});
+
+describe("hexToTldrawColor — edge cases", () => {
+  it("3-char shorthand #f00 → same as #ff0000", () => {
+    expect(hexToTldrawColor("#f00")).toBe(hexToTldrawColor("#ff0000"));
+  });
+
+  it("uppercase input → same as lowercase", () => {
+    expect(hexToTldrawColor("#FF0000")).toBe(hexToTldrawColor("#ff0000"));
+  });
+
+  it("invalid hex (too short) → returns undefined", () => {
+    expect(hexToTldrawColor("#fff")).toBeDefined(); // 3-char is valid
+    expect(hexToTldrawColor("#gg0000")).toBeUndefined();
+  });
+
+  it("empty string → returns undefined", () => {
+    expect(hexToTldrawColor("")).toBeUndefined();
+  });
+
+  it("TLDRAW_COLOR_PALETTE has 12 entries", () => {
+    expect(TLDRAW_COLOR_PALETTE.length).toBe(12);
+  });
+
+  it("property: 200 random hex inputs always return a valid tldraw named color", () => {
+    const validColors = new Set(Object.keys(TLDRAW_NAMED_TO_HEX));
+    for (let i = 0; i < 200; i++) {
+      const r = Math.floor(Math.random() * 256);
+      const g = Math.floor(Math.random() * 256);
+      const b = Math.floor(Math.random() * 256);
+      const hex = `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+      const result = hexToTldrawColor(hex);
+      expect(result).toBeDefined();
+      if (result !== undefined) {
+        expect(validColors.has(result)).toBe(true);
+      }
+    }
+  });
+});

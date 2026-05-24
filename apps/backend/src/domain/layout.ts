@@ -42,6 +42,14 @@ const DEFAULT_H = 60;
 const DEFAULT_FRAME_W = 400;
 const DEFAULT_FRAME_H = 300;
 
+// DRW-152: Mermaid subgraph direction → ELK direction mapping.
+const MERMAID_DIR_TO_ELK: Record<string, string> = {
+  TB: "DOWN",
+  LR: "RIGHT",
+  BT: "UP",
+  RL: "LEFT",
+};
+
 // DRW-003 displacement constants (preserved from Phase 2.x layout.ts).
 const COLLISION_SLACK = 10;
 const NODE_SPACING_X = 40;
@@ -360,8 +368,9 @@ function buildElkGraph(
  */
 type ContainerPassResult = {
   containerId: string;
-  /** parent-relative coords of children laid out inside this container */
-  childPositions: Map<string, { x: number; y: number }>;
+  /** parent-relative coords of children laid out inside this container.
+   * For container children (nested frames), w/h carry Pass A computed size. */
+  childPositions: Map<string, { x: number; y: number; w?: number; h?: number }>;
   /** computed w/h for the container (to write back to props) */
   newW: number;
   newH: number;
@@ -381,6 +390,13 @@ async function runPassA(
   allShapes: ShapeRec[],
   filterToIds: Set<string>,
 ): Promise<ContainerPassResult | null> {
+  // DRW-152: override ELK direction if container has meta.didrawSubgraphDirection.
+  const subgraphDir = container.meta?.didrawSubgraphDirection;
+  const elkDir = typeof subgraphDir === "string" ? MERMAID_DIR_TO_ELK[subgraphDir] : undefined;
+  const containerOpts = elkDir !== undefined
+    ? { ...opts, "elk.direction": elkDir }
+    : opts;
+
   // Разделим детей на листья и контейнеры
   const childContainers = filteredChildren.filter(isContainerShape);
   const childLeaves = filteredChildren.filter((s) => !isContainerShape(s));
@@ -425,7 +441,7 @@ async function runPassA(
 
   const graph: ElkGraph = {
     id: "root",
-    layoutOptions: { ...opts, "elk.padding": `[top=${CONTAINER_PAD_TOP},left=${CONTAINER_PAD_LR},bottom=${CONTAINER_PAD_BOT},right=${CONTAINER_PAD_LR}]` },
+    layoutOptions: { ...containerOpts, "elk.padding": `[top=${CONTAINER_PAD_TOP},left=${CONTAINER_PAD_LR},bottom=${CONTAINER_PAD_BOT},right=${CONTAINER_PAD_LR}]` },
     children: elkChildren,
     edges,
   };
@@ -465,7 +481,17 @@ async function runPassA(
   // Контейнеры — из ELK output, плюс их вложенные дети
   for (const cc of childContainers) {
     const p = positions[cc.id];
-    if (p) childPositions.set(cc.id, { x: p.x, y: p.y });
+    if (p) {
+      // DRW-154: propagate nested Pass A newW/newH into childPositions so that
+      // Pass C can write the correct props.w/h for nested frames.
+      const nested = nestedResults.get(cc.id);
+      childPositions.set(cc.id, {
+        x: p.x,
+        y: p.y,
+        w: nested ? nested.newW : undefined,
+        h: nested ? nested.newH : undefined,
+      });
+    }
 
     // Вложенные дети получают позиции relative к cc, которая уже internal relative к container
     const nested = nestedResults.get(cc.id);
@@ -638,10 +664,11 @@ async function runLayoutSubgraph(
       positions[anchorId] = { x: origB.x, y: origB.y, w, h };
     }
     // Children parent-relative positions from Pass A.
+    // DRW-154: pos.w/h carry nested Pass A computed size for container children.
     for (const [, passARes] of passAResults) {
       for (const [childId, pos] of passARes.childPositions) {
         if (!positions[childId]) {
-          positions[childId] = { x: pos.x, y: pos.y };
+          positions[childId] = { x: pos.x, y: pos.y, w: pos.w, h: pos.h };
         }
       }
     }
@@ -712,9 +739,10 @@ async function runLayoutSubgraph(
       }
     }
     // Merge Pass A child positions
+    // DRW-154: pos.w/h carry nested Pass A computed size for container children.
     for (const [, passARes] of passAResults) {
       for (const [childId, pos] of passARes.childPositions) {
-        positions[childId] = { x: pos.x, y: pos.y };
+        positions[childId] = { x: pos.x, y: pos.y, w: pos.w, h: pos.h };
       }
     }
     return { positions, anchorFrameIds };
@@ -752,11 +780,12 @@ async function runLayoutSubgraph(
   }
 
   // Children parent-relative positions from Pass A
+  // DRW-154: pos.w/h carry nested Pass A computed size for container children.
   for (const [, passARes] of passAResults) {
     for (const [childId, pos] of passARes.childPositions) {
       // Only record if not already in positions (top-level takes priority)
       if (!positions[childId]) {
-        positions[childId] = { x: pos.x, y: pos.y };
+        positions[childId] = { x: pos.x, y: pos.y, w: pos.w, h: pos.h };
       }
     }
   }

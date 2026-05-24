@@ -235,22 +235,16 @@ export type MermaidImportResult = {
 };
 
 /**
- * DRW-134 Task 2.6: Импортировать Mermaid diagram в editor.
+ * DRW-134 Task 2.6 / DRW-148: Импортировать Mermaid diagram в editor.
  *
- * **v2 path (default):** вызывает `POST /api/schema/create` с raw mermaid source.
+ * **v2 path (единственный):** вызывает `POST /api/schema/create` с raw mermaid source.
  * Backend создаёт schema-frame (v2 protocol), auto-upgrade room в v2, возвращает
  * `{frameId, nodeIds}`. Реальные tldraw records приходят через WS broadcast.
  * Frontend shapes напрямую НЕ пишутся. Возвращает `{ok:true, frameId, nodeIds,
  * shapeIds:[], sourceTargetIds:[]}` — caller зум'ит по frameId после WS settle.
  *
- * **v1 fallback path (когда `opts.forceV1 === true` или endpoint 404/503):**
- * Старый flow через `createMermaidDiagram` + local shape writes:
- *   1) записываем shape'ы локально (meta.didrawName + identity v2-fields);
- *   2) auto-ungroup cosmetic tldraw group wrappers (если есть);
- *   3) frame получает `meta.didrawSchemaFrame=true` + v2 marker fields.
- * WS-фреймы шлёт startStoreSync автоматически.
- *
- * Throws на невалидный source.
+ * Throws если backend недоступен или вернул ошибку. Тихого v1-фоллбека нет
+ * (DRW-148: v2 — единственный путь создания схем).
  */
 export async function importMermaid(
   editor: Editor,
@@ -262,44 +256,28 @@ export async function importMermaid(
     space?: string;
     /** Room для backend call. Default из location.search. */
     room?: string;
-    /** Принудительно использовать legacy v1 path. */
-    forceV1?: boolean;
   } = {},
 ): Promise<MermaidImportResult> {
   // DRW-141: aligned with MCP `extractMermaidLabel`; fixes browser-mode leaking
   // the raw mermaid identifier line (e.g. `"x[Browser X]"`) into frame.props.name.
   const label = opts.label ?? inferMermaidLabel(source);
 
-  if (!opts.forceV1) {
-    try {
-      const resp = await createSchemaViaBackend({
-        label,
-        raw: source,
-        space: opts.space,
-        room: opts.room,
-      });
-      // v2 path — shapes arrive via WS; return immediately with backend IDs.
-      return {
-        ok: true,
-        frameId: (resp as { ok: true; frameId: string }).frameId,
-        nodeIds: (resp as { ok: true; nodeIds: NodeId[] }).nodeIds,
-        shapeIds: [],
-        sourceTargetIds: [],
-      };
-    } catch (err) {
-      // Fallback to v1 if backend unavailable (e.g. 404 before Task 2.5 shipped).
-      // Log but don't rethrow — legacy path below.
-      console.warn(
-        "[mermaid-import] v2 backend call failed, falling back to v1 path:",
-        err,
-      );
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // v1 legacy path (fallback / forceV1)
-  // ---------------------------------------------------------------------------
-  return importMermaidLegacy(editor, source);
+  const resp = await createSchemaViaBackend({
+    label,
+    raw: source,
+    space: opts.space,
+    room: opts.room,
+  });
+  // v2 path — shapes arrive via WS; return immediately with backend IDs.
+  // editor param kept in signature for API compatibility (callers pass it in).
+  void editor;
+  return {
+    ok: true,
+    frameId: (resp as { ok: true; frameId: string }).frameId,
+    nodeIds: (resp as { ok: true; nodeIds: NodeId[] }).nodeIds,
+    shapeIds: [],
+    sourceTargetIds: [],
+  };
 }
 
 /**

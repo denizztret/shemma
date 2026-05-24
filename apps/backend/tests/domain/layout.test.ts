@@ -139,7 +139,7 @@ describe("runLayout", () => {
   });
 
   test("frame containers become ELK compound nodes — children laid out inside parent", async () => {
-    const frame = makeShape("shape:e_vpc", "vpc", { type: "frame", w: 400, h: 200, meta: { didrawIsGroup: true, role: "boundary" } });
+    const frame = makeShape("shape:e_vpc", "vpc", { type: "frame", w: 400, h: 200, meta: { role: "boundary" } });
     const a = makeShape("shape:e_a", "a", { parentId: "shape:e_vpc", meta: { role: "service" } });
     const b = makeShape("shape:e_b", "b", { parentId: "shape:e_vpc", meta: { role: "service" } });
     const { arrow, b1, b2 } = makeArrow("shape:c_0", "shape:e_a", "shape:e_b");
@@ -249,8 +249,8 @@ describe("runLayout", () => {
   test("DRW-082: frame children stored with parent-relative coords", async () => {
     // 2 frames чтобы поймать кейс где первый frame случайно покрывает диапазон
     // child'а — нужен второй frame в стороне от origin.
-    const frameA = makeShape("shape:e_fa", "fa", { type: "frame", w: 300, h: 200, meta: { didrawIsGroup: true, role: "boundary" } });
-    const frameB = makeShape("shape:e_fb", "fb", { type: "frame", w: 300, h: 200, meta: { didrawIsGroup: true, role: "boundary" } });
+    const frameA = makeShape("shape:e_fa", "fa", { type: "frame", w: 300, h: 200, meta: { role: "boundary" } });
+    const frameB = makeShape("shape:e_fb", "fb", { type: "frame", w: 300, h: 200, meta: { role: "boundary" } });
     const a1 = makeShape("shape:e_a1", "a1", { parentId: "shape:e_fa", meta: { role: "service" } });
     const a2 = makeShape("shape:e_a2", "a2", { parentId: "shape:e_fa", meta: { role: "service" } });
     const b1c = makeShape("shape:e_b1", "b1", { parentId: "shape:e_fb", meta: { role: "service" } });
@@ -522,6 +522,186 @@ describe("runLayout", () => {
     expect(cBf.parentId).toBe("shape:e_fB");
     expect(cAf.x + (cAf.props?.w ?? 100)).toBeLessThanOrEqual(faAfter.props.w + 5);
     expect(cBf.x + (cBf.props?.w ?? 100)).toBeLessThanOrEqual(fbAfter.props.w + 5);
+  });
+
+  // =====================================================================
+  // DRW-152: per-subgraph direction → ELK inner pass uses container direction
+  // =====================================================================
+
+  // Test DRW-152-A: geo+boundary container with meta.didrawSubgraphDirection=LR
+  // → children should spread horizontally (diffX > diffY).
+  test("DRW-152: subgraph with direction LR → children spread horizontally", async () => {
+    // geo+boundary container with LR direction (mermaid subgraph)
+    const container = makeShape("shape:e_sg", "sg", {
+      type: "geo",
+      x: 0, y: 0, w: 400, h: 300,
+      meta: { role: "boundary", didrawSubgraphDirection: "LR" },
+    });
+    const a = makeShape("shape:e_a", "a", { parentId: "shape:e_sg", x: 0, y: 0 });
+    const b = makeShape("shape:e_b", "b", { parentId: "shape:e_sg", x: 5, y: 0 });
+    const c = makeShape("shape:e_c", "c", { parentId: "shape:e_sg", x: 0, y: 5 });
+    // Chain: a → b → c (so ELK has to rank them in LR order)
+    const { arrow: arr1, b1: ba1, b2: bb1 } = makeArrow("shape:c_0", "shape:e_a", "shape:e_b");
+    const { arrow: arr2, b1: ba2, b2: bb2 } = makeArrow("shape:c_1", "shape:e_b", "shape:e_c");
+
+    const s = snapshotWith([container, a, b, c, arr1, ba1, bb1, arr2, ba2, bb2]);
+    const idx = rebuildDidrawIndex(s);
+
+    const affectedIds = new Set(["shape:e_sg"]);
+    const r = await runLayout(s, {
+      mode: "layered-tb",  // outer mode is TB but inner should override to LR
+      scope: "affected",
+      spacing: "normal",
+      affectedIds,
+    }, idx);
+
+    expect(r.reason).toBeUndefined();
+    const ns = applyStoreChanges(s, r.batch);
+
+    const aAfter = ns.store["shape:e_a"] as { x: number; y: number };
+    const bAfter = ns.store["shape:e_b"] as { x: number; y: number };
+    const cAfter = ns.store["shape:e_c"] as { x: number; y: number };
+
+    // LR: nodes should differ more in X than Y (horizontal spread dominant)
+    const xRange = Math.max(aAfter.x, bAfter.x, cAfter.x) - Math.min(aAfter.x, bAfter.x, cAfter.x);
+    const yRange = Math.max(aAfter.y, bAfter.y, cAfter.y) - Math.min(aAfter.y, bAfter.y, cAfter.y);
+    expect(xRange).toBeGreaterThan(yRange);
+  });
+
+  // Test DRW-152-B: geo+boundary container with meta.didrawSubgraphDirection=TB
+  // → children should spread vertically (diffY > diffX).
+  test("DRW-152: subgraph with direction TB → children spread vertically", async () => {
+    const container = makeShape("shape:e_sg", "sg", {
+      type: "geo",
+      x: 0, y: 0, w: 400, h: 300,
+      meta: { role: "boundary", didrawSubgraphDirection: "TB" },
+    });
+    const a = makeShape("shape:e_a", "a", { parentId: "shape:e_sg", x: 0, y: 0 });
+    const b = makeShape("shape:e_b", "b", { parentId: "shape:e_sg", x: 5, y: 0 });
+    const c = makeShape("shape:e_c", "c", { parentId: "shape:e_sg", x: 0, y: 5 });
+    const { arrow: arr1, b1: ba1, b2: bb1 } = makeArrow("shape:c_0", "shape:e_a", "shape:e_b");
+    const { arrow: arr2, b1: ba2, b2: bb2 } = makeArrow("shape:c_1", "shape:e_b", "shape:e_c");
+
+    const s = snapshotWith([container, a, b, c, arr1, ba1, bb1, arr2, ba2, bb2]);
+    const idx = rebuildDidrawIndex(s);
+
+    const affectedIds = new Set(["shape:e_sg"]);
+    const r = await runLayout(s, {
+      mode: "layered-lr",  // outer mode is LR but inner should override to TB
+      scope: "affected",
+      spacing: "normal",
+      affectedIds,
+    }, idx);
+
+    expect(r.reason).toBeUndefined();
+    const ns = applyStoreChanges(s, r.batch);
+
+    const aAfter = ns.store["shape:e_a"] as { x: number; y: number };
+    const bAfter = ns.store["shape:e_b"] as { x: number; y: number };
+    const cAfter = ns.store["shape:e_c"] as { x: number; y: number };
+
+    // TB: nodes should differ more in Y than X (vertical spread dominant)
+    const xRange = Math.max(aAfter.x, bAfter.x, cAfter.x) - Math.min(aAfter.x, bAfter.x, cAfter.x);
+    const yRange = Math.max(aAfter.y, bAfter.y, cAfter.y) - Math.min(aAfter.y, bAfter.y, cAfter.y);
+    expect(yRange).toBeGreaterThan(xRange);
+  });
+
+  // Test DRW-152-C: two containers with different per-subgraph directions — each uses its own.
+  test("DRW-152: two subgraphs with mixed directions — each uses its own direction", async () => {
+    // Container A: direction LR
+    const sgA = makeShape("shape:e_sgA", "sgA", {
+      type: "geo",
+      x: 0, y: 0, w: 400, h: 300,
+      meta: { role: "boundary", didrawSubgraphDirection: "LR" },
+    });
+    const a1 = makeShape("shape:e_a1", "a1", { parentId: "shape:e_sgA", x: 0, y: 0 });
+    const a2 = makeShape("shape:e_a2", "a2", { parentId: "shape:e_sgA", x: 5, y: 0 });
+    const a3 = makeShape("shape:e_a3", "a3", { parentId: "shape:e_sgA", x: 0, y: 5 });
+    const { arrow: ar1, b1: ab1, b2: ab2 } = makeArrow("shape:c_0", "shape:e_a1", "shape:e_a2");
+    const { arrow: ar2, b1: ab3, b2: ab4 } = makeArrow("shape:c_1", "shape:e_a2", "shape:e_a3");
+
+    // Container B: direction TB
+    const sgB = makeShape("shape:e_sgB", "sgB", {
+      type: "geo",
+      x: 500, y: 0, w: 400, h: 300,
+      meta: { role: "boundary", didrawSubgraphDirection: "TB" },
+    });
+    const b1 = makeShape("shape:e_b1", "b1", { parentId: "shape:e_sgB", x: 0, y: 0 });
+    const b2 = makeShape("shape:e_b2", "b2", { parentId: "shape:e_sgB", x: 5, y: 0 });
+    const b3 = makeShape("shape:e_b3", "b3", { parentId: "shape:e_sgB", x: 0, y: 5 });
+    const { arrow: br1, b1: bb1, b2: bb2 } = makeArrow("shape:c_2", "shape:e_b1", "shape:e_b2");
+    const { arrow: br2, b1: bb3, b2: bb4 } = makeArrow("shape:c_3", "shape:e_b2", "shape:e_b3");
+
+    const s = snapshotWith([
+      sgA, a1, a2, a3, ar1, ab1, ab2, ar2, ab3, ab4,
+      sgB, b1, b2, b3, br1, bb1, bb2, br2, bb3, bb4,
+    ]);
+    const idx = rebuildDidrawIndex(s);
+
+    const affectedIds = new Set(["shape:e_sgA", "shape:e_sgB"]);
+    const r = await runLayout(s, {
+      mode: "layered-tb",
+      scope: "affected",
+      spacing: "normal",
+      affectedIds,
+    }, idx);
+
+    expect(r.reason).toBeUndefined();
+    const ns = applyStoreChanges(s, r.batch);
+
+    // Container A children (LR): x-spread dominant
+    const a1f = ns.store["shape:e_a1"] as { x: number; y: number };
+    const a2f = ns.store["shape:e_a2"] as { x: number; y: number };
+    const a3f = ns.store["shape:e_a3"] as { x: number; y: number };
+    const axRange = Math.max(a1f.x, a2f.x, a3f.x) - Math.min(a1f.x, a2f.x, a3f.x);
+    const ayRange = Math.max(a1f.y, a2f.y, a3f.y) - Math.min(a1f.y, a2f.y, a3f.y);
+    expect(axRange).toBeGreaterThan(ayRange);
+
+    // Container B children (TB): y-spread dominant
+    const b1f = ns.store["shape:e_b1"] as { x: number; y: number };
+    const b2f = ns.store["shape:e_b2"] as { x: number; y: number };
+    const b3f = ns.store["shape:e_b3"] as { x: number; y: number };
+    const bxRange = Math.max(b1f.x, b2f.x, b3f.x) - Math.min(b1f.x, b2f.x, b3f.x);
+    const byRange = Math.max(b1f.y, b2f.y, b3f.y) - Math.min(b1f.y, b2f.y, b3f.y);
+    expect(byRange).toBeGreaterThan(bxRange);
+  });
+
+  // Test DRW-152-D: container WITHOUT direction → uses outer layout mode direction (no regression).
+  test("DRW-152: subgraph WITHOUT direction uses outer layout mode (no regression)", async () => {
+    const container = makeShape("shape:e_sg", "sg", {
+      type: "geo",
+      x: 0, y: 0, w: 400, h: 300,
+      meta: { role: "boundary" },  // no didrawSubgraphDirection
+    });
+    const a = makeShape("shape:e_a", "a", { parentId: "shape:e_sg", x: 0, y: 0 });
+    const b = makeShape("shape:e_b", "b", { parentId: "shape:e_sg", x: 5, y: 0 });
+    const c = makeShape("shape:e_c", "c", { parentId: "shape:e_sg", x: 0, y: 5 });
+    const { arrow: arr1, b1: ba1, b2: bb1 } = makeArrow("shape:c_0", "shape:e_a", "shape:e_b");
+    const { arrow: arr2, b1: ba2, b2: bb2 } = makeArrow("shape:c_1", "shape:e_b", "shape:e_c");
+
+    const s = snapshotWith([container, a, b, c, arr1, ba1, bb1, arr2, ba2, bb2]);
+    const idx = rebuildDidrawIndex(s);
+
+    // Use layered-lr as outer mode — without subgraph direction, inner should also be LR
+    const affectedIds = new Set(["shape:e_sg"]);
+    const r = await runLayout(s, {
+      mode: "layered-lr",
+      scope: "affected",
+      spacing: "normal",
+      affectedIds,
+    }, idx);
+
+    expect(r.reason).toBeUndefined();
+    const ns = applyStoreChanges(s, r.batch);
+
+    const aAfter = ns.store["shape:e_a"] as { x: number; y: number };
+    const bAfter = ns.store["shape:e_b"] as { x: number; y: number };
+    const cAfter = ns.store["shape:e_c"] as { x: number; y: number };
+
+    // LR (outer inherited): x-spread dominant
+    const xRange = Math.max(aAfter.x, bAfter.x, cAfter.x) - Math.min(aAfter.x, bAfter.x, cAfter.x);
+    const yRange = Math.max(aAfter.y, bAfter.y, cAfter.y) - Math.min(aAfter.y, bAfter.y, cAfter.y);
+    expect(xRange).toBeGreaterThan(yRange);
   });
 
   // Test 5: scope='all' path NOT broken — still single-pass, все shapes laid out.

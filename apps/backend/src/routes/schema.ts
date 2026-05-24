@@ -178,6 +178,7 @@ function makeArrowBindingsLocal(
 function makeGroupBoundaryShape(opts: {
   name: string;
   parentId: string;
+  direction?: "TB" | "LR" | "BT" | "RL";
 }): TLRecord {
   const id = childShapeId();
   const richTextVal = opts.name
@@ -218,6 +219,7 @@ function makeGroupBoundaryShape(opts: {
       didrawSubgraph: true,
       didrawSubgraphName: opts.name,
       didrawSchemaParent: opts.parentId,
+      ...(opts.direction !== undefined ? { didrawSubgraphDirection: opts.direction } : {}),
     },
   } as TLRecord;
 }
@@ -294,6 +296,53 @@ function makeFrameShape(opts: {
 
 import { rolePreset } from "@shemma/domain";
 import type { Role } from "@shemma/domain";
+import type { MermaidNodeStyle } from "../domain/schema/mermaid-parser";
+import { hexToTldrawColor } from "../export/miro/color-mapping";
+
+/**
+ * Resolve mermaid style fill/stroke/color fields to tldraw shape props.
+ *
+ * Mapping rationale:
+ *   - fill  → `fill` style (solid/semi) + `color` (border/foreground tldraw color nearest to fill hex).
+ *             When a fill is set: use "solid" fill mode to show the background color visibly.
+ *   - stroke → `color` (border/foreground tldraw color) — only used when fill is absent.
+ *   - color (text) → `labelColor` (tldraw labelColor prop) nearest-neighbor mapped.
+ */
+function resolveMermaidStyle(
+  mermaidStyle: MermaidNodeStyle,
+  presetColor: string,
+  presetFill: string,
+): { color: string; fill: string; labelColor: string } {
+  // Start with preset defaults
+  let color = presetColor;
+  let fill = presetFill;
+  let labelColor = "black";
+
+  if (mermaidStyle.fill !== undefined) {
+    // fill hex → nearest tldraw named color for border/fg color
+    const mapped = hexToTldrawColor(mermaidStyle.fill);
+    if (mapped !== undefined) {
+      color = mapped;
+      // Use "solid" fill mode to render the background color
+      fill = "solid";
+    }
+  } else if (mermaidStyle.stroke !== undefined) {
+    // stroke without fill → just change border color
+    const mapped = hexToTldrawColor(mermaidStyle.stroke);
+    if (mapped !== undefined) {
+      color = mapped;
+    }
+  }
+
+  if (mermaidStyle.color !== undefined) {
+    const mapped = hexToTldrawColor(mermaidStyle.color);
+    if (mapped !== undefined) {
+      labelColor = mapped;
+    }
+  }
+
+  return { color, fill, labelColor };
+}
 
 function makeChildShape(opts: {
   nodeId: NodeId;
@@ -301,11 +350,22 @@ function makeChildShape(opts: {
   role: Role;
   parentId: string;
   overlay?: OverlayEntry;
+  mermaidStyle?: MermaidNodeStyle;
 }): TLRecord {
   const preset = rolePreset(opts.role) ?? { style: { color: "black", fill: "none" }, defaultW: 220, defaultH: 80 };
   const x = opts.overlay?.position?.x ?? 0;
   const y = opts.overlay?.position?.y ?? 0;
-  const color = opts.overlay?.color ?? preset.style?.color ?? "black";
+
+  const presetColor = preset.style?.color ?? "black";
+  const presetFill = preset.style?.fill ?? "none";
+
+  // Apply mermaid style if provided (overrides preset defaults)
+  const resolved = opts.mermaidStyle
+    ? resolveMermaidStyle(opts.mermaidStyle, presetColor, presetFill)
+    : { color: presetColor, fill: presetFill, labelColor: "black" };
+
+  // Overlay color overrides everything (user-owned)
+  const color = opts.overlay?.color ?? resolved.color;
 
   return {
     id: childShapeId(),
@@ -323,8 +383,8 @@ function makeChildShape(opts: {
       h: preset.defaultH ?? 80,
       geo: "rectangle",
       color,
-      labelColor: "black",
-      fill: preset.style?.fill ?? "none",
+      labelColor: resolved.labelColor,
+      fill: resolved.fill,
       dash: "draw",
       size: "m",
       font: "draw",
@@ -456,6 +516,8 @@ export function schemaRoutes(bus: StoreChangeBus) {
       let parsedActions: SchemaAction[];
       let direction: MermaidDirection = "LR";
 
+      let nodeStylesByNodeId: Map<NodeId, import("../domain/schema/mermaid-parser").MermaidNodeStyle> = new Map();
+
       if (body.raw !== undefined) {
         // Mode A: parse mermaid RAW.
         if (typeof body.raw !== "string" || body.raw.trim().length === 0) {
@@ -491,6 +553,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
 
         parsedActions = parseResult.actions;
         direction = parseResult.direction;
+        nodeStylesByNodeId = parseResult.nodeStylesByNodeId;
       } else if (body.actions !== undefined) {
         // Mode B: caller-provided actions.
         if (!Array.isArray(body.actions)) {
@@ -544,6 +607,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
           label: def.label,
           role: def.role,
           parentId: frameId,
+          mermaidStyle: nodeStylesByNodeId.get(def.nodeId),
         });
         batch.added[childShape.id] = childShape;
         nodeIds.push(def.nodeId);
@@ -580,6 +644,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
         const groupShape = makeGroupBoundaryShape({
           name: action.label ?? action.name,
           parentId: frameId,
+          direction: action.direction,
         });
         batch.added[groupShape.id] = groupShape;
       }

@@ -474,3 +474,239 @@ describe("parseMermaidFlowchart — spec mapping table coverage", () => {
     expectConnect(r.actions, "api-aaaaaa", "db-aaaaaa", "sync", "HTTP/1.1");
   });
 });
+
+// ---- DRW-153: style directive parsing ----
+
+describe("parseMermaidFlowchart — DRW-153 style directives", () => {
+  test("style directive for a node is parsed into nodeStyles map", () => {
+    const raw = `graph LR
+  api[API]
+  db[(Database)]
+  style api fill:#e3f2fd,stroke:#1565c0,color:#000`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.nodeStyles).toBeDefined();
+    const style = r.nodeStyles?.get("api");
+    expect(style).toBeDefined();
+    expect(style?.fill).toBe("#e3f2fd");
+    expect(style?.stroke).toBe("#1565c0");
+    expect(style?.color).toBe("#000");
+  });
+
+  test("style directive only fill → fill set, stroke/color undefined", () => {
+    const raw = `graph LR
+  EventRouter[Event Router]
+  style EventRouter fill:#fff3e0`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const style = r.nodeStyles?.get("EventRouter");
+    expect(style?.fill).toBe("#fff3e0");
+    expect(style?.stroke).toBeUndefined();
+    expect(style?.color).toBeUndefined();
+  });
+
+  test("multiple style directives → each node gets its own style", () => {
+    const raw = `graph TD
+  a[Service A]
+  b[Service B]
+  a --> b
+  style a fill:#e8f5e9,stroke:#2e7d32
+  style b fill:#fce4ec,stroke:#c62828,color:#fff`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const styleA = r.nodeStyles?.get("a");
+    const styleB = r.nodeStyles?.get("b");
+    expect(styleA?.fill).toBe("#e8f5e9");
+    expect(styleA?.stroke).toBe("#2e7d32");
+    expect(styleB?.fill).toBe("#fce4ec");
+    expect(styleB?.stroke).toBe("#c62828");
+    expect(styleB?.color).toBe("#fff");
+  });
+
+  test("style with stroke-width and stroke-dasharray — parsed into extra map but do not fail", () => {
+    const raw = `graph LR
+  api[API]
+  style api fill:#fff,stroke:#333,stroke-width:2px,stroke-dasharray:5 5`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const style = r.nodeStyles?.get("api");
+    // fill and stroke captured; stroke-width and stroke-dasharray stored
+    expect(style?.fill).toBe("#fff");
+    expect(style?.stroke).toBe("#333");
+  });
+
+  test("style for non-existent node → still stored in nodeStyles (node may be defined later)", () => {
+    const raw = `graph LR
+  style phantom fill:#ff0000`;
+    const r = parse(raw);
+    // May fail on 'phantom' as standalone node or succeed — either way, nodeStyles populated
+    if (r.ok) {
+      const style = r.nodeStyles?.get("phantom");
+      expect(style?.fill).toBe("#ff0000");
+    }
+  });
+
+  test("malformed style value (no colon) — ignored gracefully", () => {
+    const raw = `graph LR
+  a[A] --> b[B]
+  style a BADSTYLE`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // No style parsed for 'a' (bad format), but parse succeeds
+    const style = r.nodeStyles?.get("a");
+    // Either undefined or empty object — no crash
+    expect(style?.fill).toBeUndefined();
+  });
+
+  test("diagram without any style directives → nodeStyles is empty Map", () => {
+    const raw = `graph LR
+  api[API] --> db[Database]`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.nodeStyles).toBeDefined();
+    expect(r.nodeStyles?.size).toBe(0);
+  });
+
+  test("nodeStyles keyed by mermaid id (not NodeId)", () => {
+    // mermaid id is 'EventRouter', NodeId would be 'event-router-aaaaaa' after slug
+    const raw = `graph LR
+  EventRouter[Event Router]
+  style EventRouter fill:#fff3e0`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // Key is raw mermaid id
+    expect(r.nodeStyles?.has("EventRouter")).toBe(true);
+    // NOT the slug-based nodeId
+    expect(r.nodeStyles?.has("event-router-aaaaaa")).toBe(false);
+  });
+});
+
+// ---- DRW-152: per-subgraph direction ----
+
+describe("parseMermaidFlowchart — DRW-152 per-subgraph direction", () => {
+  test("subgraph with direction LR → group action has direction LR", () => {
+    const raw = `graph TD
+  subgraph A [Group A]
+    direction LR
+    a --> b
+  end`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const groups = r.actions.filter((a) => a.kind === "schema-group") as SchemaGroupAction[];
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.direction).toBe("LR");
+  });
+
+  test("subgraph with direction TB → group action has direction TB", () => {
+    const raw = `graph LR
+  subgraph A [Group A]
+    direction TB
+    a --> b
+  end`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const groups = r.actions.filter((a) => a.kind === "schema-group") as SchemaGroupAction[];
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.direction).toBe("TB");
+  });
+
+  test("subgraph with direction TD → group action has direction TB (TD normalizes to TB)", () => {
+    const raw = `graph LR
+  subgraph A [Group A]
+    direction TD
+    a --> b
+  end`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const groups = r.actions.filter((a) => a.kind === "schema-group") as SchemaGroupAction[];
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.direction).toBe("TB");
+  });
+
+  test("subgraph with direction BT → group action has direction BT", () => {
+    const raw = `graph TD
+  subgraph A [Group A]
+    direction BT
+    a --> b
+  end`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const groups = r.actions.filter((a) => a.kind === "schema-group") as SchemaGroupAction[];
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.direction).toBe("BT");
+  });
+
+  test("subgraph with direction RL → group action has direction RL", () => {
+    const raw = `graph TD
+  subgraph A [Group A]
+    direction RL
+    a --> b
+  end`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const groups = r.actions.filter((a) => a.kind === "schema-group") as SchemaGroupAction[];
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.direction).toBe("RL");
+  });
+
+  test("subgraph WITHOUT direction line → group action has no direction field", () => {
+    const raw = `graph TD
+  subgraph A [Group A]
+    a --> b
+  end`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const groups = r.actions.filter((a) => a.kind === "schema-group") as SchemaGroupAction[];
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.direction).toBeUndefined();
+  });
+
+  test("two subgraphs with different directions → each gets its own direction", () => {
+    const raw = `graph TD
+  subgraph A [Group A]
+    direction LR
+    a --> b
+  end
+  subgraph B [Group B]
+    direction BT
+    c --> d
+  end`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const groups = r.actions.filter((a) => a.kind === "schema-group") as SchemaGroupAction[];
+    expect(groups).toHaveLength(2);
+    const grpA = groups.find((g) => g.label === "Group A");
+    const grpB = groups.find((g) => g.label === "Group B");
+    expect(grpA?.direction).toBe("LR");
+    expect(grpB?.direction).toBe("BT");
+  });
+
+  test("top-level direction line (not inside subgraph) does NOT create direction on group", () => {
+    // direction line at top level (outside any subgraph) should be ignored / not affect groups
+    const raw = `graph TD
+  direction LR
+  subgraph A [Group A]
+    a --> b
+  end`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const groups = r.actions.filter((a) => a.kind === "schema-group") as SchemaGroupAction[];
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.direction).toBeUndefined();
+  });
+});

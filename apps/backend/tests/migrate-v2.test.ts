@@ -111,7 +111,8 @@ describe("migrate v2 → v3", () => {
       (r) => r.typeName === "shape" && r.type === "frame",
     );
     expect(frame).toBeDefined();
-    expect(frame!.meta?.didrawIsGroup).toBe(true);
+    // DRW-148: didrawIsGroup removed — field no longer written by migrator.
+    expect(frame!.meta?.didrawIsGroup).toBeUndefined();
     expect(frame!.meta?.didrawName).toBe("grp");
     const children = Object.values(v3.store.store).filter(
       (r) => r.typeName === "shape" && r.parentId === frame!.id,

@@ -48,7 +48,7 @@ function makeFrame(
     y: opts.y ?? 0,
     parentId: opts.parentId ?? "page:page",
     props: { w: opts.w ?? 400, h: opts.h ?? 300, name },
-    meta: { didrawName: name, didrawIsGroup: true, role: "boundary" },
+    meta: { didrawName: name, role: "boundary" },
   } as TLRecord;
 }
 
@@ -468,5 +468,98 @@ describe("DRW-149 phase3: GAP-1 frame-expand fix", () => {
     expect(result.batch.updated["shape:frame3"]).toBeDefined();
     // G3: external peer should also be laid out (Pass B)
     expect(result.batch.updated["shape:ext"]).toBeDefined();
+  });
+});
+
+// =====================================================================
+// DRW-154: Nested frame underresize — inner frame props.w/h propagation
+// =====================================================================
+
+describe("DRW-154: nested frame inner resize", () => {
+
+  // -----------------------------------------------------------------------
+  // DRW-154 Case 1: outer frame selected, inner frame + children inside
+  // affectedIds = { outerFrame }
+  // Bug: inner frame props.w/h stays at original small size instead of
+  // growing to contain its children after layout.
+  // -----------------------------------------------------------------------
+  test("DRW-154 Case 1: inner frame props.w/h updated to contain its children after outer frame layout", async () => {
+    // Outer frame (large container)
+    const outerFrame = makeFrame("shape:outer", "outer", { x: 100, y: 100, w: 800, h: 600 });
+    // Inner frame (intentionally small — should grow after layout)
+    const innerFrame = makeFrame("shape:inner", "inner", { x: 10, y: 10, w: 50, h: 30, parentId: "shape:outer" });
+    // Three services inside the inner frame
+    const s1 = makeService("shape:s1", "s1", { x: 0, y: 0, parentId: "shape:inner" });
+    const s2 = makeService("shape:s2", "s2", { x: 5, y: 0, parentId: "shape:inner" });
+    const s3 = makeService("shape:s3", "s3", { x: 0, y: 5, parentId: "shape:inner" });
+    // Edges inside inner frame: s1→s2→s3 (drives non-trivial ELK layout)
+    const { arrow: a12, b1: b12s, b2: b12e } = makeArrow("shape:a12", "shape:s1", "shape:s2");
+    const { arrow: a23, b1: b23s, b2: b23e } = makeArrow("shape:a23", "shape:s2", "shape:s3");
+
+    const snap = snapshotWith([outerFrame, innerFrame, s1, s2, s3, a12, b12s, b12e, a23, b23s, b23e]);
+    const idx = rebuildDidrawIndex(snap);
+
+    const result = await runLayout(snap, {
+      mode: "layered-tb",
+      scope: "affected",
+      spacing: "normal",
+      affectedIds: new Set(["shape:outer"]),
+    }, idx);
+
+    const ns = applyStoreChanges(snap, result.batch);
+
+    const outerRec = ns.store["shape:outer"] as TLRecord & { props: { w: number; h: number } };
+    const innerRec = ns.store["shape:inner"] as TLRecord & { props: { w: number; h: number } };
+    const s1Rec = ns.store["shape:s1"] as TLRecord & { x: number; y: number };
+    const s2Rec = ns.store["shape:s2"] as TLRecord & { x: number; y: number };
+    const s3Rec = ns.store["shape:s3"] as TLRecord & { x: number; y: number };
+
+    console.log("[DRW-154 Case 1] reason:", result.reason);
+    console.log("[DRW-154 Case 1] outer w/h:", outerRec?.props?.w, outerRec?.props?.h);
+    console.log("[DRW-154 Case 1] inner w/h:", innerRec?.props?.w, innerRec?.props?.h);
+    console.log("[DRW-154 Case 1] s1 x/y:", s1Rec?.x, s1Rec?.y);
+    console.log("[DRW-154 Case 1] s2 x/y:", s2Rec?.x, s2Rec?.y);
+    console.log("[DRW-154 Case 1] s3 x/y:", s3Rec?.x, s3Rec?.y);
+
+    expect(result.reason).toBeUndefined();
+
+    // Inner frame must be in batch.updated (its size should change)
+    expect(result.batch.updated["shape:inner"]).toBeDefined();
+
+    // Children of inner frame must be positioned
+    const anyChildMoved =
+      result.batch.updated["shape:s1"] !== undefined ||
+      result.batch.updated["shape:s2"] !== undefined ||
+      result.batch.updated["shape:s3"] !== undefined;
+    expect(anyChildMoved).toBe(true);
+
+    // DRW-154 core assertion: inner frame must be large enough to contain its children.
+    // Each service is 120x60 (makeService default). After Pass A with CONTAINER_PAD_TOP=40,
+    // CONTAINER_PAD_LR=20, the inner frame must have w >= service.w + 2*pad and h >= service.h + pads.
+    // We verify the exact invariant: inner frame w/h >= rightmost/bottommost child edge.
+    const innerW = innerRec?.props?.w ?? 50;  // fallback to original small value
+    const innerH = innerRec?.props?.h ?? 30;  // fallback to original small value
+
+    // Each child x/y is parent-relative (relative to inner frame).
+    // The max right edge = child.x + child.props.w = child.x + 120
+    const childDefaultW = 120;
+    const childDefaultH = 60;
+    const maxChildRight = Math.max(
+      (s1Rec?.x ?? 0) + childDefaultW,
+      (s2Rec?.x ?? 0) + childDefaultW,
+      (s3Rec?.x ?? 0) + childDefaultW,
+    );
+    const maxChildBottom = Math.max(
+      (s1Rec?.y ?? 0) + childDefaultH,
+      (s2Rec?.y ?? 0) + childDefaultH,
+      (s3Rec?.y ?? 0) + childDefaultH,
+    );
+
+    console.log("[DRW-154 Case 1] innerW:", innerW, "maxChildRight:", maxChildRight);
+    console.log("[DRW-154 Case 1] innerH:", innerH, "maxChildBottom:", maxChildBottom);
+
+    // BUG ASSERTION: inner frame must contain its children (will FAIL before fix)
+    expect(innerW).toBeGreaterThanOrEqual(maxChildRight);
+    expect(innerH).toBeGreaterThanOrEqual(maxChildBottom);
   });
 });
