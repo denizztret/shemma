@@ -792,6 +792,58 @@ describe("runLayout", () => {
     expect(yRange).toBeGreaterThan(xRange);
   });
 
+  // =====================================================================
+  // DRW-161: Pass A видит cross-subgraph edges через lift до container-уровня
+  // (как Pass B). Без этого Pass A на schema-frame получает 6 containers без
+  // edges → arbitrary layered order. С lift — chain ranking восстанавливается.
+  // =====================================================================
+  test("DRW-161: Pass A lifts cross-subgraph edges → chain ranking respected", async () => {
+    // schema-frame (frame) с двумя nested boundary subgraph'ами.
+    const frame = makeShape("shape:e_frame", "frame", {
+      type: "frame", x: 0, y: 0, w: 800, h: 600,
+    });
+    // Subgraph A с leaf a_in (получает SE → a_in)
+    const sgA = makeShape("shape:e_sgA", "sgA", {
+      type: "geo",
+      parentId: "shape:e_frame",
+      x: 0, y: 0, w: 200, h: 100,
+      meta: { role: "boundary" },
+    });
+    const aIn = makeShape("shape:e_a_in", "a_in", { parentId: "shape:e_sgA", x: 0, y: 0 });
+    // Subgraph B с leaf b_in (получает a_in → b_in)
+    const sgB = makeShape("shape:e_sgB", "sgB", {
+      type: "geo",
+      parentId: "shape:e_frame",
+      x: 0, y: 0, w: 200, h: 100,
+      meta: { role: "boundary" },
+    });
+    const bIn = makeShape("shape:e_b_in", "b_in", { parentId: "shape:e_sgB", x: 0, y: 0 });
+
+    // Cross-subgraph arrow: a_in → b_in. ELK Pass A на frame должен lift'нуть
+    // до sgA → sgB и расположить sgA до sgB по chain direction (layered-tb: sgA above sgB).
+    const { arrow: arr, b1: ba, b2: bb } = makeArrow("shape:c_0", "shape:e_a_in", "shape:e_b_in");
+
+    const s = snapshotWith([frame, sgA, aIn, sgB, bIn, arr, ba, bb]);
+    const idx = rebuildDidrawIndex(s);
+
+    const affectedIds = new Set(["shape:e_frame", "shape:e_sgA", "shape:e_sgB", "shape:e_a_in", "shape:e_b_in", "shape:c_0"]);
+    const r = await runLayout(s, {
+      mode: "layered-tb",
+      scope: "affected",
+      spacing: "normal",
+      affectedIds,
+    }, idx);
+
+    expect(r.reason).toBeUndefined();
+    const ns = applyStoreChanges(s, r.batch);
+
+    const sgAFinal = ns.store["shape:e_sgA"] as { x: number; y: number };
+    const sgBFinal = ns.store["shape:e_sgB"] as { x: number; y: number };
+
+    // layered-tb: sgA (source) выше sgB (target).
+    expect(sgAFinal.y).toBeLessThan(sgBFinal.y);
+  });
+
   // Test 5: scope='all' path NOT broken — still single-pass, все shapes laid out.
   test("DRW-099 hierarchical: scope=all still works as single-pass (regression)", async () => {
     const frameA = makeShape("shape:e_fa", "fa", {
