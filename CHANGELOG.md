@@ -1,7 +1,9 @@
-## Unreleased — DRW-157 + DRW-158 + DRW-159 (visual-fidelity continuation)
+## Unreleased — DRW-157 + DRW-158 + DRW-159 + DRW-160 + DRW-161 (visual-fidelity continuation)
 
 ### Fixed
 
+- **DRW-161** — `runPassA` на schema-frame не видел inter-subgraph arrows: endpoints стрелок — leaves внутри nested containers, не сами containers, и `buildEdges` возвращал пустой массив. ELK получал 6 disconnected boundaries без рёбер и располагал их arbitrary — chain Вход → Оркестрация → Результат → Доставка → Потребители не восстанавливался. Fix: новая `buildPassAEdges` с lift логикой (как Pass B `liftToTopLevel`) — arrow с endpoint = leaf внутри child-container поднимается до container'а; dedup по `src->tgt`. +1 regression test проверяет TB ranking через cross-subgraph edge.
+- **DRW-160** — `POST /api/schema/create` запускал autolayout с hardcoded `layered-lr` независимо от mermaid header. `flowchart TB` раскладывался как LR → визуально "перевёрнутая" схема, top-level узлы (например EC) в неправильном rank. Fix: map `MermaidDirection` → `LayoutMode` (TB→layered-tb, LR→layered-lr, BT→layered-bt, RL→layered-rl) и передать в `runLayout`. `direction` уже парсился `parseMermaidFlowchart` — просто не прокидывался.
 - **DRW-159** — После tldraw v5 upgrade `TLFrameShape.props.color` стал required (`TLDefaultColorStyle`). `makeFrameShape` в `routes/schema.ts` создавал frame без `color` → frontend `mergeRemoteChanges` бросал `ValidationError: At shape(type = frame).props.color: Expected "black" or "grey" ... got undefined`, что блокировало apply всего WS batch'а и schema-frame import не отображался на канвасе. Initial state load обходил validation, поэтому regression проявлялась только на WS publish path'е. Fix: `color: "black"` в `props`. Reproduced 2026-05-25 при DRW-158 E2E test'е. +1 regression test в `schema.test.ts` проверяет valid v5 props.
 - **DRW-158** — Mermaid `subgraph X\ndirection LR\n A\n B\nend` где A и B не имеют edges между собой (только external incoming/outgoing) — ELK раскладывал их вертикально (default behavior для disconnected components в layered direction mode). Reproduced на user-схеме 2026-05-24 (subgraphs "Доставка" и "Потребители" из EventDispatch flow).
   - **Fix:** в `runPassA` после `buildEdges` детектируем connected components — если direction override задан и компонент > 1 — добавляются virtual chain edges (`v_chain_<i>`) по declaration order. ELK respects direction; edge geometry мы не читаем (только node positions).
@@ -10,8 +12,9 @@
 
 ### Tests
 
-- **+2 теста** DRW-158-A/B в `layout.test.ts` — LR/TB subgraphs с 2 children без internal edges. Backend layout suite 20 pass.
-- Full backend 1487 + frontend 262 = 1749 tests, 0 fail.
+- **+2 теста** DRW-158-A/B + **+1 тест** DRW-161 в `layout.test.ts` — LR/TB subgraphs no edges + cross-subgraph chain ranking. Backend layout suite 21 pass.
+- **+1 тест** DRW-159 в `schema.test.ts` — v5 frame props validation.
+- Full backend 1489 + frontend 262 = 1751 tests, 0 fail.
 
 ## 0.25.3 — 2026-05-24 — DRW-156 Services parented to subgraph wrappers
 
