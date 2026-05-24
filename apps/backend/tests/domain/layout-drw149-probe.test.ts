@@ -362,3 +362,110 @@ describe("DRW-149 probe: runLayoutSubgraph — 6 use cases", () => {
   });
 
 });
+
+// =====================================================================
+// DRW-149 Phase 3 — GAP-1 fix verification tests
+// =====================================================================
+
+describe("DRW-149 phase3: GAP-1 frame-expand fix", () => {
+
+  // -----------------------------------------------------------------------
+  // GAP-1 fix Case A: single frame in affectedIds → children должны переместиться
+  // После fix: frame-expand добавляет детей в affectedIds перед runLayoutSubgraph
+  // -----------------------------------------------------------------------
+  test("GAP-1 fix Case A: frame in affectedIds — children get laid out (non-empty batch.updated)", async () => {
+    const frame = makeFrame("shape:frame1", "frame1", { x: 100, y: 100, w: 400, h: 300 });
+    // 3 дочерних узла с edge c1→c2→c3 (ELK layered даст нетривиальный layout)
+    const c1 = makeService("shape:c1", "c1", { x: 0, y: 0, parentId: "shape:frame1" });
+    const c2 = makeService("shape:c2", "c2", { x: 5, y: 0, parentId: "shape:frame1" });
+    const c3 = makeService("shape:c3", "c3", { x: 0, y: 5, parentId: "shape:frame1" });
+    // Edges: c1→c2 и c2→c3 — гарантируют нетривиальный layered layout
+    const { arrow: a12, b1: b12s, b2: b12e } = makeArrow("shape:arr12", "shape:c1", "shape:c2");
+    const { arrow: a23, b1: b23s, b2: b23e } = makeArrow("shape:arr23", "shape:c2", "shape:c3");
+
+    const s = snapshotWith([frame, c1, c2, c3, a12, b12s, b12e, a23, b23s, b23e]);
+    const idx = rebuildDidrawIndex(s);
+
+    const result = await runLayout(s, {
+      mode: "layered-tb",
+      scope: "affected",
+      spacing: "normal",
+      affectedIds: new Set(["shape:frame1"]),
+    }, idx);
+
+    expect(result.reason).toBeUndefined();
+    // After GAP-1 fix: children should be moved by ELK (batch.updated non-empty)
+    const updatedKeys = Object.keys(result.batch.updated);
+    expect(updatedKeys.length).toBeGreaterThan(0);
+    // Children should appear in batch (c1 or c2 or c3 moved)
+    const anyChildMoved =
+      result.batch.updated["shape:c1"] !== undefined ||
+      result.batch.updated["shape:c2"] !== undefined ||
+      result.batch.updated["shape:c3"] !== undefined;
+    expect(anyChildMoved).toBe(true);
+  });
+
+  // -----------------------------------------------------------------------
+  // GAP-1 fix Case B: geo+boundary container in affectedIds → children layout
+  // -----------------------------------------------------------------------
+  test("GAP-1 fix Case B: geo+boundary container in affectedIds — children get laid out", async () => {
+    const container = makeContainer("shape:cont1", "cont1", { x: 200, y: 200, w: 300, h: 200 });
+    const s1 = makeService("shape:s1", "s1", { x: 0, y: 0, parentId: "shape:cont1" });
+    const s2 = makeService("shape:s2", "s2", { x: 5, y: 0, parentId: "shape:cont1" });
+    // Edge: s1→s2
+    const { arrow, b1, b2 } = makeArrow("shape:arr_s", "shape:s1", "shape:s2");
+
+    const s = snapshotWith([container, s1, s2, arrow, b1, b2]);
+    const idx = rebuildDidrawIndex(s);
+
+    const result = await runLayout(s, {
+      mode: "layered-tb",
+      scope: "affected",
+      spacing: "normal",
+      affectedIds: new Set(["shape:cont1"]),
+    }, idx);
+
+    expect(result.reason).toBeUndefined();
+    // After GAP-1 fix: at least one child should move
+    const anyChildMoved =
+      result.batch.updated["shape:s1"] !== undefined ||
+      result.batch.updated["shape:s2"] !== undefined;
+    expect(anyChildMoved).toBe(true);
+  });
+
+  // -----------------------------------------------------------------------
+  // GAP-1 fix Case C: frame+external in affectedIds — conservative expansion
+  // Когда affectedIds содержит frame + bare shape (не только контейнеры),
+  // frame-expand НЕ применяется — frame участвует в Pass B как unit.
+  // Inner children не двигаются (DRW-099 инвариант сохраняется).
+  // -----------------------------------------------------------------------
+  test("GAP-1 fix Case C: frame+external in affectedIds — frame moves as top-level unit, inner NOT expanded", async () => {
+    const frame = makeFrame("shape:frame3", "frame3", { x: 0, y: 0, w: 400, h: 300 });
+    const inner1 = makeService("shape:i1", "i1", { x: 0, y: 0, parentId: "shape:frame3" });
+    const inner2 = makeService("shape:i2", "i2", { x: 5, y: 0, parentId: "shape:frame3" });
+    const external = makeService("shape:ext", "ext", { x: 600, y: 0 });
+    // Edge: inner1→external (cross-boundary)
+    const { arrow: a1e, b1: b1es, b2: b1ee } = makeArrow("shape:arr_1e", "shape:i1", "shape:ext");
+
+    const s = snapshotWith([frame, inner1, inner2, external, a1e, b1es, b1ee]);
+    const idx = rebuildDidrawIndex(s);
+
+    const result = await runLayout(s, {
+      mode: "layered-tb",
+      scope: "affected",
+      spacing: "normal",
+      affectedIds: new Set(["shape:frame3", "shape:ext"]),
+    }, idx);
+
+    expect(result.reason).toBeUndefined();
+    // Conservative fix: mixed affectedIds (container + leaf) → no expansion
+    // DRW-099 invariant: non-selected inner children are NOT repositioned individually
+    expect(result.batch.updated["shape:i1"]).toBeUndefined();
+    expect(result.batch.updated["shape:i2"]).toBeUndefined();
+    // Frame itself and/or external should be laid out at top level (Pass B)
+    const anyTopLevelMoved =
+      result.batch.updated["shape:frame3"] !== undefined ||
+      result.batch.updated["shape:ext"] !== undefined;
+    expect(anyTopLevelMoved).toBe(true);
+  });
+});

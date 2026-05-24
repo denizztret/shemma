@@ -781,7 +781,8 @@ export async function runLayout(
   }
 
   // Subgraph mode: scope="affected" with affectedIds provided → DRW-091/092/099.
-  const affectedIds = hint.affectedIds;
+  // DRW-149 GAP-1: mutable so we can expand containers below.
+  let affectedIds = hint.affectedIds;
   const isSubgraphMode = fullHint.scope === "affected" && affectedIds && affectedIds.size > 0;
 
   // Pin set: only meta.pinned === true shapes (DRW-003).
@@ -800,9 +801,40 @@ export async function runLayout(
   let anchorFrameIds: Set<string>;
 
   if (isSubgraphMode) {
-    // DRW-099: hierarchical multi-pass layout
+    // DRW-149 GAP-1 fix: frame-expand — when affectedIds contains ONLY containers (no bare
+    // peer shapes at root level), add all direct children recursively so that Pass A runs
+    // on them. Without this: directSelectedChildrenOf(containerId) returns [] → Pass A
+    // skipped → noop (probe Cases 1 and 2).
+    //
+    // Conservative scope: expansion applies only when every id in affectedIds is a container
+    // (type "frame" or geo+role=boundary). When affectedIds mixes containers with bare leaves
+    // (e.g. frame + bare shape for top-level reposition), the frame participates as a top-level
+    // unit in Pass B — expanding its children would disrupt the DRW-099 invariant that
+    // non-selected children of a frame are not individually repositioned.
     // biome-ignore lint/style/noNonNullAssertion: isSubgraphMode guarantees affectedIds is defined
-    const result = await runLayoutSubgraph(store, shapes, fullHint, affectedIds!);
+    const allContainers = [...affectedIds!].every((id) => containerIds.has(id));
+    if (allContainers) {
+      const expanded = new Set<string>(affectedIds!);
+      const expandContainer = (containerId: string): void => {
+        for (const s of shapes) {
+          if (s.parentId !== containerId) continue;
+          expanded.add(s.id);
+          if (containerIds.has(s.id)) {
+            // Recurse into nested containers
+            expandContainer(s.id);
+          }
+        }
+      };
+      // biome-ignore lint/style/noNonNullAssertion: isSubgraphMode guarantees affectedIds is defined
+      for (const id of affectedIds!) {
+        expandContainer(id);
+      }
+      // Reassign so downstream batch-filter (uses affectedIds) includes expanded children.
+      affectedIds = expanded;
+    }
+
+    // DRW-099: hierarchical multi-pass layout
+    const result = await runLayoutSubgraph(store, shapes, fullHint, affectedIds);
     if (!result) {
       return { batch: emptyBatch, affected: [], reason: "elk-error" };
     }
