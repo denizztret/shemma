@@ -155,7 +155,24 @@ describe("POST /api/agent/layout-selection", () => {
     expect(body.hint).toBeTruthy();
   });
 
-  test("AC#10: single id → 200 with count:0 and hint", async () => {
+  test("DRW-149: single id → 200 ok count=0 (не need-2-noop)", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const room = "test-lsel-single-drw149";
+    const r = await rooms.get(room);
+    const snap = emptySnapshot();
+    snap.store["shape:x"] = makeShape("shape:x", 0, 0, "x");
+    r.store = snap;
+
+    const res = await postLayoutSelection(app, { ids: ["shape:x"] }, room);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; count: number; hint?: string };
+    expect(body.ok).toBe(true);
+    expect(body.count).toBe(0);
+    // Should NOT have a "need 2+" hint — single id must reach runLayout
+    expect(body.hint ?? "").not.toContain("need 2+");
+  });
+
+  test("AC#10-legacy: single id (old behavior) → 200 with count:0 and hint", async () => {
     const { app, rooms } = makeApp({ inMemory: true });
     const room = "test-lsel-single";
     const r = await rooms.get(room);
@@ -168,7 +185,6 @@ describe("POST /api/agent/layout-selection", () => {
     const body = (await res.json()) as { ok: boolean; count: number; hint?: string };
     expect(body.ok).toBe(true);
     expect(body.count).toBe(0);
-    expect(body.hint).toBeTruthy();
   });
 
   test("resolving didrawName ids: MCP sends names, endpoint resolves them", async () => {
