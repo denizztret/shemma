@@ -44,6 +44,8 @@ export type SchemaGroupAction = {
   as: "boundary" | "network";
   name?: NodeId; // ID самой группы
   label?: string;
+  /** Per-subgraph layout direction from mermaid `direction TB|LR|BT|RL` line. */
+  direction?: "TB" | "LR" | "BT" | "RL";
 };
 
 /** Удалить ребро между двумя узлами. */

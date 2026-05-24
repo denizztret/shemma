@@ -173,6 +173,8 @@ export function parseMermaidFlowchart(
     mermaidId: string;
     label: string;
     children: NodeId[];
+    /** direction line found inside this subgraph body, if any (normalized: TD→TB) */
+    direction?: "TB" | "LR" | "BT" | "RL";
   }> = [];
 
   /** Inline slugify (mirrors @shemma/domain identity.ts:slugify) */
@@ -234,6 +236,7 @@ export function parseMermaidFlowchart(
             label: sg.label,
             as: "boundary",
             nodeIds: sg.children,
+            ...(sg.direction !== undefined ? { direction: sg.direction } : {}),
           };
           actions.push(groupAction);
         }
@@ -241,8 +244,18 @@ export function parseMermaidFlowchart(
       continue;
     }
 
-    // ---- direction override (ignored per spec) ----
-    if (/^direction\s+(TD|LR|TB|BT|RL)\s*$/.test(line)) {
+    // ---- direction override — record in innermost subgraph context ----
+    const dirMatch = line.match(/^direction\s+(TD|LR|TB|BT|RL)\s*$/);
+    if (dirMatch) {
+      const rawDir = dirMatch[1] as "TD" | "LR" | "TB" | "BT" | "RL";
+      // Normalize TD → TB (alias)
+      const normalizedDir: "TB" | "LR" | "BT" | "RL" = rawDir === "TD" ? "TB" : rawDir;
+      if (subgraphStack.length > 0) {
+        const innermost = subgraphStack[subgraphStack.length - 1];
+        if (innermost) {
+          innermost.direction = normalizedDir;
+        }
+      }
       continue;
     }
 

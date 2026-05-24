@@ -1,3 +1,22 @@
+## [Unreleased] — DRW-152 Per-subgraph direction in mermaid → autolayout inner pass
+
+### Added
+- **Per-subgraph `direction TB|LR|BT|RL`** в mermaid flowchart теперь применяется к inner pass autolayout для этого subgraph'а. Ранее `direction` внутри `subgraph ... end` игнорировалось.
+- **`layered-bt` и `layered-rl` LayoutMode** добавлены в `@shemma/domain` (`elk.direction: UP/LEFT`).
+- **`SchemaGroupAction.direction`** — optional поле для хранения per-subgraph direction из mermaid parser.
+- Mermaid parser: `direction TD` внутри subgraph нормализуется в `TB` (alias).
+
+### Changed
+- `packages/shemma-domain/src/layout-modes.ts` — добавлены `layered-bt` (`UP`) и `layered-rl` (`LEFT`).
+- `apps/backend/src/domain/schema/mermaid-parser.ts` — `direction <DIR>` внутри subgraph записывается в `subgraphStack.direction` и эмитируется в `SchemaGroupAction.direction`.
+- `apps/backend/src/routes/schema.ts` — `makeGroupBoundaryShape` принимает `direction` и пишет `meta.didrawSubgraphDirection`.
+- `apps/backend/src/domain/layout.ts` — `runPassA` читает `meta.didrawSubgraphDirection` контейнера и переопределяет ELK `elk.direction` для inner pass этого compound.
+
+### Tests
+- **+12 новых тестов** (8 parser + 4 layout) покрывают all 4 directions (TB/TD→TB/LR/BT/RL) + no-direction case + mixed-direction integration + domain LayoutMode tests.
+
+---
+
 ## [Unreleased] — DRW-148 Remove legacy v1 mermaid import path
 
 ### BREAKING CHANGE

@@ -1,7 +1,7 @@
-export type LayoutMode = "layered-lr" | "layered-tb" | "tree" | "pack" | "force";
+export type LayoutMode = "layered-lr" | "layered-tb" | "layered-bt" | "layered-rl" | "tree" | "pack" | "force";
 export type Spacing = "compact" | "normal" | "loose";
 
-export const ALL_MODES: readonly LayoutMode[] = ["layered-lr", "layered-tb", "tree", "pack", "force"];
+export const ALL_MODES: readonly LayoutMode[] = ["layered-lr", "layered-tb", "layered-bt", "layered-rl", "tree", "pack", "force"];
 export const ALL_SPACINGS: readonly Spacing[] = ["compact", "normal", "loose"];
 
 export function isValidLayoutMode(s: string): s is LayoutMode {
@@ -78,6 +78,24 @@ export function modeToElkOptions(mode: LayoutMode, spacing: Spacing): Record<str
         ...layeredExtras,
         "elk.algorithm": "layered",
         "elk.direction": "DOWN",
+        "elk.edgeRouting": "ORTHOGONAL",
+        "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
+      };
+    case "layered-bt":
+      return {
+        ...base,
+        ...layeredExtras,
+        "elk.algorithm": "layered",
+        "elk.direction": "UP",
+        "elk.edgeRouting": "ORTHOGONAL",
+        "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
+      };
+    case "layered-rl":
+      return {
+        ...base,
+        ...layeredExtras,
+        "elk.algorithm": "layered",
+        "elk.direction": "LEFT",
         "elk.edgeRouting": "ORTHOGONAL",
         "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
       };

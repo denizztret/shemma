@@ -178,6 +178,7 @@ function makeArrowBindingsLocal(
 function makeGroupBoundaryShape(opts: {
   name: string;
   parentId: string;
+  direction?: "TB" | "LR" | "BT" | "RL";
 }): TLRecord {
   const id = childShapeId();
   const richTextVal = opts.name
@@ -218,6 +219,7 @@ function makeGroupBoundaryShape(opts: {
       didrawSubgraph: true,
       didrawSubgraphName: opts.name,
       didrawSchemaParent: opts.parentId,
+      ...(opts.direction !== undefined ? { didrawSubgraphDirection: opts.direction } : {}),
     },
   } as TLRecord;
 }
@@ -580,6 +582,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
         const groupShape = makeGroupBoundaryShape({
           name: action.label ?? action.name,
           parentId: frameId,
+          direction: action.direction,
         });
         batch.added[groupShape.id] = groupShape;
       }

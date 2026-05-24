@@ -474,3 +474,126 @@ describe("parseMermaidFlowchart — spec mapping table coverage", () => {
     expectConnect(r.actions, "api-aaaaaa", "db-aaaaaa", "sync", "HTTP/1.1");
   });
 });
+
+// ---- DRW-152: per-subgraph direction ----
+
+describe("parseMermaidFlowchart — DRW-152 per-subgraph direction", () => {
+  test("subgraph with direction LR → group action has direction LR", () => {
+    const raw = `graph TD
+  subgraph A [Group A]
+    direction LR
+    a --> b
+  end`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const groups = r.actions.filter((a) => a.kind === "schema-group") as SchemaGroupAction[];
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.direction).toBe("LR");
+  });
+
+  test("subgraph with direction TB → group action has direction TB", () => {
+    const raw = `graph LR
+  subgraph A [Group A]
+    direction TB
+    a --> b
+  end`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const groups = r.actions.filter((a) => a.kind === "schema-group") as SchemaGroupAction[];
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.direction).toBe("TB");
+  });
+
+  test("subgraph with direction TD → group action has direction TB (TD normalizes to TB)", () => {
+    const raw = `graph LR
+  subgraph A [Group A]
+    direction TD
+    a --> b
+  end`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const groups = r.actions.filter((a) => a.kind === "schema-group") as SchemaGroupAction[];
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.direction).toBe("TB");
+  });
+
+  test("subgraph with direction BT → group action has direction BT", () => {
+    const raw = `graph TD
+  subgraph A [Group A]
+    direction BT
+    a --> b
+  end`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const groups = r.actions.filter((a) => a.kind === "schema-group") as SchemaGroupAction[];
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.direction).toBe("BT");
+  });
+
+  test("subgraph with direction RL → group action has direction RL", () => {
+    const raw = `graph TD
+  subgraph A [Group A]
+    direction RL
+    a --> b
+  end`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const groups = r.actions.filter((a) => a.kind === "schema-group") as SchemaGroupAction[];
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.direction).toBe("RL");
+  });
+
+  test("subgraph WITHOUT direction line → group action has no direction field", () => {
+    const raw = `graph TD
+  subgraph A [Group A]
+    a --> b
+  end`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const groups = r.actions.filter((a) => a.kind === "schema-group") as SchemaGroupAction[];
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.direction).toBeUndefined();
+  });
+
+  test("two subgraphs with different directions → each gets its own direction", () => {
+    const raw = `graph TD
+  subgraph A [Group A]
+    direction LR
+    a --> b
+  end
+  subgraph B [Group B]
+    direction BT
+    c --> d
+  end`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const groups = r.actions.filter((a) => a.kind === "schema-group") as SchemaGroupAction[];
+    expect(groups).toHaveLength(2);
+    const grpA = groups.find((g) => g.label === "Group A");
+    const grpB = groups.find((g) => g.label === "Group B");
+    expect(grpA?.direction).toBe("LR");
+    expect(grpB?.direction).toBe("BT");
+  });
+
+  test("top-level direction line (not inside subgraph) does NOT create direction on group", () => {
+    // direction line at top level (outside any subgraph) should be ignored / not affect groups
+    const raw = `graph TD
+  direction LR
+  subgraph A [Group A]
+    a --> b
+  end`;
+    const r = parse(raw);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const groups = r.actions.filter((a) => a.kind === "schema-group") as SchemaGroupAction[];
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.direction).toBeUndefined();
+  });
+});

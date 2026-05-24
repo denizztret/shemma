@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { ALL_MODES, isValidLayoutMode, modeToElkOptions, type LayoutMode } from "../src/layout-modes";
 
 describe("LayoutMode", () => {
-  test("ALL_MODES contains 5 values", () => {
-    expect(ALL_MODES).toEqual(["layered-lr", "layered-tb", "tree", "pack", "force"]);
+  test("ALL_MODES contains 7 values (DRW-152: added layered-bt and layered-rl)", () => {
+    expect(ALL_MODES).toEqual(["layered-lr", "layered-tb", "layered-bt", "layered-rl", "tree", "pack", "force"]);
   });
-  test.each<LayoutMode>(["layered-lr", "layered-tb", "tree", "pack", "force"])(
+  test.each<LayoutMode>(["layered-lr", "layered-tb", "layered-bt", "layered-rl", "tree", "pack", "force"])(
     "isValidLayoutMode accepts %s",
     (m) => { expect(isValidLayoutMode(m)).toBe(true); },
   );
@@ -39,9 +39,18 @@ describe("modeToElkOptions", () => {
     expect(compact).toBeLessThan(normal);
     expect(normal).toBeLessThan(loose);
   });
+  // DRW-152: new layered-bt and layered-rl modes
+  test("layered-bt → direction=UP", () => {
+    expect(modeToElkOptions("layered-bt", "normal")["elk.direction"]).toBe("UP");
+  });
+  test("layered-rl → direction=LEFT", () => {
+    expect(modeToElkOptions("layered-rl", "normal")["elk.direction"]).toBe("LEFT");
+  });
   test("orthogonal edge routing for layered modes", () => {
     expect(modeToElkOptions("layered-lr", "normal")["elk.edgeRouting"]).toBe("ORTHOGONAL");
     expect(modeToElkOptions("layered-tb", "normal")["elk.edgeRouting"]).toBe("ORTHOGONAL");
+    expect(modeToElkOptions("layered-bt", "normal")["elk.edgeRouting"]).toBe("ORTHOGONAL");
+    expect(modeToElkOptions("layered-rl", "normal")["elk.edgeRouting"]).toBe("ORTHOGONAL");
   });
 
   // DRW-079: layout spacing — `normal` was too tight for 220x80 default shapes,
