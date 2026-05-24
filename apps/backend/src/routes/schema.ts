@@ -176,11 +176,12 @@ function makeArrowBindingsLocal(
 // ---- Build boundary (group) shape for subgraph ----
 
 function makeGroupBoundaryShape(opts: {
+  id?: string;
   name: string;
   parentId: string;
   direction?: "TB" | "LR" | "BT" | "RL";
 }): TLRecord {
-  const id = childShapeId();
+  const id = opts.id ?? childShapeId();
   const richTextVal = opts.name
     ? {
         type: "doc",
@@ -594,7 +595,45 @@ export function schemaRoutes(bus: StoreChangeBus) {
       const frameShape = makeFrameShape({ frameId, label, raw, position, parentId: pageId });
       batch.added[frameId] = frameShape;
 
-      // Create child shapes for each node.
+      // DRW-156: Pre-process schema-group actions to build a lookup map so that
+      // child shapes are parented to their subgraph wrapper shape, not the frame.
+      //
+      // Step 1: allocate group shape IDs eagerly and build:
+      //   nodeIdToGroupShapeId — member NodeId → group's tldraw shape id
+      //
+      // NOTE: nested subgraphs are handled at the flat level — each group shape
+      // is always parented to frameId regardless of nesting depth. Full nested
+      // group support (inner group parented to outer group) is deferred.
+      const nodeIdToGroupShapeId = new Map<NodeId, string>();
+      const groupActionToShapeId = new Map<string, string>(); // action.name → shape id
+
+      for (const action of parsedActions) {
+        if (action.kind !== "schema-group") continue;
+        if (!action.name) continue;
+        const groupShapeId = childShapeId();
+        groupActionToShapeId.set(action.name, groupShapeId);
+        for (const memberId of action.nodeIds) {
+          nodeIdToGroupShapeId.set(memberId, groupShapeId);
+        }
+      }
+
+      // Step 2: Create boundary (group) shapes before child shapes so tldraw
+      // parent shapes exist when children reference them.
+      for (const action of parsedActions) {
+        if (action.kind !== "schema-group") continue;
+        if (!action.name) continue;
+        const groupShapeId = groupActionToShapeId.get(action.name);
+        if (!groupShapeId) continue;
+        const groupShape = makeGroupBoundaryShape({
+          id: groupShapeId,
+          name: action.label ?? action.name,
+          parentId: frameId,
+          direction: action.direction,
+        });
+        batch.added[groupShapeId] = groupShape;
+      }
+
+      // Step 3: Create child shapes for each node, parenting to group wrapper if applicable.
       const nodeIds: NodeId[] = [];
       const nodeDefs = extractNodeDefs(parsedActions);
 
@@ -602,11 +641,12 @@ export function schemaRoutes(bus: StoreChangeBus) {
       const nodeIdToShapeId = new Map<NodeId, string>();
 
       for (const def of nodeDefs) {
+        const groupShapeId = nodeIdToGroupShapeId.get(def.nodeId);
         const childShape = makeChildShape({
           nodeId: def.nodeId,
           label: def.label,
           role: def.role,
-          parentId: frameId,
+          parentId: groupShapeId ?? frameId,
           mermaidStyle: nodeStylesByNodeId.get(def.nodeId),
         });
         batch.added[childShape.id] = childShape;
@@ -635,18 +675,6 @@ export function schemaRoutes(bus: StoreChangeBus) {
         batch.added[aid] = arrow;
         batch.added[start.id] = start;
         batch.added[end.id] = end;
-      }
-
-      // Create boundary (group) shapes for each schema-group action.
-      for (const action of parsedActions) {
-        if (action.kind !== "schema-group") continue;
-        if (!action.name) continue;
-        const groupShape = makeGroupBoundaryShape({
-          name: action.label ?? action.name,
-          parentId: frameId,
-          direction: action.direction,
-        });
-        batch.added[groupShape.id] = groupShape;
       }
 
       // Auto-upgrade: set room.meta.didrawProtocol = "v2" if not already v2.

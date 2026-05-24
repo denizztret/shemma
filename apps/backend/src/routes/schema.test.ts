@@ -130,20 +130,104 @@ describe("POST /api/schema/create", () => {
     const allShapes = Object.values(room.store.store).filter((r) => r?.typeName === "shape");
     const frameChildren = allShapes.filter((r) => r?.parentId === body.frameId);
 
+    // DRW-156: nodes a and b belong to subgraph X → parented to group boundary shape, not frame.
+    // Frame direct children: 1 group boundary (subgraph X) + 1 node (c) + 2 arrows = 4 shapes.
     const geoShapes = frameChildren.filter((r) => r?.type === "geo");
     const arrowShapes = frameChildren.filter((r) => r?.type === "arrow");
 
-    // 3 geo nodes + 2 arrows (a→b, b→c) + 1 group boundary = 6 frame children
-    expect(geoShapes.length).toBe(4); // 3 nodes + 1 subgraph boundary
+    expect(geoShapes.length).toBe(2); // 1 subgraph boundary + 1 free node (c)
     expect(arrowShapes.length).toBe(2);
+
+    // The subgraph boundary shape is a frame child.
+    const boundaryShape = frameChildren.find(
+      (r) => r?.type === "geo" && (r?.meta as { didrawSubgraph?: unknown })?.didrawSubgraph === true,
+    );
+    expect(boundaryShape).toBeDefined();
+
+    // Nodes a and b must be children of the subgraph boundary, not the frame.
+    const groupShapeId = boundaryShape?.id;
+    const groupChildren = allShapes.filter((r) => r?.parentId === groupShapeId);
+    const groupNodeGeos = groupChildren.filter((r) => r?.type === "geo" && (r?.meta as { didrawId?: unknown })?.didrawId);
+    expect(groupNodeGeos.length).toBe(2); // a and b
 
     // Bindings: 2 arrows × 2 bindings = 4 binding records
     const bindings = Object.values(room.store.store).filter((r) => r?.typeName === "binding");
     expect(bindings.length).toBe(4);
 
-    // Verify didrawRole is stored on node geo shapes.
-    const nodeGeos = geoShapes.filter((r) => (r?.meta as { didrawId?: unknown })?.didrawId);
-    expect(nodeGeos.every((r) => (r?.meta as { didrawRole?: unknown })?.didrawRole !== undefined)).toBe(true);
+    // All node geo shapes (across entire room) have didrawRole.
+    const allNodeGeos = allShapes.filter((r) => r?.type === "geo" && (r?.meta as { didrawId?: unknown })?.didrawId);
+    expect(allNodeGeos.every((r) => (r?.meta as { didrawRole?: unknown })?.didrawRole !== undefined)).toBe(true);
+  });
+
+  // DRW-156: Services should be parented to their subgraph wrappers, not the schema-frame.
+  test("DRW-156: subgraph members parented to group boundary shape, not frame", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(app, {
+      label: "Multi-group schema",
+      raw: [
+        "graph LR",
+        "  subgraph GroupA",
+        "    svc1[Service1]",
+        "    svc2[Service2]",
+        "  end",
+        "  subgraph GroupB",
+        "    svc3[Service3]",
+        "  end",
+        "  freeNode[FreeNode]",
+        "  svc1 --> svc3",
+      ].join("\n"),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; frameId: string; nodeIds: string[] };
+    expect(body.ok).toBe(true);
+    expect(body.nodeIds.length).toBe(4); // svc1, svc2, svc3, freeNode
+
+    const room = await rooms.get("schema-test");
+    const allShapes = Object.values(room.store.store).filter((r) => r?.typeName === "shape");
+
+    // Find both group boundary shapes.
+    const boundaries = allShapes.filter(
+      (r) => r?.type === "geo" && (r?.meta as { didrawSubgraph?: unknown })?.didrawSubgraph === true,
+    );
+    expect(boundaries.length).toBe(2); // GroupA and GroupB wrappers
+
+    // Both boundaries must be direct children of the frame.
+    expect(boundaries.every((b) => b?.parentId === body.frameId)).toBe(true);
+
+    // Find GroupA boundary by name.
+    const groupA = boundaries.find(
+      (b) => (b?.meta as { didrawSubgraphName?: unknown })?.didrawSubgraphName === "GroupA",
+    );
+    const groupB = boundaries.find(
+      (b) => (b?.meta as { didrawSubgraphName?: unknown })?.didrawSubgraphName === "GroupB",
+    );
+    expect(groupA).toBeDefined();
+    expect(groupB).toBeDefined();
+
+    // svc1 and svc2 must be children of GroupA.
+    const groupAChildren = allShapes.filter((r) => r?.parentId === groupA?.id);
+    const groupANodeLabels = groupAChildren
+      .filter((r) => r?.type === "geo" && (r?.meta as { didrawId?: unknown })?.didrawId)
+      .map((r) => (r?.meta as { didrawLabel?: unknown })?.didrawLabel);
+    expect(groupANodeLabels.sort()).toEqual(["Service1", "Service2"]);
+
+    // svc3 must be a child of GroupB.
+    const groupBChildren = allShapes.filter((r) => r?.parentId === groupB?.id);
+    const groupBNodeLabels = groupBChildren
+      .filter((r) => r?.type === "geo" && (r?.meta as { didrawId?: unknown })?.didrawId)
+      .map((r) => (r?.meta as { didrawLabel?: unknown })?.didrawLabel);
+    expect(groupBNodeLabels).toEqual(["Service3"]);
+
+    // freeNode must be a direct child of the frame (not any group).
+    const freeNode = allShapes.find(
+      (r) => r?.type === "geo" && (r?.meta as { didrawLabel?: unknown })?.didrawLabel === "FreeNode",
+    );
+    expect(freeNode).toBeDefined();
+    expect(freeNode?.parentId).toBe(body.frameId);
+
+    // Arrows are always parented to the frame (not groups).
+    const arrows = allShapes.filter((r) => r?.type === "arrow");
+    expect(arrows.every((a) => a?.parentId === body.frameId)).toBe(true);
   });
 
   test("Mode A: GET /api/canvas/view после create показывает frame", async () => {

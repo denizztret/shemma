@@ -1,3 +1,22 @@
+## [Unreleased] — 0.25.3 — DRW-156 Services parented to subgraph wrappers
+
+### Fixed
+
+- **DRW-156** — При импорте mermaid-схемы все узлы (services) парентились к `schema-frame` напрямую, а не к своим subgraph-обёрткам. Subgraph-контейнеры оставались пустыми. Два корня проблемы:
+  1. **Парсер** (`mermaid-parser.ts`): `ensureDefine` добавляла nodeId в `subgraphStack.innermost.children` только при первом определении узла. Узлы, определённые ДО subgraph (через edge-линии), повторно не добавлялись. Исправлено: трекинг subgraph-membership вынесен из ветки `!alreadyDefined` и выполняется всегда при наличии `subgraphStack` (с защитой от дублей через `includes`).
+  2. **Route** (`routes/schema.ts`): boundary shapes создавались ПОСЛЕ child shapes, без обратной фиксации `parentId`. Исправлено: group shape IDs аллоцируются заранее, boundary shapes создаются ПЕРЕД child shapes; при создании child shape `parentId = groupShapeId ?? frameId`.
+  - Nested subgraphs: outer group shape по-прежнему парентится к `frameId` (полная поддержка вложенности — отдельная задача).
+
+### Tests
+
+- **+1 новый тест** `DRW-156: subgraph members parented to group boundary shape, not frame` в `schema.test.ts` — 2 subgraph'а + free node + arrow. Проверяет: члены GroupA → parentId GroupA shape, члены GroupB → parentId GroupB shape, freeNode → parentId frameId, arrows → parentId frameId.
+- Обновлён существующий тест `Mode A: edges + subgraph → arrow shapes + group boundary shapes created` — ожидания приведены к корректному поведению (members парентятся к group shape).
+- Итого: backend 866 (+1 от 0.25.2).
+
+### Tracked
+
+- Closes DRW-156.
+
 ## 0.25.2 — 2026-05-24 — DRW-155 Mermaid multi-line quoted labels
 
 ### Fixed

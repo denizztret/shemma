@@ -656,13 +656,15 @@ function ensureDefine(
       ...(labelToEmit !== undefined ? { label: labelToEmit } : {}),
     };
     actions.push(defineAction);
+  }
 
-    // Track as child of innermost subgraph
-    if (subgraphStack.length > 0) {
-      const innermost = subgraphStack[subgraphStack.length - 1];
-      if (innermost) {
-        innermost.children.push(nodeId);
-      }
+  // Track as child of innermost subgraph, even if the node was previously defined
+  // outside the subgraph. Mermaid allows referencing pre-defined nodes inside a
+  // subgraph to declare membership (DRW-156).
+  if (subgraphStack.length > 0) {
+    const innermost = subgraphStack[subgraphStack.length - 1];
+    if (innermost && !innermost.children.includes(nodeId)) {
+      innermost.children.push(nodeId);
     }
   }
 }
