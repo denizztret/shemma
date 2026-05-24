@@ -178,6 +178,35 @@ function buildEdges(
   return edges;
 }
 
+/** DRW-158: count connected components in an undirected view of (nodes, edges). */
+function countConnectedComponents(nodes: { id: string }[], edges: ElkEdge[]): number {
+  const adj = new Map<string, Set<string>>();
+  for (const n of nodes) adj.set(n.id, new Set());
+  for (const e of edges) {
+    for (const s of e.sources) {
+      for (const t of e.targets) {
+        adj.get(s)?.add(t);
+        adj.get(t)?.add(s);
+      }
+    }
+  }
+  const seen = new Set<string>();
+  let components = 0;
+  for (const n of nodes) {
+    if (seen.has(n.id)) continue;
+    components++;
+    const stack = [n.id];
+    while (stack.length) {
+      const cur = stack.pop()!;
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      const neighbors = adj.get(cur);
+      if (neighbors) for (const nb of neighbors) stack.push(nb);
+    }
+  }
+  return components;
+}
+
 type ElkNode = {
   id: string;
   width: number;
@@ -442,6 +471,26 @@ async function runPassA(
   // Edges между детьми этого контейнера (внутренние edges только)
   const childIds = new Set(elkChildren.map((c) => c.id));
   const edges = buildEdges(store, childIds);
+
+  // DRW-158: when direction is explicit (mermaid subgraph) but internal edges
+  // не образуют connected graph, ELK layered с separateConnectedComponents=true
+  // (default) располагает компоненты ORTHOGONALly к direction. Чтобы вынудить
+  // ELK уважать direction даже для disconnected children, добавляем virtual
+  // chain edges по declaration order. Edges помечаются "v_" prefix и не
+  // пересекаются с реальными edge ID; ELK их использует только для ranking,
+  // а edge geometry мы не читаем — берём только node positions.
+  if (elkDir !== undefined && elkChildren.length >= 2) {
+    const connected = countConnectedComponents(elkChildren, edges);
+    if (connected > 1) {
+      for (let i = 0; i < elkChildren.length - 1; i++) {
+        edges.push({
+          id: `v_chain_${i}`,
+          sources: [elkChildren[i].id],
+          targets: [elkChildren[i + 1].id],
+        });
+      }
+    }
+  }
 
   const graph: ElkGraph = {
     id: "root",

@@ -704,6 +704,94 @@ describe("runLayout", () => {
     expect(xRange).toBeGreaterThan(yRange);
   });
 
+  // =====================================================================
+  // DRW-158: per-subgraph direction must work even when children have
+  // NO internal edges between them (только external incoming/outgoing).
+  // Воспроизводит user-case из sample.png: subgraph "Доставка" LR содержит
+  // AS, DS — каждый получает edge от внешнего ED, между AS↔DS нет связи.
+  // Default ELK layered с disconnected components кладёт их ORTHOGONAL
+  // к direction → bug.
+  // =====================================================================
+
+  // Test DRW-158-A: LR + 2 children без internal edges → x-spread дominant.
+  test("DRW-158: subgraph LR with no internal edges → children spread horizontally", async () => {
+    // External anchor (НЕ внутри subgraph)
+    const external = makeShape("shape:e_ext", "ext", { x: -200, y: 0 });
+
+    // Subgraph LR
+    const container = makeShape("shape:e_sg", "sg", {
+      type: "geo",
+      x: 0, y: 0, w: 400, h: 300,
+      meta: { role: "boundary", didrawSubgraphDirection: "LR" },
+    });
+    // Two children inside, NO edges between them
+    const a = makeShape("shape:e_a", "a", { parentId: "shape:e_sg", x: 0, y: 0 });
+    const b = makeShape("shape:e_b", "b", { parentId: "shape:e_sg", x: 5, y: 0 });
+
+    // Both children receive edges from external (no a→b)
+    const { arrow: arr1, b1: ba1, b2: bb1 } = makeArrow("shape:c_0", "shape:e_ext", "shape:e_a");
+    const { arrow: arr2, b1: ba2, b2: bb2 } = makeArrow("shape:c_1", "shape:e_ext", "shape:e_b");
+
+    const s = snapshotWith([external, container, a, b, arr1, ba1, bb1, arr2, ba2, bb2]);
+    const idx = rebuildDidrawIndex(s);
+
+    const affectedIds = new Set(["shape:e_sg"]);
+    const r = await runLayout(s, {
+      mode: "layered-tb",
+      scope: "affected",
+      spacing: "normal",
+      affectedIds,
+    }, idx);
+
+    expect(r.reason).toBeUndefined();
+    const ns = applyStoreChanges(s, r.batch);
+
+    const aAfter = ns.store["shape:e_a"] as { x: number; y: number };
+    const bAfter = ns.store["shape:e_b"] as { x: number; y: number };
+
+    // LR: x-spread dominant даже без internal edges
+    const xRange = Math.abs(aAfter.x - bAfter.x);
+    const yRange = Math.abs(aAfter.y - bAfter.y);
+    expect(xRange).toBeGreaterThan(yRange);
+  });
+
+  // Test DRW-158-B: TB + 2 children без internal edges → y-spread доminant.
+  test("DRW-158: subgraph TB with no internal edges → children spread vertically", async () => {
+    const external = makeShape("shape:e_ext", "ext", { x: -200, y: 0 });
+
+    const container = makeShape("shape:e_sg", "sg", {
+      type: "geo",
+      x: 0, y: 0, w: 400, h: 300,
+      meta: { role: "boundary", didrawSubgraphDirection: "TB" },
+    });
+    const a = makeShape("shape:e_a", "a", { parentId: "shape:e_sg", x: 0, y: 0 });
+    const b = makeShape("shape:e_b", "b", { parentId: "shape:e_sg", x: 5, y: 0 });
+
+    const { arrow: arr1, b1: ba1, b2: bb1 } = makeArrow("shape:c_0", "shape:e_ext", "shape:e_a");
+    const { arrow: arr2, b1: ba2, b2: bb2 } = makeArrow("shape:c_1", "shape:e_ext", "shape:e_b");
+
+    const s = snapshotWith([external, container, a, b, arr1, ba1, bb1, arr2, ba2, bb2]);
+    const idx = rebuildDidrawIndex(s);
+
+    const affectedIds = new Set(["shape:e_sg"]);
+    const r = await runLayout(s, {
+      mode: "layered-lr",
+      scope: "affected",
+      spacing: "normal",
+      affectedIds,
+    }, idx);
+
+    expect(r.reason).toBeUndefined();
+    const ns = applyStoreChanges(s, r.batch);
+
+    const aAfter = ns.store["shape:e_a"] as { x: number; y: number };
+    const bAfter = ns.store["shape:e_b"] as { x: number; y: number };
+
+    const xRange = Math.abs(aAfter.x - bAfter.x);
+    const yRange = Math.abs(aAfter.y - bAfter.y);
+    expect(yRange).toBeGreaterThan(xRange);
+  });
+
   // Test 5: scope='all' path NOT broken — still single-pass, все shapes laid out.
   test("DRW-099 hierarchical: scope=all still works as single-pass (regression)", async () => {
     const frameA = makeShape("shape:e_fa", "fa", {
