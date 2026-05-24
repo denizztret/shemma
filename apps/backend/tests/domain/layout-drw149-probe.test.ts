@@ -434,20 +434,21 @@ describe("DRW-149 phase3: GAP-1 frame-expand fix", () => {
   });
 
   // -----------------------------------------------------------------------
-  // GAP-1 fix Case C: frame+external in affectedIds — conservative expansion
-  // Когда affectedIds содержит frame + bare shape (не только контейнеры),
-  // frame-expand НЕ применяется — frame участвует в Pass B как unit.
-  // Inner children не двигаются (DRW-099 инвариант сохраняется).
+  // GAP-1 fix Case C (G3): frame+external in affectedIds — два прохода за одно нажатие
+  // DRW-149 G3: Cmd+Shift+L на frame + external — сначала внутренний layout (Pass A:
+  // children frame'а + resize frame), потом внешний (Pass B: frame как блок + ext peer).
+  // Frame-expand применяется unconditionally — даже когда selection mixed (container + leaf).
   // -----------------------------------------------------------------------
-  test("GAP-1 fix Case C: frame+external in affectedIds — frame moves as top-level unit, inner NOT expanded", async () => {
+  test("GAP-1 fix Case C (G3): frame+external — both inner children AND top-level peers laid out", async () => {
     const frame = makeFrame("shape:frame3", "frame3", { x: 0, y: 0, w: 400, h: 300 });
     const inner1 = makeService("shape:i1", "i1", { x: 0, y: 0, parentId: "shape:frame3" });
     const inner2 = makeService("shape:i2", "i2", { x: 5, y: 0, parentId: "shape:frame3" });
     const external = makeService("shape:ext", "ext", { x: 600, y: 0 });
-    // Edge: inner1→external (cross-boundary)
+    // Edges: inner1→inner2 (intra-frame, drives Pass A), inner1→external (cross-boundary, drives Pass B)
+    const { arrow: a12, b1: b12s, b2: b12e } = makeArrow("shape:arr_i12", "shape:i1", "shape:i2");
     const { arrow: a1e, b1: b1es, b2: b1ee } = makeArrow("shape:arr_1e", "shape:i1", "shape:ext");
 
-    const s = snapshotWith([frame, inner1, inner2, external, a1e, b1es, b1ee]);
+    const s = snapshotWith([frame, inner1, inner2, external, a12, b12s, b12e, a1e, b1es, b1ee]);
     const idx = rebuildDidrawIndex(s);
 
     const result = await runLayout(s, {
@@ -458,14 +459,14 @@ describe("DRW-149 phase3: GAP-1 frame-expand fix", () => {
     }, idx);
 
     expect(result.reason).toBeUndefined();
-    // Conservative fix: mixed affectedIds (container + leaf) → no expansion
-    // DRW-099 invariant: non-selected inner children are NOT repositioned individually
-    expect(result.batch.updated["shape:i1"]).toBeUndefined();
-    expect(result.batch.updated["shape:i2"]).toBeUndefined();
-    // Frame itself and/or external should be laid out at top level (Pass B)
-    const anyTopLevelMoved =
-      result.batch.updated["shape:frame3"] !== undefined ||
-      result.batch.updated["shape:ext"] !== undefined;
-    expect(anyTopLevelMoved).toBe(true);
+    // G3: inner children should move (Pass A inside frame)
+    const anyInnerMoved =
+      result.batch.updated["shape:i1"] !== undefined ||
+      result.batch.updated["shape:i2"] !== undefined;
+    expect(anyInnerMoved).toBe(true);
+    // G3: frame should be in batch.updated (likely with new props.w/h from Pass A resize)
+    expect(result.batch.updated["shape:frame3"]).toBeDefined();
+    // G3: external peer should also be laid out (Pass B)
+    expect(result.batch.updated["shape:ext"]).toBeDefined();
   });
 });

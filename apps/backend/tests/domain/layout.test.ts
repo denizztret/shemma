@@ -368,12 +368,13 @@ describe("runLayout", () => {
   });
 
   // Test 2: Mixed selection — 1 frame at root + 1 bare shape at root + edge between.
-  // Frame не имеет children в filterToIds — двигается как единица (unit move).
-  test("DRW-099 hierarchical: mixed root selection (frame + bare shape) — both laid out at top level", async () => {
+  // DRW-149 G3 update: frame-expand applies unconditionally — frame.children also get
+  // laid out (Pass A inside frame), frame resizes, frame + bare laid out at top level (Pass B).
+  test("DRW-099 hierarchical: mixed root selection (frame + bare shape) — both laid out at top level (G3 expansion)", async () => {
     const frame = makeShape("shape:e_frm", "frm", {
       type: "frame", x: 500, y: 500, w: 300, h: 200,
     });
-    // Child of frame — NOT in selection
+    // Child of frame — NOT in selection, but G3 frame-expand will include it
     const child = makeShape("shape:e_ch", "ch", { parentId: "shape:e_frm", x: 10, y: 10 });
     // Bare shape at root — offset so it will need to move
     const bare = makeShape("shape:e_bare", "bare", { x: 500, y: 500 });
@@ -383,7 +384,7 @@ describe("runLayout", () => {
     const s = snapshotWith([frame, child, bare, arrow, b1, b2]);
     const idx = rebuildDidrawIndex(s);
 
-    // Select frame + bare (NOT child)
+    // Select frame + bare (NOT child) — G3 frame-expand добавит child в Pass A
     const affectedIds = new Set(["shape:e_frm", "shape:e_bare"]);
     const r = await runLayout(s, {
       mode: "layered-lr",
@@ -394,9 +395,6 @@ describe("runLayout", () => {
 
     expect(r.reason).toBeUndefined();
     const ns = applyStoreChanges(s, r.batch);
-
-    // Child НЕ должен быть в batch.updated (он не selected, frame двигался как unit)
-    expect(r.batch.updated["shape:e_ch"]).toBeUndefined();
 
     // Хотя бы один из двух (frame или bare) должен быть laid out (оба в Pass B)
     // ELK может сохранить один из них на старом месте если они уже оптимально расположены,

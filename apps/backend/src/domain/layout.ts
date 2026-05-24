@@ -801,37 +801,41 @@ export async function runLayout(
   let anchorFrameIds: Set<string>;
 
   if (isSubgraphMode) {
-    // DRW-149 GAP-1 fix: frame-expand — when affectedIds contains ONLY containers (no bare
-    // peer shapes at root level), add all direct children recursively so that Pass A runs
-    // on them. Without this: directSelectedChildrenOf(containerId) returns [] → Pass A
-    // skipped → noop (probe Cases 1 and 2).
+    // DRW-149 GAP-1 fix: frame-expand — when affectedIds contains a container (frame or
+    // geo+boundary), recursively add its direct children so Pass A actually runs on them.
+    // Without this: directSelectedChildrenOf(containerId) returns [] → Pass A skipped → noop
+    // (probe Cases 1 and 2).
     //
-    // Conservative scope: expansion applies only when every id in affectedIds is a container
-    // (type "frame" or geo+role=boundary). When affectedIds mixes containers with bare leaves
-    // (e.g. frame + bare shape for top-level reposition), the frame participates as a top-level
-    // unit in Pass B — expanding its children would disrupt the DRW-099 invariant that
-    // non-selected children of a frame are not individually repositioned.
+    // Applied UNCONDITIONALLY (no guard on selection composition):
+    //   - {frame}             → expand frame.children → Pass A on frame.children + frame resize
+    //   - {frame, ext}        → expand frame.children → Pass A inside frame +
+    //                            Pass B on {frame, ext} as top-level peers (G3: два прохода)
+    //   - nested containers   → recurse into nested frames
+    //
+    // Архитектурно: expanded children имеют parentId = frame (не page) → они НЕ попадают
+    // в topLevelSelected (Pass B видит только original {frame, ext}). frame.children идут
+    // через Pass A → parent-relative coords → frame resize from Pass A → frame size feeds
+    // into Pass B. Pass B/A разделение сохраняется.
     // biome-ignore lint/style/noNonNullAssertion: isSubgraphMode guarantees affectedIds is defined
-    const allContainers = [...affectedIds!].every((id) => containerIds.has(id));
-    if (allContainers) {
-      const expanded = new Set<string>(affectedIds!);
-      const expandContainer = (containerId: string): void => {
-        for (const s of shapes) {
-          if (s.parentId !== containerId) continue;
-          expanded.add(s.id);
-          if (containerIds.has(s.id)) {
-            // Recurse into nested containers
-            expandContainer(s.id);
-          }
+    const expanded = new Set<string>(affectedIds!);
+    const expandContainer = (containerId: string): void => {
+      for (const s of shapes) {
+        if (s.parentId !== containerId) continue;
+        expanded.add(s.id);
+        if (containerIds.has(s.id)) {
+          // Recurse into nested containers
+          expandContainer(s.id);
         }
-      };
-      // biome-ignore lint/style/noNonNullAssertion: isSubgraphMode guarantees affectedIds is defined
-      for (const id of affectedIds!) {
+      }
+    };
+    // biome-ignore lint/style/noNonNullAssertion: isSubgraphMode guarantees affectedIds is defined
+    for (const id of affectedIds!) {
+      if (containerIds.has(id)) {
         expandContainer(id);
       }
-      // Reassign so downstream batch-filter (uses affectedIds) includes expanded children.
-      affectedIds = expanded;
     }
+    // Reassign so downstream batch-filter (uses affectedIds) includes expanded children.
+    affectedIds = expanded;
 
     // DRW-099: hierarchical multi-pass layout
     const result = await runLayoutSubgraph(store, shapes, fullHint, affectedIds);
