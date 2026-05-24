@@ -76,6 +76,9 @@ export class WsHub implements StoreChangeBus {
       source: "ai" | "user";
       version: number;
       originClientId?: string;
+      /** DRW-149: layout-selection broadcasts carry this flag so the frontend
+       * routes through markHistoryStoppingPoint + editor.run for Cmd+Z support. */
+      layoutAction?: true;
     },
   ) {
     this.broadcast(space, room, { kind: "store-change", ...msg });

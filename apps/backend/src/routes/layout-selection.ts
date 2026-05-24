@@ -185,6 +185,7 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
       changes: lr.batch,
       source: "ai",
       version: r.version,
+      layoutAction: true,
     });
 
     return c.json({

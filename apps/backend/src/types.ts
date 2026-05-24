@@ -120,6 +120,10 @@ export type StoreChangeBus = {
       source: "ai" | "user";
       version: number;
       originClientId?: string;
+      /** DRW-149: set to true for layout-selection broadcasts so the frontend
+       * can route through markHistoryStoppingPoint + editor.run instead of
+       * mergeRemoteChanges, making the layout undoable via Cmd+Z. */
+      layoutAction?: true;
     },
   ) => void;
 };
