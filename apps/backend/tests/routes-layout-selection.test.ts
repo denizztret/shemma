@@ -414,6 +414,249 @@ describe("POST /api/agent/layout-selection", () => {
     expect(rAfter.store.store["shape:out2"]!.y).toBe(200);
   });
 
+  // ============================================================
+  // DRW-149 AC-1: Frame-only selection → children layout + frame resize.
+  // Setup: frame1 with 3 services inside (parentId=frame1).
+  // Action: ids: ["shape:frame1"].
+  // Expected: 200 ok, count > 0, frame + children in affected, children positions changed.
+  // ============================================================
+  test("DRW-149 AC-1: frame-only selection → children layout + frame resize", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const room = "test-drw149-ac1";
+    const r = await rooms.get(room);
+    const snap = emptySnapshot();
+
+    // Frame at (200, 200)
+    snap.store["shape:frame1"] = makeFrame("shape:frame1", 200, 200, 400, 300, "frame1");
+    // 3 children clustered at (0,0) relative to frame (overlapping)
+    snap.store["shape:s1"] = makeShape("shape:s1", 0, 0, "s1", {}, {}, "shape:frame1");
+    snap.store["shape:s2"] = makeShape("shape:s2", 2, 0, "s2", {}, {}, "shape:frame1");
+    snap.store["shape:s3"] = makeShape("shape:s3", 0, 2, "s3", {}, {}, "shape:frame1");
+    r.store = snap;
+    r.version = 1;
+
+    const res = await postLayoutSelection(
+      app,
+      { ids: ["shape:frame1"], mode: "layered-tb" },
+      room,
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      count: number;
+      affected?: string[];
+    };
+    expect(body.ok).toBe(true);
+    expect(body.count).toBeGreaterThan(0);
+
+    // frame AND at least one child must be in affected
+    expect(body.affected).toContain("shape:frame1");
+    const childrenAffected = (body.affected ?? []).filter((id) =>
+      ["shape:s1", "shape:s2", "shape:s3"].includes(id),
+    );
+    expect(childrenAffected.length).toBeGreaterThan(0);
+
+    // Children positions should have changed from (0,0)
+    const rAfter = await rooms.get(room);
+    const s1 = rAfter.store.store["shape:s1"]! as { x: number; y: number };
+    const s2 = rAfter.store.store["shape:s2"]! as { x: number; y: number };
+    const s3 = rAfter.store.store["shape:s3"]! as { x: number; y: number };
+    // At least one child moved (ELK unstacks the cluster)
+    const anyChildMoved =
+      s1.x !== 0 || s1.y !== 0 ||
+      s2.x !== 2 || s2.y !== 0 ||
+      s3.x !== 0 || s3.y !== 2;
+    expect(anyChildMoved).toBe(true);
+  });
+
+  // ============================================================
+  // DRW-149 AC-2: Children-of-frame only selection (frame NOT in ids).
+  // Anchor detection: frame acts as anchor, children get laid out inside it.
+  // Setup: same frame + 3 children.
+  // Action: ids: ["shape:s1","shape:s2","shape:s3"] (frame omitted).
+  // Expected: 200 ok, count > 0, children moved, frame stays as anchor.
+  // ============================================================
+  test("DRW-149 AC-2: children-of-frame selection without frame — anchor detection works", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const room = "test-drw149-ac2";
+    const r = await rooms.get(room);
+    const snap = emptySnapshot();
+
+    snap.store["shape:frame1"] = makeFrame("shape:frame1", 200, 200, 400, 300, "frame1");
+    snap.store["shape:s1"] = makeShape("shape:s1", 0, 0, "s1", {}, {}, "shape:frame1");
+    snap.store["shape:s2"] = makeShape("shape:s2", 2, 0, "s2", {}, {}, "shape:frame1");
+    snap.store["shape:s3"] = makeShape("shape:s3", 0, 2, "s3", {}, {}, "shape:frame1");
+    r.store = snap;
+    r.version = 1;
+
+    const res = await postLayoutSelection(
+      app,
+      { ids: ["shape:s1", "shape:s2", "shape:s3"], mode: "layered-tb" },
+      room,
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; count: number; affected?: string[] };
+    expect(body.ok).toBe(true);
+    expect(body.count).toBeGreaterThan(0);
+
+    // Children should appear in affected
+    const childrenAffected = (body.affected ?? []).filter((id) =>
+      ["shape:s1", "shape:s2", "shape:s3"].includes(id),
+    );
+    expect(childrenAffected.length).toBeGreaterThan(0);
+
+    // Frame must stay at its original absolute position (it's an anchor)
+    const rAfter = await rooms.get(room);
+    const frame = rAfter.store.store["shape:frame1"]! as { x: number; y: number };
+    expect(frame.x).toBe(200);
+    expect(frame.y).toBe(200);
+
+    // Children should have changed from initial clustered positions
+    const s1 = rAfter.store.store["shape:s1"]! as { x: number; y: number };
+    const s2 = rAfter.store.store["shape:s2"]! as { x: number; y: number };
+    const s3 = rAfter.store.store["shape:s3"]! as { x: number; y: number };
+    const anyChildMoved =
+      s1.x !== 0 || s1.y !== 0 ||
+      s2.x !== 2 || s2.y !== 0 ||
+      s3.x !== 0 || s3.y !== 2;
+    expect(anyChildMoved).toBe(true);
+
+    // Children must stay inside the frame bounds (parent-relative)
+    const frameRec = rAfter.store.store["shape:frame1"]! as { props: { w: number; h: number } };
+    const frameW = frameRec.props.w;
+    const frameH = frameRec.props.h;
+    for (const cid of ["shape:s1", "shape:s2", "shape:s3"]) {
+      const c = rAfter.store.store[cid]! as { x: number; y: number; parentId: string; props: { w: number; h: number } };
+      expect(c.parentId).toBe("shape:frame1");
+      expect(c.x).toBeGreaterThanOrEqual(0);
+      expect(c.y).toBeGreaterThanOrEqual(0);
+      expect(c.x + (c.props?.w ?? 120)).toBeLessThanOrEqual(frameW + 5);
+      expect(c.y + (c.props?.h ?? 60)).toBeLessThanOrEqual(frameH + 5);
+    }
+  });
+
+  // ============================================================
+  // DRW-149 AC-3: Frame + external shape selection (G3 two-pass).
+  // Setup: frame1 with 2 children + ext shape outside (parent=page).
+  // Action: ids: ["shape:frame1", "shape:ext"].
+  // Expected: 200 ok, count > 0; frame, children, AND ext all in affected;
+  //           children moved inside frame; ext moved at peer level.
+  // ============================================================
+  test("DRW-149 AC-3: frame + external selection — G3 two-pass (inner + peer layout)", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const room = "test-drw149-ac3";
+    const r = await rooms.get(room);
+    const snap = emptySnapshot();
+
+    // Frame at (0, 0) with 2 children clustered
+    snap.store["shape:frame1"] = makeFrame("shape:frame1", 0, 0, 400, 300, "frame1");
+    snap.store["shape:c1"] = makeShape("shape:c1", 0, 0, "c1", {}, {}, "shape:frame1");
+    snap.store["shape:c2"] = makeShape("shape:c2", 2, 0, "c2", {}, {}, "shape:frame1");
+    // External shape on page
+    snap.store["shape:ext"] = makeShape("shape:ext", 1000, 0, "ext");
+    r.store = snap;
+    r.version = 1;
+
+    const res = await postLayoutSelection(
+      app,
+      { ids: ["shape:frame1", "shape:ext"], mode: "layered-tb" },
+      room,
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; count: number; affected?: string[] };
+    expect(body.ok).toBe(true);
+    expect(body.count).toBeGreaterThan(0);
+
+    // frame must be in affected (Pass B repositioned it)
+    expect(body.affected).toContain("shape:frame1");
+    // ext must be in affected (Pass B repositioned it as peer)
+    expect(body.affected).toContain("shape:ext");
+    // At least one frame child should be in affected (Pass A ran inside frame)
+    const childrenInAffected = (body.affected ?? []).filter((id) =>
+      ["shape:c1", "shape:c2"].includes(id),
+    );
+    expect(childrenInAffected.length).toBeGreaterThan(0);
+
+    // Children must remain inside frame (parent-relative coords ≥ 0)
+    const rAfter = await rooms.get(room);
+    for (const cid of ["shape:c1", "shape:c2"]) {
+      const c = rAfter.store.store[cid]! as { x: number; y: number; parentId: string };
+      expect(c.parentId).toBe("shape:frame1");
+      expect(c.x).toBeGreaterThanOrEqual(0);
+      expect(c.y).toBeGreaterThanOrEqual(0);
+    }
+
+    // Children should have moved from initial clustered (0,0)/(2,0)
+    const c1 = rAfter.store.store["shape:c1"]! as { x: number; y: number };
+    const c2 = rAfter.store.store["shape:c2"]! as { x: number; y: number };
+    const anyChildMoved = c1.x !== 0 || c1.y !== 0 || c2.x !== 2 || c2.y !== 0;
+    expect(anyChildMoved).toBe(true);
+  });
+
+  // ============================================================
+  // DRW-149 AC-6: Nested shape-containers (2+ levels).
+  // Setup: outer schema-frame → inner geo+boundary → services (s1, s2).
+  // Action: ids: ["shape:schemaframe"].
+  // Expected: 200 ok, count > 0; schema-frame, inner-container, s1, s2 all in affected.
+  //           Services moved; inner container possibly resized.
+  // ============================================================
+  test("DRW-149 AC-6: nested shape-containers — recursive expansion + 2-level Pass A", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const room = "test-drw149-ac6";
+    const r = await rooms.get(room);
+    const snap = emptySnapshot();
+
+    // Outer schema-frame (frame type)
+    snap.store["shape:schemaframe"] = makeFrame("shape:schemaframe", 100, 100, 600, 400, "schemaframe");
+    // Inner geo+boundary (container, child of schemaframe)
+    snap.store["shape:inner"] = makeShape(
+      "shape:inner",
+      20, 20,
+      "inner",
+      { role: "boundary" },
+      { w: 300, h: 200, geo: "rectangle" },
+      "shape:schemaframe",
+    );
+    // Two services inside inner (clustered at 0,0)
+    snap.store["shape:s1"] = makeShape("shape:s1", 0, 0, "s1", {}, {}, "shape:inner");
+    snap.store["shape:s2"] = makeShape("shape:s2", 2, 0, "s2", {}, {}, "shape:inner");
+    r.store = snap;
+    r.version = 1;
+
+    const res = await postLayoutSelection(
+      app,
+      { ids: ["shape:schemaframe"], mode: "layered-tb" },
+      room,
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; count: number; affected?: string[] };
+    expect(body.ok).toBe(true);
+    expect(body.count).toBeGreaterThan(0);
+
+    // Outer frame must be in affected
+    expect(body.affected).toContain("shape:schemaframe");
+    // Inner container must be in affected (recursive expansion reached it)
+    expect(body.affected).toContain("shape:inner");
+    // Services must be in affected (recursive expansion reached them)
+    expect(body.affected).toContain("shape:s1");
+    expect(body.affected).toContain("shape:s2");
+
+    // Services moved from initial (0,0)/(2,0) cluster
+    const rAfter = await rooms.get(room);
+    const s1 = rAfter.store.store["shape:s1"]! as { x: number; y: number; parentId: string };
+    const s2 = rAfter.store.store["shape:s2"]! as { x: number; y: number; parentId: string };
+    // parentId must still be inner container
+    expect(s1.parentId).toBe("shape:inner");
+    expect(s2.parentId).toBe("shape:inner");
+    // At least one service moved
+    const anyMoved = s1.x !== 0 || s1.y !== 0 || s2.x !== 2 || s2.y !== 0;
+    expect(anyMoved).toBe(true);
+  });
+
   // DRW-099: hierarchical multi-pass — два frame'а с детьми + cross-compound edge.
   // Select: все дети + оба frame'а. Ожидаем: children parent-relative внутри своих
   // frame'ов; frame'а расставлены без overlapping; non-selected не тронуты.
