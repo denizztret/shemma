@@ -713,15 +713,24 @@ export function schemaRoutes(bus: StoreChangeBus) {
       }
 
       // Run layout post-apply (spec §Write semantics step 9).
-      // Default layout mode for new schema-frames: layered-lr (mermaid graph LR default).
+      // DRW-160: используем direction из mermaid header (или Mode B fallback на LR).
+      // TB → layered-tb, LR → layered-lr, BT → layered-bt, RL → layered-rl.
+      // Раньше hardcoded layered-lr игнорировал `flowchart TB` и переворачивал графы.
       try {
         const affectedIds = new Set<string>(Object.keys(batch.added).filter((k) => {
           const r = room.store.store[k];
           return r?.typeName === "shape";
         }));
+        const dirToMode = {
+          TB: "layered-tb",
+          LR: "layered-lr",
+          BT: "layered-bt",
+          RL: "layered-rl",
+        } as const;
+        const layoutMode = dirToMode[direction];
         const lr = await runLayout(
           room.store,
-          { mode: "layered-lr", scope: "affected", affectedIds },
+          { mode: layoutMode, scope: "affected", affectedIds },
           room.didrawIndex,
         );
         if (!isEmptyBatch(lr.batch)) {
