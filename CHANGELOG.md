@@ -1,3 +1,21 @@
+## [Unreleased] — DRW-153 Mermaid style directives applied to imported shapes
+
+### Added
+- **Mermaid `style NAME fill:#hex,stroke:#hex,color:#hex` директивы** теперь применяются к импортированным шейпам. Узлы с `style` директивами получают tldraw `color`/`fill`/`labelColor` пропсы,映射отные через nearest-neighbor RGB mapper.
+- **`hexToTldrawColor(hex)`** — hex → nearest tldraw named color (12 цветов). Mapper использует Euclidean RGB distance. Экспортируется из `apps/backend/src/export/miro/color-mapping.ts`.
+- **`TLDRAW_COLOR_PALETTE`** — pre-built palette array для fast nearest-neighbor lookup.
+- **`MermaidNodeStyle` тип** и поля `nodeStyles` / `nodeStylesByNodeId` в `ParseResult` (`mermaid-parser.ts`). `nodeStyles` — keyed by raw mermaid id; `nodeStylesByNodeId` — keyed by resolved NodeId.
+- `stroke-width` и `stroke-dasharray` парсируются в `MermaidNodeStyle` (хранятся, не применяются к tldraw — phase 2 follow-up).
+
+### Changed
+- `apps/backend/src/domain/schema/mermaid-parser.ts` — `style NAME ...` директивы больше не пропускаются; парсируются в `nodeStyles` Map.
+- `apps/backend/src/routes/schema.ts` — `makeChildShape` принимает optional `mermaidStyle?: MermaidNodeStyle`; create-path (`POST /api/schema/create`) передаёт `nodeStylesByNodeId` из parse result.
+
+### Tests
+- **+33 новых теста**: 15 color-mapper (Sub-task A) + 7 parser style directive (Sub-task B) + 5 integration schema route (Sub-task C).
+
+---
+
 ## [Unreleased] — DRW-152 Per-subgraph direction in mermaid → autolayout inner pass
 
 ### Added
