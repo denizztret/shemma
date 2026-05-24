@@ -28,11 +28,27 @@ import type { ConnectionKind } from "@shemma/domain";
 
 export type MermaidDirection = "TD" | "LR" | "TB" | "BT" | "RL";
 
+/**
+ * Parsed mermaid `style NAME prop:val,...` directives for a single node/subgraph.
+ * Keys from mermaid CSS-like style string; all optional (partial application OK).
+ */
+export type MermaidNodeStyle = {
+  fill?: string;
+  stroke?: string;
+  color?: string;
+  /** Stored as-is if present; not applied to tldraw (phase 2 follow-up). */
+  strokeWidth?: string;
+  /** Stored as-is if present; not applied to tldraw (phase 2 follow-up). */
+  strokeDasharray?: string;
+};
+
 export type ParseResult =
   | {
       ok: true;
       actions: SchemaAction[];
       direction: MermaidDirection;
+      /** Parsed `style NAME ...` directives — keyed by raw mermaid identifier. */
+      nodeStyles: Map<string, MermaidNodeStyle>;
     }
   | {
       ok: false;
@@ -167,6 +183,8 @@ export function parseMermaidFlowchart(
   const allIds = new Set<NodeId>(existingIds);
   /** All SchemaActions accumulated */
   const actions: SchemaAction[] = [];
+  /** Parsed style directives: mermaid id → style object (keyed by raw mermaid id). */
+  const nodeStyles = new Map<string, MermaidNodeStyle>();
 
   /** Stack of active subgraph contexts — for tracking nesting */
   const subgraphStack: Array<{
@@ -259,8 +277,19 @@ export function parseMermaidFlowchart(
       continue;
     }
 
-    // ---- style/classDef/class/linkStyle/click directives (skip) ----
-    if (/^(?:style|classDef|class|linkStyle|click)\s/.test(line)) {
+    // ---- style directive: parse fill/stroke/color into nodeStyles ----
+    // Syntax: style <nodeId> <prop>:<val>[,<prop>:<val>]*
+    const styleDirectiveMatch = line.match(/^style\s+(\S+)\s+(.*)/);
+    if (styleDirectiveMatch) {
+      const mermaidId = styleDirectiveMatch[1] as string;
+      const styleStr = styleDirectiveMatch[2] as string;
+      const parsed = parseMermaidStyleString(styleStr);
+      if (parsed) nodeStyles.set(mermaidId, parsed);
+      continue;
+    }
+
+    // ---- classDef/class/linkStyle/click directives (skip) ----
+    if (/^(?:classDef|class|linkStyle|click)\s/.test(line)) {
       continue;
     }
 
@@ -280,7 +309,66 @@ export function parseMermaidFlowchart(
     }
   }
 
-  return { ok: true, actions, direction };
+  return { ok: true, actions, direction, nodeStyles };
+}
+
+// ---- Style string parsing ----
+
+/**
+ * Parse a mermaid CSS-like style string (e.g. `fill:#e3f2fd,stroke:#1565c0,color:#000`)
+ * into a `MermaidNodeStyle` object.
+ *
+ * Returns `null` if the input is empty or contains no recognisable properties.
+ * Individual unrecognised properties are silently skipped (graceful degradation).
+ */
+function parseMermaidStyleString(styleStr: string): MermaidNodeStyle | null {
+  if (!styleStr || !styleStr.trim()) return null;
+
+  const result: MermaidNodeStyle = {};
+  // Split on commas not inside parens (mermaid style values are simple; no nested commas expected)
+  const parts = styleStr.split(",");
+
+  for (const part of parts) {
+    const colonIdx = part.indexOf(":");
+    if (colonIdx === -1) continue; // malformed entry — skip
+    const key = part.slice(0, colonIdx).trim().toLowerCase();
+    const value = part.slice(colonIdx + 1).trim();
+    if (!key || !value) continue;
+
+    switch (key) {
+      case "fill":
+        result.fill = value;
+        break;
+      case "stroke":
+        result.stroke = value;
+        break;
+      case "color":
+        result.color = value;
+        break;
+      case "stroke-width":
+        result.strokeWidth = value;
+        break;
+      case "stroke-dasharray":
+        result.strokeDasharray = value;
+        break;
+      default:
+        // Unknown property — ignore (future extensibility)
+        break;
+    }
+  }
+
+  // Return null if nothing was parsed
+  if (
+    result.fill === undefined &&
+    result.stroke === undefined &&
+    result.color === undefined &&
+    result.strokeWidth === undefined &&
+    result.strokeDasharray === undefined
+  ) {
+    return null;
+  }
+
+  return result;
 }
 
 // ---- Node declaration parsing ----
