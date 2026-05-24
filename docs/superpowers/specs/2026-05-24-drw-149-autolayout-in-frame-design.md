@@ -1,6 +1,6 @@
 # DRW-149 — Autolayout внутри schema-frame с bottom-up иерархией
 
-**Версия:** v0.1
+**Версия:** v0.2 (2026-05-24 — discovery о существующем `runLayoutSubgraph`, переписан Algorithm + Implementation order)
 **Дата:** 2026-05-24
 **Источник:** brainstorm-сессия 2026-05-24 с user; заменяет cancelled DRW-142..146.
 **Связано:** DRW-147 (storage paths), DRW-148 (legacy v1 cleanup), DRW-150 (custom shape follow-up), DRW-151 (research native mermaid), DRW-152 (per-subgraph direction), DRW-153 (mermaid style directives).
@@ -55,6 +55,19 @@
 
 DRW-149 фокусируется на **v2 модели** (где shape-container = `geo`). Legacy v1 cleanup — DRW-148.
 
+### Уже существующее — `runLayoutSubgraph` (DRW-099)
+
+В `apps/backend/src/domain/layout.ts:498-754` уже есть **256 строк** функции `runLayoutSubgraph` с трёхпроходным hierarchical layout (наследие DRW-099):
+
+- **Pass A** (`runPassA`, lines 376-487) — per-compound layout: для каждого anchor container и каждого selected container, у которого есть selected children, запускает локальный ELK layout его children + вычисляет `newW`/`newH` под bbox.
+- **Pass B** (lines 601-714) — top-level ELK layout на selected top-level shapes (selected frames присутствуют как leaf-nodes с size из Pass A). Cross-compound edges remap'аются на container-to-container.
+- **Pass C** (lines 718-752) — assembly финальных позиций: top-level из Pass B, parent-relative из Pass A для children, anchor containers сохраняют свой `x/y` но получают новый `w/h`.
+- **Anchor frame detection** (lines 518-547) — frame НЕ в selection, но содержит selected descendant → marked as anchor; propagation вверх по parent chain.
+- **Cross-compound edges** — remap через `liftToTopLevel` (lines 662-680) + dedup.
+- **Single-node Pass B short-circuit** (lines 683-700) — для случая когда top-level node всего один (например selected frame один), Pass B skip'ает ELK и просто merge'ит Pass A child positions.
+
+**Что это значит для DRW-149:** большая часть bottom-up алгоритма уже работает. Реальный gap — это, в основном, **доступ** (frontend/backend short-circuit'ы не дают вызвать `runLayoutSubgraph` для single-frame selection) + **undo support** (новая работа) + точечные fix'ы по тому что вскроет probe.
+
 ### Что user видел в dev default комнате
 
 - 88 шейпов: 1 `frame` (schema-frame, без `props.name`, 2565×2543), 54 `geo`, 33 `arrow`.
@@ -92,60 +105,38 @@ Tldraw native undo stack оперирует на client-side. Server-originated 
 
 **Предлагаю (β)** — более чистая семантика, использует native tldraw flow и существующий echo-guard. Финальный выбор — на plan stage после 30-минутного probe текущего WS-sync apply pipeline (`apps/frontend/src/transport/ws.ts`) и проверки tldraw 5.x `editor.batch`/`markHistoryStoppingPoint` API (memory `feedback-tldraw-docs` — читать docs перед утверждениями).
 
-### Algorithm (Approach 1) — backend bottom-up ELK passes
+### Algorithm — gap-fill в `runLayoutSubgraph` (Approach 1)
 
-#### Шаг 1: resolve селекшна в shape records
+Existing `runLayoutSubgraph` уже реализует Pass A / Pass B / Pass C, anchor detection, cross-compound edge remap, single-node short-circuit. **Не** переписываем алгоритм с нуля. DRW-149 фокусируется на:
 
-Входной параметр — `rawIds: string[]` (приходит из frontend). Backend:
+1. **Открыть путь к нему** для single-frame selection — снять `< 2 noop` short-circuits в `tidy-layout.ts` и `layout-selection.ts`.
+2. **Гарантировать** что resize envelope под bbox **попадает в `batch.updated`** как изменение `props.w` / `props.h` (для frame и для geo). Сейчас `runLayoutSubgraph` возвращает `positions[id].w/h`, но конверсия в PatchOp выполняется в `runLayout` после Pass C — нужно verify через probe что для **обоих** типов envelope (frame и geo) поля пишутся правильно (frame: `props.w/h`; geo: `props.w/h` — оба через `props`). Если найдём gap для shape-container'а (`geo`) — точечный fix.
+3. **Не использовать `Editor.resizeShapes` на frontend** при apply. Применение `batch.updated` уже идёт через `applyStoreChanges` + WS-sync + `store.put` на фронте, минуя shape hooks — `onResize` не вызывается, дети не каскадируются (Approach X). Probe verify.
+4. **External arrow filtering для inner pass** — Pass A передаёт `filterToIds` в `buildEdges`, который фильтрует edges по `includedIds` (only selected children). Probe verify что cross-boundary arrows реально не тянут inner children. Если найдём gap — точечный fix.
+5. **Pinned envelope behaviour** — текущий код в `runLayout:828-832` восстанавливает pinned coords после layout. Probe verify что pinned envelope (`meta.pinned: true`) остаётся на месте при bottom-up flow.
+6. **Undo support (G7)** — новая работа: client-side oborachivanie apply в `editor.markHistoryStoppingPoint("Autolayout") + editor.batch(...)`. См. §Undo support.
 
-1. Resolve каждый id: если `shape:XXX` — берём прямо из `r.store.store`; если didrawName — лукап через `r.didrawIndex`.
-2. Unresolved → собираем в массив для warning'а (404 не возвращаем — продолжаем с резолвенными).
-3. **Снимаем `< 2 noop`** — пропускаем дальше любое количество (включая 0 и 1).
-4. Если resolved.length === 0 — возвращаем `{ok: true, count: 0}` (no-op без error).
-5. Если resolved.length === 1 — возвращаем `{ok: true, count: 0}` (1 шейп тривиально на своём месте).
+### Probe-задача (Phase 1)
 
-#### Шаг 2: построение container tree
+Перед написанием fix'ов нужно через integration-тесты на текущем коде задокументировать **точное** поведение `runLayoutSubgraph` для следующих случаев (с снятыми `< 2 noop` short-circuits):
 
-Функция `expandSelectionToHierarchy(resolvedIds, store) → ContainerTree`:
+| Case | Что проверяем |
+|---|---|
+| `filterToIds = {schema-frame}` (один frame) | Дети layout'нуты Pass A? Frame resized под bbox? Frame x/y остался прежним (top-level single-node Pass B short-circuit)? |
+| `filterToIds = {schema-frame, external_shape}` | Pass A на дети frame + Pass B на 2 elkChildren (frame as leaf + external)? Cross-compound edges правильно remap'нуты? |
+| `filterToIds = {childA, childB, ...}` (только дети frame, без frame) | Anchor detection: frame должен стать anchor; Pass A на детях. Результат как для frame-selected? |
+| `filterToIds = {shape-container внутри schema-frame}` | Inner Pass A на детях shape-container'а; Pass B trivially short-circuited. shape-container resized? schema-frame не двигается? |
+| External arrow от child внутри frame к external | Inner Pass A фильтрует cross-boundary edge; external arrow не тянет inner child наружу. |
+| Pinned envelope (frame с `meta.pinned: true`) | Frame x/y восстановлен после layout. |
 
-1. Для каждого id в selection: walk-up parentId chain, собираем все envelope'ы (frame или geo с `meta.role: "boundary"`), которые попали по пути.
-2. Также: для каждого envelope в selection (frame/shape-container) — добавляем **всех** его транзитивных детей (envelope'ов и не-envelope) в "scope".
-3. Для каждого envelope в scope строим запись `{ id, parentEnvelopeId, depth, children, directChildShapes }`:
-   - `parentEnvelopeId` — ближайший envelope-предок (или `null` для top-level).
-   - `depth` — расстояние от root (top-level envelope'ы имеют depth=0).
-   - `children` — envelope-дети (для recursion).
-   - `directChildShapes` — non-envelope direct children (services).
-4. Top-level peers: shapes из selection, у которых нет envelope-предков в scope.
-5. Возвращаем `{ envelopes: Envelope[], topLevelPeers: ShapeId[] }`.
+**Gap analysis** документируется как часть Phase 1 — реальные изменения Phase 3+ зависят от того что найдено.
 
-#### Шаг 3: bottom-up iteration
+### Undo support (G7) — реализация на plan stage
 
-Sort envelopes by `depth` descending (leaf-containers first). Для каждого envelope:
+Spec предложил подход β (client-driven apply). Финальный выбор — после краткой probe в Phase 1 текущего WS-sync pipeline (`apps/frontend/src/transport/ws.ts`) и tldraw 5.x history API. Подход реализуется одним из:
 
-1. Собираем входы для ELK:
-   - **Nodes:** `envelope.directChildShapes` (services) + `envelope.children` envelopes-как-блоки (с их **текущим** bbox; они уже layout'нуты на предыдущем уровне).
-   - **Edges:** все bindings из store, у которых **и** source **и** target ∈ nodes. Фильтруем cross-boundary edges (G5).
-2. Detect ELK direction:
-   - В DRW-149 scope — top-level mermaidSource direction через существующий `detectMermaidMode` (см. layout-selection.ts:30-55).
-   - Per-envelope direction (mermaid `direction LR` внутри subgraph) — DRW-152, не в текущем scope. На уровне DRW-149 используем единое direction для всех passes.
-3. Run ELK pass. Получаем new positions для nodes.
-4. Emit PatchOps: для каждого node — обновить `x`, `y` (если node — envelope-блок, его дети **уже** на правильных relative positions внутри блока; нужно дополнительно сдвинуть всех его транзитивных детей на `delta = newPos - oldPos`).
-5. Compute new bbox envelope'а: `min/max` по `x, y, x+w, y+h` всех nodes + padding (`PADDING = 16`).
-6. Emit PatchOp: envelope.{x, y, w, h} = new bbox (с adjustment для smooth positioning — envelope сдвигается так, чтобы children remained at их absolute positions).
-
-После завершения всех envelope passes — переходим к top-level pass.
-
-#### Шаг 4: top-level pass
-
-1. Nodes: `topLevelPeers` (external shapes) + root-envelopes (schema-frame и любые top-level shape-container'ы) как блоки с их текущим bbox.
-2. Edges: bindings между этими nodes (filtered).
-3. Если nodes.length === 0 — skip (всё уже сделано в envelope passes).
-4. Если nodes.length === 1 — skip (тривиально).
-5. Run ELK pass. Emit PatchOps как в шаге 3.
-
-#### Шаг 5: возврат batch
-
-Собрать все PatchOps в `batch.updated[id]`. Backend применяет `applyStoreChanges`, обновляет version, публикует в bus → frontend получает через WS.
+- **β client-driven:** frontend получает response с explicit positions, вызывает `editor.updateShapes([...])` внутри `editor.markHistoryStoppingPoint("Autolayout")`. WS-broadcast другим клиентам идёт через bus; originating клиент скипает свой echo через existing echo-guard.
+- **α server-hint+wrap:** backend в response добавляет `undoLabel: "Autolayout"`. Frontend WS-handler оборачивает apply этого patch'а в `markHistoryStoppingPoint + editor.batch`.
 
 ### Edge cases
 
@@ -165,13 +156,13 @@ Sort envelopes by `depth` descending (leaf-containers first). Для каждо�
 | Файл | Что меняем |
 |---|---|
 | `apps/frontend/src/canvas/tidy-layout.ts:26-34` | Удалить `< 2 noop` short-circuit. Передавать любое количество ids. |
-| `apps/backend/src/routes/layout-selection.ts:84-91, 132-140` | Удалить оба `< 2 noop` branch. Передавать любое количество affected ids в `runLayout`. |
-| `apps/backend/src/domain/layout.ts` | Новая функция `expandSelectionToHierarchy(rawIds, store) → ContainerTree`. Модификация `runLayout` для bottom-up iteration. Новая helper `resizeEnvelopeViaPatch(envelope, newBbox, batch)`. |
-| `apps/backend/src/domain/layout.ts` (внутри `runLayout`) | Bottom-up loop по envelopes (sorted by depth desc), затем top-level pass. |
-| Tests: `apps/backend/tests/domain/layout.test.ts` | Новые unit-тесты на `expandSelectionToHierarchy`, на bottom-up порядок, на resize-via-PatchOp. |
-| Tests: `apps/backend/tests/routes-layout-selection.test.ts` | Обновить existing тесты (removal of `< 2 noop` ожидаемого поведения). Новые тесты на frame-selection, frame+external, nested containers. |
+| `apps/backend/src/routes/layout-selection.ts:84-91, 132-140` | Удалить оба `< 2 noop` branch. Single id → ok с count=0, не error. Передавать ids дальше в `runLayout` (с `scope: "affected"`). |
+| `apps/backend/src/domain/layout.ts` | Probe-based точечные fix'ы. Возможные изменения (по findings Phase 1): корректная запись `props.w/h` для shape-container resize в `runLayout` после Pass C; уточнение `buildEdges` filtering если cross-boundary edges пробиваются; корректировка single-frame Pass B short-circuit поведения если оно пропускает resize. **НЕ переписываем алгоритм с нуля.** |
+| `apps/frontend/src/transport/ws.ts` или связанный (для Undo G7) | По выбранному undo-подходу (Phase 5): либо apply через `editor.updateShapes(...)` внутри `editor.markHistoryStoppingPoint` с echo-guard (β), либо WS-handler hook для `undoLabel: "Autolayout"` patch wrapping (α). |
+| Tests: `apps/backend/tests/domain/layout.test.ts` | Probe integration-тесты (Phase 1), затем fix-related unit-тесты после Phase 3. |
+| Tests: `apps/backend/tests/routes-layout-selection.test.ts` | Обновить existing тесты (removal of `< 2 noop` ожидаемого поведения, single id → 200 ok). Новые тесты на frame-selection, frame+external. |
 | Tests: `apps/frontend/src/canvas/tidy-layout.test.ts` | Removal `< 2 noop` тестов, добавление тестов на single-id передачу. |
-| `apps/frontend/src/transport/ws.ts` (для undo G7) | По выбранному undo-подходу (α или β) — либо WS-handler hook для `undoLabel: "autolayout"` patch wrapping, либо apply через `editor.updateShapes(...)` с echo-guard. |
+| Tests: frontend undo (Playwright или manual checklist) | Snapshot → autolayout → Cmd+Z → сравнить с snapshot (AC-12). |
 
 ## API contract
 
@@ -225,14 +216,15 @@ runLayout(store, hint: { mode, scope: "affected", spacing, affectedIds }, didraw
 
 ### Unit tests
 
-- `expandSelectionToHierarchy`:
-  - Single non-envelope shape → tree с topLevelPeers=[shape], envelopes=[].
-  - Single envelope → tree с envelopes=[that envelope] + все его транзитивные дети в scope.
-  - Mixed selection (envelope + external) → правильное разделение.
-  - Nested envelopes (schema-frame > shape-container > services) → корректный depth.
-  - Cycle protection (искусственный — defensive test).
-- Bottom-up iteration order: depth=2 envelopes обрабатываются раньше depth=1, раньше depth=0.
-- `resizeEnvelopeViaPatch`: PatchOp содержит только `x/y/w/h`, не `props.w/h` (geo-specific) и не `props.h/w` (frame-specific) — проверить что мы правильно адресуем поля для обоих типов.
+(Конкретный список — после Phase 1 probe; зависит от какие gap'ы найдены и какие fix-ы нужны. Базовые ожидаемые покрытия:)
+
+- Existing `runLayoutSubgraph` behavior для new use cases (через probe-thin integration тесты в `apps/backend/tests/domain/layout.test.ts`):
+  - `filterToIds = {single frame}` — children laid out + frame resized.
+  - `filterToIds = {single shape-container}` — inner Pass A on его children + container resized.
+  - `filterToIds = {frame, external}` — Pass B на двух top-level + frame inner Pass A.
+  - `filterToIds = {child only, без parent envelope}` — anchor detection.
+  - External arrow (binding inner→outer) — не двигает inner shape.
+- Любые fix-related unit-тесты (по Phase 3 findings) — пишутся при импleментации fix'а.
 
 ### Integration tests
 
@@ -252,28 +244,36 @@ runLayout(store, hint: { mode, scope: "affected", spacing, affectedIds }, didraw
 
 ## Phasing
 
-**Phase 1 — Backend core (1 task).**
-- `expandSelectionToHierarchy` + tests.
-- Refactor `runLayout` для bottom-up loop.
-- `resizeEnvelopeViaPatch` helper.
+**Phase 1 — Probe & gap analysis (1 task).**
+- Снять `< 2 noop` short-circuits локально (revert'аемо).
+- Запустить integration тесты на existing `runLayoutSubgraph` через все 6 cases из probe-таблицы.
+- Задокументировать gap'ы в `docs/superpowers/specs/2026-05-24-drw-149-probe-findings.md`.
+- Probe WS-sync pipeline и tldraw 5.x history API → финальный выбор undo-подхода (α или β).
 
-**Phase 2 — Frontend и backend short-circuit removal (1 task).**
-- Удалить `< 2 noop` в обоих местах + обновить existing тесты.
-- Передавать любое количество ids.
+**Phase 2 — Short-circuit removal (1 task).**
+- Удалить `< 2 noop` в frontend (`tidy-layout.ts:26-34`).
+- Удалить `< 2 noop` в backend (`layout-selection.ts:84-91, 132-140`); single id → 200 ok count=0.
+- Обновить existing тесты (frontend `tidy-layout.test.ts`, backend `routes-layout-selection.test.ts`).
 
-**Phase 3 — External arrow filtering (1 task).**
-- Логика фильтрации cross-boundary edges в inner pass.
-- Unit tests.
+**Phase 3 — Gap fixes (0-N tasks, по results Phase 1).**
+- Точечные fix'ы в `runLayoutSubgraph` / `runLayout` / `buildEdges` по findings.
+- Unit tests для каждого fix.
 
-**Phase 4 — Integration tests + manual E2E (1 task).**
-- Integration тесты на route.
-- Manual E2E на default комнате (после user cleanup).
-- Manual test plan markdown.
+**Phase 4 — Integration tests (1 task).**
+- Полное покрытие route-level: frame-only, frame+external, nested, pinned envelope, external arrow filtering.
 
-**Phase 5 — Release (1 task).**
+**Phase 5 — Undo support (G7) (1-2 task).**
+- Реализация выбранного подхода (α или β из Phase 1 probe).
+- Tests: snapshot → autolayout → Cmd+Z → диф с snapshot.
+
+**Phase 6 — Manual E2E + dogfooding (1 task).**
+- Manual test plan markdown `docs/manual-tests/drw-149-autolayout-in-frame.md`.
+- E2E на user'овой dev default комнате (после user cleanup дубликатов).
+
+**Phase 7 — Release (1 task).**
 - `bun run test` — all packages green.
 - CHANGELOG entry.
-- Release commit + tag `0.25.0` (MINOR — new behavior, не breaking).
+- Release commit + tag `0.25.0`.
 - Merge feature branch в main через `--no-ff`.
 
 ## Open questions
@@ -310,16 +310,16 @@ runLayout(store, hint: { mode, scope: "affected", spacing, affectedIds }, didraw
 
 ## Implementation order (для plan)
 
-1. **Task 1.** Backend `expandSelectionToHierarchy` + unit tests.
-2. **Task 2.** Backend `resizeEnvelopeViaPatch` helper + unit tests.
-3. **Task 3.** Backend refactor `runLayout` для bottom-up loop. Update existing tests.
-4. **Task 4.** External arrow filtering в inner pass + tests.
-5. **Task 5.** Frontend + backend remove `< 2 noop` + update tests.
-6. **Task 6.** Integration tests на route (frame-only, frame+external, nested).
-7. **Task 7.** Manual E2E test plan + dogfooding на user'овой default комнате.
-8. **Task 8.** CHANGELOG entry, release commit `0.25.0`, merge `--no-ff` в main.
+1. **Task 1 (Phase 1).** Probe — снять `< 2 noop` локально + integration тесты на existing runLayoutSubgraph через все 6 cases + probe WS-sync/history API. Output: `2026-05-24-drw-149-probe-findings.md` + чёткий список gap'ов и undo-подход.
+2. **Task 2 (Phase 2).** Удалить `< 2 noop` в frontend и backend + обновить existing тесты.
+3. **Task 3..K (Phase 3).** Точечные gap fixes (количество и содержание определяет Task 1). Каждый gap → отдельный subagent.
+4. **Task K+1 (Phase 4).** Integration tests на route covering все AC cases.
+5. **Task K+2 (Phase 5a).** Undo support — implementation выбранного подхода.
+6. **Task K+3 (Phase 5b).** Undo tests (snapshot/diff round-trip).
+7. **Task K+4 (Phase 6).** Manual test plan markdown + dogfooding на user'овой dev default комнате (после её cleanup от дубликатов).
+8. **Task K+5 (Phase 7).** CHANGELOG entry, release commit `0.25.0`, merge feature branch `--no-ff` в main.
 
-Каждый task — в отдельном subagent через `superpowers:subagent-driven-development` skill. Review policy: phase-end (после Task 4 и после Task 8), не per-task.
+Каждый task — в отдельном subagent через `superpowers:subagent-driven-development` skill. Review policy: phase-end (после Phase 3 и после Phase 7), не per-task.
 
 ## Связано
 
