@@ -623,8 +623,29 @@ async function runLayoutSubgraph(
   }
 
   if (elkChildren.length === 0) {
-    // Nothing to layout
-    return { positions: {}, anchorFrameIds };
+    // No top-level selected shapes to lay out in Pass B.
+    // Still return Pass A child positions (e.g. children-only selection where
+    // the parent frame is an anchor not in selection — AC-2).
+    const positions: Positions = {};
+    // Anchor containers: original x/y stays, w/h from Pass A if computed.
+    for (const anchorId of anchorFrameIds) {
+      const anchor = frameById.get(anchorId);
+      if (!anchor) continue;
+      const origB = shapeBounds(anchor);
+      const passARes = passAResults.get(anchorId);
+      const w = passARes ? passARes.newW : origB.w;
+      const h = passARes ? passARes.newH : origB.h;
+      positions[anchorId] = { x: origB.x, y: origB.y, w, h };
+    }
+    // Children parent-relative positions from Pass A.
+    for (const [, passARes] of passAResults) {
+      for (const [childId, pos] of passARes.childPositions) {
+        if (!positions[childId]) {
+          positions[childId] = { x: pos.x, y: pos.y };
+        }
+      }
+    }
+    return { positions, anchorFrameIds };
   }
 
   // Build edges for Pass B.
@@ -781,7 +802,8 @@ export async function runLayout(
   }
 
   // Subgraph mode: scope="affected" with affectedIds provided → DRW-091/092/099.
-  const affectedIds = hint.affectedIds;
+  // DRW-149 GAP-1: mutable so we can expand containers below.
+  let affectedIds = hint.affectedIds;
   const isSubgraphMode = fullHint.scope === "affected" && affectedIds && affectedIds.size > 0;
 
   // Pin set: only meta.pinned === true shapes (DRW-003).
@@ -800,9 +822,44 @@ export async function runLayout(
   let anchorFrameIds: Set<string>;
 
   if (isSubgraphMode) {
-    // DRW-099: hierarchical multi-pass layout
+    // DRW-149 GAP-1 fix: frame-expand — when affectedIds contains a container (frame or
+    // geo+boundary), recursively add its direct children so Pass A actually runs on them.
+    // Without this: directSelectedChildrenOf(containerId) returns [] → Pass A skipped → noop
+    // (probe Cases 1 and 2).
+    //
+    // Applied UNCONDITIONALLY (no guard on selection composition):
+    //   - {frame}             → expand frame.children → Pass A on frame.children + frame resize
+    //   - {frame, ext}        → expand frame.children → Pass A inside frame +
+    //                            Pass B on {frame, ext} as top-level peers (G3: два прохода)
+    //   - nested containers   → recurse into nested frames
+    //
+    // Архитектурно: expanded children имеют parentId = frame (не page) → они НЕ попадают
+    // в topLevelSelected (Pass B видит только original {frame, ext}). frame.children идут
+    // через Pass A → parent-relative coords → frame resize from Pass A → frame size feeds
+    // into Pass B. Pass B/A разделение сохраняется.
     // biome-ignore lint/style/noNonNullAssertion: isSubgraphMode guarantees affectedIds is defined
-    const result = await runLayoutSubgraph(store, shapes, fullHint, affectedIds!);
+    const expanded = new Set<string>(affectedIds!);
+    const expandContainer = (containerId: string): void => {
+      for (const s of shapes) {
+        if (s.parentId !== containerId) continue;
+        expanded.add(s.id);
+        if (containerIds.has(s.id)) {
+          // Recurse into nested containers
+          expandContainer(s.id);
+        }
+      }
+    };
+    // biome-ignore lint/style/noNonNullAssertion: isSubgraphMode guarantees affectedIds is defined
+    for (const id of affectedIds!) {
+      if (containerIds.has(id)) {
+        expandContainer(id);
+      }
+    }
+    // Reassign so downstream batch-filter (uses affectedIds) includes expanded children.
+    affectedIds = expanded;
+
+    // DRW-099: hierarchical multi-pass layout
+    const result = await runLayoutSubgraph(store, shapes, fullHint, affectedIds);
     if (!result) {
       return { batch: emptyBatch, affected: [], reason: "elk-error" };
     }
@@ -835,6 +892,10 @@ export async function runLayout(
   // Анчоры (centroid baseline) — top-level selected shapes (containers + bare leaves at root).
   // Anchor frames (children selected, frame НЕ в selection) исключены — они уже stay-put через
   // override в Pass C. Pinned shapes тоже исключены — у них своя анкоринг.
+  // DRW-149 GAP-2 investigation: origin preservation фильтрует только top-level shapes
+  // (parentId === "page:page"). После GAP-1 frame-expand дети контейнера становятся
+  // частью affectedIds, но их parent-relative coords из Pass A НЕ трогаются centroid
+  // translation'ом — потому что их parentId != "page:page". GAP-2 не актуален.
   if (isSubgraphMode && affectedIds && affectedIds.size > 0) {
     const anchorShapes = shapes.filter(
       (s) =>

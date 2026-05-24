@@ -69,6 +69,10 @@ type StoreSyncMessage =
       changes: StoreChangeBatch;
       version: number;
       originClientId?: string;
+      /** DRW-149: present and true when changes come from layout-selection.
+       * Frontend routes through markHistoryStoppingPoint + editor.run so the
+       * layout is undoable via Cmd+Z instead of being lost to mergeRemoteChanges. */
+      layoutAction?: true;
     }
   | { kind: "prompt-created"; prompt: unknown }
   | { kind: "prompt-resolved"; id: string; response?: string }
@@ -334,9 +338,24 @@ export function startStoreSync(deps: StoreSyncDeps): {
           );
           break;
         }
-        deps.editor.store.mergeRemoteChanges(() => {
-          deps.editor.store.applyDiff(batchToDiff(msg.changes));
-        });
+        // DRW-149: layout-selection broadcasts carry layoutAction=true. Apply
+        // through editor.run() so tldraw records the diff in undo history,
+        // making a single Cmd+Z revert the entire layout operation atomically.
+        // All other AI patches continue through mergeRemoteChanges (no undo
+        // entry — existing behaviour).
+        if (msg.layoutAction === true) {
+          deps.editor.markHistoryStoppingPoint("Autolayout");
+          deps.editor.run(
+            () => {
+              deps.editor.store.applyDiff(batchToDiff(msg.changes));
+            },
+            { history: "record" },
+          );
+        } else {
+          deps.editor.store.mergeRemoteChanges(() => {
+            deps.editor.store.applyDiff(batchToDiff(msg.changes));
+          });
+        }
         if (msg.version > currentVersion) currentVersion = msg.version;
         // DRW-075 / DRW-077: notify caller about AI-driven changes so it can
         // trigger side-effects (growY correction, zoomToFit).

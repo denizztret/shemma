@@ -13,6 +13,9 @@ apps/backend/src/frontend-dist/
 # Backlog.md (local-only task management, не коммитим)
 backlog/
 
+# Superpowers brainstorming visual companion (local-only)
+.superpowers/
+
 # Shemma local storage (per-project; smoke / accidental cwd runs)
 .shemma/
 # Legacy: pre-rename storage folder

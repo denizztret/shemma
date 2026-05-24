@@ -81,15 +81,6 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
       });
     }
 
-    // AC#10: single id → noop
-    if (rawIds.length === 1) {
-      return c.json({
-        ok: true,
-        count: 0,
-        hint: "need 2+ shapes to tidy — single shape has nothing to layout against",
-      });
-    }
-
     const { rooms, scheduleSave, space } = bundleForRequest(c);
     const r = await rooms.get(id);
 
@@ -127,16 +118,6 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
         },
         400,
       );
-    }
-
-    // AC#10: after resolution, fewer than 2 → noop
-    if (affectedIds.size < 2) {
-      return c.json({
-        ok: true,
-        count: 0,
-        hint: "need 2+ shapes to tidy — single shape has nothing to layout against",
-        unresolved: unresolved.length > 0 ? unresolved : undefined,
-      });
     }
 
     // AC#8: если mode не передан, пробуем определить из mermaidSource всех selected shapes.
@@ -204,6 +185,7 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
       changes: lr.batch,
       source: "ai",
       version: r.version,
+      layoutAction: true,
     });
 
     return c.json({

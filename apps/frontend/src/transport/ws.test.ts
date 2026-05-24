@@ -582,6 +582,117 @@ describe("startStoreSync — import-mermaid callback (DRW-083)", () => {
   });
 });
 
+// DRW-149: layoutAction flag dispatches through history wrap (Cmd+Z support)
+describe("startStoreSync — layoutAction undo path (DRW-149)", () => {
+  // Extended MockStore that also captures editor.markHistoryStoppingPoint /
+  // editor.run calls. Because startStoreSync receives `deps.editor`, we attach
+  // spy methods directly onto the editor stub.
+
+  function makeDepsWithHistorySpies() {
+    const sock = new MockSocket();
+    const store = new MockStore();
+
+    const historyStops: string[] = [];
+    const runCalls: Array<{ opts: unknown }> = [];
+
+    const editorBase = { store };
+    const editor = Object.assign(editorBase, {
+      markHistoryStoppingPoint: (name?: string) => {
+        historyStops.push(name ?? "");
+        return "";
+      },
+      run: (fn: () => void, opts?: unknown) => {
+        runCalls.push({ opts });
+        fn(); // execute the callback so applyDiff is actually called
+        return editor;
+      },
+    }) as unknown as Parameters<typeof startStoreSync>[0]["editor"];
+
+    const sync = startStoreSync({
+      editor,
+      wsUrl: "ws://test/ws?room=t",
+      room: "test-room",
+      initialVersion: 0,
+      onTruncated: () => {},
+      debounceMs: 5,
+      socketFactory: () => sock as unknown as WebSocket,
+    });
+
+    return {
+      sock,
+      store,
+      historyStops,
+      runCalls,
+      stop: sync.stop,
+      setPaused: sync.setPaused,
+    };
+  }
+
+  test("layoutAction=true routes through markHistoryStoppingPoint + editor.run", () => {
+    const t = makeDepsWithHistorySpies();
+    t.sock.open();
+
+    const changes = sampleBatch();
+    t.sock.message({
+      kind: "store-change",
+      source: "ai",
+      changes,
+      version: 1,
+      layoutAction: true,
+    });
+
+    expect(t.historyStops).toHaveLength(1);
+    expect(t.historyStops[0]).toBe("Autolayout");
+    expect(t.runCalls).toHaveLength(1);
+    expect((t.runCalls[0]!.opts as { history: string }).history).toBe("record");
+    // mergeRemoteChanges must NOT have been called
+    expect(t.store.mergeCalls).toBe(0);
+    // But the diff still reaches applyDiff (via editor.run callback)
+    expect(t.store.applied).toHaveLength(1);
+
+    t.stop();
+  });
+
+  test("layoutAction absent → legacy mergeRemoteChanges path, no history stop", () => {
+    const t = makeDepsWithHistorySpies();
+    t.sock.open();
+
+    t.sock.message({
+      kind: "store-change",
+      source: "ai",
+      changes: sampleBatch(),
+      version: 2,
+    });
+
+    expect(t.historyStops).toHaveLength(0);
+    expect(t.runCalls).toHaveLength(0);
+    expect(t.store.mergeCalls).toBe(1);
+    expect(t.store.applied).toHaveLength(1);
+
+    t.stop();
+  });
+
+  test("layoutAction=true is skipped when paused (drop, no history entry)", () => {
+    const t = makeDepsWithHistorySpies();
+    t.sock.open();
+    t.setPaused(true);
+
+    t.sock.message({
+      kind: "store-change",
+      source: "ai",
+      changes: sampleBatch(),
+      version: 3,
+      layoutAction: true,
+    });
+
+    expect(t.historyStops).toHaveLength(0);
+    expect(t.runCalls).toHaveLength(0);
+    expect(t.store.applied).toHaveLength(0);
+
+    t.stop();
+  });
+});
+
 // DRW-086: focus parameter propagation through WS transport
 describe("startStoreSync — import-mermaid focus parameter (DRW-086)", () => {
   function makeDepsWithFocusCapture() {

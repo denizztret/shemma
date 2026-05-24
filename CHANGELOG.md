@@ -1,3 +1,42 @@
+## 0.25.0 — 2026-05-24 — DRW-149 Autolayout в schema-frame
+
+### Added
+- **Cmd+Shift+L (Tidy) на schema-frame** — теперь корректно выполняет рекурсивный bottom-up autolayout его детей с resize envelope под bbox + padding. Closes G1.
+- **Frame + external selection (G3)** — два прохода за одно нажатие: внутренний Pass A на детях frame + внешний Pass B на frame+external peers.
+- **Autolayout — атомарная undo-able операция (G7).** Cmd+Z одним нажатием откатывает все позиции и размеры; Cmd+Shift+Z восстанавливает post-layout. Реализация — стратегия α (`layoutAction: true` flag в WS broadcast + `editor.markHistoryStoppingPoint("Autolayout")` + `editor.run({ history: "record" })` на клиенте).
+- **Frame-expand для container selection** — `runLayout` (в subgraph mode) автоматически добавляет прямых детей containers (frame / `meta.didrawSubgraph` / `meta.role: "boundary"`) в `affectedIds`, рекурсивно для nested containers. Заменяет ручную expand-логику на клиенте.
+
+### Changed
+- **Snapped `< 2 noop` short-circuits** в frontend `apps/frontend/src/canvas/tidy-layout.ts` и backend `apps/backend/src/routes/layout-selection.ts`. Single shape selection → 200 ok count=0 без error (раньше возвращал hint "need 2+ shapes to tidy").
+- **External arrow filtering** (bindings inner→outer) уже работало на inner Pass A — verified probe Case 5.
+- **Pinned envelope (`meta.pinned: true`)** уже сохранял x/y через origin-preservation — verified probe Case 6.
+
+### Fixed
+- **GAP-1 (BLOCKING):** `directSelectedChildrenOf(containerId)` возвращал `[]` когда frame/shape-container выбран, но его дети не в `filterToIds` (типичный сценарий tldraw frame selection mutex). Pass A пропускался, layout не происходил. Fix: frame-expand в `runLayout` recursively добавляет container children. Покрывает Cases 1, 2, 3 из probe.
+- **GAP-3:** `runLayoutSubgraph` ветка `elkChildren.length === 0` (children-only anchor selection) полностью отбрасывала результаты Pass A. Fix: собираем `childPositions` и размеры anchor-containers как в `single node` ветке. Покрывает Case 4 в probe.
+
+### Tests
+- **+99 тестов** suite-wide: backend probe + integration tests (Cases 1-6, AC-1..AC-6, GAP-3 reproduction) + frontend WS handler tests для layoutAction dispatch.
+- Итого: domain 105 + backend 818 + client 47 + cli 217 + mcp 246 + frontend 262 = **1695 tests, 0 fail**.
+
+### Tracked
+- Closes DRW-149.
+
+### Related (separate tickets — не входят в DRW-149)
+- DRW-147 (storage paths bug), DRW-148 (legacy v1 cleanup), DRW-150 (custom shape `schema-container`), DRW-151 (research native `@tldraw/mermaid`), DRW-152 (per-subgraph direction в mermaid import), DRW-153 (mermaid style directives).
+
+### Documentation
+- `docs/superpowers/specs/2026-05-24-drw-149-autolayout-in-frame-design.md` v0.2 — spec.
+- `docs/superpowers/specs/2026-05-24-drw-149-probe-findings.md` — Phase 1 findings.
+- `docs/superpowers/plans/2026-05-24-drw-149-autolayout-in-frame-plan.md` v0.1 — implementation plan.
+- `docs/manual-tests/drw-149-autolayout-in-frame.md` — manual E2E checklist (AC-1..AC-12).
+
+### Dogfooding (verified)
+- Storage-mode mermaid import → schema-frame с 5 services и 4 edges.
+- Cmd+Shift+L (через `editor.dispatchEvent` hotkey) → 4 services repositioned через WS layoutAction broadcast.
+- `editor.undo()` → все 4 service positions revert to pre-layout state (атомарный round-trip).
+- Screenshots: `/tmp/drw-149-post-undo.png` + `/tmp/drw-149-post-redo.png`.
+
 ## 0.24.0 — 2026-05-23 — DRW-111 Visual Fidelity v2
 
 ### Changed (default behavior)
