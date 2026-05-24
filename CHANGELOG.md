@@ -1,7 +1,8 @@
-## Unreleased — DRW-157 + DRW-158 (visual-fidelity continuation)
+## Unreleased — DRW-157 + DRW-158 + DRW-159 (visual-fidelity continuation)
 
 ### Fixed
 
+- **DRW-159** — После tldraw v5 upgrade `TLFrameShape.props.color` стал required (`TLDefaultColorStyle`). `makeFrameShape` в `routes/schema.ts` создавал frame без `color` → frontend `mergeRemoteChanges` бросал `ValidationError: At shape(type = frame).props.color: Expected "black" or "grey" ... got undefined`, что блокировало apply всего WS batch'а и schema-frame import не отображался на канвасе. Initial state load обходил validation, поэтому regression проявлялась только на WS publish path'е. Fix: `color: "black"` в `props`. Reproduced 2026-05-25 при DRW-158 E2E test'е. +1 regression test в `schema.test.ts` проверяет valid v5 props.
 - **DRW-158** — Mermaid `subgraph X\ndirection LR\n A\n B\nend` где A и B не имеют edges между собой (только external incoming/outgoing) — ELK раскладывал их вертикально (default behavior для disconnected components в layered direction mode). Reproduced на user-схеме 2026-05-24 (subgraphs "Доставка" и "Потребители" из EventDispatch flow).
   - **Fix:** в `runPassA` после `buildEdges` детектируем connected components — если direction override задан и компонент > 1 — добавляются virtual chain edges (`v_chain_<i>`) по declaration order. ELK respects direction; edge geometry мы не читаем (только node positions).
   - `countConnectedComponents` utility в `apps/backend/src/domain/layout.ts`.

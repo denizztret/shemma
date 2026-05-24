@@ -283,6 +283,10 @@ function makeFrameShape(opts: {
       name: opts.label,
       w: 640,
       h: 480,
+      // DRW-159: tldraw v5 TLFrameShape.props.color стал required (TLDefaultColorStyle).
+      // Без него mergeRemoteChanges/applyDiff на frontend бросает ValidationError
+      // и блокирует apply всего WS batch'а — schema-frame import не виден на канвасе.
+      color: "black",
     },
     meta: {
       didrawSchemaFrame: true,
