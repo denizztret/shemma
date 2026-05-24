@@ -217,6 +217,7 @@ function makeGroupBoundaryShape(opts: {
       richText: richTextVal,
     },
     meta: {
+      role: "boundary",
       didrawSubgraph: true,
       didrawSubgraphName: opts.name,
       didrawSchemaParent: opts.parentId,
