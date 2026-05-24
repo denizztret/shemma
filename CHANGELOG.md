@@ -1,3 +1,15 @@
+## 0.25.2 — 2026-05-24 — DRW-155 Mermaid multi-line quoted labels
+
+### Fixed
+- **DRW-155** — Mermaid parser падал с `invalid-mermaid: Cannot parse line N` на квалифицированных метках типа `["EventDispatch\n  AnalyticsPayload\n  DelegatePayload"]` (метка разбита на несколько строк внутри кавычек). Парсер теперь pre-processing'ом collapses newlines внутри `"..."` в пробелы — multi-line labels поддерживаются как один токен. Reproduced на реальной схеме user'а 2026-05-24.
+
+### Tests
+- **+4 новых теста** в `mermaid-parser.test.ts` (multi-line basic / 3-line / inline at edge target / single-line regression guard).
+- Итого: backend 865 (+4 от 0.25.1).
+
+### Tracked
+- Closes DRW-155.
+
 ## 0.25.1 — 2026-05-24 — Schema visual fidelity cluster (DRW-154 + DRW-148 + DRW-152 + DRW-153)
 
 Cluster release fixing schema-frame visual fidelity gaps surfaced during DRW-149 dogfooding (2026-05-24).
