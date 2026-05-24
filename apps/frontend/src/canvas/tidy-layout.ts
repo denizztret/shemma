@@ -11,8 +11,9 @@ export type TidyLayoutResult =
 /**
  * Call backend layout-selection endpoint for the given shape ids.
  *
- * Returns noop if fewer than 2 ids provided (consistent with AC#9/AC#10 —
- * backend will also return noop, but we short-circuit here to avoid the round-trip).
+ * Returns noop immediately only for empty ids (no round-trip needed).
+ * Single-id selection is forwarded to the backend — backend handles
+ * container expansion (DRW-149: auto-layout in frame).
  *
  * DRW-116 Task 15: accepts `space` so multi-space gallery can address the
  * correct per-space bundle. Legacy callers pass `LEGACY_SPACE_ID` (the
@@ -23,13 +24,10 @@ export async function tidyLayout(
   space: string,
   room: string,
 ): Promise<TidyLayoutResult> {
-  if (ids.length < 2) {
+  if (ids.length === 0) {
     return {
       kind: "noop",
-      reason:
-        ids.length === 0
-          ? "no shapes selected — select shapes first"
-          : "need 2+ shapes to tidy",
+      reason: "no shapes selected — select shapes first",
     };
   }
 

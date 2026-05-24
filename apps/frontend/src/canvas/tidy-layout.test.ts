@@ -43,7 +43,14 @@ afterEach(() => {
 });
 
 describe("tidyLayout helper", () => {
-  test("returns noop when ids.length < 2", async () => {
+  test("DRW-149: single id passes through to backend (no noop short-circuit)", async () => {
+    mockFetch(() => ({ body: { ok: true, count: 0, affected: [] } }));
+    const { tidyLayout } = await import("./tidy-layout");
+    const r = await tidyLayout(["shape:foo"], "default", "test-room");
+    expect(r.kind).toBe("ok");
+  });
+
+  test("returns noop when ids.length === 0", async () => {
     const { tidyLayout } = await import("./tidy-layout");
     const result = await tidyLayout([], "__legacy__", "test-room");
     expect(result.kind).toBe("noop");
