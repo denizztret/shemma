@@ -867,6 +867,10 @@ export async function runLayout(
   // Анчоры (centroid baseline) — top-level selected shapes (containers + bare leaves at root).
   // Anchor frames (children selected, frame НЕ в selection) исключены — они уже stay-put через
   // override в Pass C. Pinned shapes тоже исключены — у них своя анкоринг.
+  // DRW-149 GAP-2 investigation: origin preservation фильтрует только top-level shapes
+  // (parentId === "page:page"). После GAP-1 frame-expand дети контейнера становятся
+  // частью affectedIds, но их parent-relative coords из Pass A НЕ трогаются centroid
+  // translation'ом — потому что их parentId != "page:page". GAP-2 не актуален.
   if (isSubgraphMode && affectedIds && affectedIds.size > 0) {
     const anchorShapes = shapes.filter(
       (s) =>
