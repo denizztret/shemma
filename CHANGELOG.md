@@ -1,59 +1,54 @@
-## [Unreleased] — DRW-153 Mermaid style directives applied to imported shapes
+## 0.25.1 — 2026-05-24 — Schema visual fidelity cluster (DRW-154 + DRW-148 + DRW-152 + DRW-153)
 
-### Added
-- **Mermaid `style NAME fill:#hex,stroke:#hex,color:#hex` директивы** теперь применяются к импортированным шейпам. Узлы с `style` директивами получают tldraw `color`/`fill`/`labelColor` пропсы,映射отные через nearest-neighbor RGB mapper.
-- **`hexToTldrawColor(hex)`** — hex → nearest tldraw named color (12 цветов). Mapper использует Euclidean RGB distance. Экспортируется из `apps/backend/src/export/miro/color-mapping.ts`.
-- **`TLDRAW_COLOR_PALETTE`** — pre-built palette array для fast nearest-neighbor lookup.
-- **`MermaidNodeStyle` тип** и поля `nodeStyles` / `nodeStylesByNodeId` в `ParseResult` (`mermaid-parser.ts`). `nodeStyles` — keyed by raw mermaid id; `nodeStylesByNodeId` — keyed by resolved NodeId.
-- `stroke-width` и `stroke-dasharray` парсируются в `MermaidNodeStyle` (хранятся, не применяются к tldraw — phase 2 follow-up).
+Cluster release fixing schema-frame visual fidelity gaps surfaced during DRW-149 dogfooding (2026-05-24).
 
-### Changed
-- `apps/backend/src/domain/schema/mermaid-parser.ts` — `style NAME ...` директивы больше не пропускаются; парсируются в `nodeStyles` Map.
-- `apps/backend/src/routes/schema.ts` — `makeChildShape` принимает optional `mermaidStyle?: MermaidNodeStyle`; create-path (`POST /api/schema/create`) передаёт `nodeStylesByNodeId` из parse result.
-
-### Tests
-- **+33 новых теста**: 15 color-mapper (Sub-task A) + 7 parser style directive (Sub-task B) + 5 integration schema route (Sub-task C).
-
----
-
-## [Unreleased] — DRW-152 Per-subgraph direction in mermaid → autolayout inner pass
-
-### Added
-- **Per-subgraph `direction TB|LR|BT|RL`** в mermaid flowchart теперь применяется к inner pass autolayout для этого subgraph'а. Ранее `direction` внутри `subgraph ... end` игнорировалось.
-- **`layered-bt` и `layered-rl` LayoutMode** добавлены в `@shemma/domain` (`elk.direction: UP/LEFT`).
-- **`SchemaGroupAction.direction`** — optional поле для хранения per-subgraph direction из mermaid parser.
-- Mermaid parser: `direction TD` внутри subgraph нормализуется в `TB` (alias).
-
-### Changed
-- `packages/shemma-domain/src/layout-modes.ts` — добавлены `layered-bt` (`UP`) и `layered-rl` (`LEFT`).
-- `apps/backend/src/domain/schema/mermaid-parser.ts` — `direction <DIR>` внутри subgraph записывается в `subgraphStack.direction` и эмитируется в `SchemaGroupAction.direction`.
-- `apps/backend/src/routes/schema.ts` — `makeGroupBoundaryShape` принимает `direction` и пишет `meta.didrawSubgraphDirection`.
-- `apps/backend/src/domain/layout.ts` — `runPassA` читает `meta.didrawSubgraphDirection` контейнера и переопределяет ELK `elk.direction` для inner pass этого compound.
-
-### Tests
-- **+12 новых тестов** (8 parser + 4 layout) покрывают all 4 directions (TB/TD→TB/LR/BT/RL) + no-direction case + mixed-direction integration + domain LayoutMode tests.
-
----
-
-## [Unreleased] — DRW-148 Remove legacy v1 mermaid import path
-
-### BREAKING CHANGE
+### BREAKING CHANGE (DRW-148)
 
 - **`importMermaid()` больше не делает тихий fallback на v1 legacy path** при недоступности backend. Если `POST /api/schema/create` возвращает ошибку — функция throws. Используй `importMermaidLegacy()` напрямую если нужен legacy-путь.
 - **`forceV1` опция удалена** из `importMermaid()` в `apps/frontend/src/canvas/mermaid-import.ts`.
-- **`meta.didrawIsGroup` поле удалено** из shape meta, которое записывалось в `domain/compile.ts` (action type:group) и в `migrate-v2.ts` (envelope v2→v3 migrator). Поле никогда не читалось runtime-кодом — только присутствовало как dead field.
+- **`meta.didrawIsGroup` поле удалено** из shape meta (записывалось в `domain/compile.ts` action type:group и в `migrate-v2.ts`). Поле было dead field — никогда не читалось runtime. Backward compatibility: существующие v1 rooms с `didrawIsGroup` продолжают загружаться (нет миграции, нет краша).
+
+### Added
+
+- **DRW-152 — Per-subgraph `direction TB|LR|BT|RL`** в mermaid `subgraph ... end` теперь применяется к inner pass autolayout для этого compound'а. Ранее `direction` внутри subgraph игнорировался.
+  - `layered-bt` и `layered-rl` LayoutMode добавлены в `@shemma/domain` (`elk.direction: UP/LEFT`).
+  - `SchemaGroupAction.direction` — optional поле.
+  - `meta.didrawSubgraphDirection` на shape-container, читается `runPassA`.
+  - Mermaid `TD` нормализуется в `TB` (alias).
+- **DRW-153 — Mermaid `style NAME fill:#hex,stroke:#hex,color:#hex` директивы** теперь применяются к импортированным шейпам. Узлы с `style` получают tldraw `color`/`fill`/`labelColor` пропсы через nearest-neighbor RGB hex → 12 tldraw named colors mapper.
+  - `hexToTldrawColor(hex)` экспортируется из `apps/backend/src/export/miro/color-mapping.ts`.
+  - `TLDRAW_COLOR_PALETTE` — pre-built palette для fast lookup.
+  - `MermaidNodeStyle` тип + `nodeStyles` / `nodeStylesByNodeId` в parser `ParseResult`.
+  - `stroke-width` / `stroke-dasharray` парсируются но не применяются (phase 2).
+
+### Fixed
+
+- **DRW-154 — Nested frame underresize** (DRW-149 follow-up). `runPassA.childPositions` теперь forward'ит `w/h` для nested containers — outer Pass B видит правильный размер inner frame'а. Inner frame'ы теперь resize'ятся под bbox своих children даже при глубоко вложенных схемах. Verified via user dogfooding 2026-05-24.
 
 ### Changed
-- `apps/backend/src/domain/compile.ts` — `group` DomainAction frame meta: удалено `didrawIsGroup: true` (dead field).
-- `apps/backend/src/migrate-v2.ts` — `groupToFrame()`: удалено `didrawIsGroup: true` (dead field).
-- `apps/frontend/src/canvas/mermaid-import.ts` — `importMermaid()`: удалена опция `forceV1`, удалён тихий v1-фоллбек.
 
-### Backward compatibility
-- Существующие v1 rooms (`frame+didrawIsGroup` shapes) продолжают загружаться и рендериться — нет migration, нет краша daemon.
-- `importMermaidLegacy()` остаётся доступна для тестов и возможного unit-использования.
-- Оба mode (`browser` и `storage`) в `shemma_import_mermaid` всегда производят v2 модель.
+- `apps/backend/src/domain/layout.ts` — `runPassA` reads `meta.didrawSubgraphDirection`, `childPositions` extended with optional `w`/`h`.
+- `apps/backend/src/domain/schema/mermaid-parser.ts` — `direction` + `style NAME` parsing в `nodeStyles` Map.
+- `apps/backend/src/routes/schema.ts` — `makeGroupBoundaryShape(direction)`, `makeChildShape(mermaidStyle)`.
+- `apps/backend/src/domain/compile.ts` + `migrate-v2.ts` — `didrawIsGroup` field удалён.
+- `apps/frontend/src/canvas/mermaid-import.ts` — `forceV1` удалён, silent v1 fallback удалён.
+- `packages/shemma-domain/src/layout-modes.ts` — `layered-bt` + `layered-rl` добавлены.
+- `packages/shemma-domain/src/schema-actions.ts` — `SchemaGroupAction.direction`.
 
----
+### Tests
+
+- **+47 новых тестов**: DRW-154 (1 nested-frame regression) + DRW-152 (8 parser + 4 layout) + DRW-153 (15 color-mapper + 7 parser + 5 integration) + various legacy test updates (DRW-148 cleanup).
+- Итого: domain 109 + backend 861 + client 47 + cli 217 + mcp 246 + frontend 262 = **1742 tests, 0 fail** (+47 от 0.25.0).
+
+### Tracked
+- Closes DRW-154, DRW-148, DRW-152, DRW-153.
+
+### Documentation
+- `docs/superpowers/specs/2026-05-24-drw-148-cleanup-plan.md` — DRW-148 plan (Option C choice + reason).
+
+### Known limitations
+- DRW-153 hex → tldraw color mapper использует RGB Euclidean distance — pale/pastel hex (например `#e3f2fd` light pastel blue) могут маппиться в `light-violet` математически корректно но перцептивно неожиданно. LAB/HSL mapper — phase 2 follow-up.
+- DRW-153 `stroke-width` / `stroke-dasharray` парсируются но не применяются к tldraw — phase 2 follow-up.
 
 ## 0.25.0 — 2026-05-24 — DRW-149 Autolayout в schema-frame
 
