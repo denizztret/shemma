@@ -623,8 +623,29 @@ async function runLayoutSubgraph(
   }
 
   if (elkChildren.length === 0) {
-    // Nothing to layout
-    return { positions: {}, anchorFrameIds };
+    // No top-level selected shapes to lay out in Pass B.
+    // Still return Pass A child positions (e.g. children-only selection where
+    // the parent frame is an anchor not in selection — AC-2).
+    const positions: Positions = {};
+    // Anchor containers: original x/y stays, w/h from Pass A if computed.
+    for (const anchorId of anchorFrameIds) {
+      const anchor = frameById.get(anchorId);
+      if (!anchor) continue;
+      const origB = shapeBounds(anchor);
+      const passARes = passAResults.get(anchorId);
+      const w = passARes ? passARes.newW : origB.w;
+      const h = passARes ? passARes.newH : origB.h;
+      positions[anchorId] = { x: origB.x, y: origB.y, w, h };
+    }
+    // Children parent-relative positions from Pass A.
+    for (const [, passARes] of passAResults) {
+      for (const [childId, pos] of passARes.childPositions) {
+        if (!positions[childId]) {
+          positions[childId] = { x: pos.x, y: pos.y };
+        }
+      }
+    }
+    return { positions, anchorFrameIds };
   }
 
   // Build edges for Pass B.
