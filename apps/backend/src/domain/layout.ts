@@ -178,6 +178,62 @@ function buildEdges(
   return edges;
 }
 
+/**
+ * DRW-161: Pass A edge collection с cross-subgraph lift'ом.
+ *
+ * Возвращает edges для ELK input в Pass A. В отличие от buildEdges:
+ * - Если arrow endpoint находится в childIds — оставляем напрямую.
+ * - Если endpoint — leaf внутри одного из child-containers childIds — поднимаем
+ *   ID до этого container'а (как Pass B `liftToTopLevel`).
+ * - Если оба endpoint после lift'а попали в childIds и различны — добавляем
+ *   container→container ребро (дедупликация по `src->tgt`).
+ *
+ * Это даёт ELK информацию о потоке между nested compounds на уровне Pass A
+ * и позволяет layered ranking'у выстроить chain (например Вход → Оркестрация
+ * → Результат → Доставка → Потребители → EC).
+ */
+function buildPassAEdges(
+  store: TLStoreSnapshot,
+  childIds: Set<string>,
+  allShapes: ShapeRec[],
+): ElkEdge[] {
+  // Карта shape.id → ancestor in childIds (lift up to closest child of this Pass A's container).
+  const shapeById = new Map(allShapes.map((s) => [s.id, s]));
+  const liftCache = new Map<string, string | null>();
+  const lift = (rawId: string): string | null => {
+    if (childIds.has(rawId)) return rawId;
+    const cached = liftCache.get(rawId);
+    if (cached !== undefined) return cached;
+    let current = shapeById.get(rawId);
+    let safety = 32;
+    while (current && current.parentId && safety-- > 0) {
+      if (childIds.has(current.parentId)) {
+        liftCache.set(rawId, current.parentId);
+        return current.parentId;
+      }
+      current = shapeById.get(current.parentId);
+    }
+    liftCache.set(rawId, null);
+    return null;
+  };
+
+  const edges: ElkEdge[] = [];
+  const seen = new Set<string>();
+  for (const a of collectArrows(store)) {
+    const ep = resolveArrowEndpoints(store, a.id);
+    if (!ep) continue;
+    const src = lift(ep.src);
+    const tgt = lift(ep.tgt);
+    if (!src || !tgt || src === tgt) continue;
+    if (!childIds.has(src) || !childIds.has(tgt)) continue;
+    const key = `${src}->${tgt}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    edges.push({ id: `${a.id}_pa`, sources: [src], targets: [tgt] });
+  }
+  return edges;
+}
+
 /** DRW-158: count connected components in an undirected view of (nodes, edges). */
 function countConnectedComponents(nodes: { id: string }[], edges: ElkEdge[]): number {
   const adj = new Map<string, Set<string>>();
@@ -468,9 +524,13 @@ async function runPassA(
 
   if (elkChildren.length === 0) return null;
 
-  // Edges между детьми этого контейнера (внутренние edges только)
+  // Edges между детьми этого контейнера. DRW-161: помимо прямых рёбер
+  // child↔child нужно lift'ить cross-subgraph рёбра — если arrow соединяет
+  // два leaf'а в разных nested containers (которые сейчас выступают leaf'ами
+  // в Pass A на этом уровне), это даёт container→container ребро. Без этого
+  // ELK видит только containers без рёбер и раскладывает их arbitrary.
   const childIds = new Set(elkChildren.map((c) => c.id));
-  const edges = buildEdges(store, childIds);
+  const edges = buildPassAEdges(store, childIds, allShapes);
 
   // DRW-158: when direction is explicit (mermaid subgraph) but internal edges
   // не образуют connected graph, ELK layered с separateConnectedComponents=true
