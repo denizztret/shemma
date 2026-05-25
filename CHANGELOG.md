@@ -1,3 +1,27 @@
+## 0.27.0 — 2026-05-25 — DRW-150 follow-up cluster (DRW-165..169)
+
+### Added
+
+- **DRW-169** — Mermaid `style <subgraph> stroke-dasharray:<pattern>` директивы теперь применяются к schema-container'у. Mapping: `0`/`none` → `solid`, короткие dashes с первым значением ≤ 2 (`1,4`, `2,2`) → `dotted`, остальные ненулевые patterns (`5,5`, `8 4`) → `dashed`. `mermaidDashToTldraw` helper в `routes/schema.ts` + расширенная `resolveSubgraphStyle` возвращает optional `dash`.
+
+### Fixed
+
+- **DRW-168** — Autolayout игнорировал tldraw style `size: l/xl` — font/stroke рендерился крупнее, но `w`/`h` shape'а оставались прежними → текст overflow, ELK packing неверный. Fix: `effectiveShapeBounds` в новом `apps/backend/src/domain/shape-size.ts` мультиплицирует bounds по size factor (`s:0.85 · m:1.0 · l:1.3 · xl:1.6`); прокинуто в 3 leaf-сайта (`runPassA` childLeaves, `runLayoutSubgraph` Pass B topLevelSelectedLeaves, `buildElkGraph.buildLeaf`); effective w/h записывается обратно в `props.w`/`props.h` так чтобы shape визуально вырос под содержимое.
+- **DRW-167** — Direction change на schema-container внутри tldraw frame'а схлопывал родительский frame: `runLayoutSubgraph` поднимал frame в `anchorFrameIds` (из-за selected child container) и Pass A пересчитывал frame.newW/newH с одним child'ом → frame shrinks. Fix: `scope: "self"` параметр в `/api/agent/layout-selection` — skip anchor expansion, return после Pass A без Pass B; parent frame bounds preserved.
+- **DRW-166** — Direction context-menu single-click "запоминал" state но layout срабатывал только на Cmd+Shift+L (race: `editor.updateShape` локально → WS debounce 50ms → backend `layout-selection` POST читал stale direction до WS-sync; второй клик попадал на уже синхронный state). Fix: запрос несёт `directions: Record<id, Direction>` map, backend атомарно patch'ит `props.direction` ПЕРЕД layout pass'ом. Plus: context-menu Direction items обёрнуты в submenu (single-click trigger вместо плоского списка), добавлены BT/RL варианты.
+- **DRW-165** — Resize schema-container'а через corner-handles масштабировал все children пропорционально (group-like, не frame-like): default `ShapeUtil.canResizeChildren()` returns `true`. Tldraw's native `FrameShapeUtil` переопределяет на `false`; `SchemaContainerShapeUtil` теперь делает то же — children сохраняют свои bounds при изменении контейнера.
+
+### Tests
+
+- **DRW-168:** 10 unit (`shape-size.test.ts`) + 1 integration (`routes-layout-selection.test.ts` — size=xl → w≥352 h≥128).
+- **DRW-169:** 9 unit (`mermaid-dash.test.ts`) + 2 integration (`routes-schema-create.test.ts` — `5,5`→dashed, `1,4`→dotted).
+- **DRW-166/167:** 3 integration (`routes-layout-selection.test.ts` — directions apply atomically, scope=self preserves frame, bogus id → unresolved).
+- Backend 1817 (+54) + frontend 269 = **2086 tests, 0 fail**.
+
+### Migration
+
+- Не требуется. Все изменения backward-compat: новые поля в request body optional, defaults preservируют existing behavior.
+
 ## 0.26.0 — 2026-05-25 — DRW-150 schema-container shape + visual-fidelity cluster (DRW-157..163)
 
 ### Added
