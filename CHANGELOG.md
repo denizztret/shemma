@@ -1,3 +1,15 @@
+## Unreleased
+
+### Fixed
+
+- **DRW-171** — Текст в новых shapes из mermaid-import / AI-driven WS обрезался: `triggerGrowY` пересчитывал autosize только для `geo`, а `note` и `text` приходили с stale `w`/`h` после `store.put` (snapshot load + WS `mergeRemoteChanges` обходят `ShapeUtil.onBeforeUpdate`). Симптом: малейший resize-touch фигуры мгновенно "схлопывал" её под минимальный размер для текста, потому что user-driven resize шёл уже через `editor.updateShape` → onBeforeUpdate срабатывал. Fix: функция вынесена в `apps/frontend/src/canvas/auto-size.ts` как `triggerAutoSize` с whitelist'ом `geo | note | text` и no-op `editor.updateShape` для каждого — onBeforeUpdate теперь срабатывает на autosize-capable shape сразу при создании.
+
+### Tests
+
+- **DRW-171:** 9 unit (`auto-size.test.ts` — empty / geo / note / text / non-autosize types / ids-filter / mixed / empty ids set). Frontend 278 (+9), backend 1817 без изменений = **2095 tests, 0 fail**.
+
+---
+
 ## 0.27.0 — 2026-05-25 — DRW-150 follow-up cluster (DRW-165..169)
 
 ### Added

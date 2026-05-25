@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { type Editor, type TLGeoShape, Tldraw } from "tldraw";
+import { type Editor, Tldraw } from "tldraw";
+import { triggerAutoSize } from "./canvas/auto-size";
 import {
   SchemaContainerShapeUtil,
   registerAutoFlipDirection,
@@ -34,31 +35,6 @@ import { getState, seedSchema } from "./transport/api";
 import { viewportReporter } from "./transport/viewport";
 import { computeTruncatedBackoff } from "./transport/sync-recovery";
 import { type AiActivity, startStoreSync } from "./transport/ws";
-
-/**
- * DRW-077: Re-trigger tldraw's growY side-effect for geo shapes.
- *
- * tldraw's GeoShapeUtil.onBeforeUpdate runs growY only when shapes are
- * mutated via editor.createShapes/updateShapes (not via store.put /
- * mergeRemoteChanges). Calling editor.updateShape with the same props forces
- * onBeforeUpdate to run and correct the height to fit the label text.
- *
- * @param editor  Live tldraw editor instance.
- * @param ids     Optional set of shape ids to process; when omitted all geo
- *                shapes on the current page are processed.
- */
-function triggerGrowY(editor: Editor, ids?: Set<string>): void {
-  const shapes = editor.getCurrentPageShapes().filter(
-    (s): s is TLGeoShape =>
-      s.type === "geo" && (ids === undefined || ids.has(s.id)),
-  );
-  if (shapes.length === 0) return;
-  editor.run(() => {
-    for (const s of shapes) {
-      editor.updateShape<TLGeoShape>({ id: s.id, type: "geo", props: s.props });
-    }
-  });
-}
 
 /**
  * DRW-096: zoom to the union bounds of `affectedIds`, but only when those
@@ -454,11 +430,12 @@ export function App({
         .then((j) => active && setAiActivity(j.activity ?? null))
         .catch(() => {});
 
-      // DRW-077: re-trigger growY for all geo shapes after initial snapshot
-      // load. loadSnapshot uses store.put (not editor.createShapes), so
-      // tldraw's onBeforeUpdate growY never fires. A no-op updateShape forces
-      // the util to recalculate height based on actual text bounds.
-      triggerGrowY(editor);
+      // DRW-077 / DRW-171: re-trigger autosize for geo/note/text shapes
+      // after initial snapshot load. loadSnapshot uses store.put (not
+      // editor.createShapes), so tldraw's onBeforeUpdate (growY for geo/note,
+      // autoSize for text) never fires. A no-op updateShape pass forces each
+      // util to remeasure and correct the bounds to fit text.
+      triggerAutoSize(editor);
 
       // Camera: restore from localStorage, otherwise zoomToFit if there's
       // content. If a saved camera exists the user has already navigated this
@@ -499,7 +476,7 @@ export function App({
           initialVersion,
           onAiChange: (changedIds) => {
             if (!active) return;
-            triggerGrowY(editor, changedIds);
+            triggerAutoSize(editor, changedIds);
             scheduleAiZoom();
           },
           onImportMermaid: runMermaidImport,
