@@ -31,6 +31,7 @@ import { modeToElkOptions, type LayoutMode, type Spacing } from "@shemma/domain"
 import elkWorkerPath from "../../node_modules/elkjs/lib/elk-worker.min.js" with { type: "file" };
 import type { StoreChangeBatch, TLRecord, TLStoreSnapshot } from "../store-types";
 import type { ElementId, LayoutHint } from "./types";
+import { effectiveShapeBounds } from "./shape-size";
 
 // biome-ignore lint/suspicious/noExplicitAny: third-party CJS module
 const ELK = require("elkjs/lib/main.js") as any;
@@ -430,7 +431,7 @@ function buildElkGraph(
   }
 
   const buildLeaf = (s: ShapeRec): ElkNode => {
-    const b = shapeBounds(s);
+    const b = effectiveShapeBounds(s, shapeBounds(s));
     return { id: s.id, width: Math.max(20, b.w), height: Math.max(20, b.h), ports: [] };
   };
 
@@ -537,9 +538,9 @@ async function runPassA(
     elkChildren.push({ id: cc.id, width: Math.max(20, w), height: Math.max(20, h) });
   }
 
-  // Обычные листья
+  // Обычные листья — используем effective bounds чтобы ELK учитывал props.size
   for (const s of childLeaves) {
-    const b = shapeBounds(s);
+    const b = effectiveShapeBounds(s, shapeBounds(s));
     elkChildren.push({ id: s.id, width: Math.max(20, b.w), height: Math.max(20, b.h) });
   }
 
@@ -816,7 +817,7 @@ async function runLayoutSubgraph(
     elkChildren.push({ id: sc.id, width: Math.max(20, w), height: Math.max(20, h) });
   }
   for (const s of topLevelSelectedLeaves) {
-    const b = shapeBounds(s);
+    const b = effectiveShapeBounds(s, shapeBounds(s));
     elkChildren.push({ id: s.id, width: Math.max(20, b.w), height: Math.max(20, b.h) });
   }
 
@@ -1202,8 +1203,19 @@ export async function runLayout(
       newY = p.y;
     }
     // DRW-004: для frame пишем bbox обратно в props.w/props.h.
-    const newW = isFrame && typeof p.w === "number" ? p.w : undefined;
-    const newH = isFrame && typeof p.h === "number" ? p.h : undefined;
+    // DRW-168: для leaf shapes — пишем effective w/h чтобы визуально shape
+    // вырос под выбранный size (L/XL). ELK уже использовал effective dims;
+    // теперь синхронизируем props чтобы форма на canvas совпадала.
+    let newW: number | undefined;
+    let newH: number | undefined;
+    if (isFrame && typeof p.w === "number") {
+      newW = p.w;
+      newH = typeof p.h === "number" ? p.h : undefined;
+    } else if (!isFrame) {
+      const effB = effectiveShapeBounds(s, oldB);
+      if (effB.w > oldB.w + EPS) newW = effB.w;
+      if (effB.h > oldB.h + EPS) newH = effB.h;
+    }
 
     const xChanged = Math.abs(newX - oldB.x) > EPS;
     const yChanged = Math.abs(newY - oldB.y) > EPS;

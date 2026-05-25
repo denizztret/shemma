@@ -789,6 +789,44 @@ describe("POST /api/agent/layout-selection", () => {
     expect(body.unresolved).toContain("shape:bogus");
   });
 
+  // ============================================================
+  // DRW-168: shape with size=xl should have effective w/h bumped after layout.
+  // ============================================================
+  test("DRW-168: shape with size=xl gets effective w/h bumped after layout", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const room = "test-drw168-size-xl";
+    const r = await rooms.get(room);
+    const snap = emptySnapshot();
+
+    // Two geo shapes with size=xl and default w=220, h=80
+    snap.store["shape:xl-a"] = makeShape("shape:xl-a", 0, 0, "xl-a", {}, { w: 220, h: 80, size: "xl" });
+    snap.store["shape:xl-b"] = makeShape("shape:xl-b", 5, 0, "xl-b", {}, { w: 220, h: 80, size: "xl" });
+    r.store = snap;
+    r.version = 1;
+
+    const res = await postLayoutSelection(
+      app,
+      { ids: ["shape:xl-a", "shape:xl-b"], mode: "layered-tb" },
+      room,
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+
+    const rAfter = await rooms.get(room);
+
+    // Expected minimum effective dimensions: ceil(220 * 1.6) = 352, ceil(80 * 1.6) = 128
+    const minW = Math.ceil(220 * 1.6);
+    const minH = Math.ceil(80 * 1.6);
+
+    for (const sid of ["shape:xl-a", "shape:xl-b"]) {
+      const s = rAfter.store.store[sid]! as { props: { w: number; h: number } };
+      expect(s.props.w).toBeGreaterThanOrEqual(minW);
+      expect(s.props.h).toBeGreaterThanOrEqual(minH);
+    }
+  });
+
   // DRW-099: hierarchical multi-pass — два frame'а с детьми + cross-compound edge.
   // Select: все дети + оба frame'а. Ожидаем: children parent-relative внутри своих
   // frame'ов; frame'а расставлены без overlapping; non-selected не тронуты.
