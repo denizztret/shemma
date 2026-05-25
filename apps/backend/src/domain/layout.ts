@@ -660,6 +660,7 @@ async function runLayoutSubgraph(
   shapes: ShapeRec[],
   hint: Required<LayoutHint>,
   filterToIds: Set<string>,
+  containerScope: "self" | "auto" = "auto",
 ): Promise<{ positions: Positions; anchorFrameIds: Set<string> } | null> {
   const opts = modeToElkOptions(hint.mode, hint.spacing);
 
@@ -675,22 +676,27 @@ async function runLayoutSubgraph(
   // Anchor containers: NOT selected, but have ≥1 selected descendant (handles deep nesting).
   // First pass: direct selected leaf/container child. Then iterate until stable to propagate
   // anchor status up through nested anchor parents.
+  //
+  // containerScope === "self": skip anchor expansion entirely — we only re-layout the internal
+  // children of the directly selected containers, leaving parent frames untouched (DRW-167).
   const anchorFrameIds = new Set<string>();
-  for (const f of frames) {
-    if (filterToIds.has(f.id)) continue;
-    const hasDirectSelectedLeaf = selectedLeaves.some((s) => s.parentId === f.id);
-    const hasDirectSelectedContainer = selectedContainers.some((c) => c.parentId === f.id);
-    if (hasDirectSelectedLeaf || hasDirectSelectedContainer) anchorFrameIds.add(f.id);
-  }
-  let changed = true;
-  while (changed) {
-    changed = false;
+  if (containerScope !== "self") {
     for (const f of frames) {
-      if (filterToIds.has(f.id) || anchorFrameIds.has(f.id)) continue;
-      const hasAnchorChild = frames.some((ff) => ff.parentId === f.id && anchorFrameIds.has(ff.id));
-      if (hasAnchorChild) {
-        anchorFrameIds.add(f.id);
-        changed = true;
+      if (filterToIds.has(f.id)) continue;
+      const hasDirectSelectedLeaf = selectedLeaves.some((s) => s.parentId === f.id);
+      const hasDirectSelectedContainer = selectedContainers.some((c) => c.parentId === f.id);
+      if (hasDirectSelectedLeaf || hasDirectSelectedContainer) anchorFrameIds.add(f.id);
+    }
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const f of frames) {
+        if (filterToIds.has(f.id) || anchorFrameIds.has(f.id)) continue;
+        const hasAnchorChild = frames.some((ff) => ff.parentId === f.id && anchorFrameIds.has(ff.id));
+        if (hasAnchorChild) {
+          anchorFrameIds.add(f.id);
+          changed = true;
+        }
       }
     }
   }
@@ -763,6 +769,31 @@ async function runLayoutSubgraph(
 
     const res = await runPassA(store, sc, directFilteredChildren, opts, shapes, filterToIds);
     if (res) passAResults.set(sc.id, res);
+  }
+
+  // =====================================================================
+  // containerScope === "self": return after Pass A — no Pass B, no top-level
+  // repositioning. Parent frames keep their original bounds (DRW-167).
+  // =====================================================================
+  if (containerScope === "self") {
+    const positions: Positions = {};
+    for (const [, passARes] of passAResults) {
+      for (const [childId, pos] of passARes.childPositions) {
+        positions[childId] = { x: pos.x, y: pos.y, w: pos.w, h: pos.h };
+      }
+      // Include the container itself so its w/h gets updated to the Pass A result.
+      const container = frameById.get(passARes.containerId);
+      if (container) {
+        const origB = shapeBounds(container);
+        positions[passARes.containerId] = {
+          x: origB.x,
+          y: origB.y,
+          w: passARes.newW,
+          h: passARes.newH,
+        };
+      }
+    }
+    return { positions, anchorFrameIds };
   }
 
   // =====================================================================
@@ -1032,7 +1063,7 @@ export async function runLayout(
     affectedIds = expanded;
 
     // DRW-099: hierarchical multi-pass layout
-    const result = await runLayoutSubgraph(store, shapes, fullHint, affectedIds);
+    const result = await runLayoutSubgraph(store, shapes, fullHint, affectedIds, hint.containerScope ?? "auto");
     if (!result) {
       return { batch: emptyBatch, affected: [], reason: "elk-error" };
     }

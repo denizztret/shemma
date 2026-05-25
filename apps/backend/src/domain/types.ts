@@ -15,6 +15,9 @@ export type LayoutHint = {
   scope?: "all" | "affected" | ElementId;
   spacing?: Spacing;
   affectedIds?: Set<string>;
+  /** When "self": skip anchor-frame expansion and Pass B — only re-layout
+   * the internal children of the directly selected containers (DRW-166/167). */
+  containerScope?: "self" | "auto";
 };
 
 export type DefineAction = {

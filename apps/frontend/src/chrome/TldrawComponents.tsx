@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   DefaultContextMenu,
   DefaultContextMenuContent,
@@ -39,6 +40,7 @@ export function buildTldrawComponents(
   // overrides its inner content while keeping the Radix shell + canvas rendering.
   function TidyContextMenu() {
     const editor = useEditor();
+    const [directionSubmenuOpen, setDirectionSubmenuOpen] = useState(false);
     const selectedCount = useValue(
       "selectedCount",
       () => editor.getSelectedShapeIds().length,
@@ -95,33 +97,50 @@ export function buildTldrawComponents(
             </button>
           </div>
         )}
-        {/* DRW-150: Direction submenu — visible only when a schema-container is selected */}
+        {/* DRW-166: Direction submenu — visible only when a schema-container is selected */}
         {hasContainer && onSetContainerDirection && (
           <div className="tlui-menu__group">
+            {/* Submenu trigger */}
             <button
               type="button"
-              className="tlui-button tlui-button__menu"
+              className="tlui-button tlui-button__menu tlui-menu__submenu__trigger"
               onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => onSetContainerDirection("TB")}
+              onClick={() => setDirectionSubmenuOpen((v) => !v)}
             >
-              <span className="tlui-button__label">Direction: Top → Bottom</span>
+              <span className="tlui-button__label">Direction</span>
+              <span style={{ marginLeft: "auto", opacity: 0.6, fontSize: "0.75em" }}>
+                {directionSubmenuOpen ? "▼" : "▶"}
+              </span>
             </button>
-            <button
-              type="button"
-              className="tlui-button tlui-button__menu"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => onSetContainerDirection("LR")}
-            >
-              <span className="tlui-button__label">Direction: Left → Right</span>
-            </button>
-            <button
-              type="button"
-              className="tlui-button tlui-button__menu"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => onSetContainerDirection("custom")}
-            >
-              <span className="tlui-button__label">Direction: Custom (manual)</span>
-            </button>
+            {/* Inline submenu items — rendered in-place when open */}
+            {directionSubmenuOpen && (
+              <div
+                style={{ paddingLeft: 12 }}
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                {(
+                  [
+                    ["TB", "Top → Bottom"],
+                    ["LR", "Left → Right"],
+                    ["BT", "Bottom → Top"],
+                    ["RL", "Right → Left"],
+                    ["custom", "Custom (manual)"],
+                  ] as [SchemaContainerDirection, string][]
+                ).map(([dir, label]) => (
+                  <button
+                    key={dir}
+                    type="button"
+                    className="tlui-button tlui-button__menu"
+                    onClick={() => {
+                      onSetContainerDirection(dir);
+                      setDirectionSubmenuOpen(false);
+                    }}
+                  >
+                    <span className="tlui-button__label">{label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </DefaultContextMenu>

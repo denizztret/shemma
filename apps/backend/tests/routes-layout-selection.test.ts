@@ -65,6 +65,28 @@ function makeFrame(
   } as TLRecord;
 }
 
+function makeSchemaContainer(
+  id: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  name: string,
+  direction: string,
+  parentId = "page:page",
+): TLRecord {
+  return {
+    id,
+    typeName: "shape",
+    type: "schema-container",
+    x,
+    y,
+    parentId,
+    props: { w, h, name, direction, titlePosition: "inside", color: "grey", fill: "semi", dash: "dashed" },
+    meta: { didrawName: name },
+  } as TLRecord;
+}
+
 async function postLayoutSelection(
   app: ReturnType<typeof makeApp>["app"],
   body: unknown,
@@ -655,6 +677,116 @@ describe("POST /api/agent/layout-selection", () => {
     // At least one service moved
     const anyMoved = s1.x !== 0 || s1.y !== 0 || s2.x !== 2 || s2.y !== 0;
     expect(anyMoved).toBe(true);
+  });
+
+  // ============================================================
+  // DRW-166: directions field applies prop update before layout
+  // ============================================================
+  test("DRW-166: directions field applies prop update before layout", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const room = "test-drw166-directions";
+    const r = await rooms.get(room);
+    const snap = emptySnapshot();
+
+    snap.store["shape:container1"] = makeSchemaContainer(
+      "shape:container1", 100, 100, 300, 200, "container1", "TB",
+    );
+    snap.store["shape:child1"] = makeShape("shape:child1", 0, 0, "child1", {}, {}, "shape:container1");
+    snap.store["shape:child2"] = makeShape("shape:child2", 5, 0, "child2", {}, {}, "shape:container1");
+    r.store = snap;
+    r.version = 1;
+
+    const res = await postLayoutSelection(
+      app,
+      {
+        ids: ["shape:container1"],
+        directions: { "shape:container1": "LR" },
+        scope: "self",
+      },
+      room,
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+
+    const rAfter = await rooms.get(room);
+    const container = rAfter.store.store["shape:container1"] as { props: { direction: string } };
+    expect(container.props.direction).toBe("LR");
+  });
+
+  // ============================================================
+  // DRW-167: scope=self preserves parent frame bounds
+  // ============================================================
+  test("DRW-167: scope=self preserves parent frame bounds", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const room = "test-drw167-scope-self";
+    const r = await rooms.get(room);
+    const snap = emptySnapshot();
+
+    // Frame at (0, 0) with 800x600
+    snap.store["shape:frame1"] = makeFrame("shape:frame1", 0, 0, 800, 600, "frame1");
+    // Schema-container inside frame at (100, 100) with 200x150
+    snap.store["shape:sc1"] = makeSchemaContainer(
+      "shape:sc1", 100, 100, 200, 150, "sc1", "TB", "shape:frame1",
+    );
+    // Children of the schema-container (clustered)
+    snap.store["shape:s1"] = makeShape("shape:s1", 0, 0, "s1", {}, {}, "shape:sc1");
+    snap.store["shape:s2"] = makeShape("shape:s2", 2, 0, "s2", {}, {}, "shape:sc1");
+    r.store = snap;
+    r.version = 1;
+
+    const res = await postLayoutSelection(
+      app,
+      {
+        ids: ["shape:sc1"],
+        directions: { "shape:sc1": "LR" },
+        scope: "self",
+      },
+      room,
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+
+    const rAfter = await rooms.get(room);
+    // Frame bounds must be unchanged
+    const frame = rAfter.store.store["shape:frame1"] as { x: number; y: number; props: { w: number; h: number } };
+    expect(frame.x).toBe(0);
+    expect(frame.y).toBe(0);
+    expect(frame.props.w).toBe(800);
+    expect(frame.props.h).toBe(600);
+  });
+
+  // ============================================================
+  // DRW-166: directions on non-existent container goes to unresolved
+  // ============================================================
+  test("DRW-166: directions on non-existent container goes to unresolved", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const room = "test-drw166-unresolved";
+    const r = await rooms.get(room);
+    const snap = emptySnapshot();
+
+    // A valid shape so ids is not empty
+    snap.store["shape:valid"] = makeShape("shape:valid", 0, 0, "valid");
+    snap.store["shape:valid2"] = makeShape("shape:valid2", 5, 0, "valid2");
+    r.store = snap;
+
+    const res = await postLayoutSelection(
+      app,
+      {
+        ids: ["shape:valid", "shape:valid2"],
+        directions: { "shape:bogus": "LR" },
+        scope: "self",
+      },
+      room,
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; unresolved?: string[] };
+    expect(body.ok).toBe(true);
+    expect(body.unresolved).toContain("shape:bogus");
   });
 
   // DRW-099: hierarchical multi-pass — два frame'а с детьми + cross-compound edge.
