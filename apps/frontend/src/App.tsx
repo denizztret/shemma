@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type Editor, type TLGeoShape, Tldraw } from "tldraw";
+import { SchemaContainerShapeUtil } from "./shapes/schema-container";
 import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
@@ -674,6 +675,7 @@ export function App({
         // Phase 3.0: NO persistenceKey. Backend TLStoreSnapshot — единственный
         // источник правды; IndexedDB persistence создавал split-brain между
         // tab'ами и бэкендом (см. spec §3.x). Refresh → /api/state → loadSnapshot.
+        shapeUtils={[SchemaContainerShapeUtil]}
         onMount={(ed) => {
           setEditor(ed);
           if (import.meta.env.DEV) {
