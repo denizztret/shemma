@@ -182,15 +182,56 @@ function normalizeDirection(d: "TB" | "LR" | "BT" | "RL" | undefined): "TB" | "L
   return "TB";
 }
 
+/**
+ * Maps a CSS stroke-dasharray string to the nearest tldraw dash style.
+ *
+ * Returns undefined when input is falsy or unparseable (defensive — caller keeps its default).
+ *
+ * Rules:
+ *   "0" / "none" / all-zeros → "solid"
+ *   First number ≤ 2 (very short dash like "1,4" or "2 2") → "dotted"
+ *   Any other non-empty pattern → "dashed"
+ */
+export function mermaidDashToTldraw(
+  strokeDasharray: string | undefined,
+): "solid" | "dashed" | "dotted" | undefined {
+  if (!strokeDasharray) return undefined;
+
+  const raw = strokeDasharray.trim();
+  if (!raw) return undefined;
+
+  // Handle keyword "none"
+  if (raw.toLowerCase() === "none") return "solid";
+
+  // Split on comma or whitespace tokens
+  const tokens = raw.split(/[\s,]+/).filter(Boolean);
+  if (tokens.length === 0) return undefined;
+
+  const nums = tokens.map(Number);
+  // If any token is not a number, return undefined (unparseable)
+  if (nums.some((n) => Number.isNaN(n))) return undefined;
+
+  // All zeros → solid (e.g. "0" or "0 0")
+  if (nums.every((n) => n === 0)) return "solid";
+
+  // First value ≤ 2 → dotted (short dashes like "1,4" / "2,2")
+  if (nums[0]! <= 2) return "dotted";
+
+  return "dashed";
+}
+
 function resolveSubgraphStyle(s: import("../domain/schema/mermaid-parser").MermaidNodeStyle): {
   color?: string;
   fill?: "semi";
+  dash?: "draw" | "dashed" | "dotted" | "solid";
 } {
-  const out: { color?: string; fill?: "semi" } = {};
+  const out: { color?: string; fill?: "semi"; dash?: "draw" | "dashed" | "dotted" | "solid" } = {};
   // Priority: stroke first (mermaid stroke = border, tldraw color = border).
   if (s.stroke) out.color = hexToTldrawColor(s.stroke);
   else if (s.fill) out.color = hexToTldrawColor(s.fill);
   if (s.fill) out.fill = "semi";
+  const dash = mermaidDashToTldraw(s.strokeDasharray);
+  if (dash !== undefined) out.dash = dash;
   return out;
 }
 
@@ -227,7 +268,7 @@ function makeSchemaContainerShape(opts: {
       titlePosition: "inside",
       color: styleProps.color ?? "grey",
       fill: styleProps.fill ?? "semi",
-      dash: "dashed",
+      dash: styleProps.dash ?? "dashed",
     },
     meta: {
       didrawSubgraph: true,
