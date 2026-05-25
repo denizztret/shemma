@@ -1,3 +1,15 @@
+## Unreleased
+
+### Fixed
+
+- **DRW-171** — Текст в новых shapes из mermaid-import / AI-driven WS обрезался: shapes приходили через `store.put` (snapshot load + WS `mergeRemoteChanges`), минуя `ShapeUtil.onBeforeCreate` где tldraw мерит richText через `editor.textMeasure` и рассчитывает `growY` / расширяет `w`. Симптом: малейший resize-touch мгновенно "схлопывал" фигуру до минимального размера для текста, потому что user-driven resize шёл через `editor.updateShape` → onBeforeUpdate срабатывал. Существовавший workaround DRW-077 (`triggerGrowY` → no-op `editor.updateShape({...same props})`) не работал в реальности: `GeoShapeUtil.onBeforeUpdate` early-returns когда `richText/font/size` не изменились (`isEqual` check в tldraw source), так что re-measure не запускался. Fix: функция вынесена в `apps/frontend/src/canvas/auto-size.ts` как `triggerAutoSize` с whitelist'ом `geo | note | text` и **переиспользованием `util.onBeforeCreate(shape)` напрямую** — это runs measure regardless of diff и возвращает props с правильным `growY/w`, который применяется через `updateShape`. Verified live: mermaid-import с длинными labels помещает весь текст без touch-resize.
+
+### Tests
+
+- **DRW-171:** 9 unit (`auto-size.test.ts` — empty / geo / note / text / non-autosize types / ids-filter / mixed / empty ids set). Frontend 278 (+9), backend 1817 без изменений = **2095 tests, 0 fail**.
+
+---
+
 ## 0.27.0 — 2026-05-25 — DRW-150 follow-up cluster (DRW-165..169)
 
 ### Added
