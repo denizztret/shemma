@@ -36,6 +36,7 @@ import {
 import type { StoreChangeBatch } from "../store-types";
 import type { TLRecord } from "../store-types";
 import type { RoomState, StoreChangeBus } from "../types";
+import { runAndBroadcastAnchors } from "./_anchors";
 import { bundleForRequest } from "./_space-context";
 
 // ---- LRU cache (паттерн из routes/domain.ts:24-53) ----
@@ -864,6 +865,9 @@ export function schemaRoutes(bus: StoreChangeBus) {
         // Layout failure is non-fatal; shapes remain at (0,0).
       }
 
+      // DRW-172: post-layout anchor distribution (no-op if idempotent).
+      runAndBroadcastAnchors(room, bus, spaceId, id, scheduleSave);
+
       return c.json({
         ok: true,
         frameId,
@@ -1029,6 +1033,9 @@ export function schemaRoutes(bus: StoreChangeBus) {
       } catch {
         // Layout failure is non-fatal; shapes remain at their computed positions.
       }
+
+      // DRW-172: post-layout anchor distribution.
+      runAndBroadcastAnchors(room, bus, spaceId, id, scheduleSave);
 
       const resp: SchemaPatchResponse = {
         ok: true,
@@ -1373,6 +1380,9 @@ export function schemaRoutes(bus: StoreChangeBus) {
       } catch {
         // Layout failure non-fatal; measure batch is already persisted.
       }
+
+      // DRW-172: post-layout anchor distribution.
+      runAndBroadcastAnchors(room, bus, spaceId, id, scheduleSave);
 
       return c.json({
         ok: true,

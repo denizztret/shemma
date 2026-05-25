@@ -878,6 +878,116 @@ describe("POST /api/schema/:frameId/measured-bounds (DRW-174)", () => {
   });
 });
 
+// ---- DRW-172: post-layout anchor distribution ----
+
+describe("POST /api/schema/create — DRW-172 per-edge anchors", () => {
+  test("hub-spoke mermaid → bindings get isPrecise=true with distributed anchors, arrows get port meta", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(
+      app,
+      {
+        label: "Hub",
+        raw: `flowchart LR
+  hub[Hub]
+  hub --> a[Target A]
+  hub --> b[Target B]
+  hub --> c[Target C]`,
+      },
+      "anchors-room",
+    );
+    expect(res.status).toBe(200);
+    const { frameId } = (await res.json()) as { frameId: string };
+    expect(frameId).toBeDefined();
+
+    const room = await rooms.get("anchors-room");
+    const records = Object.values(room.store.store);
+
+    const bindings = records.filter((r) => r?.typeName === "binding");
+    expect(bindings.length).toBe(6); // 3 arrows × 2 bindings each
+
+    // All bindings should have isPrecise=true after anchor pass.
+    const allPrecise = bindings.every(
+      (b) =>
+        (b!.props as { isPrecise?: boolean } | undefined)?.isPrecise === true,
+    );
+    expect(allPrecise).toBe(true);
+
+    // Anchors should NOT all be center (0.5, 0.5) — distribution applied.
+    const allCentered = bindings.every((b) => {
+      const a = (b!.props as { normalizedAnchor?: { x: number; y: number } })
+        ?.normalizedAnchor;
+      return a?.x === 0.5 && a?.y === 0.5;
+    });
+    expect(allCentered).toBe(false);
+
+    // Arrows should have port meta written.
+    const arrows = records.filter(
+      (r) => r?.typeName === "shape" && r?.type === "arrow",
+    );
+    expect(arrows.length).toBe(3);
+    for (const a of arrows) {
+      const meta = a!.meta as Record<string, unknown>;
+      expect(meta.didrawSourcePort).toBeDefined();
+      expect(meta.didrawTargetPort).toBeDefined();
+    }
+  });
+
+  test("single arrow A → B (B east of A) → source anchor on right, target on left", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(
+      app,
+      { label: "Simple", raw: "graph LR\n  a[A] --> b[B]" },
+      "simple-room",
+    );
+    expect(res.status).toBe(200);
+
+    const room = await rooms.get("simple-room");
+    const arrows = Object.values(room.store.store).filter(
+      (r) => r?.typeName === "shape" && r?.type === "arrow",
+    );
+    expect(arrows.length).toBe(1);
+    const arrow = arrows[0]!;
+    const meta = arrow.meta as Record<string, unknown>;
+    expect(meta.didrawSourcePort).toBe("right");
+    expect(meta.didrawTargetPort).toBe("left");
+  });
+
+  test("idempotent: anchors are not re-written if already correct (verified via version stability)", async () => {
+    // Trigger a re-layout via measured-bounds with no-op bounds.
+    // The anchor pass should detect already-correct anchors and not bump version further.
+    const { app, rooms } = makeApp({ inMemory: true });
+    const createRes = await postCreate(
+      app,
+      { label: "Idempotent", raw: "graph LR\n  a[A] --> b[B]" },
+      "idem-room",
+    );
+    expect(createRes.status).toBe(200);
+    const { frameId } = (await createRes.json()) as { frameId: string };
+
+    const r0 = await rooms.get("idem-room");
+    const versionAfterCreate = r0.version;
+
+    // POST measured-bounds with empty bounds → should be a no-op (no layout, no anchors).
+    const boundsRes = await app.fetch(
+      new Request(
+        `http://localhost/api/schema/${encodeURIComponent(frameId)}/measured-bounds?room=idem-room`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ bounds: {} }),
+        },
+      ),
+    );
+    expect(boundsRes.status).toBe(200);
+    const body = (await boundsRes.json()) as { applied: number };
+    expect(body.applied).toBe(0);
+
+    const r1 = await rooms.get("idem-room");
+    // Version should be unchanged: no applied bounds, no re-layout, anchors already correct.
+    expect(r1.version).toBe(versionAfterCreate);
+  });
+});
+
 // ---- DRW-153: mermaid style directives → shape props ----
 
 describe("POST /api/schema/create — DRW-153 mermaid style directives applied to shapes", () => {

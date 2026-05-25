@@ -18,6 +18,7 @@
 import { Hono } from "hono";
 import { config } from "../config";
 import { runLayout } from "../domain/layout";
+import { runAndBroadcastAnchors } from "./_anchors";
 import { pushOpLog, resolveRoomId } from "../rooms";
 import { applyStoreChanges, rebuildDidrawIndex } from "../store-ops";
 import type { TLRecord } from "../store-types";
@@ -269,6 +270,9 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
       version: r.version,
       layoutAction: true,
     });
+
+    // DRW-172: post-layout anchor distribution.
+    runAndBroadcastAnchors(r, bus, space.id, id, scheduleSave);
 
     return c.json({
       ok: true,
