@@ -5,104 +5,151 @@ import { triggerAutoSize } from "./auto-size";
 type MockShape = { id: string; type: string; props: Record<string, unknown> };
 type Update = { id: string; type: string; props: Record<string, unknown> };
 
-function makeMockEditor(shapes: MockShape[]): { editor: Editor; updates: Update[] } {
+interface MockOpts {
+  shapes: MockShape[];
+  // Per-type onBeforeCreate stub. Returning undefined = no change.
+  onBeforeCreate?: Record<string, (s: MockShape) => MockShape | undefined>;
+}
+
+function makeMockEditor(opts: MockOpts): {
+  editor: Editor;
+  updates: Update[];
+  measured: Array<{ id: string; type: string }>;
+} {
   const updates: Update[] = [];
+  const measured: Array<{ id: string; type: string }> = [];
   const editor = {
-    getCurrentPageShapes: () => shapes,
+    getCurrentPageShapes: () => opts.shapes,
     run: (fn: () => void) => fn(),
     updateShape: (u: Update) => {
       updates.push(u);
     },
+    getShapeUtil: (type: string) => ({
+      onBeforeCreate: (s: MockShape) => {
+        measured.push({ id: s.id, type: s.type });
+        return opts.onBeforeCreate?.[type]?.(s);
+      },
+    }),
   } as unknown as Editor;
-  return { editor, updates };
+  return { editor, updates, measured };
 }
 
 describe("triggerAutoSize", () => {
   test("no-op when no shapes on page", () => {
-    const { editor, updates } = makeMockEditor([]);
+    const { editor, updates, measured } = makeMockEditor({ shapes: [] });
     triggerAutoSize(editor);
+    expect(updates).toEqual([]);
+    expect(measured).toEqual([]);
+  });
+
+  test("calls onBeforeCreate for geo and applies growY when returned", () => {
+    const { editor, updates, measured } = makeMockEditor({
+      shapes: [{ id: "shape:a", type: "geo", props: { w: 220, h: 80, growY: 0 } }],
+      onBeforeCreate: {
+        geo: (s) => ({ ...s, props: { ...s.props, growY: 130 } }),
+      },
+    });
+    triggerAutoSize(editor);
+    expect(measured).toEqual([{ id: "shape:a", type: "geo" }]);
+    expect(updates).toHaveLength(1);
+    expect(updates[0]!.props.growY).toBe(130);
+  });
+
+  test("skips updateShape when onBeforeCreate returns undefined (no change)", () => {
+    const { editor, updates, measured } = makeMockEditor({
+      shapes: [{ id: "shape:a", type: "geo", props: { w: 220, h: 80, growY: 0 } }],
+      onBeforeCreate: { geo: () => undefined },
+    });
+    triggerAutoSize(editor);
+    expect(measured).toHaveLength(1);
     expect(updates).toEqual([]);
   });
 
-  test("triggers updateShape for geo with original props", () => {
-    const props = { w: 100, h: 50, growY: 0 };
-    const { editor, updates } = makeMockEditor([
-      { id: "shape:a", type: "geo", props },
-    ]);
+  test("re-measures note shapes", () => {
+    const { editor, updates, measured } = makeMockEditor({
+      shapes: [{ id: "shape:b", type: "note", props: { growY: 0 } }],
+      onBeforeCreate: {
+        note: (s) => ({ ...s, props: { ...s.props, growY: 40 } }),
+      },
+    });
     triggerAutoSize(editor);
+    expect(measured).toEqual([{ id: "shape:b", type: "note" }]);
     expect(updates).toHaveLength(1);
-    expect(updates[0]).toEqual({ id: "shape:a", type: "geo", props });
+    expect(updates[0]!.props.growY).toBe(40);
   });
 
-  test("triggers updateShape for note", () => {
-    const { editor, updates } = makeMockEditor([
-      { id: "shape:b", type: "note", props: { growY: 0 } },
-    ]);
+  test("re-measures text shapes", () => {
+    const { editor, updates, measured } = makeMockEditor({
+      shapes: [{ id: "shape:c", type: "text", props: { autoSize: true, w: 8 } }],
+      onBeforeCreate: {
+        text: (s) => ({ ...s, props: { ...s.props, w: 320 } }),
+      },
+    });
     triggerAutoSize(editor);
+    expect(measured).toEqual([{ id: "shape:c", type: "text" }]);
     expect(updates).toHaveLength(1);
-    expect(updates[0]!.type).toBe("note");
-    expect(updates[0]!.id).toBe("shape:b");
-  });
-
-  test("triggers updateShape for text", () => {
-    const { editor, updates } = makeMockEditor([
-      { id: "shape:c", type: "text", props: { autoSize: true } },
-    ]);
-    triggerAutoSize(editor);
-    expect(updates).toHaveLength(1);
-    expect(updates[0]!.type).toBe("text");
+    expect(updates[0]!.props.w).toBe(320);
   });
 
   test("ignores non-autosize types (group, frame, arrow, custom)", () => {
-    const { editor, updates } = makeMockEditor([
-      { id: "shape:d", type: "group", props: {} },
-      { id: "shape:e", type: "frame", props: {} },
-      { id: "shape:f", type: "schema-container", props: {} },
-      { id: "shape:g", type: "arrow", props: {} },
-    ]);
+    const { editor, updates, measured } = makeMockEditor({
+      shapes: [
+        { id: "shape:d", type: "group", props: {} },
+        { id: "shape:e", type: "frame", props: {} },
+        { id: "shape:f", type: "schema-container", props: {} },
+        { id: "shape:g", type: "arrow", props: {} },
+      ],
+    });
     triggerAutoSize(editor);
     expect(updates).toEqual([]);
+    expect(measured).toEqual([]);
   });
 
   test("filters by ids set when provided", () => {
-    const { editor, updates } = makeMockEditor([
-      { id: "shape:a", type: "geo", props: {} },
-      { id: "shape:b", type: "note", props: {} },
-      { id: "shape:c", type: "text", props: {} },
-    ]);
+    const { editor, updates, measured } = makeMockEditor({
+      shapes: [
+        { id: "shape:a", type: "geo", props: {} },
+        { id: "shape:b", type: "note", props: {} },
+        { id: "shape:c", type: "text", props: {} },
+      ],
+      onBeforeCreate: {
+        geo: (s) => ({ ...s, props: { ...s.props, growY: 1 } }),
+        note: (s) => ({ ...s, props: { ...s.props, growY: 1 } }),
+        text: (s) => ({ ...s, props: { ...s.props, w: 1 } }),
+      },
+    });
     triggerAutoSize(editor, new Set(["shape:b"]));
+    expect(measured).toEqual([{ id: "shape:b", type: "note" }]);
     expect(updates).toHaveLength(1);
     expect(updates[0]!.id).toBe("shape:b");
   });
 
-  test("ids filter excludes shapes not in the set even if type matches", () => {
-    const { editor, updates } = makeMockEditor([
-      { id: "shape:a", type: "geo", props: {} },
-      { id: "shape:b", type: "geo", props: {} },
-    ]);
-    triggerAutoSize(editor, new Set(["shape:a"]));
-    expect(updates).toHaveLength(1);
-    expect(updates[0]!.id).toBe("shape:a");
-  });
-
-  test("mixed shapes: only autosize-capable types are triggered", () => {
-    const { editor, updates } = makeMockEditor([
-      { id: "shape:a", type: "geo", props: {} },
-      { id: "shape:b", type: "note", props: {} },
-      { id: "shape:c", type: "text", props: {} },
-      { id: "shape:d", type: "group", props: {} },
-      { id: "shape:e", type: "arrow", props: {} },
-    ]);
+  test("mixed shapes: only autosize-capable types are measured", () => {
+    const { editor, updates, measured } = makeMockEditor({
+      shapes: [
+        { id: "shape:a", type: "geo", props: {} },
+        { id: "shape:b", type: "note", props: {} },
+        { id: "shape:c", type: "text", props: {} },
+        { id: "shape:d", type: "group", props: {} },
+        { id: "shape:e", type: "arrow", props: {} },
+      ],
+      onBeforeCreate: {
+        geo: (s) => ({ ...s, props: { ...s.props, growY: 1 } }),
+        note: (s) => ({ ...s, props: { ...s.props, growY: 1 } }),
+        text: (s) => ({ ...s, props: { ...s.props, w: 1 } }),
+      },
+    });
     triggerAutoSize(editor);
+    expect(measured.map((m) => m.type).sort()).toEqual(["geo", "note", "text"]);
     expect(updates).toHaveLength(3);
-    expect(updates.map((u) => u.type).sort()).toEqual(["geo", "note", "text"]);
   });
 
-  test("empty ids set yields no updates even when shapes exist", () => {
-    const { editor, updates } = makeMockEditor([
-      { id: "shape:a", type: "geo", props: {} },
-    ]);
+  test("empty ids set yields no measurements", () => {
+    const { editor, updates, measured } = makeMockEditor({
+      shapes: [{ id: "shape:a", type: "geo", props: {} }],
+    });
     triggerAutoSize(editor, new Set());
     expect(updates).toEqual([]);
+    expect(measured).toEqual([]);
   });
 });
