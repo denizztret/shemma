@@ -125,6 +125,8 @@ export function App({
   const onExportSelection = useRef<((ids: string[]) => void) | null>(null);
   // DRW-150: schema-container direction callback — needs live editor ref, set in onMount.
   const onSetContainerDirection = useRef<((direction: SchemaContainerDirection) => void) | null>(null);
+  // DRW-150: disposer for registerAutoFlipDirection — prevents listener accumulation on HMR/room-switch.
+  const autoFlipDisposerRef = useRef<(() => void) | null>(null);
   onExportSelection.current = (ids: string[]) => {
     if (ids.length === 0) return;
     setExportOpen(true);
@@ -139,6 +141,14 @@ export function App({
       }),
     [space, room],
   );
+
+  // DRW-150: cleanup auto-flip listener on unmount
+  useEffect(() => {
+    return () => {
+      autoFlipDisposerRef.current?.();
+      autoFlipDisposerRef.current = null;
+    };
+  }, []);
 
   // ⌘K / ⌘M / Esc keyboard handler.
   useEffect(() => {
@@ -686,7 +696,9 @@ export function App({
         shapeUtils={[SchemaContainerShapeUtil]}
         onMount={(ed) => {
           setEditor(ed);
-          registerAutoFlipDirection(ed); // DRW-150: auto-flip direction='custom' on manual child drag
+          // DRW-150: store disposer to prevent listener accumulation on HMR/room-switch
+          autoFlipDisposerRef.current?.();
+          autoFlipDisposerRef.current = registerAutoFlipDirection(ed);
           // DRW-150: wire direction callback for context-menu (requires live editor)
           onSetContainerDirection.current = (direction) =>
             setSchemaContainerDirection(ed, direction);

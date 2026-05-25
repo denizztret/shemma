@@ -41,11 +41,11 @@ async function triggerLayoutSelection(containerIds: string[]): Promise<void> {
   const room = url.searchParams.get("room") ?? "default";
   try {
     await fetch(
-      `/api/layout/selection?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room)}`,
+      `/api/agent/layout-selection?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room)}`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ affectedIds: containerIds }),
+        body: JSON.stringify({ ids: containerIds }),
       },
     );
   } catch {
