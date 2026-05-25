@@ -173,7 +173,70 @@ function makeArrowBindingsLocal(
   return { start: mk("start", fromShapeId), end: mk("end", toShapeId) };
 }
 
-// ---- Build boundary (group) shape for subgraph ----
+// ---- Direction normalization + style resolver for schema-container ----
+
+function normalizeDirection(d: "TB" | "LR" | "BT" | "RL" | undefined): "TB" | "LR" {
+  if (d === "BT") return "TB";
+  if (d === "RL") return "LR";
+  if (d === "LR") return "LR";
+  return "TB";
+}
+
+function resolveSubgraphStyle(s: import("../domain/schema/mermaid-parser").MermaidNodeStyle): {
+  color?: string;
+  fill?: "semi";
+} {
+  const out: { color?: string; fill?: "semi" } = {};
+  // Priority: stroke first (mermaid stroke = border, tldraw color = border).
+  if (s.stroke) out.color = hexToTldrawColor(s.stroke);
+  else if (s.fill) out.color = hexToTldrawColor(s.fill);
+  if (s.fill) out.fill = "semi";
+  return out;
+}
+
+// ---- Build schema-container shape for subgraph (DRW-150) ----
+
+function makeSchemaContainerShape(opts: {
+  id?: string;
+  name: string;
+  parentId: string;
+  direction?: "TB" | "LR" | "BT" | "RL";
+  style?: import("../domain/schema/mermaid-parser").MermaidNodeStyle;
+}): TLRecord {
+  const id = opts.id ?? childShapeId();
+  const styleProps = opts.style ? resolveSubgraphStyle(opts.style) : {};
+  // Strip surrounding quotes from label (mermaid `["Label"]` syntax preserves them).
+  const name = opts.name.replace(/^["']|["']$/g, "");
+  return {
+    id,
+    typeName: "shape",
+    type: "schema-container",
+    x: 0,
+    y: 0,
+    parentId: opts.parentId,
+    index: "a1",
+    isLocked: false,
+    opacity: 1,
+    rotation: 0,
+    props: {
+      w: 300,
+      h: 200,
+      name,
+      direction: normalizeDirection(opts.direction),
+      titlePosition: "inside",
+      color: styleProps.color ?? "grey",
+      fill: styleProps.fill ?? "semi",
+      dash: "dashed",
+    },
+    meta: {
+      didrawSubgraph: true,
+      didrawSubgraphName: name,
+      didrawSchemaParent: opts.parentId,
+    },
+  } as TLRecord;
+}
+
+// ---- Build boundary (group) shape for subgraph (legacy, kept for backwards-compat) ----
 
 function makeGroupBoundaryShape(opts: {
   id?: string;
@@ -523,6 +586,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
       let direction: MermaidDirection = "LR";
 
       let nodeStylesByNodeId: Map<NodeId, import("../domain/schema/mermaid-parser").MermaidNodeStyle> = new Map();
+      let subgraphStyles: Map<string, import("../domain/schema/mermaid-parser").MermaidNodeStyle> = new Map();
 
       if (body.raw !== undefined) {
         // Mode A: parse mermaid RAW.
@@ -560,6 +624,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
         parsedActions = parseResult.actions;
         direction = parseResult.direction;
         nodeStylesByNodeId = parseResult.nodeStylesByNodeId;
+        subgraphStyles = parseResult.subgraphStyles;
       } else if (body.actions !== undefined) {
         // Mode B: caller-provided actions.
         if (!Array.isArray(body.actions)) {
@@ -629,11 +694,12 @@ export function schemaRoutes(bus: StoreChangeBus) {
         if (!action.name) continue;
         const groupShapeId = groupActionToShapeId.get(action.name);
         if (!groupShapeId) continue;
-        const groupShape = makeGroupBoundaryShape({
+        const groupShape = makeSchemaContainerShape({
           id: groupShapeId,
           name: action.label ?? action.name,
           parentId: frameId,
           direction: action.direction,
+          style: subgraphStyles.get(action.name),
         });
         batch.added[groupShapeId] = groupShape;
       }
