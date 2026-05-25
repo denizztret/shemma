@@ -14,6 +14,14 @@ import type {
 // RecordProps is re-exported via tldraw → @tldraw/editor → @tldraw/tlschema
 import type { RecordProps } from "tldraw";
 
+// Module augmentation: register schema-container in the global tldraw shape map
+// so that SchemaContainerShape satisfies the TLBaseBoxShape constraint.
+declare module "tldraw" {
+  interface TLGlobalShapePropsMap {
+    "schema-container": SchemaContainerProps;
+  }
+}
+
 export type SchemaContainerDirection = "TB" | "LR" | "custom";
 export type SchemaContainerTitlePosition = "inside" | "outside";
 
