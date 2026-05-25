@@ -50,6 +50,22 @@ const MERMAID_DIR_TO_ELK: Record<string, string> = {
   RL: "LEFT",
 };
 
+function readContainerDirection(container: ShapeRec): string | undefined {
+  if (container.type === "schema-container") {
+    const d = (container.props as Record<string, unknown> | undefined)?.direction;
+    if (d === "custom") return undefined;
+    if (typeof d === "string") return MERMAID_DIR_TO_ELK[d];
+  }
+  const subgraphDir = container.meta?.didrawSubgraphDirection;
+  if (typeof subgraphDir === "string") return MERMAID_DIR_TO_ELK[subgraphDir];
+  return undefined;
+}
+
+function isCustomDirection(container: ShapeRec): boolean {
+  if (container.type !== "schema-container") return false;
+  return (container.props as Record<string, unknown> | undefined)?.direction === "custom";
+}
+
 // DRW-003 displacement constants (preserved from Phase 2.x layout.ts).
 const COLLISION_SLACK = 10;
 const NODE_SPACING_X = 40;
@@ -110,6 +126,7 @@ function isLayoutCandidate(r: ShapeRec): boolean {
 // пишут оба поля, но старые комнаты могут содержать только didrawSubgraph).
 function isContainerShape(r: ShapeRec): boolean {
   if (r.type === "frame") return true;
+  if (r.type === "schema-container") return true;
   if (r.type === "geo" && r.meta?.role === "boundary") return true;
   if (r.type === "geo" && r.meta?.didrawSubgraph === true) return true;
   return false;
@@ -482,9 +499,9 @@ async function runPassA(
   allShapes: ShapeRec[],
   filterToIds: Set<string>,
 ): Promise<ContainerPassResult | null> {
-  // DRW-152: override ELK direction if container has meta.didrawSubgraphDirection.
-  const subgraphDir = container.meta?.didrawSubgraphDirection;
-  const elkDir = typeof subgraphDir === "string" ? MERMAID_DIR_TO_ELK[subgraphDir] : undefined;
+  // DRW-152/DRW-150: override ELK direction if container has didrawSubgraphDirection (legacy)
+  // or schema-container props.direction (new). custom direction → undefined (no override).
+  const elkDir = readContainerDirection(container);
   const containerOpts = elkDir !== undefined
     ? { ...opts, "elk.direction": elkDir }
     : opts;
@@ -498,6 +515,7 @@ async function runPassA(
   // и запустим Pass A рекурсивно. Container collectShapes уже отфильтровал arrows.
   const nestedResults = new Map<string, ContainerPassResult>();
   for (const cc of childContainers) {
+    if (isCustomDirection(cc)) continue; // DRW-150: custom direction → preserve children positions
     const ccSelectedChildren = allShapes.filter(
       (s) => s.parentId === cc.id && !isContainerShape(s) && filterToIds.has(s.id),
     );
@@ -719,6 +737,7 @@ async function runLayoutSubgraph(
   for (const anchorId of topLevelAnchorIds) {
     const anchor = frameById.get(anchorId);
     if (!anchor) continue;
+    if (isCustomDirection(anchor)) continue; // DRW-150: custom direction → preserve children positions
 
     // Direct filtered children + nested anchor frames as direct children.
     const directAnchorChildren = frames.filter(
@@ -733,6 +752,7 @@ async function runLayoutSubgraph(
 
   // Process selected containers that have selected children (not inside anchor/other selected)
   for (const sc of topLevelSelectedContainers) {
+    if (isCustomDirection(sc)) continue; // DRW-150: custom direction → preserve children positions
     const directFilteredChildren = directSelectedChildrenOf(sc.id);
     if (directFilteredChildren.length === 0) continue;
 
@@ -949,6 +969,9 @@ export async function runLayout(
   // Subgraph mode: scope="affected" with affectedIds provided → DRW-091/092/099.
   // DRW-149 GAP-1: mutable so we can expand containers below.
   let affectedIds = hint.affectedIds;
+  // DRW-150: scope='all' (Cmd+Shift+L) overrides custom direction containers.
+  // Per user expectation — global layout request implies "re-layout everything".
+  // Per-container preserve (custom direction) applies only in scope='affected' path.
   const isSubgraphMode = fullHint.scope === "affected" && affectedIds && affectedIds.size > 0;
 
   // Pin set: only meta.pinned === true shapes (DRW-003).
