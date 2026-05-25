@@ -36,6 +36,21 @@ tldraw 5.x frontend + Bun backend (singleton daemon на `:8787` release+debug, 
 - НЕ использовать `v0.x.y` — это устаревший формат. Старые `v0.1.0` / `v0.2.0` / `v0.3.0` остаются как legacy; решение про переименование — отдельно.
 - Tag ставится локально на `main` после release-коммита.
 
+**Когда ставить tag (release triggers):**
+
+| Триггер | Релиз? |
+|---|---|
+| Завершена фаза (MINOR bump, например `0.27.0` → `0.28.0`) | да |
+| Накопилось ≥3 fix'ов **и** user даёт explicit signal "релиз" (PATCH bump, `0.27.0` → `0.27.1`) | да |
+| Critical hotfix (regression ломает работу) | да (PATCH сразу) |
+| Merge одной feature/fix ветки в `main` | **нет** |
+| Завершён один Backlog task | **нет** |
+| Прошёл интервал времени / scheduled cadence | **нет** |
+
+Между релизами версия определяется runtime через `git describe --tags --dirty` → формат `0.27.0-3-gabc1234[-dirty]`. Это и есть source of truth для dev/debug сборки. Промежуточные теги НЕ нужны.
+
+Каждый tag сопровождается: bump в package.json (всех 9), release-commit, optional `git push --tags`, optional GH Release с binaries (через `./scripts/publish-release.sh`). См. [[feedback-versioning-tags-only-on-release]] + [[feedback-batch-release-cluster]].
+
 ## Plan workflow (важно)
 
 1. Brainstorm → spec в `docs/superpowers/specs/`.
