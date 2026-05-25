@@ -104,7 +104,21 @@ function readNumberProp(props: Record<string, unknown> | undefined, key: string,
 function shapeBounds(r: ShapeRec): Bounds {
   const isFrame = r.type === "frame";
   const w = readNumberProp(r.props, "w", isFrame ? DEFAULT_FRAME_W : DEFAULT_W);
-  const h = readNumberProp(r.props, "h", isFrame ? DEFAULT_FRAME_H : DEFAULT_H);
+  const baseH = readNumberProp(
+    r.props,
+    "h",
+    isFrame ? DEFAULT_FRAME_H : DEFAULT_H,
+  );
+  // DRW-174: tldraw geo/note shapes use `growY` to extend height for text that
+  // doesn't fit in `h` alone. Effective rendered height = `h + growY`. ELK must
+  // see effective height so frame Pass A computes newH covering the full child
+  // visual bounds. Without this growY ignored → frame.props.h stays at the
+  // estimate while children visually overflow.
+  const growY =
+    r.type === "geo" || r.type === "note"
+      ? readNumberProp(r.props, "growY", 0)
+      : 0;
+  const h = baseH + growY;
   const x = typeof r.x === "number" ? r.x : 0;
   const y = typeof r.y === "number" ? r.y : 0;
   return { x, y, w, h };
