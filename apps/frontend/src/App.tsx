@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type Editor, type TLGeoShape, Tldraw } from "tldraw";
-import { SchemaContainerShapeUtil, registerAutoFlipDirection } from "./shapes/schema-container";
+import {
+  SchemaContainerShapeUtil,
+  registerAutoFlipDirection,
+  setSchemaContainerDirection,
+} from "./shapes/schema-container";
+import type { SchemaContainerDirection } from "./shapes/schema-container";
 import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
@@ -118,6 +123,8 @@ export function App({
   // component) to avoid re-mounting the editor on every render.
   const onTidySelection = useRef<((ids: string[]) => void) | null>(null);
   const onExportSelection = useRef<((ids: string[]) => void) | null>(null);
+  // DRW-150: schema-container direction callback — needs live editor ref, set in onMount.
+  const onSetContainerDirection = useRef<((direction: SchemaContainerDirection) => void) | null>(null);
   onExportSelection.current = (ids: string[]) => {
     if (ids.length === 0) return;
     setExportOpen(true);
@@ -128,6 +135,7 @@ export function App({
         onMermaidImport: () => setMermaidOpen(true),
         onTidySelection: (ids) => onTidySelection.current?.(ids),
         onExportSelection: (ids) => onExportSelection.current?.(ids),
+        onSetContainerDirection: (direction) => onSetContainerDirection.current?.(direction),
       }),
     [space, room],
   );
@@ -679,6 +687,9 @@ export function App({
         onMount={(ed) => {
           setEditor(ed);
           registerAutoFlipDirection(ed); // DRW-150: auto-flip direction='custom' on manual child drag
+          // DRW-150: wire direction callback for context-menu (requires live editor)
+          onSetContainerDirection.current = (direction) =>
+            setSchemaContainerDirection(ed, direction);
           if (import.meta.env.DEV) {
             // biome-ignore lint/suspicious/noExplicitAny: dev-only debug hook
             (window as any).__editor = ed;

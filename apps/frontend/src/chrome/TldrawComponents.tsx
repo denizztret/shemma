@@ -8,6 +8,7 @@ import {
   useValue,
 } from "tldraw";
 import { tokens } from "../design-tokens";
+import type { SchemaContainerDirection } from "../shapes/schema-container/SchemaContainerShape";
 import { GalleryLink } from "./GalleryLink";
 import { RoomBadge } from "./RoomBadge";
 
@@ -29,9 +30,10 @@ export function buildTldrawComponents(
     onMermaidImport?: () => void;
     onTidySelection?: (ids: string[]) => void;
     onExportSelection?: (ids: string[]) => void;
+    onSetContainerDirection?: (direction: SchemaContainerDirection) => void;
   } = {},
 ): TLComponents {
-  const { onMermaidImport, onTidySelection, onExportSelection } = opts;
+  const { onMermaidImport, onTidySelection, onExportSelection, onSetContainerDirection } = opts;
 
   // We wrap DefaultContextMenu and append items as children — DefaultContextMenu
   // overrides its inner content while keeping the Radix shell + canvas rendering.
@@ -40,6 +42,14 @@ export function buildTldrawComponents(
     const selectedCount = useValue(
       "selectedCount",
       () => editor.getSelectedShapeIds().length,
+      [editor],
+    );
+    const hasContainer = useValue(
+      "hasContainer",
+      () =>
+        editor
+          .getSelectedShapes()
+          .some((s) => s.type === "schema-container"),
       [editor],
     );
 
@@ -82,6 +92,35 @@ export function buildTldrawComponents(
             >
               <span className="tlui-button__label">Export to Miro</span>
               <kbd className="tlui-kbd">⌘⇧E</kbd>
+            </button>
+          </div>
+        )}
+        {/* DRW-150: Direction submenu — visible only when a schema-container is selected */}
+        {hasContainer && onSetContainerDirection && (
+          <div className="tlui-menu__group">
+            <button
+              type="button"
+              className="tlui-button tlui-button__menu"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => onSetContainerDirection("TB")}
+            >
+              <span className="tlui-button__label">Direction: Top → Bottom</span>
+            </button>
+            <button
+              type="button"
+              className="tlui-button tlui-button__menu"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => onSetContainerDirection("LR")}
+            >
+              <span className="tlui-button__label">Direction: Left → Right</span>
+            </button>
+            <button
+              type="button"
+              className="tlui-button tlui-button__menu"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => onSetContainerDirection("custom")}
+            >
+              <span className="tlui-button__label">Direction: Custom (manual)</span>
             </button>
           </div>
         )}
@@ -142,6 +181,6 @@ export function buildTldrawComponents(
         ) : null}
       </DefaultToolbar>
     ),
-    ContextMenu: (onTidySelection || onExportSelection) ? TidyContextMenu : undefined,
+    ContextMenu: (onTidySelection || onExportSelection || onSetContainerDirection) ? TidyContextMenu : undefined,
   };
 }
