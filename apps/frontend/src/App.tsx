@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type Editor, type TLGeoShape, Tldraw } from "tldraw";
-import { SchemaContainerShapeUtil } from "./shapes/schema-container";
+import { SchemaContainerShapeUtil, registerAutoFlipDirection } from "./shapes/schema-container";
 import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
@@ -678,6 +678,7 @@ export function App({
         shapeUtils={[SchemaContainerShapeUtil]}
         onMount={(ed) => {
           setEditor(ed);
+          registerAutoFlipDirection(ed); // DRW-150: auto-flip direction='custom' on manual child drag
           if (import.meta.env.DEV) {
             // biome-ignore lint/suspicious/noExplicitAny: dev-only debug hook
             (window as any).__editor = ed;
