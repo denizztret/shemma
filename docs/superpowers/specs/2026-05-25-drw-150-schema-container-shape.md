@@ -1,6 +1,6 @@
 # DRW-150: Custom tldraw shape `schema-container` — Design Spec
 
-**Status:** Draft v0.1 (2026-05-25)
+**Status:** Draft v0.2 (2026-05-25 — post self-review)
 **Target release:** 0.26.0
 **Author session:** continuation of post-DRW-149 cluster, brainstormed 2026-05-25
 
@@ -153,25 +153,43 @@ function makeSchemaContainerShape(opts: {
 }
 ```
 
-**Normalize direction** для MVP: BT → TB, RL → LR (с warning в log если получили BT/RL — добавить полную поддержку в DRW-150.x).
+**Normalize direction** для MVP: BT → TB, RL → LR (с warning в log если получили BT/RL — добавить полную поддержку в DRW-150.x). Frontend `props.direction` enum = `'TB' | 'LR' | 'custom'` only; BT/RL никогда не попадают в `props` — они normalize'ятся в backend factory ПРЕЖДЕ shape creation. Это решает schema validation (tldraw `T.literalEnum('TB','LR','custom')` rejected бы BT/RL).
 
-**Style resolution:**
+```ts
+function normalizeDirection(d: 'TB' | 'LR' | 'BT' | 'RL' | undefined): 'TB' | 'LR' {
+  if (d === 'BT') return 'TB'   // P1 polish: handle BT properly в DRW-150.x
+  if (d === 'RL') return 'LR'
+  if (d === 'LR') return 'LR'
+  return 'TB'                    // default
+}
+```
+
+**Style resolution priority** — mermaid `stroke` ближе к tldraw `color` semantically (color = border + label), mermaid `fill` ближе к tldraw `fill` mode:
+
 ```ts
 function resolveSubgraphStyle(s: MermaidNodeStyle): Partial<SchemaContainerProps> {
   const out: Partial<SchemaContainerProps> = {}
-  if (s.fill) out.color = hexToTldrawColor(s.fill)       // border = fill (по DRW-153 pattern)
-  if (s.fill) out.fill = 'semi'                           // у нас всегда semi fill, hex выбирает color
-  if (s.stroke && !s.fill) out.color = hexToTldrawColor(s.stroke)
+  // Priority: stroke first (mermaid stroke = border, tldraw color = border).
+  if (s.stroke) out.color = hexToTldrawColor(s.stroke)
+  else if (s.fill) out.color = hexToTldrawColor(s.fill)   // fallback если только fill задан
+  // fill presence (regardless of hex) → semi fill mode (semi = translucent заливка цветом color).
+  if (s.fill) out.fill = 'semi'
   return out
 }
 ```
 
-### 3.3 Mermaid parser update
+Trade-off: точное соответствие mermaid (`fill:#e3f2fd, stroke:#1565c0` где fill и stroke разных hex) недостижимо в default TLDraw palette (single color prop). Приближение — color = stroke (semantic border), fill mode = semi если был fill (visible заливка цветом стрелки).
+
+### 3.3 Mermaid parser update (subsumes DRW-162)
+
+**DRW-162 (Mermaid style директивы не применяются к subgraph wrappers)** subsumed в эту работу — закроется одним PR'ом вместе с DRW-150. Backlog ticket DRW-162 finalSummary укажет "shipped via DRW-150".
 
 `apps/backend/src/domain/schema/mermaid-parser.ts`:
 - Сейчас `nodeStyles` / `nodeStylesByNodeId` собирает `style <leafNode> fill:...`.
-- Расширить: парсить `style <subgraphName> fill:...` (uppercase ID matching subgraph name) и эмитить отдельный `subgraphStyles: Map<string, MermaidNodeStyle>` keyed by subgraph slug.
+- Расширить: парсить `style <subgraphName> fill:...` (token matching subgraph name token) и эмитить отдельный `subgraphStyles: Map<string, MermaidNodeStyle>` keyed by subgraph slug.
 - `routes/schema.ts` при build'е group actions передаёт `subgraphStyles.get(name)` в `makeSchemaContainerShape`.
+
+NB: token matching должен быть case-sensitive (mermaid `style INPUT` matches subgraph `INPUT ["Вход"]`). Если коллизия (subgraph и leaf node имеют одинаковый ID) — оба получают style; это OK (раздельная распиновка по type).
 
 ### 3.4 Layout integration
 
@@ -194,7 +212,26 @@ function readContainerDirection(container: ShapeRec): string | undefined {
 }
 ```
 
-- **Custom direction → skip Pass A**: если `props.direction === "custom"`, в `runLayoutSubgraph` пропускаем этот container в Pass A loop. Children сохраняют existing positions (parent-relative, не trogаем). Pass B всё ещё видит container как leaf node с current size.
+- **Custom direction → skip Pass A**: явный guard в `runLayoutSubgraph` (apps/backend/src/domain/layout.ts:653-678 — Pass A loop):
+
+```ts
+// Process top-level anchors
+for (const anchorId of topLevelAnchorIds) {
+  const anchor = frameById.get(anchorId)
+  if (!anchor) continue
+  // DRW-150: custom direction → skip Pass A for this container
+  if (anchor.type === 'schema-container' && anchor.props?.direction === 'custom') continue
+  // ... existing Pass A logic ...
+}
+
+// Process selected containers
+for (const sc of topLevelSelectedContainers) {
+  if (sc.type === 'schema-container' && sc.props?.direction === 'custom') continue
+  // ... existing Pass A logic ...
+}
+```
+
+Children сохраняют existing parent-relative positions (мы их не trogаем). Pass B всё ещё видит container как leaf node с current `w/h` — Pass B layout'ит container среди sibling containers, но не лезет внутрь.
 
 ### 3.5 Auto-flip mechanism (frontend)
 
@@ -284,12 +321,13 @@ function setSchemaContainerDirection(editor: Editor, direction: 'TB' | 'LR' | 'c
   for (const t of targets) {
     editor.updateShape({ id: t.id, type: 'schema-container', props: { ...t.props, direction } })
   }
-  // Optionally trigger immediate layout pass для selected containers
+  // MANDATORY: trigger immediate layout pass для selected containers (если direction !== custom).
+  // Без этого user изменил direction но visually ничего не меняется до следующего Cmd+Shift+L.
   if (direction !== 'custom') triggerLayoutSelection(editor, targets.map(t => t.id))
 }
 ```
 
-После изменения direction → optional immediate layout: вызов backend `/api/layout?scope=affected&affectedIds=<container>` (или local через `runLayout` если есть frontend variant).
+После изменения direction (≠ custom) → **обязательный** immediate layout: вызов backend `POST /api/layout/selection?affectedIds=<container>` (existing endpoint, DRW-149). Per AC-7. Для direction = `'custom'` re-layout НЕ trigger'ится — namespace preserve manual positions.
 
 ### 3.7 Title rendering — inside vs outside
 
@@ -389,7 +427,7 @@ TLDraw `color` = border + label color. `fill` = enum (none/semi/solid/pattern). 
 ## 7. Open Questions (для plan'а)
 
 - **Q1:** Какой триггер для immediate re-layout после context-menu direction change — explicit API call или local frontend `runLayout`? (Lean: backend trigger via POST /api/layout/selection.)
-- **Q2:** Точная visual identity inside-title — текст внутри shape сверху-по-центру с какой font-size/color? Bootstrap pikne (font: 20, color = props.color).
+- **Q2:** Точная visual identity inside-title — текст внутри shape сверху-по-центру с какой font-size/color? Pick value (e.g., font: 20, color = props.color). Уточнить в plan когда будем рендерить компонент.
 - **Q3:** Frame-bar высота для outside-title — 32px / 28px / адаптивная под font-size?
 - **Q4:** Pass A skip semantics — preserve абсолютные positions или относительные? Lean: relative (текущий child.x/y inside container остаются).
 - **Q5:** Что если user удалит/архивирует пресет-комнату? Старые comm с geo+meta wrappers продолжают читаться (`isContainerShape` legacy branch).
@@ -440,4 +478,15 @@ Step 3: 0.26.0 release commit + tag (DRW-150).
 
 ---
 
-**End of Spec v0.1.**
+**End of Spec v0.2.**
+
+## Self-review changelog (v0.1 → v0.2)
+
+1. **Style resolution priority** flipped — stroke first (matches mermaid semantic border), fill fallback. Trade-off explicitly stated (single tldraw color prop ≠ separate fill/stroke colors).
+2. **Direction normalization** explicit: factory принимает 'TB|LR|BT|RL', frontend props enum = 'TB|LR|custom' only. Added `normalizeDirection` snippet showing BT→TB, RL→LR mapping happens BEFORE props serialization.
+3. **Pass A custom skip** — added explicit code snippet showing where guard inserts в runLayoutSubgraph loop. Removed ambiguity.
+4. **Context-menu re-layout trigger** — "Optionally" → MANDATORY per AC-7. Added rationale.
+5. **DRW-162 subsumption** — explicit: parser update for subgraph styles ships как часть DRW-150. DRW-162 backlog ticket будет закрыт с final-summary "shipped via DRW-150".
+6. **Typo fix** — "Bootstrap pikne" → "Pick value".
+
+Open Questions Q1-Q5 — moved to plan (как и было задумано).
