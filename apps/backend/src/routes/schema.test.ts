@@ -689,6 +689,195 @@ describe("POST /api/schema/:frameId/overlay", () => {
   });
 });
 
+// ---- DRW-174: POST /api/schema/:frameId/measured-bounds ----
+
+describe("POST /api/schema/:frameId/measured-bounds (DRW-174)", () => {
+  async function postBounds(
+    app: AppInstance["app"],
+    frameId: string,
+    body: unknown,
+    room = "bounds-room",
+  ) {
+    return app.fetch(
+      new Request(
+        `http://localhost/api/schema/${encodeURIComponent(frameId)}/measured-bounds?room=${room}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      ),
+    );
+  }
+
+  /** Setup: create v2 frame с 1 нодой и вернуть {frameId, childShapeId}. */
+  async function setupFrameWithChild(
+    app: AppInstance["app"],
+    rooms: AppInstance["rooms"],
+    room = "bounds-room",
+  ) {
+    const res = await postCreate(
+      app,
+      { label: "Bounds base", raw: "graph TB\n  a[Node A]" },
+      room,
+    );
+    expect(res.status).toBe(200);
+    const { frameId } = (await res.json()) as { frameId: string };
+
+    const r = await rooms.get(room);
+    const child = Object.values(r.store.store).find(
+      (s) =>
+        s?.typeName === "shape" &&
+        s?.type === "geo" &&
+        (s.meta as { didrawSchemaParent?: string } | undefined)?.didrawSchemaParent === frameId,
+    );
+    if (!child) throw new Error("child shape not created");
+    return { frameId, childShapeId: child.id };
+  }
+
+  test("apply measured bounds → 200, child.h updated, frame.h grew via re-layout", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const { frameId, childShapeId } = await setupFrameWithChild(app, rooms);
+
+    const r1 = await rooms.get("bounds-room");
+    const frameBefore = r1.store.store[frameId];
+    const childBefore = r1.store.store[childShapeId];
+    const childOldH = (childBefore?.props as { h?: number } | undefined)?.h ?? 0;
+    const frameOldH = (frameBefore?.props as { h?: number } | undefined)?.h ?? 0;
+
+    const measuredH = childOldH + 60; // simulate autosize growing child by 60px
+
+    const res = await postBounds(app, frameId, {
+      bounds: { [childShapeId]: { h: measuredH } },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      applied: number;
+      skipped: number;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.applied).toBe(1);
+    expect(body.skipped).toBe(0);
+
+    const r2 = await rooms.get("bounds-room");
+    const childAfter = r2.store.store[childShapeId];
+    expect((childAfter?.props as { h?: number }).h).toBeCloseTo(measuredH, 1);
+
+    const frameAfter = r2.store.store[frameId];
+    const frameNewH = (frameAfter?.props as { h?: number } | undefined)?.h ?? 0;
+    expect(frameNewH).toBeGreaterThan(frameOldH);
+  });
+
+  test("shape not descendant of frame → skipped, applied=0", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const { frameId } = await setupFrameWithChild(app, rooms);
+
+    const res = await postBounds(app, frameId, {
+      bounds: { "shape:nonexistent": { h: 200 } },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { applied: number; skipped: number };
+    expect(body.applied).toBe(0);
+    expect(body.skipped).toBe(1);
+  });
+
+  test("no-op bounds (same as current) → applied=0, no re-layout", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const { frameId, childShapeId } = await setupFrameWithChild(app, rooms);
+
+    const r0 = await rooms.get("bounds-room");
+    const versionBefore = r0.version;
+    const child = r0.store.store[childShapeId];
+    const currentH = (child?.props as { h?: number } | undefined)?.h ?? 0;
+
+    const res = await postBounds(app, frameId, {
+      bounds: { [childShapeId]: { h: currentH } },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { applied: number; skipped: number };
+    expect(body.applied).toBe(0);
+    expect(body.skipped).toBe(1);
+
+    const r1 = await rooms.get("bounds-room");
+    expect(r1.version).toBe(versionBefore);
+  });
+
+  test("bounds without numeric w/h → skipped", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const { frameId, childShapeId } = await setupFrameWithChild(app, rooms);
+
+    const res = await postBounds(app, frameId, {
+      bounds: { [childShapeId]: { w: "not-a-number" } },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { applied: number; skipped: number };
+    expect(body.applied).toBe(0);
+    expect(body.skipped).toBe(1);
+  });
+
+  test("frame-not-found → 404", async () => {
+    const { app } = makeApp({ inMemory: true });
+    await postCreate(app, { label: "Room", raw: "graph LR\n  a[A]" }, "bounds-room");
+
+    const res = await postBounds(app, "shape:nonexistent", { bounds: {} });
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { ok: boolean; errors: Array<{ code: string }> };
+    expect(body.ok).toBe(false);
+    expect(body.errors[0]?.code).toBe("frame-not-found");
+  });
+
+  test("legacy room (not v2) → 422", async () => {
+    const { app } = makeApp({ inMemory: true });
+    // Don't call postCreate → room stays v1.
+    const res = await postBounds(app, "shape:any", { bounds: {} }, "legacy-room");
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { ok: boolean; errors: Array<{ code: string }> };
+    expect(body.ok).toBe(false);
+    expect(body.errors[0]?.code).toBe("legacy-room-not-v2");
+  });
+
+  test("bad-request (no bounds field) → 400", async () => {
+    const { app } = makeApp({ inMemory: true });
+    await postCreate(app, { label: "Room", raw: "graph LR\n  a[A]" }, "bounds-room");
+
+    const res = await postBounds(app, "shape:any", { foo: "bar" });
+    expect(res.status).toBe(400);
+  });
+
+  test("multiple children measured at once → all applied, re-layout once", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(
+      app,
+      { label: "Multi", raw: "graph TB\n  a[Node A]\n  b[Node B]\n  c[Node C]" },
+      "bounds-room",
+    );
+    expect(res.status).toBe(200);
+    const { frameId } = (await res.json()) as { frameId: string };
+
+    const r0 = await rooms.get("bounds-room");
+    const children = Object.values(r0.store.store).filter(
+      (s) =>
+        s?.typeName === "shape" &&
+        s?.type === "geo" &&
+        (s.meta as { didrawSchemaParent?: string } | undefined)?.didrawSchemaParent === frameId,
+    );
+    expect(children.length).toBe(3);
+
+    const bounds: Record<string, { h: number }> = {};
+    for (const c of children) {
+      const oldH = (c.props as { h?: number } | undefined)?.h ?? 0;
+      bounds[c.id] = { h: oldH + 50 };
+    }
+
+    const res2 = await postBounds(app, frameId, { bounds });
+    expect(res2.status).toBe(200);
+    const body = (await res2.json()) as { applied: number; skipped: number };
+    expect(body.applied).toBe(3);
+    expect(body.skipped).toBe(0);
+  });
+});
+
 // ---- DRW-153: mermaid style directives → shape props ----
 
 describe("POST /api/schema/create — DRW-153 mermaid style directives applied to shapes", () => {

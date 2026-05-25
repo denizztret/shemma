@@ -1142,5 +1142,244 @@ export function schemaRoutes(bus: StoreChangeBus) {
       });
 
       return c.json({ ok: true });
+    })
+
+    // =========================================================================
+    // POST /api/schema/:frameId/measured-bounds  (DRW-174)
+    // Body: { bounds: Record<shapeId, {w?: number, h?: number}>, clientOpId? }
+    //
+    // Frontend after autosize (tldraw util.onBeforeCreate measure) sends real
+    // child shape bounds. Backend writes them into store, then re-runs layout
+    // with `affectedIds = {frameId}` so frame-expand inside runLayout repacks
+    // children + recomputes frame.props.w/h via Pass A. WS broadcasts the
+    // measure batch (source=user) + the layout batch (source=ai) so the
+    // frontend sees a single coherent final layout instead of estimate+overflow.
+    //
+    // Shapes not descendant of frameId are skipped (counted in `skipped`).
+    // =========================================================================
+    .post("/api/schema/:frameId/measured-bounds", async (c) => {
+      const rv = resolveRoomId(c.req.query("room"));
+      if (!rv.ok)
+        return c.json(
+          { ok: false, errors: [{ code: "invalid-room", message: rv.reason }] },
+          422,
+        );
+      const id = rv.id;
+      const frameId = c.req.param("frameId");
+
+      const body = (await c.req.json().catch(() => null)) as {
+        bounds?: Record<string, { w?: number; h?: number }>;
+        clientOpId?: string;
+      } | null;
+
+      if (!body || typeof body.bounds !== "object" || body.bounds === null) {
+        return c.json(
+          {
+            ok: false,
+            errors: [
+              {
+                code: "bad-request",
+                message:
+                  "expected {bounds: Record<shapeId, {w?, h?}>, clientOpId?}",
+              },
+            ],
+          },
+          400,
+        );
+      }
+
+      const { rooms, scheduleSave, space } = bundleForRequest(c);
+      const spaceId = space.id;
+      const room = await rooms.get(id);
+
+      if (!isV2Room(room)) {
+        return c.json(
+          {
+            ok: false,
+            errors: [
+              {
+                code: "legacy-room-not-v2",
+                message: "room is not a v2 schema room",
+              },
+            ],
+          },
+          422,
+        );
+      }
+
+      const store = room.store.store as Record<string, TLRecord | undefined>;
+      const frame = store[frameId];
+      if (!frame || frame.typeName !== "shape") {
+        return c.json(
+          {
+            ok: false,
+            errors: [
+              {
+                code: "frame-not-found",
+                message: `schema-frame '${frameId}' not found`,
+              },
+            ],
+          },
+          404,
+        );
+      }
+      if (frame.meta?.didrawSchemaFrame !== true) {
+        return c.json(
+          {
+            ok: false,
+            errors: [
+              {
+                code: "not-schema-frame",
+                message: `shape '${frameId}' is not a schema-frame`,
+              },
+            ],
+          },
+          422,
+        );
+      }
+
+      // descendant check: walk parentId chain up to frameId. Bounded depth.
+      const isDescendantOf = (descendantId: string, ancestorId: string): boolean => {
+        let cur = store[descendantId];
+        let safety = 32;
+        while (cur && safety-- > 0) {
+          const pid = typeof cur.parentId === "string" ? cur.parentId : undefined;
+          if (pid === ancestorId) return true;
+          if (!pid) return false;
+          cur = store[pid];
+        }
+        return false;
+      };
+
+      const updated: Record<string, [TLRecord, TLRecord]> = {};
+      let appliedCount = 0;
+      let skippedCount = 0;
+      const EPS = 1e-6;
+
+      for (const [shapeId, m] of Object.entries(body.bounds)) {
+        const orig = store[shapeId];
+        if (
+          !orig ||
+          orig.typeName !== "shape" ||
+          !isDescendantOf(shapeId, frameId)
+        ) {
+          skippedCount++;
+          continue;
+        }
+        const w =
+          typeof m?.w === "number" && Number.isFinite(m.w) ? m.w : undefined;
+        const h =
+          typeof m?.h === "number" && Number.isFinite(m.h) ? m.h : undefined;
+        if (w === undefined && h === undefined) {
+          skippedCount++;
+          continue;
+        }
+        const oldProps = (orig.props ?? {}) as Record<string, unknown>;
+        const oldW = typeof oldProps.w === "number" ? oldProps.w : undefined;
+        const oldH = typeof oldProps.h === "number" ? oldProps.h : undefined;
+        const oldGrowY =
+          typeof oldProps.growY === "number" ? oldProps.growY : 0;
+        // DRW-174: frontend sends effective bounds (h already includes growY for
+        // geo/note). Reset growY=0 when applying so tldraw doesn't double-count
+        // height = h + growY on render. Only relevant for geo/note (other types
+        // either don't have growY or set autoSize via different prop).
+        const resetsGrowY =
+          (orig.type === "geo" || orig.type === "note") && oldGrowY !== 0;
+        const wChanged =
+          w !== undefined && (oldW === undefined || Math.abs(w - oldW) > EPS);
+        const hChanged =
+          h !== undefined && (oldH === undefined || Math.abs(h - oldH) > EPS);
+        if (!wChanged && !hChanged && !resetsGrowY) {
+          skippedCount++;
+          continue;
+        }
+        const newProps: Record<string, unknown> = { ...oldProps };
+        if (wChanged) newProps.w = w;
+        if (hChanged) newProps.h = h;
+        if (resetsGrowY) newProps.growY = 0;
+        updated[shapeId] = [orig, { ...orig, props: newProps } as TLRecord];
+        appliedCount++;
+      }
+
+      if (appliedCount === 0) {
+        return c.json({
+          ok: true,
+          frameId,
+          version: room.version,
+          applied: 0,
+          skipped: skippedCount,
+        });
+      }
+
+      const measureBatch: StoreChangeBatch = {
+        added: {},
+        updated,
+        removed: {},
+      };
+      room.store = applyStoreChanges(room.store, measureBatch);
+      room.didrawIndex = rebuildDidrawIndex(room.store);
+      room.version += 1;
+      pushOpLog(
+        room,
+        {
+          ops: measureBatch,
+          source: "user",
+          version: room.version,
+          at: Date.now(),
+          clientOpId: body.clientOpId,
+        },
+        config.opLogMaxSize,
+      );
+      room.dirty = true;
+      scheduleSave(id, room);
+      bus.publish(spaceId, id, {
+        changes: measureBatch,
+        source: "user",
+        version: room.version,
+        originClientId: body.clientOpId,
+      });
+
+      // Re-run layout: frame-expand inside runLayout will discover children.
+      // Layout mode из frame.meta.layoutMode (DRW-160 wrote it for v2 frames)
+      // или default "layered-tb" (наиболее распространённое для mermaid `graph TB`).
+      const frameMeta = (frame.meta ?? {}) as Record<string, unknown>;
+      const layoutMode = (typeof frameMeta.layoutMode === "string"
+        ? frameMeta.layoutMode
+        : "layered-tb") as import("@shemma/domain").LayoutMode;
+
+      try {
+        const lr = await runLayout(
+          room.store,
+          { mode: layoutMode, scope: "affected", affectedIds: new Set([frameId]) },
+          room.didrawIndex,
+        );
+        if (!isEmptyBatch(lr.batch)) {
+          room.store = applyStoreChanges(room.store, lr.batch);
+          room.didrawIndex = rebuildDidrawIndex(room.store);
+          room.version += 1;
+          pushOpLog(
+            room,
+            { ops: lr.batch, source: "ai", version: room.version, at: Date.now() },
+            config.opLogMaxSize,
+          );
+          room.dirty = true;
+          scheduleSave(id, room);
+          bus.publish(spaceId, id, {
+            changes: lr.batch,
+            source: "ai",
+            version: room.version,
+          });
+        }
+      } catch {
+        // Layout failure non-fatal; measure batch is already persisted.
+      }
+
+      return c.json({
+        ok: true,
+        frameId,
+        version: room.version,
+        applied: appliedCount,
+        skipped: skippedCount,
+      });
     });
 }

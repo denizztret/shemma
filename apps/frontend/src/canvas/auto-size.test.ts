@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Editor } from "tldraw";
 import { triggerAutoSize } from "./auto-size";
 
@@ -151,5 +151,188 @@ describe("triggerAutoSize", () => {
     triggerAutoSize(editor, new Set());
     expect(updates).toEqual([]);
     expect(measured).toEqual([]);
+  });
+});
+
+// DRW-174: POST /measured-bounds for shapes inside a v2 schema-frame.
+
+describe("triggerAutoSize — DRW-174 measured-bounds POST", () => {
+  // biome-ignore lint/suspicious/noExplicitAny: capturing fetch calls
+  let fetchCalls: Array<{ url: string; body: any }>;
+  let originalFetch: typeof fetch | undefined;
+
+  beforeEach(() => {
+    fetchCalls = [];
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      fetchCalls.push({ url, body });
+      return new Response(
+        JSON.stringify({ ok: true, applied: 0, skipped: 0 }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    if (originalFetch) globalThis.fetch = originalFetch;
+  });
+
+  type ShapeWithParent = {
+    id: string;
+    type: string;
+    props: Record<string, unknown>;
+    parentId?: string;
+    meta?: Record<string, unknown>;
+  };
+
+  function makeEditorWithParents(opts: {
+    shapes: ShapeWithParent[];
+    onBeforeCreate?: Record<string, (s: ShapeWithParent) => ShapeWithParent>;
+  }): Editor {
+    return {
+      getCurrentPageShapes: () => opts.shapes,
+      run: (fn: () => void) => fn(),
+      updateShape: () => {},
+      getShapeUtil: (type: string) => ({
+        onBeforeCreate: (s: ShapeWithParent) =>
+          opts.onBeforeCreate?.[type]?.(s) ?? s,
+      }),
+    } as unknown as Editor;
+  }
+
+  test("shape inside schema-frame → POST measured-bounds with effective h (h+growY)", async () => {
+    const editor = makeEditorWithParents({
+      shapes: [
+        {
+          id: "shape:frame1",
+          type: "frame",
+          props: {},
+          meta: { didrawSchemaFrame: true },
+        },
+        {
+          id: "shape:a",
+          type: "geo",
+          parentId: "shape:frame1",
+          props: { w: 220, h: 80, growY: 0 },
+        },
+      ],
+      onBeforeCreate: {
+        geo: (s) => ({ ...s, props: { ...s.props, growY: 50 } }),
+      },
+    });
+    triggerAutoSize(editor);
+    // Allow microtask queue for fire-and-forget POST.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fetchCalls).toHaveLength(1);
+    expect(fetchCalls[0]!.url).toContain(
+      "/api/schema/shape%3Aframe1/measured-bounds",
+    );
+    expect(fetchCalls[0]!.body.bounds["shape:a"]).toEqual({ h: 130 });
+  });
+
+  test("shape without schema-frame ancestor → no POST", async () => {
+    const editor = makeEditorWithParents({
+      shapes: [
+        { id: "shape:a", type: "geo", props: { w: 220, h: 80, growY: 0 } },
+      ],
+      onBeforeCreate: {
+        geo: (s) => ({ ...s, props: { ...s.props, growY: 50 } }),
+      },
+    });
+    triggerAutoSize(editor);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fetchCalls).toHaveLength(0);
+  });
+
+  test("shape inside plain (non-schema) frame → no POST", async () => {
+    const editor = makeEditorWithParents({
+      shapes: [
+        {
+          id: "shape:frame1",
+          type: "frame",
+          props: {},
+          meta: {} /* no didrawSchemaFrame */,
+        },
+        {
+          id: "shape:a",
+          type: "geo",
+          parentId: "shape:frame1",
+          props: { w: 220, h: 80, growY: 0 },
+        },
+      ],
+      onBeforeCreate: {
+        geo: (s) => ({ ...s, props: { ...s.props, growY: 50 } }),
+      },
+    });
+    triggerAutoSize(editor);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fetchCalls).toHaveLength(0);
+  });
+
+  test("nested: shape → schema-container → schema-frame → POST grouped by frame", async () => {
+    const editor = makeEditorWithParents({
+      shapes: [
+        {
+          id: "shape:frame1",
+          type: "frame",
+          props: {},
+          meta: { didrawSchemaFrame: true },
+        },
+        {
+          id: "shape:container1",
+          type: "schema-container",
+          parentId: "shape:frame1",
+          props: {},
+        },
+        {
+          id: "shape:a",
+          type: "geo",
+          parentId: "shape:container1",
+          props: { w: 220, h: 80, growY: 0 },
+        },
+        {
+          id: "shape:b",
+          type: "geo",
+          parentId: "shape:container1",
+          props: { w: 220, h: 80, growY: 0 },
+        },
+      ],
+      onBeforeCreate: {
+        geo: (s) => ({ ...s, props: { ...s.props, growY: 30 } }),
+      },
+    });
+    triggerAutoSize(editor);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fetchCalls).toHaveLength(1);
+    expect(fetchCalls[0]!.body.bounds["shape:a"]).toEqual({ h: 110 });
+    expect(fetchCalls[0]!.body.bounds["shape:b"]).toEqual({ h: 110 });
+  });
+
+  test("no effective bounds change → no POST", async () => {
+    const editor = makeEditorWithParents({
+      shapes: [
+        {
+          id: "shape:frame1",
+          type: "frame",
+          props: {},
+          meta: { didrawSchemaFrame: true },
+        },
+        {
+          id: "shape:a",
+          type: "geo",
+          parentId: "shape:frame1",
+          props: { w: 220, h: 80, growY: 0 },
+        },
+      ],
+      onBeforeCreate: {
+        // identity — onBeforeCreate returns same shape.
+        geo: (s) => s,
+      },
+    });
+    triggerAutoSize(editor);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fetchCalls).toHaveLength(0);
   });
 });
