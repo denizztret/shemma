@@ -19,10 +19,11 @@ tldraw 5.x frontend + Bun backend (singleton daemon на `:8787` release+debug, 
 ## Git workflow — GitFlow + SemVer
 
 **Branches:**
-- `main` — production-ready. Только merge'ы из feature/hotfix веток + release-коммиты + теги. Прямые коммиты в `main` запрещены (кроме docs/memory изменений вне feature scope).
+- `main` — production-ready. **ВСЕ изменения** идут через ветки + `--no-ff` merge. Прямые коммиты в `main` **запрещены без исключений** — даже однострочная правка docs/memory/README. На main-line должны быть только merge-коммиты, release-коммиты и теги; одиночных feature/fix/docs коммитов вне ветки быть не должно.
 - `feature/<short-name>` — новые фазы и крупные feature'ы. От `main`, merge обратно по готовности.
 - `fix/<short-name>` или `hotfix/<short-name>` — баг-фиксы из backlog. От `main`, merge обратно.
-- Merge style: `--no-ff` (сохраняем merge-коммит как явную метку конца ветки).
+- `docs/<short-name>` — правки CLAUDE.md / docs/* / memory pointers / README / changelog backfill вне feature scope. От `main`, merge обратно.
+- Merge style: `--no-ff` (сохраняем merge-коммит как явную метку конца ветки). Никогда не `rebase` feature-ветку перед merge — branch history должна оставаться видимой.
 - Удалять ветку после merge (локально).
 
 **SemVer (https://semver.org):**
