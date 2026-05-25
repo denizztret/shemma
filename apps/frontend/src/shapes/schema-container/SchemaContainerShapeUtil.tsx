@@ -1,15 +1,20 @@
 import {
   BaseFrameLikeShapeUtil,
+  Group2d,
+  Rectangle2d,
   SVGContainer,
   getColorValue,
   useColorMode,
 } from "tldraw";
-import type { Editor } from "tldraw";
+import type { Editor, Geometry2d } from "tldraw";
 import {
   DEFAULT_SCHEMA_CONTAINER_PROPS,
   type SchemaContainerShape,
   schemaContainerShapeProps,
 } from "./SchemaContainerShape";
+
+const INSIDE_LABEL_HEIGHT = 36;
+const OUTSIDE_LABEL_HEIGHT = 28;
 
 export class SchemaContainerShapeUtil extends BaseFrameLikeShapeUtil<SchemaContainerShape> {
   static override type = "schema-container" as const;
@@ -17,6 +22,26 @@ export class SchemaContainerShapeUtil extends BaseFrameLikeShapeUtil<SchemaConta
 
   override getDefaultProps() {
     return { ...DEFAULT_SCHEMA_CONTAINER_PROPS };
+  }
+
+  // DRW-164: tldraw `getShapeAtPoint` для frame-like shapes делает
+  // `(geometry as Group2d).children` — default `BaseBoxShapeUtil.getGeometry`
+  // возвращает `Rectangle2d` без children → `E.children is not iterable` crash
+  // на pointer move. Возвращаем Group2d с body + label rectangle (как FrameShapeUtil).
+  override getGeometry(shape: SchemaContainerShape): Geometry2d {
+    const { w, h, titlePosition } = shape.props;
+    const body = new Rectangle2d({ width: w, height: h, isFilled: false });
+    const labelHeight = titlePosition === "outside" ? OUTSIDE_LABEL_HEIGHT : INSIDE_LABEL_HEIGHT;
+    const label = new Rectangle2d({
+      x: 0,
+      y: titlePosition === "outside" ? -labelHeight : 0,
+      width: w,
+      height: labelHeight,
+      isFilled: true,
+      isLabel: true,
+      excludeFromShapeBounds: true,
+    });
+    return new Group2d({ children: [body, label] });
   }
 
   override component(shape: SchemaContainerShape) {
