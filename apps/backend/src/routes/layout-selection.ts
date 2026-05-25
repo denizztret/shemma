@@ -4,7 +4,9 @@
 // или didrawNames), запускает runLayout с scope="affected" + affectedIds,
 // возвращает only changed coords.
 //
-// Body: { ids: string[], mode?: LayoutMode, spacing?: Spacing }
+// Body: { ids: string[], mode?: LayoutMode, spacing?: Spacing,
+//         directions?: Record<string, "TB"|"LR"|"BT"|"RL"|"custom">,
+//         scope?: "self" | "auto" }
 // Ответ: { ok: true, version, count, affected: string[] }
 //
 // Edge cases:
@@ -18,6 +20,7 @@ import { config } from "../config";
 import { runLayout } from "../domain/layout";
 import { pushOpLog, resolveRoomId } from "../rooms";
 import { applyStoreChanges, rebuildDidrawIndex } from "../store-ops";
+import type { TLRecord } from "../store-types";
 import type { StoreChangeBus } from "../types";
 import { bundleForRequest } from "./_space-context";
 
@@ -60,10 +63,15 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
     if (!rv.ok) return c.json({ ok: false, error: rv.reason }, 422);
     const id = rv.id;
 
+    const VALID_DIRECTIONS = new Set(["TB", "LR", "BT", "RL", "custom"]);
+    type Direction = "TB" | "LR" | "BT" | "RL" | "custom";
+
     const body = (await c.req.json().catch(() => ({}))) as {
       ids?: unknown;
       mode?: string;
       spacing?: string;
+      directions?: unknown;
+      scope?: unknown;
     };
 
     const rawIds: string[] = Array.isArray(body.ids)
@@ -108,8 +116,27 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
       }
     }
 
-    // All ids unresolved → 400
-    if (affectedIds.size === 0) {
+    // Parse directions map: Record<shapeId, Direction>
+    const rawDirections =
+      body.directions !== null &&
+      typeof body.directions === "object" &&
+      !Array.isArray(body.directions)
+        ? (body.directions as Record<string, unknown>)
+        : null;
+
+    const parsedDirections: Record<string, Direction> = {};
+    if (rawDirections) {
+      for (const [shapeId, dir] of Object.entries(rawDirections)) {
+        if (!VALID_DIRECTIONS.has(dir as string)) continue;
+        parsedDirections[shapeId] = dir as Direction;
+      }
+    }
+
+    const containerScope: "self" | "auto" =
+      body.scope === "self" ? "self" : "auto";
+
+    // All ids unresolved AND no direction updates pending → 400
+    if (affectedIds.size === 0 && Object.keys(parsedDirections).length === 0) {
       return c.json(
         {
           ok: false,
@@ -118,6 +145,60 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
         },
         400,
       );
+    }
+
+    // Apply directions prop patch atomically BEFORE layout (DRW-166: eliminates
+    // the race between optimistic updateShape on frontend and the WS 50ms debounce).
+    const directionUpdated: Record<string, [TLRecord, TLRecord]> = {};
+    for (const [shapeId, dir] of Object.entries(parsedDirections)) {
+      const shape = r.store.store[shapeId];
+      if (!shape || shape.typeName !== "shape") {
+        unresolved.push(shapeId);
+        continue;
+      }
+      const shapeType = (shape as { type?: unknown }).type;
+      if (shapeType !== "schema-container") {
+        unresolved.push(shapeId);
+        continue;
+      }
+      const oldProps = ((shape as { props?: Record<string, unknown> }).props ?? {});
+      const newShape: TLRecord = {
+        ...shape,
+        props: { ...oldProps, direction: dir },
+      };
+      directionUpdated[shapeId] = [shape, newShape];
+      // Ensure shape is in affectedIds so it participates in layout.
+      affectedIds.add(shapeId);
+    }
+
+    if (Object.keys(directionUpdated).length > 0) {
+      const dirBatch = { added: {}, updated: directionUpdated, removed: {} };
+      r.store = applyStoreChanges(r.store, dirBatch);
+      r.didrawIndex = rebuildDidrawIndex(r.store);
+      r.version += 1;
+      pushOpLog(
+        r,
+        { ops: dirBatch, source: "user", version: r.version, at: Date.now() },
+        config.opLogMaxSize,
+      );
+      r.dirty = true;
+      scheduleSave(id, r);
+      bus.publish(space.id, id, {
+        changes: dirBatch,
+        source: "user",
+        version: r.version,
+      });
+    }
+
+    // After direction patch, re-check if we have any shapes to lay out.
+    if (affectedIds.size === 0) {
+      return c.json({
+        ok: true,
+        version: r.version,
+        count: 0,
+        affected: [],
+        unresolved: unresolved.length > 0 ? unresolved : undefined,
+      });
     }
 
     // AC#8: если mode не передан, пробуем определить из mermaidSource всех selected shapes.
@@ -147,6 +228,7 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
       scope: "affected" as never,
       spacing: (body.spacing ?? "normal") as never,
       affectedIds,
+      containerScope,
     };
 
     let lr: Awaited<ReturnType<typeof runLayout>>;

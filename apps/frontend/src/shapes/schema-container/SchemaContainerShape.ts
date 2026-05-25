@@ -22,7 +22,7 @@ declare module "tldraw" {
   }
 }
 
-export type SchemaContainerDirection = "TB" | "LR" | "custom";
+export type SchemaContainerDirection = "TB" | "LR" | "BT" | "RL" | "custom";
 export type SchemaContainerTitlePosition = "inside" | "outside";
 
 export interface SchemaContainerProps {
@@ -45,7 +45,7 @@ export const schemaContainerShapeProps: RecordProps<SchemaContainerShape> = {
   w: T.nonZeroNumber,
   h: T.nonZeroNumber,
   name: T.string,
-  direction: T.literalEnum("TB", "LR", "custom"),
+  direction: T.literalEnum("TB", "LR", "BT", "RL", "custom"),
   titlePosition: T.literalEnum("inside", "outside"),
   color: DefaultColorStyle,
   fill: DefaultFillStyle,
