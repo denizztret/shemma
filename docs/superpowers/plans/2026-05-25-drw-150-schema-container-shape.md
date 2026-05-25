@@ -93,23 +93,40 @@ Expected: FAIL — `r.subgraphStyles` is undefined OR doesn't have INPUT key.
 
 In `apps/backend/src/domain/schema/mermaid-parser.ts`:
 
-(a) Find `ParseResult` ok-variant type, add field:
+**Sub-step (a):** Locate `ParseResult` type (interface or type alias for ok-variant). Likely shape:
 ```ts
-subgraphStyles: Map<string, MermaidNodeStyle>;
+type ParseResult = { ok: true; actions: SchemaAction[]; direction: ...; nodeStyles: Map<...>; ... } | { ok: false; ... }
 ```
+Add new field to ok-variant: `subgraphStyles: Map<string, MermaidNodeStyle>;`.
 
-(b) In parser body where `nodeStyles` is built, add parallel collection:
+**Sub-step (b):** Locate body of `parseMermaidFlowchart`. Find где collection state initialized (skim для `const nodeStyles = new Map`). Add рядом:
 ```ts
 const subgraphStyles = new Map<string, MermaidNodeStyle>();
-const subgraphNames = new Set<string>();  // collected when subgraph X[...] encountered
-// ... existing parse loop ...
-// When parsing `style <TOKEN> fill:...`:
-//   if subgraphNames.has(token) → subgraphStyles.set(token, parsed);
-//   else → nodeStyles.set(token, parsed)  (existing path)
+const subgraphNames = new Set<string>();
 ```
 
-(c) Track `subgraphNames` when parsing `subgraph <NAME>[...]` lines.
-(d) Return `subgraphStyles` in result ok-variant.
+**Sub-step (c):** Find где парсится `subgraph <NAME>[...]` line (search для `subgraph` keyword regex или token). После того как мы extract'или `subgraphName`, добавить:
+```ts
+subgraphNames.add(subgraphName);
+```
+
+**Sub-step (d):** Find где парсится `style <TOKEN> ...` line (search `style ` keyword). Замените unconditional `nodeStyles.set(token, parsed)` на conditional dispatch:
+```ts
+const parsed: MermaidNodeStyle = parseMermaidStyleString(stylePart);
+if (subgraphNames.has(styleToken)) {
+  subgraphStyles.set(styleToken, parsed);
+} else {
+  nodeStyles.set(styleToken, parsed);     // existing path для leaf node
+  // (existing dispatch к nodeStylesByNodeId etc. остаётся unchanged)
+}
+```
+
+**Sub-step (e):** В return statement ok-variant, добавить `subgraphStyles` поле:
+```ts
+return { ok: true, actions, direction, nodeStyles, nodeStylesByNodeId, subgraphStyles };
+```
+
+**NB:** "style directive ORDER matters" — если `style X ...` встречается ДО `subgraph X[...]` declaration в mermaid source, `subgraphNames.has(X)` будет false и стиль пойдёт в `nodeStyles`. Это edge case — для нашей user-схемы style всегда после subgraph blocks. Если станет проблемой, нужен 2-pass parse (first pass: collect subgraph names; second pass: dispatch styles). Defer.
 
 - [ ] **Step 4: Run test to verify pass**
 
@@ -255,11 +272,48 @@ function makeSchemaContainerShape(opts: {
 }
 ```
 
-- [ ] **Step 5: Replace `makeGroupBoundaryShape` calls in POST handler**
+- [ ] **Step 5: Wire subgraphStyles + replace `makeGroupBoundaryShape` call site**
 
-In `apps/backend/src/routes/schema.ts`, find call site (around line 632):
-- Replace `makeGroupBoundaryShape({...})` → `makeSchemaContainerShape({...style: parseResult.subgraphStyles.get(name)})`.
-- Old function `makeGroupBoundaryShape` — keep for now (may be used elsewhere, remove если unused в Task 4 cleanup).
+Find в `apps/backend/src/routes/schema.ts`:
+
+(a) `parseMermaidFlowchart(...)` call в POST handler. После того как мы получаем `parseResult`, добавим:
+```ts
+const subgraphStyles = parseResult.ok ? parseResult.subgraphStyles : new Map();
+```
+
+(b) Find `makeGroupBoundaryShape({...})` call site (был в POST handler, search via `grep -n "makeGroupBoundaryShape" apps/backend/src/routes/schema.ts`). Это создание boundary shape во время `applySchemaActions` обработки `schema-group` actions. Заменить call на:
+
+```ts
+// Before:
+const groupShape = makeGroupBoundaryShape({
+  id: groupShapeId,
+  name: actionName,
+  parentId: frameId,
+  direction: actionDirection,
+});
+
+// After:
+const groupShape = makeSchemaContainerShape({
+  id: groupShapeId,
+  name: actionName,
+  parentId: frameId,
+  direction: actionDirection,
+  style: subgraphStyles.get(actionName),   // pass mermaid style if present
+});
+```
+
+(c) Если `subgraphStyles` живёт outside callsite scope (например он внутри `applySchemaActions` функции), пробросить как параметр:
+```ts
+function applySchemaActions(actions, store, opts) {
+  // ... add subgraphStyles to opts ...
+}
+// Caller:
+applySchemaActions(actions, store, { subgraphStyles });
+```
+
+(d) **Не удалять** `makeGroupBoundaryShape` — оставляем для backwards-compat и любых других callsites. Если grep показывает что больше нет callers, удалить можно в follow-up cleanup (DRW-150.x).
+
+**Verification:** `grep -n "makeGroupBoundaryShape\|makeSchemaContainerShape" apps/backend/src/routes/schema.ts` — should show old function defined но no call sites; new function defined AND called.
 
 - [ ] **Step 6: Run test to verify pass**
 
@@ -400,6 +454,21 @@ for (const sc of topLevelSelectedContainers) {
 }
 ```
 
+- [ ] **Step 5b: Document scope='all' behavior (known design)**
+
+**Important behavior note:** custom direction skip применяется **только** в `runLayoutSubgraph` path (scope='affected'). Global `Cmd+Shift+L` triggers `scope='all'` → single-pass `buildElkGraph` который НЕ проверяет custom direction. Container с direction='custom' получит re-layout при global Cmd+Shift+L.
+
+Это **design decision per user expectation:**
+- User меняет direction через context menu → re-layout этого container (preserve other shapes).
+- User triggers global Cmd+Shift+L → re-layout всё (intentional override custom).
+
+Добавить inline comment в `runLayout` near isSubgraphMode branch:
+```ts
+// DRW-150: scope='all' (Cmd+Shift+L) overrides custom direction containers.
+// Per user expectation — global layout request implies "re-layout everything".
+// Per-container preserve (custom direction) only applies в scope='affected' path.
+```
+
 - [ ] **Step 6: Run test to verify pass**
 
 Run: `bun test apps/backend/tests/domain/layout.test.ts -t "DRW-150"`
@@ -494,9 +563,8 @@ export const DEFAULT_SCHEMA_CONTAINER_PROPS: SchemaContainerProps = {
 Create barrel `apps/frontend/src/shapes/schema-container/index.ts`:
 ```ts
 export * from "./SchemaContainerShape";
-export * from "./SchemaContainerShapeUtil";
 ```
-(Util comes in Task 6.)
+**Важно:** Util / AutoFlip / Actions добавятся в барель в Task 6/9/10 как они создаются. Не экспортируй из несозданных файлов сейчас — это сломает любой `import { ... } from "./shapes/schema-container"`.
 
 - [ ] **Step 2: Commit**
 
@@ -526,10 +594,9 @@ Create `apps/frontend/src/shapes/schema-container/SchemaContainerShapeUtil.tsx`:
 ```tsx
 import {
   BaseFrameLikeShapeUtil,
-  Editor,
+  type Editor,
   SVGContainer,
   getDefaultColorTheme,
-  useIsDarkMode,
 } from "tldraw";
 import {
   DEFAULT_SCHEMA_CONTAINER_PROPS,
@@ -559,8 +626,10 @@ export class SchemaContainerShapeUtil extends BaseFrameLikeShapeUtil<SchemaConta
 }
 
 function renderInsideTitle(shape: SchemaContainerShape, editor: Editor) {
+  // Note: `editor` param сохраняем для future use (theme detection, hover state).
+  // Сейчас hardcoded light theme — improve в DRW-150.x.
   const { w, h, name, color, fill, dash } = shape.props;
-  const isDark = false;  // simplification — useIsDarkMode hook не доступен вне component func
+  const isDark = editor.user.getIsDarkMode();
   const theme = getDefaultColorTheme({ isDarkMode: isDark });
   const colorCss = theme[color].solid;
   const fillCss = fill === "none" ? "transparent" : fill === "solid" ? colorCss : `${colorCss}33`;
@@ -635,9 +704,10 @@ proper outside рендер в Task 7."
 Replace placeholder function in `SchemaContainerShapeUtil.tsx`:
 
 ```tsx
-function renderOutsideTitle(shape: SchemaContainerShape, _editor: Editor) {
+function renderOutsideTitle(shape: SchemaContainerShape, editor: Editor) {
   const { w, h, name, color, fill, dash } = shape.props;
-  const theme = getDefaultColorTheme({ isDarkMode: false });
+  const isDark = editor.user.getIsDarkMode();
+  const theme = getDefaultColorTheme({ isDarkMode: isDark });
   const colorCss = theme[color].solid;
   const fillCss = fill === "none" ? "transparent" : fill === "solid" ? colorCss : `${colorCss}33`;
   const strokeDasharray =
@@ -762,6 +832,14 @@ shapeUtils prop добавлен с SchemaContainerShapeUtil. Tldraw editor
 - Create: `apps/frontend/src/shapes/schema-container/SchemaContainerAutoFlip.test.ts`
 
 - [ ] **Step 1: Write failing test for auto-flip**
+
+**Caveat:** Test bootstrap (Editor constructor signature, dispose API) может отличаться в tldraw 5.x. Если test setup ниже не работает, simplify по факту — possible alternatives:
+
+1. Использовать `TldrawTestContext` / `setupTldraw` helper если такой есть в tldraw test utils.
+2. Mock side-effect handler напрямую без полного Editor — call handler как pure function.
+3. Defer integration test → cover behavior в E2E (Task 12) only.
+
+Implementer choice: предпочитать (1), fallback (2). Important: тест ДОЛЖЕН проверить both cases (user vs programmatic).
 
 Create `apps/frontend/src/shapes/schema-container/SchemaContainerAutoFlip.test.ts`:
 
@@ -1339,6 +1417,22 @@ Expected: tag on release commit, history shows merge.
 
 3. **Type consistency** — `SchemaContainerProps` used same way in all tasks. `direction` enum consistent. ✓
 
+## Self-review changelog (v0.1 → v0.2)
+
+1. **Task 5 barrel fix** — index.ts экспортирует только Shape file initially. Util/AutoFlip/Actions добавляются в барель в их respective tasks. Иначе T5 commit ломал бы build (imports from non-existent file).
+
+2. **Task 3 Step 5 detail** — добавлен полный pseudocode для callsite replacement: (a) get subgraphStyles из parseResult, (b) before/after example для makeGroupBoundaryShape→makeSchemaContainerShape, (c) prop propagation если нужно, (d) verification command. Subagent теперь имеет explicit guidance.
+
+3. **Task 4 Step 5b** — добавлен паграф про scope='all' behavior. Cmd+Shift+L (global) намеренно overrides custom direction containers per user expectation ("re-layout everything"). Per-container preserve работает только в context-menu trigger path. Inline comment в `runLayout`.
+
+4. **Task 9 Editor constructor caveat** — добавлен Step 1 disclaimer с 3 fallback options если test bootstrap broken. Implementer's choice.
+
+5. **Task 6 unused imports cleanup** — `useIsDarkMode` удалён из imports (использовалось через editor.user). `Editor` стал `type Editor` (type-only import). `_editor` параметры теперь все `editor` с real usage (isDarkMode detection).
+
+6. **Task 2 explicit pseudocode** — 5 явных sub-steps (a..e) для parser modification: type field, state init, subgraphNames collection, style dispatch, return. + edge-case note про style-before-subgraph ordering.
+
+Open Questions Q1-Q5 from spec — частично решены в plan'е (Q4 preserve = relative, Q1 trigger = `/api/layout/selection` Task 10/11). Q2 visual identity, Q3 frame-bar height — defaulted к pragmatic values (font 20 / bar 28px). Refinement если visual feedback negative — DRW-150.x.
+
 ---
 
-**End of Plan.**
+**End of Plan v0.2.**
