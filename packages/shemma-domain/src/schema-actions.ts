@@ -46,6 +46,10 @@ export type SchemaGroupAction = {
   label?: string;
   /** Per-subgraph layout direction from mermaid `direction TB|LR|BT|RL` line. */
   direction?: "TB" | "LR" | "BT" | "RL";
+  /** Raw mermaid id of the subgraph (e.g. "INPUT") — used for style lookup.
+   *  Distinct from `name` which is the resolved NodeId (e.g. "входa1b2c3").
+   *  DRW-150 C1: callsite must use this key against subgraphStyles map. */
+  mermaidId?: string;
 };
 
 /** Удалить ребро между двумя узлами. */

@@ -777,3 +777,28 @@ describe("parseMermaidFlowchart — DRW-155 multi-line quoted labels", () => {
     expect(defines).toHaveLength(2);
   });
 });
+
+test("DRW-162: collects subgraph styles from style directives", () => {
+  const src = `flowchart TB
+ subgraph INPUT["Вход"]
+   SE["SourceEvent"]
+ end
+ subgraph TRANSPORT["Доставка"]
+   AS["AnalyticsSinkProtocol"]
+ end
+ style INPUT fill:#e3f2fd,stroke:#1565c0,color:#000
+ style TRANSPORT fill:#C8E6C9,stroke:#2e7d32
+ style SE fill:#fff,stroke:#000
+`;
+  const r = parseMermaidFlowchart(src, {
+    suffixLen: 6,
+    existingIds: new Set(),
+    generateId: (slug, existing) => `${slug}-xxxxxx` as NodeId,
+  });
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  expect(r.subgraphStyles).toBeDefined();
+  expect(r.subgraphStyles.get("INPUT")).toEqual({ fill: "#e3f2fd", stroke: "#1565c0", color: "#000" });
+  expect(r.subgraphStyles.get("TRANSPORT")).toEqual({ fill: "#C8E6C9", stroke: "#2e7d32" });
+  expect(r.nodeStyles.get("SE")).toBeDefined();
+});

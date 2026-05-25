@@ -1,4 +1,17 @@
-## Unreleased — DRW-157 + DRW-158 + DRW-159 + DRW-160 + DRW-161 (visual-fidelity continuation)
+## 0.26.0 — 2026-05-25 — DRW-150 schema-container shape + visual-fidelity cluster (DRW-157..163)
+
+### Added
+
+- **DRW-150** — Кастомный tldraw shape `schema-container` заменяет `geo + meta.didrawSubgraph` обёртки для subgraph wrappers (новые комнаты). Naследует frame-like behavior через `BaseFrameLikeShapeUtil`: resize **не** масштабирует children, drag-to-reparent работает out of the box.
+  - **Typed props:** `direction: "TB" | "LR" | "custom"`, `titlePosition: "inside" | "outside"`, plus standard `TLDefault*Style` для color/fill/dash (TLDraw style panel работает на selected schema-container).
+  - **Per-container direction toggle** через context-menu (3 actions: TB / LR / Custom). Setting direction → `updateShape` props + immediate POST `/api/agent/layout-selection` для re-layout если direction !== 'custom'.
+  - **Auto-flip:** manual user drag ребёнка контейнера → `props.direction → "custom"` (через `editor.store.listen({source:"user"})`). Programmatic/AI updates НЕ trigger flip.
+  - **Mermaid style applied to wrappers** (subsumes DRW-162): `style <subgraphName> fill:#hex,stroke:#hex` → schema-container получает соответствующий tldraw color (stroke priority over fill, hex→nearest TLDefault* mapping).
+  - **Backwards-compat (skip migration):** existing rooms с `geo+meta.didrawSubgraph` продолжают работать; `isContainerShape` + `readContainerDirection` имеют dual-path для legacy и нового типа.
+  - **Backend factory** `makeSchemaContainerShape` в `routes/schema.ts` заменяет `makeGroupBoundaryShape` callsite. `normalizeDirection` BT/RL → TB/LR (full BT/RL support — P1 в DRW-150.x).
+  - **TS schema:** `TLGlobalShapePropsMap` module augmentation + `defineShape` registration через `shapeUtils={[SchemaContainerShapeUtil]}` prop на `<Tldraw>`.
+  - **Render:** SVG rectangle с dashed border, semi fill, title centered top (inside). Outside title-bar variant заложен (`titlePosition: "outside"`), default `inside`.
+  - **Pass A custom skip:** в `runLayoutSubgraph` containers с `direction:"custom"` пропускаются — children preserve manual positions. Scope='all' (Cmd+Shift+L) overrides custom — global re-layout intentional.
 
 ### Fixed
 
@@ -8,13 +21,25 @@
 - **DRW-158** — Mermaid `subgraph X\ndirection LR\n A\n B\nend` где A и B не имеют edges между собой (только external incoming/outgoing) — ELK раскладывал их вертикально (default behavior для disconnected components в layered direction mode). Reproduced на user-схеме 2026-05-24 (subgraphs "Доставка" и "Потребители" из EventDispatch flow).
   - **Fix:** в `runPassA` после `buildEdges` детектируем connected components — если direction override задан и компонент > 1 — добавляются virtual chain edges (`v_chain_<i>`) по declaration order. ELK respects direction; edge geometry мы не читаем (только node positions).
   - `countConnectedComponents` utility в `apps/backend/src/domain/layout.ts`.
-- **DRW-157** — `isContainerShape` теперь детектит mermaid subgraph wrappers через `meta.didrawSubgraph === true` (DRW-156 followup, ранее unreleased на main).
+- **DRW-163** — `CONTAINER_PAD_TOP` 40 → 72px (избежать overlap title контейнера с first row child shapes).
+- **DRW-157** — `isContainerShape` теперь детектит mermaid subgraph wrappers через `meta.didrawSubgraph === true` (DRW-156 followup).
 
 ### Tests
 
-- **+2 теста** DRW-158-A/B + **+1 тест** DRW-161 в `layout.test.ts` — LR/TB subgraphs no edges + cross-subgraph chain ranking. Backend layout suite 21 pass.
-- **+1 тест** DRW-159 в `schema.test.ts` — v5 frame props validation.
-- Full backend 1489 + frontend 262 = 1751 tests, 0 fail.
+- **DRW-150:** +1 parser test (subgraphStyles), +3 schema tests (factory + style mapping positive/negative), +1 layout test (custom direction skip), +7 frontend auto-flip tests (pure function).
+- **DRW-157..163:** +2 layout (DRW-158 LR/TB no-edges), +1 layout (DRW-161 cross-subgraph), +1 schema (DRW-159 frame color).
+- Backend 1494 (+5) + frontend 269 (+7) = **1763 tests, 0 fail**.
+
+### Migration
+
+- Skip-migration policy: existing rooms с `geo+meta.didrawSubgraph` wrappers продолжают работать через legacy branch в `isContainerShape` / `readContainerDirection`. Новые комнаты получают `schema-container` тип.
+
+### Known limitations (deferred к DRW-150.x)
+
+- `direction: "BT" | "RL"` — currently normalized to TB/LR. Full 4-direction support — отдельная задача.
+- Arrow style toggle (curved ↔ elbow) — не входит в этот release.
+- Native tldraw frame-like label дублируется с SVG title (cosmetic).
+- Custom panel UI (Miro-style multi-shape settings) — отдельная задача.
 
 ## 0.25.3 — 2026-05-24 — DRW-156 Services parented to subgraph wrappers
 

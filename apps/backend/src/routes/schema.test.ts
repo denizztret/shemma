@@ -158,17 +158,19 @@ describe("POST /api/schema/create", () => {
     const allShapes = Object.values(room.store.store).filter((r) => r?.typeName === "shape");
     const frameChildren = allShapes.filter((r) => r?.parentId === body.frameId);
 
-    // DRW-156: nodes a and b belong to subgraph X → parented to group boundary shape, not frame.
-    // Frame direct children: 1 group boundary (subgraph X) + 1 node (c) + 2 arrows = 4 shapes.
+    // DRW-156 / DRW-150: nodes a and b belong to subgraph X → parented to group boundary shape, not frame.
+    // Frame direct children: 1 schema-container (subgraph X) + 1 node geo (c) + 2 arrows = 4 shapes.
     const geoShapes = frameChildren.filter((r) => r?.type === "geo");
     const arrowShapes = frameChildren.filter((r) => r?.type === "arrow");
+    const containerShapes = frameChildren.filter((r) => r?.type === "schema-container");
 
-    expect(geoShapes.length).toBe(2); // 1 subgraph boundary + 1 free node (c)
+    expect(geoShapes.length).toBe(1); // 1 free node (c) — boundary is now schema-container
+    expect(containerShapes.length).toBe(1); // 1 subgraph boundary (DRW-150)
     expect(arrowShapes.length).toBe(2);
 
-    // The subgraph boundary shape is a frame child.
+    // The subgraph boundary shape is a frame child (DRW-150: schema-container).
     const boundaryShape = frameChildren.find(
-      (r) => r?.type === "geo" && (r?.meta as { didrawSubgraph?: unknown })?.didrawSubgraph === true,
+      (r) => r?.type === "schema-container" && (r?.meta as { didrawSubgraph?: unknown })?.didrawSubgraph === true,
     );
     expect(boundaryShape).toBeDefined();
 
@@ -213,9 +215,9 @@ describe("POST /api/schema/create", () => {
     const room = await rooms.get("schema-test");
     const allShapes = Object.values(room.store.store).filter((r) => r?.typeName === "shape");
 
-    // Find both group boundary shapes.
+    // Find both group boundary shapes (DRW-150: now schema-container type).
     const boundaries = allShapes.filter(
-      (r) => r?.type === "geo" && (r?.meta as { didrawSubgraph?: unknown })?.didrawSubgraph === true,
+      (r) => r?.type === "schema-container" && (r?.meta as { didrawSubgraph?: unknown })?.didrawSubgraph === true,
     );
     expect(boundaries.length).toBe(2); // GroupA and GroupB wrappers
 
@@ -789,6 +791,73 @@ describe("POST /api/schema/create — DRW-153 mermaid style directives applied t
     expect(nodeA).toBeDefined();
     // Without style directive, labelColor defaults to "black"
     expect(nodeA?.props?.labelColor).toBe("black");
+  });
+
+  test("DRW-150: subgraph wrapper создаётся как schema-container shape", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(app, {
+      raw: `flowchart TB
+ subgraph INPUT["Вход"]
+   SE["SourceEvent"]
+ end
+ style INPUT fill:#e3f2fd,stroke:#1565c0
+`,
+    });
+    expect(res.status).toBe(200);
+    const room = await rooms.get("schema-test");
+    const wrapper = Object.values(room.store.store).find(
+      (r: any) => r?.type === "schema-container",
+    ) as any;
+    expect(wrapper).toBeDefined();
+    expect(wrapper.type).toBe("schema-container");
+    expect(wrapper.props.name).toBe("Вход");
+    expect(wrapper.props.direction).toBe("TB");
+    expect(wrapper.props.titlePosition).toBe("inside");
+    expect(wrapper.props.dash).toBe("dashed");
+    expect(wrapper.meta.didrawSubgraph).toBe(true);
+  });
+
+  test("DRW-150 AC-8: subgraph С style directive → wrapper получает non-default color (не grey)", async () => {
+    // stroke:#1565c0 (dark blue) → hexToTldrawColor → "blue" (nearest in tldraw palette).
+    // Default factory color is "grey" — if style lookup fails, test will catch it.
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(app, {
+      raw: `flowchart TB
+ subgraph INPUT["Вход"]
+   SE["SourceEvent"]
+ end
+ style INPUT fill:#e3f2fd,stroke:#1565c0
+`,
+    }, "drw150-styled");
+    expect(res.status).toBe(200);
+    const room = await rooms.get("drw150-styled");
+    const wrapper = Object.values(room.store.store).find(
+      (r: any) => r?.type === "schema-container",
+    ) as any;
+    expect(wrapper).toBeDefined();
+    // Must NOT be default grey — proves style lookup (C1 fix) actually worked
+    expect(wrapper.props.color).not.toBe("grey");
+    // stroke:#1565c0 → nearest tldraw color is "blue"
+    expect(["blue", "light-blue"]).toContain(wrapper.props.color);
+  });
+
+  test("DRW-150 AC-8: subgraph БЕЗ style directive → wrapper получает default grey", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(app, {
+      raw: `flowchart TB
+ subgraph INPUT["Вход"]
+   SE["SourceEvent"]
+ end
+`,
+    }, "drw150-unstyled");
+    expect(res.status).toBe(200);
+    const room = await rooms.get("drw150-unstyled");
+    const wrapper = Object.values(room.store.store).find(
+      (r: any) => r?.type === "schema-container",
+    ) as any;
+    expect(wrapper).toBeDefined();
+    // No style directive → factory default
+    expect(wrapper.props.color).toBe("grey");
   });
 
   test("mixed styled and unstyled nodes in same diagram", async () => {

@@ -54,6 +54,13 @@ export type ParseResult =
        * Only includes nodes that appear in both a node/edge line and a style directive.
        */
       nodeStylesByNodeId: Map<NodeId, MermaidNodeStyle>;
+      /**
+       * Parsed `style NAME ...` directives for subgraph boundaries — keyed by subgraph mermaid id (slug).
+       * Populated only for identifiers that appeared in a `subgraph X[...]` header at parse time.
+       * NOTE: if a `style X ...` directive appears BEFORE the `subgraph X[...]` line in source,
+       * it will NOT be captured here (classified as leaf node style instead). MVP limitation.
+       */
+      subgraphStyles: Map<string, MermaidNodeStyle>;
     }
   | {
       ok: false;
@@ -197,6 +204,10 @@ export function parseMermaidFlowchart(
   const actions: SchemaAction[] = [];
   /** Parsed style directives: mermaid id → style object (keyed by raw mermaid id). */
   const nodeStyles = new Map<string, MermaidNodeStyle>();
+  /** Parsed style directives for subgraph boundaries — keyed by subgraph mermaid id. */
+  const subgraphStyles = new Map<string, MermaidNodeStyle>();
+  /** Set of mermaid ids that are subgraph identifiers (populated as subgraph headers are parsed). */
+  const subgraphNames = new Set<string>();
 
   /** Stack of active subgraph contexts — for tracking nesting */
   const subgraphStack: Array<{
@@ -246,8 +257,12 @@ export function parseMermaidFlowchart(
     if (subgraphMatch) {
       const sgMermaidId = subgraphMatch[1] ?? "";
       const rawSgLabel = subgraphMatch[2];
-      const sgLabel =
+      // DRW-150 W1: strip surrounding quotes from label here in parser, not in factory.
+      // e.g. subgraph INPUT["Вход"] → rawSgLabel = '"Вход"' → sgLabel = 'Вход'
+      const sgLabelRaw =
         rawSgLabel !== undefined ? rawSgLabel.trim() : sgMermaidId;
+      const sgLabel = sgLabelRaw.replace(/^["']|["']$/g, "");
+      subgraphNames.add(sgMermaidId);
       subgraphStack.push({ mermaidId: sgMermaidId, label: sgLabel, children: [] });
       continue;
     }
@@ -260,12 +275,14 @@ export function parseMermaidFlowchart(
           // Ensure the subgraph itself has a NodeId
           const sgNodeId = resolveNodeId(sg.mermaidId, sg.label);
           // Emit schema-group action
+          // DRW-150 C1: include mermaidId so callsite can use it for subgraphStyles lookup.
           const groupAction: SchemaGroupAction = {
             kind: "schema-group",
             name: sgNodeId,
             label: sg.label,
             as: "boundary",
             nodeIds: sg.children,
+            mermaidId: sg.mermaidId,
             ...(sg.direction !== undefined ? { direction: sg.direction } : {}),
           };
           actions.push(groupAction);
@@ -293,10 +310,18 @@ export function parseMermaidFlowchart(
     // Syntax: style <nodeId> <prop>:<val>[,<prop>:<val>]*
     const styleDirectiveMatch = line.match(/^style\s+(\S+)\s+(.*)/);
     if (styleDirectiveMatch) {
-      const mermaidId = styleDirectiveMatch[1] as string;
+      const styleToken = styleDirectiveMatch[1] as string;
       const styleStr = styleDirectiveMatch[2] as string;
       const parsed = parseMermaidStyleString(styleStr);
-      if (parsed) nodeStyles.set(mermaidId, parsed);
+      if (parsed) {
+        if (subgraphNames.has(styleToken)) {
+          // Subgraph boundary style — stored separately for use in schema factory (Task 3)
+          subgraphStyles.set(styleToken, parsed);
+        } else {
+          // Leaf node style — stored in nodeStyles as before
+          nodeStyles.set(styleToken, parsed);
+        }
+      }
       continue;
     }
 
@@ -333,7 +358,7 @@ export function parseMermaidFlowchart(
     }
   }
 
-  return { ok: true, actions, direction, nodeStyles, nodeStylesByNodeId };
+  return { ok: true, actions, direction, nodeStyles, nodeStylesByNodeId, subgraphStyles };
 }
 
 // ---- Style string parsing ----

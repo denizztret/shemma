@@ -882,4 +882,33 @@ describe("runLayout", () => {
     // layered-lr: frameA should be left of frameB
     expect(fa.x).toBeLessThan(fb.x);
   });
+
+  test("DRW-150: schema-container with direction='custom' → Pass A skipped, children preserve positions", async () => {
+    const frame = makeShape("shape:e_frame", "frame", { type: "frame", x: 0, y: 0, w: 800, h: 600 });
+    const cont = {
+      id: "shape:e_cont",
+      typeName: "shape",
+      type: "schema-container",
+      x: 0,
+      y: 0,
+      parentId: "shape:e_frame",
+      props: { w: 400, h: 300, name: "cont", direction: "custom", titlePosition: "inside",
+               color: "grey", fill: "semi", dash: "dashed" },
+      meta: { didrawName: "cont" },
+    } as TLRecord;
+    const aShape = makeShape("shape:e_a", "a", { parentId: "shape:e_cont", x: 50, y: 50 });
+    const bShape = makeShape("shape:e_b", "b", { parentId: "shape:e_cont", x: 150, y: 200 });
+    const s = snapshotWith([frame, cont, aShape, bShape]);
+    const idx = rebuildDidrawIndex(s);
+    const affectedIds = new Set(["shape:e_frame", "shape:e_cont", "shape:e_a", "shape:e_b"]);
+    const r = await runLayout(s, { mode: "layered-tb", scope: "affected", affectedIds }, idx);
+    expect(r.reason).toBeUndefined();
+    const ns = applyStoreChanges(s, r.batch);
+    const aAfter = ns.store["shape:e_a"] as { x: number; y: number };
+    const bAfter = ns.store["shape:e_b"] as { x: number; y: number };
+    expect(aAfter.x).toBe(50);
+    expect(aAfter.y).toBe(50);
+    expect(bAfter.x).toBe(150);
+    expect(bAfter.y).toBe(200);
+  });
 });

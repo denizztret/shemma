@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type Editor, type TLGeoShape, Tldraw } from "tldraw";
+import {
+  SchemaContainerShapeUtil,
+  registerAutoFlipDirection,
+  setSchemaContainerDirection,
+} from "./shapes/schema-container";
+import type { SchemaContainerDirection } from "./shapes/schema-container";
 import "tldraw/tldraw.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
@@ -117,6 +123,10 @@ export function App({
   // component) to avoid re-mounting the editor on every render.
   const onTidySelection = useRef<((ids: string[]) => void) | null>(null);
   const onExportSelection = useRef<((ids: string[]) => void) | null>(null);
+  // DRW-150: schema-container direction callback — needs live editor ref, set in onMount.
+  const onSetContainerDirection = useRef<((direction: SchemaContainerDirection) => void) | null>(null);
+  // DRW-150: disposer for registerAutoFlipDirection — prevents listener accumulation on HMR/room-switch.
+  const autoFlipDisposerRef = useRef<(() => void) | null>(null);
   onExportSelection.current = (ids: string[]) => {
     if (ids.length === 0) return;
     setExportOpen(true);
@@ -127,9 +137,18 @@ export function App({
         onMermaidImport: () => setMermaidOpen(true),
         onTidySelection: (ids) => onTidySelection.current?.(ids),
         onExportSelection: (ids) => onExportSelection.current?.(ids),
+        onSetContainerDirection: (direction) => onSetContainerDirection.current?.(direction),
       }),
     [space, room],
   );
+
+  // DRW-150: cleanup auto-flip listener on unmount
+  useEffect(() => {
+    return () => {
+      autoFlipDisposerRef.current?.();
+      autoFlipDisposerRef.current = null;
+    };
+  }, []);
 
   // ⌘K / ⌘M / Esc keyboard handler.
   useEffect(() => {
@@ -674,8 +693,15 @@ export function App({
         // Phase 3.0: NO persistenceKey. Backend TLStoreSnapshot — единственный
         // источник правды; IndexedDB persistence создавал split-brain между
         // tab'ами и бэкендом (см. spec §3.x). Refresh → /api/state → loadSnapshot.
+        shapeUtils={[SchemaContainerShapeUtil]}
         onMount={(ed) => {
           setEditor(ed);
+          // DRW-150: store disposer to prevent listener accumulation on HMR/room-switch
+          autoFlipDisposerRef.current?.();
+          autoFlipDisposerRef.current = registerAutoFlipDirection(ed);
+          // DRW-150: wire direction callback for context-menu (requires live editor)
+          onSetContainerDirection.current = (direction) =>
+            setSchemaContainerDirection(ed, direction);
           if (import.meta.env.DEV) {
             // biome-ignore lint/suspicious/noExplicitAny: dev-only debug hook
             (window as any).__editor = ed;
