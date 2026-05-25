@@ -24,6 +24,13 @@ export class SchemaContainerShapeUtil extends BaseFrameLikeShapeUtil<SchemaConta
     return { ...DEFAULT_SCHEMA_CONTAINER_PROPS };
   }
 
+  // DRW-165: frame-like semantics — children keep their bounds when the
+  // container is resized. Base `ShapeUtil.canResizeChildren` defaults to true
+  // (would scale all descendants proportionally with the container).
+  override canResizeChildren(_shape: SchemaContainerShape): boolean {
+    return false;
+  }
+
   // DRW-164: tldraw `getShapeAtPoint` для frame-like shapes делает
   // `(geometry as Group2d).children` — default `BaseBoxShapeUtil.getGeometry`
   // возвращает `Rectangle2d` без children → `E.children is not iterable` crash
