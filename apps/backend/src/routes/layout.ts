@@ -4,6 +4,7 @@ import { runLayout } from "../domain/layout";
 import { pushOpLog, resolveRoomId } from "../rooms";
 import { applyStoreChanges, rebuildDidrawIndex } from "../store-ops";
 import type { StoreChangeBus } from "../types";
+import { runAndBroadcastAnchors } from "./_anchors";
 import { bundleForRequest } from "./_space-context";
 
 export function layoutRoutes(bus: StoreChangeBus) {
@@ -55,6 +56,9 @@ export function layoutRoutes(bus: StoreChangeBus) {
       source: "ai",
       version: r.version,
     });
+
+    // DRW-172: post-layout anchor distribution.
+    runAndBroadcastAnchors(r, bus, space.id, id, scheduleSave);
 
     return c.json({ ok: true, version: r.version, count });
   });

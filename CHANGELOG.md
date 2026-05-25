@@ -1,5 +1,9 @@
 ## Unreleased
 
+### Added
+
+- **DRW-172** — Per-edge arrow anchor distribution. Раньше backend писал hardcoded `normalizedAnchor: {x:0.5, y:0.5}` + `isPrecise: false` для всех bindings (в `routes/schema.ts:makeArrowBindingsLocal` и `domain/schema/apply.ts:makeArrowBindings`) — tldraw render проектировал на periphery из центра, что приводило к visual overlap при N стрелках из/в один shape (hub-spoke не читался). Новый `apps/backend/src/domain/anchors.ts:computeAnchors` запускается post-layout в каждом endpoint меняющем positions (`/api/schema/create`, `/api/schema/:frameId/patch`, `/api/schema/:frameId/measured-bounds`, `/api/layout`, `/api/agent/layout-selection`) через helper `apps/backend/src/routes/_anchors.ts:runAndBroadcastAnchors`. Алгоритм cardinal-snap: (1) для каждого arrow с обоими bindings — угол center-to-center → snap к ближайшей стороне (top/bottom/left/right); (2) group по `(shapeId, side)`, sort by perpendicular peer position; (3) distribute offsets `(i+1)/(n+1)` — 1→0.5, 2→0.33/0.67, 3→0.25/0.5/0.75; (4) write `normalizedAnchor + isPrecise=true`; (5) write `arrow.meta.didrawSourcePort` + `didrawTargetPort` — port-side meta как input contract для DRW-173 (libavoid edge router). Preservation: arrow с `meta.styleOwnedBy: "user"` или binding с `isExact: true` пропускаются; dangling arrows (!=2 bindings) skip. Idempotent: re-trigger на already-correct store → empty batch. Verified live: hub-spoke schema (1 hub + 4 outgoing + 2 incoming) — стрелки выходят из distributed точек периметра, нет visual overlap.
+
 ### Fixed
 
 - **DRW-174** — После DRW-171 текст помещался в shape'ах, но frame и schema-container'ы не пересчитывались под выросшие children → дети визуально вылезали за нижнюю границу родителя, sibling subgraphs не разъезжались. Корень: backend `runLayout.shapeBounds` читал только `props.h`, игнорируя `props.growY` (tldraw geo/note хранят добавочную высоту для текста в `growY`); ELK Pass A видел старый estimate 220×80, frame.props.h ставился под estimate, а frontend autosize дополнительно ставил growY-only локально (через WS как user-source change, но без trigger'а re-layout). Fix two-prong:
@@ -11,6 +15,7 @@
 
 ### Tests
 
+- **DRW-172:** 20 unit (`anchors.test.ts` — snapAngleToSide cardinal mapping + boundary, anchorForSide для 4 сторон, single arrow east → right/left, hub с 3 outgoing → 0.25/0.5/0.75 distribution sorted by peer y, 4-spoke fan → 4 port pairs, user-pinned skip, isExact skip, dangling skip, missing endpoint skip, idempotent, arrowIds filter, parent-relative coords via parentId walk) + 3 schema integration (`schema.test.ts` — hub-spoke 3 outgoing → all bindings precise + meta written, single arrow east → right/left ports, idempotent measured-bounds → version stable). Backend +23 tests.
 - **DRW-174:** 8 backend integration (`schema.test.ts` — apply bounds + frame.h grow, non-descendant skip, no-op skip, invalid w/h skip, frame-not-found 404, legacy room 422, bad-request 400, multi-child apply) + 5 frontend (`auto-size.test.ts` — POST для shape внутри schema-frame с effective h=h+growY, no POST без ancestor, no POST для plain non-schema frame, grouped POST через nested schema-container, no POST если effective bounds не изменились). Frontend 283 (+5), backend +8 schema route tests.
 - **DRW-171:** 9 unit (`auto-size.test.ts` — empty / geo / note / text / non-autosize types / ids-filter / mixed / empty ids set). Frontend 278 (+9), backend 1817 без изменений = **2095 tests, 0 fail**.
 
