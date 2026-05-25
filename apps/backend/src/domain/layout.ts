@@ -56,7 +56,10 @@ const NODE_SPACING_X = 40;
 const NODE_SPACING_Y = 20;
 
 // Padding around children inside a container after Pass A layout.
-const CONTAINER_PAD_TOP = 40;
+// DRW-162: top padding увеличен с 40 до 72 — geo boundary рисует label
+// сверху-по-середине; 40px давал overlap между title контейнера и first row
+// child shapes. 72 ≈ font-height (m: ~24px) + breathing room.
+const CONTAINER_PAD_TOP = 72;
 const CONTAINER_PAD_LR = 20;
 const CONTAINER_PAD_BOT = 20;
 
