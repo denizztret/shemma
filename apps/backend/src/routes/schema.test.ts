@@ -813,10 +813,51 @@ describe("POST /api/schema/create — DRW-153 mermaid style directives applied t
     expect(wrapper.props.name).toBe("Вход");
     expect(wrapper.props.direction).toBe("TB");
     expect(wrapper.props.titlePosition).toBe("inside");
-    expect(wrapper.props.color).toBeDefined();
-    expect(wrapper.props.fill).toBe("semi");
     expect(wrapper.props.dash).toBe("dashed");
     expect(wrapper.meta.didrawSubgraph).toBe(true);
+  });
+
+  test("DRW-150 AC-8: subgraph С style directive → wrapper получает non-default color (не grey)", async () => {
+    // stroke:#1565c0 (dark blue) → hexToTldrawColor → "blue" (nearest in tldraw palette).
+    // Default factory color is "grey" — if style lookup fails, test will catch it.
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(app, {
+      raw: `flowchart TB
+ subgraph INPUT["Вход"]
+   SE["SourceEvent"]
+ end
+ style INPUT fill:#e3f2fd,stroke:#1565c0
+`,
+    }, "drw150-styled");
+    expect(res.status).toBe(200);
+    const room = await rooms.get("drw150-styled");
+    const wrapper = Object.values(room.store.store).find(
+      (r: any) => r?.type === "schema-container",
+    ) as any;
+    expect(wrapper).toBeDefined();
+    // Must NOT be default grey — proves style lookup (C1 fix) actually worked
+    expect(wrapper.props.color).not.toBe("grey");
+    // stroke:#1565c0 → nearest tldraw color is "blue"
+    expect(["blue", "light-blue"]).toContain(wrapper.props.color);
+  });
+
+  test("DRW-150 AC-8: subgraph БЕЗ style directive → wrapper получает default grey", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(app, {
+      raw: `flowchart TB
+ subgraph INPUT["Вход"]
+   SE["SourceEvent"]
+ end
+`,
+    }, "drw150-unstyled");
+    expect(res.status).toBe(200);
+    const room = await rooms.get("drw150-unstyled");
+    const wrapper = Object.values(room.store.store).find(
+      (r: any) => r?.type === "schema-container",
+    ) as any;
+    expect(wrapper).toBeDefined();
+    // No style directive → factory default
+    expect(wrapper.props.color).toBe("grey");
   });
 
   test("mixed styled and unstyled nodes in same diagram", async () => {

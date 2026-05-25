@@ -205,8 +205,9 @@ function makeSchemaContainerShape(opts: {
 }): TLRecord {
   const id = opts.id ?? childShapeId();
   const styleProps = opts.style ? resolveSubgraphStyle(opts.style) : {};
-  // Strip surrounding quotes from label (mermaid `["Label"]` syntax preserves them).
-  const name = opts.name.replace(/^["']|["']$/g, "");
+  // DRW-150 W1: quote-stripping moved to parser (mermaid-parser.ts subgraph header parsing).
+  // Label arrives here already clean.
+  const name = opts.name ?? "";
   return {
     id,
     typeName: "shape",
@@ -699,7 +700,9 @@ export function schemaRoutes(bus: StoreChangeBus) {
           name: action.label ?? action.name,
           parentId: frameId,
           direction: action.direction,
-          style: subgraphStyles.get(action.name),
+          // DRW-150 C1: use mermaidId (e.g. "INPUT") as key — subgraphStyles is keyed by raw
+          // mermaid id, not by NodeId. action.name is the resolved NodeId so it would never match.
+          style: action.mermaidId ? subgraphStyles.get(action.mermaidId) : undefined,
         });
         batch.added[groupShapeId] = groupShape;
       }

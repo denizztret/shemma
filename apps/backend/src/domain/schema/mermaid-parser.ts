@@ -257,8 +257,11 @@ export function parseMermaidFlowchart(
     if (subgraphMatch) {
       const sgMermaidId = subgraphMatch[1] ?? "";
       const rawSgLabel = subgraphMatch[2];
-      const sgLabel =
+      // DRW-150 W1: strip surrounding quotes from label here in parser, not in factory.
+      // e.g. subgraph INPUT["Вход"] → rawSgLabel = '"Вход"' → sgLabel = 'Вход'
+      const sgLabelRaw =
         rawSgLabel !== undefined ? rawSgLabel.trim() : sgMermaidId;
+      const sgLabel = sgLabelRaw.replace(/^["']|["']$/g, "");
       subgraphNames.add(sgMermaidId);
       subgraphStack.push({ mermaidId: sgMermaidId, label: sgLabel, children: [] });
       continue;
@@ -272,12 +275,14 @@ export function parseMermaidFlowchart(
           // Ensure the subgraph itself has a NodeId
           const sgNodeId = resolveNodeId(sg.mermaidId, sg.label);
           // Emit schema-group action
+          // DRW-150 C1: include mermaidId so callsite can use it for subgraphStyles lookup.
           const groupAction: SchemaGroupAction = {
             kind: "schema-group",
             name: sgNodeId,
             label: sg.label,
             as: "boundary",
             nodeIds: sg.children,
+            mermaidId: sg.mermaidId,
             ...(sg.direction !== undefined ? { direction: sg.direction } : {}),
           };
           actions.push(groupAction);

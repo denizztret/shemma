@@ -734,6 +734,11 @@ async function runLayoutSubgraph(
   const passAResults = new Map<string, ContainerPassResult>();
 
   // Process top-level anchors (they will recursively handle nested ones)
+  // DRW-150 W2: When a container has direction='custom', ALL its descendants
+  // (including nested non-custom containers) are skipped from Pass A.
+  // This is intentional — custom = "user-controlled subtree". To re-layout
+  // inner subtree without affecting outer, user must set outer back to TB/LR
+  // via context menu, then trigger layout, then revert to custom if needed.
   for (const anchorId of topLevelAnchorIds) {
     const anchor = frameById.get(anchorId);
     if (!anchor) continue;
