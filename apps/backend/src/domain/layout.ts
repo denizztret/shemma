@@ -53,13 +53,22 @@ const MERMAID_DIR_TO_ELK: Record<string, string> = {
 };
 
 function readContainerDirection(container: ShapeRec): string | undefined {
+  // DRW-178 Task 2.6: auto-inferred direction wins over inherited props.direction.
+  // If the user did NOT explicitly write `direction X` in mermaid, schema/create
+  // stamps props.direction="TB" but sets meta.didrawDirectionInherited=true. The
+  // inference pass writes meta.didrawDirection. We must prefer the inferred value
+  // over the inherited default.
+  const inherited = container.meta?.didrawDirectionInherited === true;
+  const inferred = container.meta?.didrawDirection;
+  if (inherited && typeof inferred === "string" && MERMAID_DIR_TO_ELK[inferred]) {
+    return MERMAID_DIR_TO_ELK[inferred];
+  }
   if (container.type === "schema-container") {
     const d = (container.props as Record<string, unknown> | undefined)?.direction;
     if (d === "custom") return undefined;
     if (typeof d === "string" && MERMAID_DIR_TO_ELK[d]) return MERMAID_DIR_TO_ELK[d];
   }
-  // DRW-178 Task 2.6: auto-inferred direction via inferContainerDirections pass.
-  const inferred = container.meta?.didrawDirection;
+  // Fallback: explicit-but-not-via-props inferred direction (rare path).
   if (typeof inferred === "string" && MERMAID_DIR_TO_ELK[inferred]) {
     return MERMAID_DIR_TO_ELK[inferred];
   }
