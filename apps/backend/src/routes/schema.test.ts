@@ -878,6 +878,29 @@ describe("POST /api/schema/:frameId/measured-bounds (DRW-174)", () => {
   });
 });
 
+// ---- DRW-178: arrow kind defaults ----
+
+describe("POST /api/schema/create — DRW-178 arrow kind defaults to elbow", () => {
+  test("mermaid-imported arrows default to kind='elbow'", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(
+      app,
+      { label: "Arrow kind test", raw: "graph LR\n  a[A] --> b[B]" },
+      "arrow-kind-room",
+    );
+    expect(res.status).toBe(200);
+
+    const room = await rooms.get("arrow-kind-room");
+    const arrows = Object.values(room.store.store).filter(
+      (r) => r?.typeName === "shape" && r?.type === "arrow",
+    );
+    expect(arrows.length).toBe(1);
+    const arrow = arrows[0]!;
+    const props = arrow.props as Record<string, unknown>;
+    expect(props.kind).toBe("elbow");
+  });
+});
+
 // ---- DRW-172: post-layout anchor distribution ----
 
 describe("POST /api/schema/create — DRW-172 per-edge anchors", () => {
