@@ -12,3 +12,10 @@ export {
   type LabelMetrics,
   type LabelMetricsOptions,
 } from "./label-metrics";
+export {
+  type LayoutParams,
+  type Direction as LayoutDirection,
+  DEFAULT_LAYOUT_PARAMS,
+  applyLayoutParamsDefaults,
+  validateLayoutParams,
+} from "./layout-params";

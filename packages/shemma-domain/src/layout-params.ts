@@ -1,0 +1,96 @@
+// packages/shemma-domain/src/layout-params.ts
+//
+// DRW-178: LayoutParams — single source of configuration for the layout
+// pipeline. Replaces hardcoded numbers in apps/backend/src/domain/layout.ts
+// helpers so that callers (route, future UI panel) can override per-call.
+
+export type Direction = "TB" | "BT" | "LR" | "RL";
+
+export type LayoutParams = {
+  // Node sizing
+  nodeMinWidth: number;
+  nodeMinHeight: number;
+  nodePadding: number;
+
+  // Container insets
+  containerPadding: number;
+  containerLabelHeight: number;
+
+  // Edge spacing
+  edgeSpacing: number;
+  edgeNodeSpacing: number;
+  edgeLabelMaxWidth: number;
+  edgeLabelMaxLines: number;
+  edgeLabelMargin: number;
+  edgeLabelFontSize: number;
+
+  // Direction
+  defaultDirection: Direction;
+  autoDirectionEnabled: boolean;
+
+  // Anchor + midpoint behavior
+  anchorOffsetMode: "distribute" | "center";
+  midpointDistribution: "even" | "fixed-0.5";
+};
+
+export const DEFAULT_LAYOUT_PARAMS: LayoutParams = {
+  nodeMinWidth: 120,
+  nodeMinHeight: 60,
+  nodePadding: 16,
+  containerPadding: 24,
+  containerLabelHeight: 32,
+  edgeSpacing: 16,
+  edgeNodeSpacing: 20,
+  edgeLabelMaxWidth: 200,
+  edgeLabelMaxLines: 3,
+  edgeLabelMargin: 12,
+  edgeLabelFontSize: 16,
+  defaultDirection: "TB",
+  autoDirectionEnabled: true,
+  anchorOffsetMode: "distribute",
+  midpointDistribution: "even",
+};
+
+const NUMERIC_FIELDS: ReadonlyArray<keyof LayoutParams> = [
+  "nodeMinWidth",
+  "nodeMinHeight",
+  "nodePadding",
+  "containerPadding",
+  "containerLabelHeight",
+  "edgeSpacing",
+  "edgeNodeSpacing",
+  "edgeLabelMaxWidth",
+  "edgeLabelMaxLines",
+  "edgeLabelMargin",
+  "edgeLabelFontSize",
+];
+
+const VALID_DIRECTIONS: ReadonlySet<Direction> = new Set(["TB", "BT", "LR", "RL"]);
+const VALID_ANCHOR_MODES = new Set(["distribute", "center"]);
+const VALID_MID_MODES = new Set(["even", "fixed-0.5"]);
+
+export function applyLayoutParamsDefaults(partial: Partial<LayoutParams>): LayoutParams {
+  return { ...DEFAULT_LAYOUT_PARAMS, ...partial };
+}
+
+export function validateLayoutParams(p: Partial<LayoutParams>): void {
+  for (const key of NUMERIC_FIELDS) {
+    const v = p[key];
+    if (v === undefined) continue;
+    if (typeof v !== "number" || !Number.isFinite(v) || v < 0) {
+      throw new Error(`LayoutParams.${String(key)} must be a non-negative finite number; got ${String(v)}`);
+    }
+  }
+  if (p.defaultDirection !== undefined && !VALID_DIRECTIONS.has(p.defaultDirection)) {
+    throw new Error(`LayoutParams.defaultDirection must be one of TB|BT|LR|RL; got ${String(p.defaultDirection)}`);
+  }
+  if (p.anchorOffsetMode !== undefined && !VALID_ANCHOR_MODES.has(p.anchorOffsetMode)) {
+    throw new Error(`LayoutParams.anchorOffsetMode must be distribute|center; got ${String(p.anchorOffsetMode)}`);
+  }
+  if (p.midpointDistribution !== undefined && !VALID_MID_MODES.has(p.midpointDistribution)) {
+    throw new Error(`LayoutParams.midpointDistribution must be even|fixed-0.5; got ${String(p.midpointDistribution)}`);
+  }
+  if (p.autoDirectionEnabled !== undefined && typeof p.autoDirectionEnabled !== "boolean") {
+    throw new Error(`LayoutParams.autoDirectionEnabled must be boolean; got ${typeof p.autoDirectionEnabled}`);
+  }
+}
