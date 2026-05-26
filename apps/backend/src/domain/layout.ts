@@ -27,7 +27,7 @@
 // Edges для ELK реконструируются по binding'ам (typeName === 'binding').
 // Если у arrow != 2 bindings (висячая) — стрелка пропускается.
 
-import { modeToElkOptions, type LayoutMode, type Spacing } from "@shemma/domain";
+import { measureLabelHeuristic, modeToElkOptions, type LayoutMode, type Spacing } from "@shemma/domain";
 import elkWorkerPath from "../../node_modules/elkjs/lib/elk-worker.min.js" with { type: "file" };
 import type { StoreChangeBatch, TLRecord, TLStoreSnapshot } from "../store-types";
 import type { ElementId, LayoutHint } from "./types";
@@ -126,6 +126,36 @@ function shapeBounds(r: ShapeRec): Bounds {
 
 function isShape(r: TLRecord): r is ShapeRec {
   return r.typeName === "shape";
+}
+
+// DRW-178: extract plain text from arrow richText prop (ProseMirror doc).
+function extractArrowLabel(shape: ShapeRec): string {
+  const rt = (shape.props as { richText?: { content?: Array<{ content?: Array<{ text?: string }> }> } } | undefined)
+    ?.richText;
+  if (!rt?.content) return "";
+  const parts: string[] = [];
+  for (const block of rt.content) {
+    if (!Array.isArray(block?.content)) continue;
+    for (const span of block.content) {
+      if (typeof span?.text === "string") parts.push(span.text);
+    }
+  }
+  return parts.join("");
+}
+
+// DRW-178: compute max arrow label width from the store's arrows and return a
+// label-derived layer spacing floor. Returns 0 when no labelled arrows found.
+// Accepts store directly because collectShapes() filters out arrows (they are
+// not ELK layout candidates), so we use collectArrows() to read them.
+function computeLabelDerivedSpacing(store: TLStoreSnapshot): number {
+  let maxLabelWidth = 0;
+  for (const s of collectArrows(store)) {
+    const text = extractArrowLabel(s);
+    if (!text) continue;
+    const m = measureLabelHeuristic(text, { maxWidth: 200, maxLines: 3 });
+    if (m.width > maxLabelWidth) maxLabelWidth = m.width;
+  }
+  return maxLabelWidth > 0 ? maxLabelWidth + 24 : 0;
 }
 
 function isLayoutCandidate(r: ShapeRec): boolean {
@@ -427,6 +457,13 @@ function buildElkGraph(
   hint: Required<LayoutHint>,
 ): unknown {
   const opts = modeToElkOptions(hint.mode, hint.spacing);
+  // DRW-178: reserve horizontal layer spacing for the widest arrow label so
+  // labels never overflow into neighbouring shapes/arrows.
+  const labelDerivedSpacing = computeLabelDerivedSpacing(store);
+  if (labelDerivedSpacing > 0) {
+    const key = "elk.layered.spacing.nodeNodeBetweenLayers";
+    opts[key] = String(Math.max(Number(opts[key] ?? 0), labelDerivedSpacing));
+  }
 
   // Partition shapes: frames (compound) vs leaves.
   const frames = shapes.filter(isContainerShape);
@@ -678,6 +715,13 @@ async function runLayoutSubgraph(
   containerScope: "self" | "auto" = "auto",
 ): Promise<{ positions: Positions; anchorFrameIds: Set<string> } | null> {
   const opts = modeToElkOptions(hint.mode, hint.spacing);
+  // DRW-178: reserve horizontal layer spacing for the widest arrow label so
+  // labels never overflow into neighbouring shapes/arrows.
+  const labelDerivedSpacing = computeLabelDerivedSpacing(store);
+  if (labelDerivedSpacing > 0) {
+    const key = "elk.layered.spacing.nodeNodeBetweenLayers";
+    opts[key] = String(Math.max(Number(opts[key] ?? 0), labelDerivedSpacing));
+  }
 
   const frames = shapes.filter(isContainerShape);
   const leaves = shapes.filter((s) => !isContainerShape(s));
