@@ -109,3 +109,23 @@ describe("determineContainerDirection (4-way)", () => {
     ).toBe("BT");
   });
 });
+
+describe("determineContainerDirection — params control", () => {
+  test("autoDirectionEnabled=false → returns params.defaultDirection regardless of edges", () => {
+    const result = determineContainerDirection({
+      container: { id: "c", meta: {} } as any,
+      edgesIn: [{ side: "right" }, { side: "right" }],
+      edgesOut: [],
+    }, { defaultDirection: "TB", autoDirectionEnabled: false });
+    expect(result).toBe("TB");
+  });
+
+  test("autoDirectionEnabled=true (default) → infers from edges (existing behavior)", () => {
+    const result = determineContainerDirection({
+      container: { id: "c", meta: {} } as any,
+      edgesIn: [{ side: "right" }, { side: "right" }],
+      edgesOut: [],
+    }, { defaultDirection: "TB", autoDirectionEnabled: true });
+    expect(result).toBe("RL");
+  });
+});

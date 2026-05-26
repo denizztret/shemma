@@ -3,6 +3,7 @@
 // DRW-178: distribute elbowMidPoint among arrows that share the same
 // (sourceId, sourceSide, targetId, targetSide). Singletons stay at 0.5.
 
+import type { LayoutParams } from "@shemma/domain";
 import type { StoreChangeBatch, TLRecord, TLStoreSnapshot } from "../store-types";
 
 type ArrowRec = TLRecord & {
@@ -35,7 +36,13 @@ const EPS = 1e-6;
  * 5. Within chosen group, sort by id and assign elbowMidPoint = (i+1)/(N+1).
  * 6. Return StoreChangeBatch with only arrows that changed.
  */
-export function computeElbowMidpoints(store: TLStoreSnapshot): StoreChangeBatch {
+export function computeElbowMidpoints(
+  store: TLStoreSnapshot,
+  params?: Pick<LayoutParams, "midpointDistribution">,
+): StoreChangeBatch {
+  if (params?.midpointDistribution === "fixed-0.5") {
+    return { added: {}, updated: {}, removed: {} };
+  }
   const updated: Record<string, [TLRecord, TLRecord]> = {};
   const arrows: ArrowRec[] = [];
 

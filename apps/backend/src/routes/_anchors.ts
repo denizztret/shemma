@@ -9,6 +9,7 @@
 // Idempotent: no-op when computeAnchors returns an empty batch (already-
 // correct stores stay quiet).
 
+import type { LayoutParams } from "@shemma/domain";
 import { config } from "../config";
 import { computeAnchors } from "../domain/anchors";
 import { computeElbowMidpoints } from "../domain/midpoints";

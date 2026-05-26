@@ -5,6 +5,7 @@
 // the side with the most external edges aligns with the side where the
 // receiving child sits.
 
+import type { LayoutParams } from "@shemma/domain";
 import type { TLRecord } from "../store-types";
 
 export type Direction = "TB" | "BT" | "LR" | "RL";
@@ -27,10 +28,17 @@ const SIDE_TO_DIRECTION: Record<CardinalSide, Direction> = {
   right: "RL",
 };
 
-export function determineContainerDirection(input: DetermineInput): Direction {
+export function determineContainerDirection(
+  input: DetermineInput,
+  params?: Pick<LayoutParams, "defaultDirection" | "autoDirectionEnabled">,
+): Direction {
   const explicit = input.container.meta?.didrawDirection;
   if (explicit === "TB" || explicit === "BT" || explicit === "LR" || explicit === "RL") {
     return explicit;
+  }
+
+  if (params && params.autoDirectionEnabled === false) {
+    return params.defaultDirection ?? "TB";
   }
 
   const counts: Record<CardinalSide, number> = { top: 0, bottom: 0, left: 0, right: 0 };

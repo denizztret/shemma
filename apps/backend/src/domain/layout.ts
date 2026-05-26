@@ -27,7 +27,7 @@
 // Edges для ELK реконструируются по binding'ам (typeName === 'binding').
 // Если у arrow != 2 bindings (висячая) — стрелка пропускается.
 
-import { measureLabelHeuristic, modeToElkOptions, type LayoutMode, type Spacing } from "@shemma/domain";
+import { applyLayoutParamsDefaults, measureLabelHeuristic, modeToElkOptions, type LayoutMode, type LayoutParams, type Spacing } from "@shemma/domain";
 import elkWorkerPath from "../../node_modules/elkjs/lib/elk-worker.min.js" with { type: "file" };
 import type { StoreChangeBatch, TLRecord, TLStoreSnapshot } from "../store-types";
 import type { ElementId, LayoutHint } from "./types";
@@ -147,15 +147,19 @@ function extractArrowLabel(shape: ShapeRec): string {
 // label-derived layer spacing floor. Returns 0 when no labelled arrows found.
 // Accepts store directly because collectShapes() filters out arrows (they are
 // not ELK layout candidates), so we use collectArrows() to read them.
-function computeLabelDerivedSpacing(store: TLStoreSnapshot): number {
+function computeLabelDerivedSpacing(store: TLStoreSnapshot, params: LayoutParams): number {
   let maxLabelWidth = 0;
   for (const s of collectArrows(store)) {
     const text = extractArrowLabel(s);
     if (!text) continue;
-    const m = measureLabelHeuristic(text, { maxWidth: 200, maxLines: 3 });
+    const m = measureLabelHeuristic(text, {
+      maxWidth: params.edgeLabelMaxWidth,
+      maxLines: params.edgeLabelMaxLines,
+      fontSize: params.edgeLabelFontSize,
+    });
     if (m.width > maxLabelWidth) maxLabelWidth = m.width;
   }
-  return maxLabelWidth > 0 ? maxLabelWidth + 24 : 0;
+  return maxLabelWidth > 0 ? maxLabelWidth + params.edgeLabelMargin * 2 : 0;
 }
 
 function isLayoutCandidate(r: ShapeRec): boolean {
@@ -455,11 +459,12 @@ function buildElkGraph(
   store: TLStoreSnapshot,
   shapes: ShapeRec[],
   hint: Required<LayoutHint>,
+  params: LayoutParams,
 ): unknown {
   const opts = modeToElkOptions(hint.mode, hint.spacing);
   // DRW-178: reserve horizontal layer spacing for the widest arrow label so
   // labels never overflow into neighbouring shapes/arrows.
-  const labelDerivedSpacing = computeLabelDerivedSpacing(store);
+  const labelDerivedSpacing = computeLabelDerivedSpacing(store, params);
   if (labelDerivedSpacing > 0) {
     const key = "elk.layered.spacing.nodeNodeBetweenLayers";
     opts[key] = String(Math.max(Number(opts[key] ?? 0), labelDerivedSpacing));
@@ -712,12 +717,13 @@ async function runLayoutSubgraph(
   shapes: ShapeRec[],
   hint: Required<LayoutHint>,
   filterToIds: Set<string>,
+  params: LayoutParams,
   containerScope: "self" | "auto" = "auto",
 ): Promise<{ positions: Positions; anchorFrameIds: Set<string> } | null> {
   const opts = modeToElkOptions(hint.mode, hint.spacing);
   // DRW-178: reserve horizontal layer spacing for the widest arrow label so
   // labels never overflow into neighbouring shapes/arrows.
-  const labelDerivedSpacing = computeLabelDerivedSpacing(store);
+  const labelDerivedSpacing = computeLabelDerivedSpacing(store, params);
   if (labelDerivedSpacing > 0) {
     const key = "elk.layered.spacing.nodeNodeBetweenLayers";
     opts[key] = String(Math.max(Number(opts[key] ?? 0), labelDerivedSpacing));
@@ -1046,7 +1052,9 @@ export async function runLayout(
   hint: LayoutHint,
   // biome-ignore lint/correctness/noUnusedFunctionParameters: kept for API stability, see jsdoc
   index: Map<string, string>,
+  paramsPartial?: Partial<LayoutParams>,
 ): Promise<{ batch: StoreChangeBatch; affected: string[]; reason?: string }> {
+  const params = applyLayoutParamsDefaults(paramsPartial ?? {});
   const fullHint: Required<LayoutHint> = {
     mode: (hint.mode ?? "layered-lr") as LayoutMode,
     scope: hint.scope ?? "affected",
@@ -1122,7 +1130,7 @@ export async function runLayout(
     affectedIds = expanded;
 
     // DRW-099: hierarchical multi-pass layout
-    const result = await runLayoutSubgraph(store, shapes, fullHint, affectedIds, hint.containerScope ?? "auto");
+    const result = await runLayoutSubgraph(store, shapes, fullHint, affectedIds, params, hint.containerScope ?? "auto");
     if (!result) {
       return { batch: emptyBatch, affected: [], reason: "elk-error" };
     }
@@ -1132,7 +1140,7 @@ export async function runLayout(
     // scope='all': single-pass through INCLUDE_CHILDREN (unchanged behavior).
     // No anchor frames in scope='all' — every shape participates.
     anchorFrameIds = new Set();
-    const graph = buildElkGraph(store, shapes, fullHint);
+    const graph = buildElkGraph(store, shapes, fullHint, params);
 
     let res: { children?: unknown[]; edges?: unknown[] };
     try {

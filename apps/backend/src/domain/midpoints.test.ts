@@ -227,3 +227,31 @@ describe("computeElbowMidpoints — fan-in / fan-out (DRW-178 Task 2.5)", () => 
     expect(Object.keys(batch.updated).length).toBe(0);
   });
 });
+
+describe("computeElbowMidpoints — params control", () => {
+  test("midpointDistribution=fixed-0.5 → empty batch (no distribution)", () => {
+    const store = makeStore({
+      "shape:a1": makeArrow("shape:a1", "right", "top"),
+      "shape:a2": makeArrow("shape:a2", "right", "top"),
+      "binding:s1": makeBinding("binding:s1", "shape:a1", "shape:A", "start"),
+      "binding:e1": makeBinding("binding:e1", "shape:a1", "shape:B", "end"),
+      "binding:s2": makeBinding("binding:s2", "shape:a2", "shape:A", "start"),
+      "binding:e2": makeBinding("binding:e2", "shape:a2", "shape:B", "end"),
+    });
+    const batch = computeElbowMidpoints(store, { midpointDistribution: "fixed-0.5" });
+    expect(Object.keys(batch.updated).length).toBe(0);
+  });
+
+  test("midpointDistribution=even (default) → distributes (existing behavior)", () => {
+    const store = makeStore({
+      "shape:a1": makeArrow("shape:a1", "right", "top"),
+      "shape:a2": makeArrow("shape:a2", "right", "top"),
+      "binding:s1": makeBinding("binding:s1", "shape:a1", "shape:A", "start"),
+      "binding:e1": makeBinding("binding:e1", "shape:a1", "shape:B", "end"),
+      "binding:s2": makeBinding("binding:s2", "shape:a2", "shape:A", "start"),
+      "binding:e2": makeBinding("binding:e2", "shape:a2", "shape:B", "end"),
+    });
+    const batch = computeElbowMidpoints(store, { midpointDistribution: "even" });
+    expect(Object.keys(batch.updated).length).toBe(2);
+  });
+});
