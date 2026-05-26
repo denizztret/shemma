@@ -95,16 +95,12 @@ export function inferContainerDirection(input: InferDirectionInput): Direction {
     }
   }
 
-  // Fallback: aggregate all external edges and use the count-based heuristic.
-  const aggregated: ExternalEdge[] = [];
-  for (const [, edges] of input.externalEdgesPerChild) {
-    for (const e of edges) aggregated.push(e);
-  }
-  return determineContainerDirection({
-    container: input.container,
-    edgesIn: aggregated,
-    edgesOut: [],
-  });
+  // No high-confidence match → inherit parent direction. We intentionally do
+  // NOT fall back to the count-based heuristic here: in topologies where one
+  // child wants the top side (incoming-from-above) and another wants the
+  // bottom side (outgoing-below), majority counts can pick BT/RL which
+  // visually inverts the natural chain. Inheriting parent is the safer default.
+  return input.parentDirection;
 }
 
 export function determineContainerDirection(

@@ -42,9 +42,9 @@ describe("inferContainerDirection — parallel lanes", () => {
     expect(result).toBe("TB");
   });
 
-  test("mixed sides → fallback to count-based heuristic", () => {
-    // child A has top, child B has bottom — not parallel lanes; fall back
-    // aggregate: top=1, bottom=1 — tie, default TB (TIE_PRIORITY prefers TB)
+  test("mixed sides → inherit parent direction (safe default)", () => {
+    // child A has top, child B has bottom — not parallel lanes.
+    // High-confidence rule doesn't apply → inherit parent (TB).
     const result = inferContainerDirection({
       container: { id: "S", meta: {} } as any,
       parentDirection: "TB",
@@ -56,8 +56,19 @@ describe("inferContainerDirection — parallel lanes", () => {
     expect(result).toBe("TB");
   });
 
-  test("single child with external edges → fallback", () => {
-    // aggregate top=1 → TB
+  test("mixed sides with parent LR → inherit LR (not TB default)", () => {
+    const result = inferContainerDirection({
+      container: { id: "S", meta: {} } as any,
+      parentDirection: "LR",
+      externalEdgesPerChild: new Map([
+        ["A", [{ side: "left" }]],
+        ["B", [{ side: "right" }]],
+      ]),
+    });
+    expect(result).toBe("LR");
+  });
+
+  test("single child with external edges → inherit parent (no parallel lanes match)", () => {
     const result = inferContainerDirection({
       container: { id: "S", meta: {} } as any,
       parentDirection: "TB",
@@ -89,9 +100,8 @@ describe("inferContainerDirection — parallel lanes", () => {
     expect(result).toBe("TB");
   });
 
-  test("child has edges to MULTIPLE sides → not parallel lanes; fallback", () => {
-    // child A has top+bottom, child B has bottom.
-    // A has 2 sides → not parallel lanes; aggregate: top=1, bottom=2 → BT
+  test("child has edges to MULTIPLE sides → inherit parent (no parallel lanes match)", () => {
+    // child A has top+bottom → not parallel lanes; inherit parent direction.
     const result = inferContainerDirection({
       container: { id: "S", meta: {} } as any,
       parentDirection: "TB",
@@ -100,6 +110,6 @@ describe("inferContainerDirection — parallel lanes", () => {
         ["B", [{ side: "bottom" }]],
       ]),
     });
-    expect(result).toBe("BT");
+    expect(result).toBe("TB");
   });
 });
