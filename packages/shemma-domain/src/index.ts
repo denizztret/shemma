@@ -7,3 +7,8 @@ export * from "./validation";
 export * from "./identity";
 export * from "./schema-meta";
 export * from "./schema-actions";
+export {
+  measureLabelHeuristic,
+  type LabelMetrics,
+  type LabelMetricsOptions,
+} from "./label-metrics";
