@@ -715,6 +715,48 @@ describe("POST /api/agent/layout-selection", () => {
     expect(container.props.direction).toBe("LR");
   });
 
+  // DRW-178: explicit context-menu direction must clear inherited/inferred flags
+  test("DRW-178: context-menu direction clears didrawDirectionInherited + didrawDirection meta", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const room = "test-drw178-direction-clears-inherited";
+    const r = await rooms.get(room);
+    const snap = emptySnapshot();
+
+    // Container created via mermaid-import had inherited TB + inferred TB
+    const inheritedContainer = makeSchemaContainer(
+      "shape:c1", 100, 100, 300, 200, "c1", "TB",
+    );
+    (inheritedContainer as { meta: Record<string, unknown> }).meta = {
+      didrawDirectionInherited: true,
+      didrawDirection: "TB",
+    };
+    snap.store["shape:c1"] = inheritedContainer;
+    snap.store["shape:child1"] = makeShape("shape:child1", 0, 0, "child1", {}, {}, "shape:c1");
+    snap.store["shape:child2"] = makeShape("shape:child2", 5, 0, "child2", {}, {}, "shape:c1");
+    r.store = snap;
+    r.version = 1;
+
+    const res = await postLayoutSelection(
+      app,
+      {
+        ids: ["shape:c1"],
+        directions: { "shape:c1": "RL" },
+        scope: "self",
+      },
+      room,
+    );
+
+    expect(res.status).toBe(200);
+    const rAfter = await rooms.get(room);
+    const cAfter = rAfter.store.store["shape:c1"] as {
+      props: { direction: string };
+      meta: Record<string, unknown>;
+    };
+    expect(cAfter.props.direction).toBe("RL");
+    expect(cAfter.meta.didrawDirectionInherited).toBeUndefined();
+    expect(cAfter.meta.didrawDirection).toBeUndefined();
+  });
+
   // ============================================================
   // DRW-167: scope=self preserves parent frame bounds
   // ============================================================
