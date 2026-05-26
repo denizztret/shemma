@@ -6,7 +6,9 @@
       "Skill(superpowers:brainstorming)",
       "Bash(backlog --version)",
       "Bash(curl -s http://127.0.0.1:8787/api/health)",
-      "Bash(curl -s http://127.0.0.1:8787/api/rooms)"
+      "Bash(curl -s http://127.0.0.1:8787/api/rooms)",
+      "Bash(shemma version *)",
+      "Bash(shemma s *)"
     ]
   }
 }

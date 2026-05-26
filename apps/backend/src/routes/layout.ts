@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { validateLayoutParams, type LayoutParams } from "@shemma/domain";
 import { config } from "../config";
 import { runLayout } from "../domain/layout";
 import { pushOpLog, resolveRoomId } from "../rooms";
@@ -16,6 +17,7 @@ export function layoutRoutes(bus: StoreChangeBus) {
       mode?: string;
       scope?: string;
       spacing?: string;
+      params?: Partial<LayoutParams>;
     };
 
     const { rooms, scheduleSave, space } = bundleForRequest(c);
@@ -27,9 +29,18 @@ export function layoutRoutes(bus: StoreChangeBus) {
       spacing: (body.spacing ?? "normal") as never,
     };
 
+    // Validate optional LayoutParams if provided.
+    if (body.params) {
+      try {
+        validateLayoutParams(body.params);
+      } catch (e) {
+        return c.json({ ok: false, error: (e as Error).message }, 400);
+      }
+    }
+
     let lr: Awaited<ReturnType<typeof runLayout>>;
     try {
-      lr = await runLayout(r.store, hint, r.didrawIndex);
+      lr = await runLayout(r.store, hint, r.didrawIndex, body.params);
     } catch (e) {
       return c.json({ ok: false, error: (e as Error).message }, 500);
     }

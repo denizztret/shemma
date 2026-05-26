@@ -27,11 +27,12 @@
 // Edges для ELK реконструируются по binding'ам (typeName === 'binding').
 // Если у arrow != 2 bindings (висячая) — стрелка пропускается.
 
-import { modeToElkOptions, type LayoutMode, type Spacing } from "@shemma/domain";
+import { applyLayoutParamsDefaults, measureLabelHeuristic, modeToElkOptions, type LayoutMode, type LayoutParams, type Spacing } from "@shemma/domain";
 import elkWorkerPath from "../../node_modules/elkjs/lib/elk-worker.min.js" with { type: "file" };
 import type { StoreChangeBatch, TLRecord, TLStoreSnapshot } from "../store-types";
 import type { ElementId, LayoutHint } from "./types";
 import { effectiveShapeBounds } from "./shape-size";
+import { inferContainerDirection, type Direction, type ExternalEdge } from "./directions";
 
 // biome-ignore lint/suspicious/noExplicitAny: third-party CJS module
 const ELK = require("elkjs/lib/main.js") as any;
@@ -52,11 +53,26 @@ const MERMAID_DIR_TO_ELK: Record<string, string> = {
 };
 
 function readContainerDirection(container: ShapeRec): string | undefined {
+  // DRW-178 Task 2.6: auto-inferred direction wins over inherited props.direction.
+  // If the user did NOT explicitly write `direction X` in mermaid, schema/create
+  // stamps props.direction="TB" but sets meta.didrawDirectionInherited=true. The
+  // inference pass writes meta.didrawDirection. We must prefer the inferred value
+  // over the inherited default.
+  const inherited = container.meta?.didrawDirectionInherited === true;
+  const inferred = container.meta?.didrawDirection;
+  if (inherited && typeof inferred === "string" && MERMAID_DIR_TO_ELK[inferred]) {
+    return MERMAID_DIR_TO_ELK[inferred];
+  }
   if (container.type === "schema-container") {
     const d = (container.props as Record<string, unknown> | undefined)?.direction;
     if (d === "custom") return undefined;
-    if (typeof d === "string") return MERMAID_DIR_TO_ELK[d];
+    if (typeof d === "string" && MERMAID_DIR_TO_ELK[d]) return MERMAID_DIR_TO_ELK[d];
   }
+  // Fallback: explicit-but-not-via-props inferred direction (rare path).
+  if (typeof inferred === "string" && MERMAID_DIR_TO_ELK[inferred]) {
+    return MERMAID_DIR_TO_ELK[inferred];
+  }
+  // Legacy: didrawSubgraphDirection written by mermaid import.
   const subgraphDir = container.meta?.didrawSubgraphDirection;
   if (typeof subgraphDir === "string") return MERMAID_DIR_TO_ELK[subgraphDir];
   return undefined;
@@ -126,6 +142,40 @@ function shapeBounds(r: ShapeRec): Bounds {
 
 function isShape(r: TLRecord): r is ShapeRec {
   return r.typeName === "shape";
+}
+
+// DRW-178: extract plain text from arrow richText prop (ProseMirror doc).
+function extractArrowLabel(shape: ShapeRec): string {
+  const rt = (shape.props as { richText?: { content?: Array<{ content?: Array<{ text?: string }> }> } } | undefined)
+    ?.richText;
+  if (!rt?.content) return "";
+  const parts: string[] = [];
+  for (const block of rt.content) {
+    if (!Array.isArray(block?.content)) continue;
+    for (const span of block.content) {
+      if (typeof span?.text === "string") parts.push(span.text);
+    }
+  }
+  return parts.join("");
+}
+
+// DRW-178: compute max arrow label width from the store's arrows and return a
+// label-derived layer spacing floor. Returns 0 when no labelled arrows found.
+// Accepts store directly because collectShapes() filters out arrows (they are
+// not ELK layout candidates), so we use collectArrows() to read them.
+function computeLabelDerivedSpacing(store: TLStoreSnapshot, params: LayoutParams): number {
+  let maxLabelWidth = 0;
+  for (const s of collectArrows(store)) {
+    const text = extractArrowLabel(s);
+    if (!text) continue;
+    const m = measureLabelHeuristic(text, {
+      maxWidth: params.edgeLabelMaxWidth,
+      maxLines: params.edgeLabelMaxLines,
+      fontSize: params.edgeLabelFontSize,
+    });
+    if (m.width > maxLabelWidth) maxLabelWidth = m.width;
+  }
+  return maxLabelWidth > 0 ? maxLabelWidth + params.edgeLabelMargin * 2 : 0;
 }
 
 function isLayoutCandidate(r: ShapeRec): boolean {
@@ -425,8 +475,16 @@ function buildElkGraph(
   store: TLStoreSnapshot,
   shapes: ShapeRec[],
   hint: Required<LayoutHint>,
+  params: LayoutParams,
 ): unknown {
   const opts = modeToElkOptions(hint.mode, hint.spacing);
+  // DRW-178: reserve horizontal layer spacing for the widest arrow label so
+  // labels never overflow into neighbouring shapes/arrows.
+  const labelDerivedSpacing = computeLabelDerivedSpacing(store, params);
+  if (labelDerivedSpacing > 0) {
+    const key = "elk.layered.spacing.nodeNodeBetweenLayers";
+    opts[key] = String(Math.max(Number(opts[key] ?? 0), labelDerivedSpacing));
+  }
 
   // Partition shapes: frames (compound) vs leaves.
   const frames = shapes.filter(isContainerShape);
@@ -675,9 +733,17 @@ async function runLayoutSubgraph(
   shapes: ShapeRec[],
   hint: Required<LayoutHint>,
   filterToIds: Set<string>,
+  params: LayoutParams,
   containerScope: "self" | "auto" = "auto",
 ): Promise<{ positions: Positions; anchorFrameIds: Set<string> } | null> {
   const opts = modeToElkOptions(hint.mode, hint.spacing);
+  // DRW-178: reserve horizontal layer spacing for the widest arrow label so
+  // labels never overflow into neighbouring shapes/arrows.
+  const labelDerivedSpacing = computeLabelDerivedSpacing(store, params);
+  if (labelDerivedSpacing > 0) {
+    const key = "elk.layered.spacing.nodeNodeBetweenLayers";
+    opts[key] = String(Math.max(Number(opts[key] ?? 0), labelDerivedSpacing));
+  }
 
   const frames = shapes.filter(isContainerShape);
   const leaves = shapes.filter((s) => !isContainerShape(s));
@@ -989,6 +1055,256 @@ async function runLayoutSubgraph(
   return { positions, anchorFrameIds };
 }
 
+// =====================================================================
+// DRW-178 Task 2.6: Auto-infer direction for containers without explicit setting.
+// =====================================================================
+
+/**
+ * Compute the parent direction for a container by walking up the shape hierarchy.
+ * Returns the direction of the nearest ancestor container that has a readable
+ * direction, or "TB" as the universal default.
+ */
+function getParentDirection(
+  container: ShapeRec,
+  shapeById: Map<string, ShapeRec>,
+): Direction {
+  let current = container;
+  let safety = 32;
+  while (current.parentId && safety-- > 0) {
+    const parent = shapeById.get(current.parentId);
+    if (!parent) break;
+    if (isContainerShape(parent)) {
+      // Read explicit direction from parent (meta or props), not inferred yet.
+      // We read didrawSubgraphDirection (legacy mermaid) and schema-container props.
+      if (parent.type === "schema-container") {
+        const d = (parent.props as Record<string, unknown> | undefined)?.direction;
+        // DRW-178: didrawDirectionInherited=true means props.direction is a structural default,
+        // not an explicit user choice — do not treat it as authoritative parent direction.
+        const isInherited = parent.meta?.didrawDirectionInherited === true;
+        if (!isInherited && typeof d === "string" && d !== "custom" && MERMAID_DIR_TO_ELK[d]) {
+          return d as Direction;
+        }
+      }
+      const metaDir = parent.meta?.didrawSubgraphDirection ?? parent.meta?.didrawDirection;
+      if (typeof metaDir === "string" && (metaDir === "TB" || metaDir === "BT" || metaDir === "LR" || metaDir === "RL")) {
+        return metaDir as Direction;
+      }
+    }
+    current = parent;
+  }
+  return "TB";
+}
+
+/**
+ * DRW-178 Task 2.6: For each container without an explicit direction set,
+ * compute the optimal direction using the parallel-lanes algorithm and return
+ * it as meta.didrawDirection writes in a StoreChangeBatch.
+ *
+ * "Explicit direction" means:
+ *   - schema-container: props.direction is a valid direction (not "custom")
+ *   - any container: meta.didrawDirection or meta.didrawSubgraphDirection already set
+ *
+ * When autoDirectionEnabled === false, returns an empty batch (no inference).
+ */
+function inferContainerDirections(
+  store: TLStoreSnapshot,
+  shapes: ShapeRec[],
+  params: LayoutParams,
+): StoreChangeBatch {
+  const batch: StoreChangeBatch = { added: {}, updated: {}, removed: {} };
+  if (params.autoDirectionEnabled === false) return batch;
+
+  const containers = shapes.filter(isContainerShape);
+  if (containers.length === 0) return batch;
+
+  const shapeById = new Map(shapes.map((s) => [s.id, s]));
+
+  // Build subtree membership: shape.id → set of ancestor container ids.
+  // Used to determine if an arrow endpoint is inside a given container.
+  const ancestorContainerIds = (shapeId: string): Set<string> => {
+    const result = new Set<string>();
+    let current = shapeById.get(shapeId);
+    let safety = 32;
+    while (current && current.parentId && safety-- > 0) {
+      result.add(current.parentId);
+      current = shapeById.get(current.parentId);
+    }
+    return result;
+  };
+
+  // Collect all arrows with their endpoints.
+  const arrows: Array<{ src: string; tgt: string }> = [];
+  for (const a of collectArrows(store)) {
+    const ep = resolveArrowEndpoints(store, a.id);
+    if (ep) arrows.push(ep);
+  }
+
+  for (const container of containers) {
+    // Skip if explicit direction is set.
+    if (container.type === "schema-container") {
+      const d = (container.props as Record<string, unknown> | undefined)?.direction;
+      // DRW-178 bug fix: props.direction="TB" written by makeSchemaContainerShape as a structural
+      // default when the user did NOT explicitly write `direction X` in mermaid is marked with
+      // meta.didrawDirectionInherited=true. In that case, treat direction as non-explicit so
+      // inferContainerDirections can auto-infer the best direction for this container.
+      const isInherited = container.meta?.didrawDirectionInherited === true;
+      if (!isInherited && typeof d === "string" && d !== "custom" && MERMAID_DIR_TO_ELK[d]) continue;
+    }
+    if (typeof container.meta?.didrawSubgraphDirection === "string") continue;
+    if (typeof container.meta?.didrawDirection === "string") continue;
+
+    // Collect direct children of this container.
+    const directChildIds = new Set<string>();
+    for (const s of shapes) {
+      if (s.parentId === container.id) directChildIds.add(s.id);
+    }
+    if (directChildIds.size === 0) continue;
+
+    // For each direct child, compute which sides external edges come from/go to.
+    // "External" means the other endpoint is NOT inside this container's subtree.
+    const externalEdgesPerChild = new Map<string, ExternalEdge[]>();
+    for (const childId of directChildIds) {
+      externalEdgesPerChild.set(childId, []);
+    }
+
+    // Pre-compute sibling order for side determination.
+    // parentDirection is needed to map sibling order to cardinal side.
+    const parentDirection = getParentDirection(container, shapeById);
+
+    // Get ordered siblings of container in parent scope (sibling order as proxy for position).
+    const containerParentId = container.parentId;
+    const siblings: string[] = [];
+    if (containerParentId) {
+      for (const s of shapes) {
+        if (s.parentId === containerParentId) siblings.push(s.id);
+      }
+    }
+    const idxContainer = siblings.indexOf(container.id);
+
+    /**
+     * Given an external shape (outside this container), determine which cardinal
+     * side relative to this container the edge comes from.
+     * Uses sibling order in parent as position proxy.
+     */
+    const sideRelativeToContainer = (externalShapeId: string): ExternalEdge["side"] | null => {
+      // Find the sibling-of-container ancestor of externalShape.
+      let current = shapeById.get(externalShapeId);
+      let safety = 32;
+      let ancestor: ShapeRec | undefined;
+      while (current && safety-- > 0) {
+        if (current.parentId === containerParentId) {
+          ancestor = current;
+          break;
+        }
+        if (!current.parentId) break;
+        current = shapeById.get(current.parentId);
+      }
+      if (!ancestor) return null;
+
+      const idxA = siblings.indexOf(ancestor.id);
+      if (idxA === -1 || idxA === idxContainer) return null;
+
+      const before = idxA < idxContainer;
+      switch (parentDirection) {
+        case "TB": return before ? "top" : "bottom";
+        case "BT": return before ? "bottom" : "top";
+        case "LR": return before ? "left" : "right";
+        case "RL": return before ? "right" : "left";
+      }
+    };
+
+    /**
+     * Given a direct child of container and the other endpoint of an arrow,
+     * check if the other endpoint is outside this container's subtree.
+     * If so, compute the cardinal side and push it.
+     */
+    const processArrowEndpoint = (childId: string, otherEndpointId: string): void => {
+      // Is the other endpoint inside this container?
+      const otherAncestors = ancestorContainerIds(otherEndpointId);
+      if (otherAncestors.has(container.id)) return; // internal edge, skip
+      // Check if otherEndpoint is the container itself
+      if (otherEndpointId === container.id) return;
+
+      const side = sideRelativeToContainer(otherEndpointId);
+      if (side) {
+        externalEdgesPerChild.get(childId)?.push({ side });
+      }
+    };
+
+    // Walk all arrows: for each endpoint that is a direct child of this container,
+    // check if the other endpoint is external.
+    for (const arrow of arrows) {
+      // Find which side of the arrow is inside this container.
+      // Walk up from src to check if any ancestor is a direct child of container.
+      const findDirectChild = (shapeId: string): string | null => {
+        if (directChildIds.has(shapeId)) return shapeId;
+        let current = shapeById.get(shapeId);
+        let safety = 32;
+        while (current && current.parentId && safety-- > 0) {
+          if (current.parentId === container.id) return current.id;
+          current = shapeById.get(current.parentId);
+        }
+        return null;
+      };
+
+      const srcChild = findDirectChild(arrow.src);
+      const tgtChild = findDirectChild(arrow.tgt);
+
+      if (srcChild && !tgtChild) {
+        // src is inside container, tgt is outside → outgoing external edge
+        processArrowEndpoint(srcChild, arrow.tgt);
+      } else if (tgtChild && !srcChild) {
+        // tgt is inside container, src is outside → incoming external edge
+        processArrowEndpoint(tgtChild, arrow.src);
+      }
+      // If both are inside or both outside → skip (internal or irrelevant)
+    }
+
+    // Only infer when there are actual external edges to reason about.
+    // If no external edges exist → let ELK inherit the outer layout direction
+    // (the existing behavior before DRW-178 Task 2.6). Writing TB here would
+    // override ELK's own direction inheritance which tests rely on.
+    const totalExternalEdges = [...externalEdgesPerChild.values()].reduce((sum, e) => sum + e.length, 0);
+    if (totalExternalEdges === 0) continue;
+
+    // Apply inference algorithm.
+    const inferred = inferContainerDirection({
+      container,
+      parentDirection,
+      externalEdgesPerChild,
+    });
+
+    // Write inferred direction to meta.didrawDirection.
+    const updated: ShapeRec = {
+      ...container,
+      meta: { ...(container.meta ?? {}), didrawDirection: inferred },
+    };
+    batch.updated[container.id] = [container, updated as TLRecord];
+  }
+
+  return batch;
+}
+
+/**
+ * Apply a StoreChangeBatch to a TLStoreSnapshot, returning a new snapshot
+ * with the updated records merged in. Used to apply direction inference
+ * before layout passes so they see inferred directions.
+ */
+function applyBatchToStore(store: TLStoreSnapshot, batch: StoreChangeBatch): TLStoreSnapshot {
+  if (Object.keys(batch.updated).length === 0 && Object.keys(batch.added).length === 0) {
+    return store;
+  }
+  const newStore: Record<string, TLRecord> = { ...store.store };
+  for (const id in batch.updated) {
+    const [, newRec] = batch.updated[id]!;
+    newStore[id] = newRec;
+  }
+  for (const id in batch.added) {
+    newStore[id] = batch.added[id]!;
+  }
+  return { ...store, store: newStore };
+}
+
 /**
  * Run ELK layout over a TLStoreSnapshot and produce a StoreChangeBatch
  * updating only position (x/y) and, for frames, props.w/props.h.
@@ -1002,7 +1318,9 @@ export async function runLayout(
   hint: LayoutHint,
   // biome-ignore lint/correctness/noUnusedFunctionParameters: kept for API stability, see jsdoc
   index: Map<string, string>,
+  paramsPartial?: Partial<LayoutParams>,
 ): Promise<{ batch: StoreChangeBatch; affected: string[]; reason?: string }> {
+  const params = applyLayoutParamsDefaults(paramsPartial ?? {});
   const fullHint: Required<LayoutHint> = {
     mode: (hint.mode ?? "layered-lr") as LayoutMode,
     scope: hint.scope ?? "affected",
@@ -1016,6 +1334,13 @@ export async function runLayout(
   if (shapes.length === 0) {
     return { batch: emptyBatch, affected: [] };
   }
+
+  // DRW-178 Task 2.6: auto-infer direction for containers without explicit setting.
+  // Must run BEFORE layout passes so readContainerDirection sees inferred meta.didrawDirection.
+  const directionInferenceBatch = inferContainerDirections(store, shapes, params);
+  const storeForLayout = applyBatchToStore(store, directionInferenceBatch);
+  // Refresh shapes from updated store so layout passes see inferred directions in meta.
+  const shapesForLayout = collectShapes(storeForLayout);
 
   // Subgraph mode: scope="affected" with affectedIds provided → DRW-091/092/099.
   // DRW-149 GAP-1: mutable so we can expand containers below.
@@ -1031,7 +1356,7 @@ export async function runLayout(
   // (DRW-082) and origin-preservation top-level filter below.
   const containerIds = new Set<string>();
   const shapeById = new Map<string, ShapeRec>();
-  for (const s of shapes) {
+  for (const s of shapesForLayout) {
     if (isPinned(s)) pinnedSet.add(s.id);
     if (isContainerShape(s)) containerIds.add(s.id);
     shapeById.set(s.id, s);
@@ -1059,7 +1384,7 @@ export async function runLayout(
     // biome-ignore lint/style/noNonNullAssertion: isSubgraphMode guarantees affectedIds is defined
     const expanded = new Set<string>(affectedIds!);
     const expandContainer = (containerId: string): void => {
-      for (const s of shapes) {
+      for (const s of shapesForLayout) {
         if (s.parentId !== containerId) continue;
         expanded.add(s.id);
         if (containerIds.has(s.id)) {
@@ -1078,7 +1403,7 @@ export async function runLayout(
     affectedIds = expanded;
 
     // DRW-099: hierarchical multi-pass layout
-    const result = await runLayoutSubgraph(store, shapes, fullHint, affectedIds, hint.containerScope ?? "auto");
+    const result = await runLayoutSubgraph(storeForLayout, shapesForLayout, fullHint, affectedIds, params, hint.containerScope ?? "auto");
     if (!result) {
       return { batch: emptyBatch, affected: [], reason: "elk-error" };
     }
@@ -1088,7 +1413,7 @@ export async function runLayout(
     // scope='all': single-pass through INCLUDE_CHILDREN (unchanged behavior).
     // No anchor frames in scope='all' — every shape participates.
     anchorFrameIds = new Set();
-    const graph = buildElkGraph(store, shapes, fullHint);
+    const graph = buildElkGraph(storeForLayout, shapesForLayout, fullHint, params);
 
     let res: { children?: unknown[]; edges?: unknown[] };
     try {
@@ -1101,7 +1426,7 @@ export async function runLayout(
 
   // Restore pinned coords (ELK layered ignores fixed-position hints in elkjs 0.9.3 —
   // override after layout).
-  for (const s of shapes) {
+  for (const s of shapesForLayout) {
     if (pinnedSet.has(s.id) && positions[s.id] !== undefined) {
       positions[s.id] = { ...positions[s.id], x: s.x ?? 0, y: s.y ?? 0 };
     }
@@ -1116,7 +1441,7 @@ export async function runLayout(
   // частью affectedIds, но их parent-relative coords из Pass A НЕ трогаются centroid
   // translation'ом — потому что их parentId != "page:page". GAP-2 не актуален.
   if (isSubgraphMode && affectedIds && affectedIds.size > 0) {
-    const anchorShapes = shapes.filter(
+    const anchorShapes = shapesForLayout.filter(
       (s) =>
         affectedIds.has(s.id) &&
         !pinnedSet.has(s.id) &&
@@ -1170,7 +1495,7 @@ export async function runLayout(
   }
 
   // DRW-003 displacement.
-  applyDisplacement(positions, shapes, pinnedSet);
+  applyDisplacement(positions, shapesForLayout, pinnedSet);
 
   // Build updated batch — only записи, у которых реально поменялись x/y/w/h.
   const updated: Record<string, [TLRecord, TLRecord]> = {};
@@ -1186,7 +1511,7 @@ export async function runLayout(
   // DRW-099: В subgraph mode positions для children от Pass A уже parent-relative
   // (ELK layout на детях относительно root=0,0 контейнера).
   // В scope='all' mode positions абсолютные (collectPositions с offset walk).
-  for (const s of shapes) {
+  for (const s of shapesForLayout) {
     const p = positions[s.id];
     if (!p) continue;
     const isAnchor = anchorFrameIds.has(s.id);
@@ -1249,7 +1574,25 @@ export async function runLayout(
     affected.push(s.id);
   }
 
-  return { batch: { added: {}, updated, removed: {} }, affected };
+  // Merge direction inference writes into the layout batch.
+  // Containers that moved will already have the updated meta from shapesForLayout in
+  // their `updated[s.id]` entry above. For containers without position change we add
+  // the meta-only inference write so callers persist the inferred direction.
+  for (const id in directionInferenceBatch.updated) {
+    if (!updated[id]) {
+      updated[id] = directionInferenceBatch.updated[id]!;
+    }
+    // If already in updated (position changed), the new record already carries
+    // the inferred meta because shapesForLayout was built from storeForLayout.
+  }
+
+  const batch: StoreChangeBatch = { added: {}, updated, removed: {} };
+
+  // NOTE (DRW-178): computeElbowMidpoints is NOT called here. It runs in
+  // runAndBroadcastAnchors (route layer) AFTER computeAnchors has written
+  // meta.didrawSourcePort / meta.didrawTargetPort, so midpoints see correct ports.
+
+  return { batch, affected };
 }
 
 export type { ElementId };

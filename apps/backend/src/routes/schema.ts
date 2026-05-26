@@ -127,7 +127,7 @@ function makeArrowShapeLocal(opts: {
     opacity: 1,
     rotation: 0,
     props: {
-      kind: "arc",
+      kind: "elbow",
       color: "black",
       labelColor: "black",
       fill: "none",
@@ -176,10 +176,9 @@ function makeArrowBindingsLocal(
 
 // ---- Direction normalization + style resolver for schema-container ----
 
-function normalizeDirection(d: "TB" | "LR" | "BT" | "RL" | undefined): "TB" | "LR" {
-  if (d === "BT") return "TB";
-  if (d === "RL") return "LR";
-  if (d === "LR") return "LR";
+// DRW-178: preserve all four directions; default to "TB" when undefined.
+export function normalizeDirection(d: "TB" | "LR" | "BT" | "RL" | undefined): "TB" | "LR" | "BT" | "RL" {
+  if (d === "BT" || d === "RL" || d === "LR" || d === "TB") return d;
   return "TB";
 }
 
@@ -265,6 +264,9 @@ function makeSchemaContainerShape(opts: {
       w: 300,
       h: 200,
       name,
+      // DRW-178 bug fix: normalizeDirection(undefined) returns "TB" (required by frontend schema),
+      // but we mark the meta so inferContainerDirections can distinguish "TB because user said so"
+      // from "TB as a structural default that inference should override".
       direction: normalizeDirection(opts.direction),
       titlePosition: "inside",
       color: styleProps.color ?? "grey",
@@ -275,6 +277,9 @@ function makeSchemaContainerShape(opts: {
       didrawSubgraph: true,
       didrawSubgraphName: name,
       didrawSchemaParent: opts.parentId,
+      // When user did NOT explicitly write `direction X` in mermaid, mark this flag so
+      // inferContainerDirections treats direction as non-explicit and runs auto-inference.
+      ...(opts.direction === undefined ? { didrawDirectionInherited: true } : {}),
     },
   } as TLRecord;
 }

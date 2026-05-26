@@ -9,8 +9,10 @@
 // Idempotent: no-op when computeAnchors returns an empty batch (already-
 // correct stores stay quiet).
 
+import type { LayoutParams } from "@shemma/domain";
 import { config } from "../config";
 import { computeAnchors } from "../domain/anchors";
+import { computeElbowMidpoints } from "../domain/midpoints";
 import { pushOpLog } from "../rooms";
 import {
   applyStoreChanges,
@@ -26,21 +28,44 @@ export function runAndBroadcastAnchors(
   roomId: string,
   scheduleSave: (id: string, room: RoomState) => void,
 ): void {
-  const batch = computeAnchors(room.store);
-  if (isEmptyBatch(batch)) return;
-  room.store = applyStoreChanges(room.store, batch);
-  room.didrawIndex = rebuildDidrawIndex(room.store);
-  room.version += 1;
-  pushOpLog(
-    room,
-    { ops: batch, source: "ai", version: room.version, at: Date.now() },
-    config.opLogMaxSize,
-  );
-  room.dirty = true;
-  scheduleSave(roomId, room);
-  bus.publish(spaceId, roomId, {
-    changes: batch,
-    source: "ai",
-    version: room.version,
-  });
+  // Step 1: compute and apply anchors (sets didrawSourcePort / didrawTargetPort on arrows).
+  const anchorsBatch = computeAnchors(room.store);
+  if (!isEmptyBatch(anchorsBatch)) {
+    room.store = applyStoreChanges(room.store, anchorsBatch);
+    room.didrawIndex = rebuildDidrawIndex(room.store);
+    room.version += 1;
+    pushOpLog(
+      room,
+      { ops: anchorsBatch, source: "ai", version: room.version, at: Date.now() },
+      config.opLogMaxSize,
+    );
+    room.dirty = true;
+    scheduleSave(roomId, room);
+    bus.publish(spaceId, roomId, {
+      changes: anchorsBatch,
+      source: "ai",
+      version: room.version,
+    });
+  }
+
+  // Step 2: compute and apply midpoints — runs on post-anchor store so port meta is visible.
+  // DRW-178: distributes elbowMidPoint among arrows sharing the same port pair.
+  const midpointsBatch = computeElbowMidpoints(room.store);
+  if (!isEmptyBatch(midpointsBatch)) {
+    room.store = applyStoreChanges(room.store, midpointsBatch);
+    room.didrawIndex = rebuildDidrawIndex(room.store);
+    room.version += 1;
+    pushOpLog(
+      room,
+      { ops: midpointsBatch, source: "ai", version: room.version, at: Date.now() },
+      config.opLogMaxSize,
+    );
+    room.dirty = true;
+    scheduleSave(roomId, room);
+    bus.publish(spaceId, roomId, {
+      changes: midpointsBatch,
+      source: "ai",
+      version: room.version,
+    });
+  }
 }

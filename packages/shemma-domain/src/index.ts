@@ -7,3 +7,15 @@ export * from "./validation";
 export * from "./identity";
 export * from "./schema-meta";
 export * from "./schema-actions";
+export {
+  measureLabelHeuristic,
+  type LabelMetrics,
+  type LabelMetricsOptions,
+} from "./label-metrics";
+export {
+  type LayoutParams,
+  type Direction as LayoutDirection,
+  DEFAULT_LAYOUT_PARAMS,
+  applyLayoutParamsDefaults,
+  validateLayoutParams,
+} from "./layout-params";

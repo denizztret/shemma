@@ -1,4 +1,5 @@
 import type { Editor, RecordsDiff, TLRecord } from "tldraw";
+import { withAutoFlipSuppressed } from "../shapes/schema-container/SchemaContainerAutoFlip";
 
 export type AiActivity = {
   actor: string;
@@ -345,12 +346,19 @@ export function startStoreSync(deps: StoreSyncDeps): {
         // entry — existing behaviour).
         if (msg.layoutAction === true) {
           deps.editor.markHistoryStoppingPoint("Autolayout");
-          deps.editor.run(
-            () => {
-              deps.editor.store.applyDiff(batchToDiff(msg.changes));
-            },
-            { history: "record" },
-          );
+          // DRW-178: suppress auto-flip-to-custom while applying layoutAction.
+          // editor.run() stamps the diff as source:"user" (so Cmd+Z works),
+          // but these shape moves are layout-driven, not manual — the
+          // SchemaContainerAutoFlip listener would otherwise mark the parent
+          // container as direction:"custom".
+          withAutoFlipSuppressed(() => {
+            deps.editor.run(
+              () => {
+                deps.editor.store.applyDiff(batchToDiff(msg.changes));
+              },
+              { history: "record" },
+            );
+          });
         } else {
           deps.editor.store.mergeRemoteChanges(() => {
             deps.editor.store.applyDiff(batchToDiff(msg.changes));

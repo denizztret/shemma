@@ -55,7 +55,7 @@ function makeArrowShape(opts: {
     opacity: 1,
     rotation: 0,
     props: {
-      kind: "arc",
+      kind: "elbow",
       color: "black",
       labelColor: "black",
       fill: "none",

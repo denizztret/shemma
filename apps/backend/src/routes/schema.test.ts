@@ -10,6 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { makeApp } from "../index";
+import { normalizeDirection } from "./schema";
 
 // ---- Helpers ----
 
@@ -878,6 +879,29 @@ describe("POST /api/schema/:frameId/measured-bounds (DRW-174)", () => {
   });
 });
 
+// ---- DRW-178: arrow kind defaults ----
+
+describe("POST /api/schema/create — DRW-178 arrow kind defaults to elbow", () => {
+  test("mermaid-imported arrows default to kind='elbow'", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(
+      app,
+      { label: "Arrow kind test", raw: "graph LR\n  a[A] --> b[B]" },
+      "arrow-kind-room",
+    );
+    expect(res.status).toBe(200);
+
+    const room = await rooms.get("arrow-kind-room");
+    const arrows = Object.values(room.store.store).filter(
+      (r) => r?.typeName === "shape" && r?.type === "arrow",
+    );
+    expect(arrows.length).toBe(1);
+    const arrow = arrows[0]!;
+    const props = arrow.props as Record<string, unknown>;
+    expect(props.kind).toBe("elbow");
+  });
+});
+
 // ---- DRW-172: post-layout anchor distribution ----
 
 describe("POST /api/schema/create — DRW-172 per-edge anchors", () => {
@@ -1189,5 +1213,128 @@ describe("POST /api/schema/create — DRW-153 mermaid style directives applied t
     expect(nodeA?.props?.fill).toBe("solid");
     // 'c' was not styled → default fill from rolePreset (service preset uses "semi")
     expect(nodeC?.props?.fill).toBe("semi");
+  });
+});
+
+// ---- DRW-178: 4-way direction survival ----
+
+describe("normalizeDirection — DRW-178 4-way preservation", () => {
+  test("TB → TB", () => expect(normalizeDirection("TB")).toBe("TB"));
+  test("LR → LR", () => expect(normalizeDirection("LR")).toBe("LR"));
+  test("BT → BT (not collapsed to TB)", () => expect(normalizeDirection("BT")).toBe("BT"));
+  test("RL → RL (not collapsed to LR)", () => expect(normalizeDirection("RL")).toBe("RL"));
+  test("undefined → TB (default)", () => expect(normalizeDirection(undefined)).toBe("TB"));
+});
+
+describe("POST /api/schema/create — DRW-178 subgraph direction RL survives", () => {
+  test("subgraph with `direction RL` keeps meta props.direction='RL' after create", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(
+      app,
+      {
+        label: "RL test",
+        raw: `flowchart TB
+  subgraph S1["S1"]
+    direction RL
+    A["A"]
+    B["B"]
+  end
+  A --> B`,
+      },
+      "drw178-rl-room",
+    );
+    expect(res.status).toBe(200);
+
+    const room = await rooms.get("drw178-rl-room");
+    const shapes = Object.values(room.store.store);
+    const container = shapes.find(
+      (s) =>
+        s?.typeName === "shape" &&
+        s?.type === "schema-container" &&
+        (s?.meta as { didrawSubgraphName?: string })?.didrawSubgraphName === "S1",
+    );
+    expect(container).toBeDefined();
+    const props = container!.props as Record<string, unknown>;
+    expect(props.direction).toBe("RL");
+  });
+});
+
+describe("POST /api/schema/create — DRW-178 subgraph without explicit direction → inference", () => {
+  test("subgraph WITHOUT explicit direction gets meta.didrawDirectionInherited=true", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(
+      app,
+      {
+        label: "inherited direction test",
+        raw: `flowchart TB
+  subgraph S1["S1"]
+    A["A"]
+    B["B"]
+  end
+  subgraph S2["S2"]
+    C["C"]
+    D["D"]
+  end
+  A --> C
+  B --> D`,
+      },
+      "drw178-inherited-room",
+    );
+    expect(res.status).toBe(200);
+
+    const room = await rooms.get("drw178-inherited-room");
+    const shapes = Object.values(room.store.store);
+
+    // Containers without explicit direction must have didrawDirectionInherited=true
+    // so inferContainerDirections can auto-infer the best layout direction.
+    const s1 = shapes.find(
+      (s) =>
+        s?.typeName === "shape" &&
+        s?.type === "schema-container" &&
+        (s?.meta as { didrawSubgraphName?: string })?.didrawSubgraphName === "S1",
+    );
+    expect(s1).toBeDefined();
+    expect((s1!.meta as Record<string, unknown>).didrawDirectionInherited).toBe(true);
+
+    const s2 = shapes.find(
+      (s) =>
+        s?.typeName === "shape" &&
+        s?.type === "schema-container" &&
+        (s?.meta as { didrawSubgraphName?: string })?.didrawSubgraphName === "S2",
+    );
+    expect(s2).toBeDefined();
+    expect((s2!.meta as Record<string, unknown>).didrawDirectionInherited).toBe(true);
+  });
+
+  test("subgraph WITH explicit direction does NOT get meta.didrawDirectionInherited", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(
+      app,
+      {
+        label: "explicit direction test",
+        raw: `flowchart TB
+  subgraph S1["S1"]
+    direction LR
+    A["A"]
+    B["B"]
+  end`,
+      },
+      "drw178-explicit-room",
+    );
+    expect(res.status).toBe(200);
+
+    const room = await rooms.get("drw178-explicit-room");
+    const shapes = Object.values(room.store.store);
+    const s1 = shapes.find(
+      (s) =>
+        s?.typeName === "shape" &&
+        s?.type === "schema-container" &&
+        (s?.meta as { didrawSubgraphName?: string })?.didrawSubgraphName === "S1",
+    );
+    expect(s1).toBeDefined();
+    // Explicit direction → no inherited flag → inference skips this container.
+    expect((s1!.meta as Record<string, unknown>).didrawDirectionInherited).toBeUndefined();
+    // props.direction must be preserved as user specified.
+    expect((s1!.props as Record<string, unknown>).direction).toBe("LR");
   });
 });
