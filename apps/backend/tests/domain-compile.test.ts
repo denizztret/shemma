@@ -163,6 +163,34 @@ describe("compile.connect", () => {
       expect(props.snap).toBe("none");
     }
   });
+
+  it("arrow shape defaults to kind='elbow' for orthogonal routing", () => {
+    const s = emptyStore();
+    s.store["shape:f"] = {
+      id: "shape:f",
+      typeName: "shape",
+      type: "geo",
+      meta: { didrawName: "front" },
+    } as TLRecord;
+    s.store["shape:b"] = {
+      id: "shape:b",
+      typeName: "shape",
+      type: "geo",
+      meta: { didrawName: "back" },
+    } as TLRecord;
+    const idx = rebuildDidrawIndex(s);
+    const r = compile(
+      [{ kind: "connect", from: "front", to: "back" }],
+      s,
+      idx,
+    );
+    const arrows = Object.values(r.batch.added).filter(
+      (x) => x.typeName === "shape" && x.type === "arrow",
+    );
+    expect(arrows.length).toBe(1);
+    const props = arrows[0]!.props as Record<string, unknown>;
+    expect(props.kind).toBe("elbow");
+  });
 });
 
 describe("compile.group", () => {
