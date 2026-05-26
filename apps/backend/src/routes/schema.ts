@@ -264,6 +264,9 @@ function makeSchemaContainerShape(opts: {
       w: 300,
       h: 200,
       name,
+      // DRW-178 bug fix: normalizeDirection(undefined) returns "TB" (required by frontend schema),
+      // but we mark the meta so inferContainerDirections can distinguish "TB because user said so"
+      // from "TB as a structural default that inference should override".
       direction: normalizeDirection(opts.direction),
       titlePosition: "inside",
       color: styleProps.color ?? "grey",
@@ -274,6 +277,9 @@ function makeSchemaContainerShape(opts: {
       didrawSubgraph: true,
       didrawSubgraphName: name,
       didrawSchemaParent: opts.parentId,
+      // When user did NOT explicitly write `direction X` in mermaid, mark this flag so
+      // inferContainerDirections treats direction as non-explicit and runs auto-inference.
+      ...(opts.direction === undefined ? { didrawDirectionInherited: true } : {}),
     },
   } as TLRecord;
 }

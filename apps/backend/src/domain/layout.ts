@@ -1069,7 +1069,10 @@ function getParentDirection(
       // We read didrawSubgraphDirection (legacy mermaid) and schema-container props.
       if (parent.type === "schema-container") {
         const d = (parent.props as Record<string, unknown> | undefined)?.direction;
-        if (typeof d === "string" && d !== "custom" && MERMAID_DIR_TO_ELK[d]) {
+        // DRW-178: didrawDirectionInherited=true means props.direction is a structural default,
+        // not an explicit user choice — do not treat it as authoritative parent direction.
+        const isInherited = parent.meta?.didrawDirectionInherited === true;
+        if (!isInherited && typeof d === "string" && d !== "custom" && MERMAID_DIR_TO_ELK[d]) {
           return d as Direction;
         }
       }
@@ -1131,7 +1134,12 @@ function inferContainerDirections(
     // Skip if explicit direction is set.
     if (container.type === "schema-container") {
       const d = (container.props as Record<string, unknown> | undefined)?.direction;
-      if (typeof d === "string" && d !== "custom" && MERMAID_DIR_TO_ELK[d]) continue;
+      // DRW-178 bug fix: props.direction="TB" written by makeSchemaContainerShape as a structural
+      // default when the user did NOT explicitly write `direction X` in mermaid is marked with
+      // meta.didrawDirectionInherited=true. In that case, treat direction as non-explicit so
+      // inferContainerDirections can auto-infer the best direction for this container.
+      const isInherited = container.meta?.didrawDirectionInherited === true;
+      if (!isInherited && typeof d === "string" && d !== "custom" && MERMAID_DIR_TO_ELK[d]) continue;
     }
     if (typeof container.meta?.didrawSubgraphDirection === "string") continue;
     if (typeof container.meta?.didrawDirection === "string") continue;

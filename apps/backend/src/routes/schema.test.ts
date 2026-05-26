@@ -1258,3 +1258,83 @@ describe("POST /api/schema/create — DRW-178 subgraph direction RL survives", (
     expect(props.direction).toBe("RL");
   });
 });
+
+describe("POST /api/schema/create — DRW-178 subgraph without explicit direction → inference", () => {
+  test("subgraph WITHOUT explicit direction gets meta.didrawDirectionInherited=true", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(
+      app,
+      {
+        label: "inherited direction test",
+        raw: `flowchart TB
+  subgraph S1["S1"]
+    A["A"]
+    B["B"]
+  end
+  subgraph S2["S2"]
+    C["C"]
+    D["D"]
+  end
+  A --> C
+  B --> D`,
+      },
+      "drw178-inherited-room",
+    );
+    expect(res.status).toBe(200);
+
+    const room = await rooms.get("drw178-inherited-room");
+    const shapes = Object.values(room.store.store);
+
+    // Containers without explicit direction must have didrawDirectionInherited=true
+    // so inferContainerDirections can auto-infer the best layout direction.
+    const s1 = shapes.find(
+      (s) =>
+        s?.typeName === "shape" &&
+        s?.type === "schema-container" &&
+        (s?.meta as { didrawSubgraphName?: string })?.didrawSubgraphName === "S1",
+    );
+    expect(s1).toBeDefined();
+    expect((s1!.meta as Record<string, unknown>).didrawDirectionInherited).toBe(true);
+
+    const s2 = shapes.find(
+      (s) =>
+        s?.typeName === "shape" &&
+        s?.type === "schema-container" &&
+        (s?.meta as { didrawSubgraphName?: string })?.didrawSubgraphName === "S2",
+    );
+    expect(s2).toBeDefined();
+    expect((s2!.meta as Record<string, unknown>).didrawDirectionInherited).toBe(true);
+  });
+
+  test("subgraph WITH explicit direction does NOT get meta.didrawDirectionInherited", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(
+      app,
+      {
+        label: "explicit direction test",
+        raw: `flowchart TB
+  subgraph S1["S1"]
+    direction LR
+    A["A"]
+    B["B"]
+  end`,
+      },
+      "drw178-explicit-room",
+    );
+    expect(res.status).toBe(200);
+
+    const room = await rooms.get("drw178-explicit-room");
+    const shapes = Object.values(room.store.store);
+    const s1 = shapes.find(
+      (s) =>
+        s?.typeName === "shape" &&
+        s?.type === "schema-container" &&
+        (s?.meta as { didrawSubgraphName?: string })?.didrawSubgraphName === "S1",
+    );
+    expect(s1).toBeDefined();
+    // Explicit direction → no inherited flag → inference skips this container.
+    expect((s1!.meta as Record<string, unknown>).didrawDirectionInherited).toBeUndefined();
+    // props.direction must be preserved as user specified.
+    expect((s1!.props as Record<string, unknown>).direction).toBe("LR");
+  });
+});
