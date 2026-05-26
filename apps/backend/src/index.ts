@@ -35,6 +35,7 @@ import { makeHealthRoutes } from "./routes/health";
 import { importMermaidRoutes } from "./routes/import-mermaid";
 import { layoutRoutes } from "./routes/layout";
 import { layoutSelectionRoutes } from "./routes/layout-selection";
+import { smartInsertRoutes } from "./routes/smart-insert";
 import { promptRoutes } from "./routes/prompts";
 import { roomsRoutes } from "./routes/rooms";
 import { sessionRoutes } from "./routes/session";
@@ -293,6 +294,7 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", stateRoutes());
   app.route("/", layoutRoutes(bus));
   app.route("/", layoutSelectionRoutes(bus));
+  app.route("/", smartInsertRoutes(bus));
   app.route("/", promptRoutes(bus));
   app.route("/", aiRoutes(bus));
   app.route("/", roomsRoutes(storageDir));
