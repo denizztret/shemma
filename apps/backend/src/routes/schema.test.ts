@@ -10,6 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { makeApp } from "../index";
+import { normalizeDirection } from "./schema";
 
 // ---- Helpers ----
 
@@ -1212,5 +1213,48 @@ describe("POST /api/schema/create — DRW-153 mermaid style directives applied t
     expect(nodeA?.props?.fill).toBe("solid");
     // 'c' was not styled → default fill from rolePreset (service preset uses "semi")
     expect(nodeC?.props?.fill).toBe("semi");
+  });
+});
+
+// ---- DRW-178: 4-way direction survival ----
+
+describe("normalizeDirection — DRW-178 4-way preservation", () => {
+  test("TB → TB", () => expect(normalizeDirection("TB")).toBe("TB"));
+  test("LR → LR", () => expect(normalizeDirection("LR")).toBe("LR"));
+  test("BT → BT (not collapsed to TB)", () => expect(normalizeDirection("BT")).toBe("BT"));
+  test("RL → RL (not collapsed to LR)", () => expect(normalizeDirection("RL")).toBe("RL"));
+  test("undefined → TB (default)", () => expect(normalizeDirection(undefined)).toBe("TB"));
+});
+
+describe("POST /api/schema/create — DRW-178 subgraph direction RL survives", () => {
+  test("subgraph with `direction RL` keeps meta props.direction='RL' after create", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(
+      app,
+      {
+        label: "RL test",
+        raw: `flowchart TB
+  subgraph S1["S1"]
+    direction RL
+    A["A"]
+    B["B"]
+  end
+  A --> B`,
+      },
+      "drw178-rl-room",
+    );
+    expect(res.status).toBe(200);
+
+    const room = await rooms.get("drw178-rl-room");
+    const shapes = Object.values(room.store.store);
+    const container = shapes.find(
+      (s) =>
+        s?.typeName === "shape" &&
+        s?.type === "schema-container" &&
+        (s?.meta as { didrawSubgraphName?: string })?.didrawSubgraphName === "S1",
+    );
+    expect(container).toBeDefined();
+    const props = container!.props as Record<string, unknown>;
+    expect(props.direction).toBe("RL");
   });
 });

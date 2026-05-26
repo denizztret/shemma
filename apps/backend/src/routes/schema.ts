@@ -176,10 +176,9 @@ function makeArrowBindingsLocal(
 
 // ---- Direction normalization + style resolver for schema-container ----
 
-function normalizeDirection(d: "TB" | "LR" | "BT" | "RL" | undefined): "TB" | "LR" {
-  if (d === "BT") return "TB";
-  if (d === "RL") return "LR";
-  if (d === "LR") return "LR";
+// DRW-178: preserve all four directions; default to "TB" when undefined.
+export function normalizeDirection(d: "TB" | "LR" | "BT" | "RL" | undefined): "TB" | "LR" | "BT" | "RL" {
+  if (d === "BT" || d === "RL" || d === "LR" || d === "TB") return d;
   return "TB";
 }
 
