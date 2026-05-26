@@ -30,19 +30,8 @@
 import { measureLabelHeuristic, modeToElkOptions, type LayoutMode, type Spacing } from "@shemma/domain";
 import elkWorkerPath from "../../node_modules/elkjs/lib/elk-worker.min.js" with { type: "file" };
 import type { StoreChangeBatch, TLRecord, TLStoreSnapshot } from "../store-types";
-import { applyStoreChanges } from "../store-ops";
 import type { ElementId, LayoutHint } from "./types";
 import { effectiveShapeBounds } from "./shape-size";
-import { computeElbowMidpoints } from "./midpoints";
-
-// DRW-178: shallow merge of two StoreChangeBatch — later batch wins on conflicts.
-function mergeBatch(a: StoreChangeBatch, b: StoreChangeBatch): StoreChangeBatch {
-  return {
-    added: { ...a.added, ...b.added },
-    updated: { ...a.updated, ...b.updated },
-    removed: { ...a.removed, ...b.removed },
-  };
-}
 
 // biome-ignore lint/suspicious/noExplicitAny: third-party CJS module
 const ELK = require("elkjs/lib/main.js") as any;
@@ -1304,16 +1293,11 @@ export async function runLayout(
     affected.push(s.id);
   }
 
-  const layoutBatch: StoreChangeBatch = { added: {}, updated, removed: {} };
+  const batch: StoreChangeBatch = { added: {}, updated, removed: {} };
 
-  // DRW-178: distribute elbowMidPoint among arrows sharing the same
-  // (sourceShapeId, sourceSide, targetShapeId, targetSide). Must run AFTER
-  // computeAnchors (via runAndBroadcastAnchors in the route layer) has written
-  // meta.didrawSourcePort / meta.didrawTargetPort. We apply the layout batch to
-  // a local snapshot so midpoints see the updated anchor ports before grouping.
-  const storeWithLayout = applyStoreChanges(store, layoutBatch);
-  const midpointsBatch = computeElbowMidpoints(storeWithLayout);
-  const batch = mergeBatch(layoutBatch, midpointsBatch);
+  // NOTE (DRW-178): computeElbowMidpoints is NOT called here. It runs in
+  // runAndBroadcastAnchors (route layer) AFTER computeAnchors has written
+  // meta.didrawSourcePort / meta.didrawTargetPort, so midpoints see correct ports.
 
   return { batch, affected };
 }
