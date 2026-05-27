@@ -11,7 +11,9 @@ import {
 } from "./api";
 import { applyPreset, type PresetName } from "./presets";
 import { setContainerDirection } from "../shapes/schema-container/SchemaContainerActions";
+import { setContainerLayoutParams } from "../shapes/container-layout-params";
 import { scopeFor } from "../canvas/tidy-layout";
+import type { LayoutSettingsValue } from "./sections/LayoutSettingsSection";
 import type { LayoutParams, Role } from "@shemma/domain";
 
 export type SettingsPopoverProps = { space: string; room: string };
@@ -254,6 +256,58 @@ const SelectionPanelContainer: FC<{
     return containers.every((c) => readDir(c) === first) ? first : null;
   }, [editor]) as "TB" | "LR" | "BT" | "RL" | "custom" | null;
 
+  // Spec 7.3: aggregate layout-params overrides across selected containers.
+  // null per field = mixed / indeterminate (rendered as "Avto-направление: —" etc.).
+  const layoutSettings = useValue<LayoutSettingsValue>("layoutSettings", () => {
+    const containers = (editor.getSelectedShapes() as unknown as Array<{
+      type: string;
+      meta?: { didrawLayoutParams?: Record<string, unknown> };
+    }>).filter(isContainerShape);
+    if (containers.length === 0) {
+      return { preset: null, autoDirection: null, midpoint: null };
+    }
+
+    const readSpacing = (s: { meta?: { didrawLayoutParams?: Record<string, unknown> } }):
+      "compact" | "normal" | "loose" | null => {
+      const v = s.meta?.didrawLayoutParams?.spacing;
+      return v === "compact" || v === "normal" || v === "loose" ? v : null;
+    };
+    const readAuto = (s: { meta?: { didrawLayoutParams?: Record<string, unknown> } }): boolean | null => {
+      const v = s.meta?.didrawLayoutParams?.autoDirectionEnabled;
+      return typeof v === "boolean" ? v : null;
+    };
+    const readMid = (s: { meta?: { didrawLayoutParams?: Record<string, unknown> } }):
+      "even" | "fixed-0.5" | null => {
+      const v = s.meta?.didrawLayoutParams?.midpointDistribution;
+      return v === "even" || v === "fixed-0.5" ? v : null;
+    };
+
+    const spaces = containers.map(readSpacing);
+    const autos = containers.map(readAuto);
+    const mids = containers.map(readMid);
+
+    const allSame = <T,>(arr: T[]): T | null =>
+      arr.length > 0 && arr.every((v) => v === arr[0]) ? arr[0]! : null;
+
+    return {
+      preset: allSame(spaces),
+      autoDirection: allSame(autos),
+      midpoint: allSame(mids),
+    };
+  }, [editor]);
+
+  // Show Reset link if ANY selected container has an explicit meta.didrawLayoutParams override.
+  const showReset = useValue("showReset", () => {
+    const containers = (editor.getSelectedShapes() as unknown as Array<{
+      type: string;
+      meta?: { didrawLayoutParams?: unknown };
+    }>).filter(isContainerShape);
+    return containers.some((s) => {
+      const lp = s.meta?.didrawLayoutParams;
+      return lp !== undefined && lp !== null;
+    });
+  }, [editor]);
+
   const pinValues = useValue("pinValues", () => {
     const selected = editor.getSelectedShapes() as unknown as Array<{ meta?: { pinned?: boolean; didrawSizePinned?: boolean } }>;
     return {
@@ -261,6 +315,21 @@ const SelectionPanelContainer: FC<{
       position: selected.length > 0 && selected.every((s) => s.meta?.pinned === true),
     };
   }, [editor]);
+
+  // Spec 4.1 + 7.4: writer пишет `meta.didrawLayoutParams = partial` целиком (replace).
+  // Если user меняет ONE field — без accumulate он бы потерял остальные overrides.
+  // Frontend accumulate: читаем existing override у первого selected container'а и
+  // merge'им с новым subset. Multi-selection с different overrides — picked first
+  // (acceptable: mixed state UI уже indicated через null в layoutSettings).
+  const buildPartial = (override: Partial<LayoutParams>): Partial<LayoutParams> => {
+    const sel = editor.getSelectedShapes() as unknown as Array<{
+      type: string;
+      meta?: { didrawLayoutParams?: Record<string, unknown> };
+    }>;
+    const firstContainer = sel.find(isContainerShape);
+    const current = (firstContainer?.meta?.didrawLayoutParams ?? {}) as Partial<LayoutParams>;
+    return { ...current, ...override };
+  };
 
   return (
     <SelectionPanel
@@ -272,6 +341,29 @@ const SelectionPanelContainer: FC<{
         const ids = editor.getSelectedShapeIds() as unknown as string[];
         setContainerDirection(editor, ids, d);
       }}
+      layoutSettings={layoutSettings}
+      onPreset={(p) => {
+        const ids = editor.getSelectedShapeIds() as unknown as string[];
+        void setContainerLayoutParams(editor, ids, buildPartial({ spacing: p }));
+      }}
+      onAutoDirection={(v) => {
+        const ids = editor.getSelectedShapeIds() as unknown as string[];
+        void setContainerLayoutParams(editor, ids, buildPartial({ autoDirectionEnabled: v }));
+      }}
+      onMidpoint={(m) => {
+        const ids = editor.getSelectedShapeIds() as unknown as string[];
+        void setContainerLayoutParams(editor, ids, buildPartial({ midpointDistribution: m }));
+      }}
+      onAdvanced={() => {
+        // Full per-container Advanced UX — отложено в отдельную задачу.
+        // BoardPanel-level Advanced остаётся доступен через клик по empty space → Board.
+        console.warn("[settings] Advanced drill-down per-container — future work");
+      }}
+      onReset={() => {
+        const ids = editor.getSelectedShapeIds() as unknown as string[];
+        void setContainerLayoutParams(editor, ids, null);
+      }}
+      showReset={showReset}
       onLayoutAction={async (id) => {
         setPending(id);
         const ids = editor.getSelectedShapeIds() as unknown as string[];

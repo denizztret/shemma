@@ -1,6 +1,7 @@
 import type { FC } from "react";
 import { DirectionSection, type DirectionValue } from "../sections/DirectionSection";
 import { LayoutActionsSection, type LayoutAction } from "../sections/LayoutActionsSection";
+import { LayoutSettingsSection, type LayoutSettingsValue } from "../sections/LayoutSettingsSection";
 import { PinSection } from "../sections/PinSection";
 
 export type SelectionCounts = { containers: number; nodes: number };
@@ -34,13 +35,23 @@ export function selectionHasContainer(c: SelectionCounts): boolean {
 export type SelectionPanelProps = {
   counts: SelectionCounts;
   /**
-   * Conservative rule: показывать Direction/Layout sections только если все
-   * selected — containers (нет leaf-узлов вне). Task 12 будет full-wire через
-   * rendering rule; currently passed for forward compatibility.
+   * Conservative rule (spec 7.5): Direction + LayoutSettings секции рендерятся
+   * только когда все selected — containers (containers > 0 && nodes === 0).
+   * Mixed selection (containers + nodes) → false → секции скрыты, остаются
+   * Pin + LayoutActions.
    */
-  showContainerSections?: boolean;
+  showContainerSections: boolean;
   direction: DirectionValue | null;
   onDirectionChange: (d: DirectionValue) => void;
+  /** Aggregate layout-params для текущего выделения (null = mixed/indeterminate per field). */
+  layoutSettings: LayoutSettingsValue;
+  onPreset: (p: "compact" | "normal" | "loose") => void;
+  onAutoDirection: (v: boolean) => void;
+  onMidpoint: (m: "even" | "fixed-0.5") => void;
+  onAdvanced: () => void;
+  onReset: () => void;
+  /** Показывать ли Reset link — true если хоть у одного из selected есть meta.didrawLayoutParams. */
+  showReset: boolean;
   onLayoutAction: (id: LayoutAction["id"]) => void;
   pinValues: { size: boolean; position: boolean };
   onPinToggle: (field: "size" | "position") => void;
@@ -48,13 +59,38 @@ export type SelectionPanelProps = {
 };
 
 export const SelectionPanel: FC<SelectionPanelProps> = ({
-  counts, showContainerSections: _showContainerSections, direction, onDirectionChange, onLayoutAction, pinValues, onPinToggle, pending,
+  counts,
+  showContainerSections,
+  direction,
+  onDirectionChange,
+  layoutSettings,
+  onPreset,
+  onAutoDirection,
+  onMidpoint,
+  onAdvanced,
+  onReset,
+  showReset,
+  onLayoutAction,
+  pinValues,
+  onPinToggle,
+  pending,
 }) => {
   const total = counts.containers + counts.nodes;
   return (
     <div className="settings-popover__panel" role="dialog" aria-label="Настройки выделения">
-      {selectionHasContainer(counts) && (
-        <DirectionSection current={direction} onChange={onDirectionChange} />
+      {showContainerSections && (
+        <>
+          <DirectionSection current={direction} onChange={onDirectionChange} />
+          <LayoutSettingsSection
+            current={layoutSettings}
+            onPreset={onPreset}
+            onAutoDirection={onAutoDirection}
+            onMidpoint={onMidpoint}
+            onAdvanced={onAdvanced}
+            onReset={onReset}
+            showReset={showReset}
+          />
+        </>
       )}
       <LayoutActionsSection onAction={onLayoutAction} pending={pending} />
       <PinSection values={pinValues} onToggle={onPinToggle} bulkLabel={total > 1} />

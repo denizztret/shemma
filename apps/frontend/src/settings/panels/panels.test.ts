@@ -36,6 +36,21 @@ function hasClassName(root: unknown, className: string): boolean {
   });
 }
 
+function hasComponent(root: unknown, componentName: string): boolean {
+  return flatten(root).some((el) => {
+    const t = el.type as unknown;
+    if (typeof t === "function" && (t as { name?: string }).name === componentName) return true;
+    return false;
+  });
+}
+
+function findComponent(root: unknown, componentName: string): AnyElement | null {
+  return flatten(root).find((el) => {
+    const t = el.type as unknown;
+    return typeof t === "function" && (t as { name?: string }).name === componentName;
+  }) ?? null;
+}
+
 describe("selectionFooterCounter", () => {
   test("1 контейнер only", () => {
     expect(selectionFooterCounter({ containers: 1, nodes: 0 })).toBe("1 контейнер");
@@ -145,5 +160,87 @@ describe("BoardPanelAdvanced", () => {
     const tree = renderBoardPanelAdvanced();
     expect(hasText(tree, "Эти значения работают как defaults для всего room")).toBe(true);
     expect(hasClassName(tree, "settings-popover__hint")).toBe(true);
+  });
+});
+
+import { SelectionPanel, type SelectionPanelProps } from "./SelectionPanel";
+import type { LayoutSettingsValue } from "../sections/LayoutSettingsSection";
+
+const defaultLayoutSettings: LayoutSettingsValue = {
+  preset: "normal",
+  autoDirection: true,
+  midpoint: "even",
+};
+
+function renderSelectionPanel(overrides: Partial<SelectionPanelProps> = {}): ReturnType<typeof SelectionPanel> {
+  const props: SelectionPanelProps = {
+    counts: { containers: 1, nodes: 0 },
+    showContainerSections: true,
+    direction: "TB",
+    onDirectionChange: () => {},
+    layoutSettings: defaultLayoutSettings,
+    onPreset: () => {},
+    onAutoDirection: () => {},
+    onMidpoint: () => {},
+    onAdvanced: () => {},
+    onReset: () => {},
+    showReset: false,
+    onLayoutAction: () => {},
+    pinValues: { size: false, position: false },
+    onPinToggle: () => {},
+    pending: null,
+    ...overrides,
+  };
+  return SelectionPanel(props);
+}
+
+describe("SelectionPanel", () => {
+  test("showContainerSections=true (1 container) → Direction + LayoutSettings rendered", () => {
+    const tree = renderSelectionPanel({
+      counts: { containers: 1, nodes: 0 },
+      showContainerSections: true,
+    });
+    expect(hasComponent(tree, "DirectionSection")).toBe(true);
+    expect(hasComponent(tree, "LayoutSettingsSection")).toBe(true);
+  });
+
+  test("showContainerSections=false (mixed) → Direction + LayoutSettings hidden; Pin + LayoutActions visible", () => {
+    const tree = renderSelectionPanel({
+      counts: { containers: 1, nodes: 1 },
+      showContainerSections: false,
+    });
+    expect(hasComponent(tree, "DirectionSection")).toBe(false);
+    expect(hasComponent(tree, "LayoutSettingsSection")).toBe(false);
+    expect(hasComponent(tree, "PinSection")).toBe(true);
+    expect(hasComponent(tree, "LayoutActionsSection")).toBe(true);
+  });
+
+  test("showReset=true → Reset link visible (showReset prop пробрасывается)", () => {
+    const tree = renderSelectionPanel({
+      showContainerSections: true,
+      showReset: true,
+    });
+    const layoutSettings = findComponent(tree, "LayoutSettingsSection");
+    expect(layoutSettings).not.toBeNull();
+    expect(layoutSettings!.props.showReset).toBe(true);
+  });
+
+  test("showReset=false → Reset hidden (showReset prop = false)", () => {
+    const tree = renderSelectionPanel({
+      showContainerSections: true,
+      showReset: false,
+    });
+    const layoutSettings = findComponent(tree, "LayoutSettingsSection");
+    expect(layoutSettings).not.toBeNull();
+    expect(layoutSettings!.props.showReset).toBe(false);
+  });
+
+  test("does NOT render badge \"Для нового содержимого\"", () => {
+    const tree = renderSelectionPanel({
+      showContainerSections: true,
+      showReset: true,
+    });
+    expect(hasText(tree, "Для нового содержимого")).toBe(false);
+    expect(hasClassName(tree, "settings-popover__badge")).toBe(false);
   });
 });
