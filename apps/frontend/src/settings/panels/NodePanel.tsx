@@ -12,7 +12,7 @@ export type NodePanelProps = {
 };
 
 export const NodePanel: FC<NodePanelProps> = ({ pinValues, onPinToggle, role, onRoleSelect }) => (
-  <div className="settings-popover__panel" role="dialog" aria-label="Node settings">
+  <div className="settings-popover__panel" role="dialog" aria-label="Настройки узла">
     <PinSection values={pinValues} onToggle={onPinToggle} />
     <RoleSection current={role} onSelect={onRoleSelect} />
   </div>

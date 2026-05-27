@@ -2,14 +2,20 @@ import { describe, expect, test } from "bun:test";
 import { selectionFooterCounter, selectionHasContainer } from "./SelectionPanel";
 
 describe("selectionFooterCounter", () => {
-  test("1 container only", () => {
-    expect(selectionFooterCounter({ containers: 1, nodes: 0 })).toBe("1 container");
+  test("1 контейнер only", () => {
+    expect(selectionFooterCounter({ containers: 1, nodes: 0 })).toBe("1 контейнер");
   });
-  test("2 containers + 5 nodes", () => {
-    expect(selectionFooterCounter({ containers: 2, nodes: 5 })).toBe("2 containers, 5 nodes");
+  test("2 контейнера + 5 узлов", () => {
+    expect(selectionFooterCounter({ containers: 2, nodes: 5 })).toBe("2 контейнера, 5 узлов");
   });
-  test("7 nodes only", () => {
-    expect(selectionFooterCounter({ containers: 0, nodes: 7 })).toBe("7 shapes");
+  test("7 элементов only", () => {
+    expect(selectionFooterCounter({ containers: 0, nodes: 7 })).toBe("7 элементов");
+  });
+  test("21 контейнер (правило плюрализации)", () => {
+    expect(selectionFooterCounter({ containers: 21, nodes: 0 })).toBe("21 контейнер");
+  });
+  test("12 элементов (тыс. — many)", () => {
+    expect(selectionFooterCounter({ containers: 0, nodes: 12 })).toBe("12 элементов");
   });
 });
 
