@@ -45,9 +45,12 @@ export function PromptDrawer({
     <div
       style={{
         position: "absolute",
-        left: 8,
-        top: "30%",
-        zIndex: tokens.z.overlay,
+        // DRW-191: переехали с bottom-left (`left:8; top:30%`) на top
+        // сразу после chrome menu zone (Menu/Page/Undo/Redo/Delete/Copy/More).
+        // zIndex > 300 (SharePanel zone), иначе перекрывается Gallery.
+        top: 4,
+        left: 320,
+        zIndex: 301,
         pointerEvents: "auto",
         fontFamily: tokens.font.sans,
         fontSize: tokens.font.sm,
