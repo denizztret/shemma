@@ -45,6 +45,33 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
     return () => window.removeEventListener("pointerdown", onDown);
   }, [target, close]);
 
+  useEffect(() => {
+    if (!target) return;
+    const el = popoverRef.current;
+    if (!el) return;
+    const first = el.querySelector<HTMLElement>('button, input, [tabindex]:not([tabindex="-1"])');
+    first?.focus();
+
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Tab") return;
+      const focusables = Array.from(
+        el!.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled])')
+      );
+      if (focusables.length === 0) return;
+      const firstEl = focusables[0]!;
+      const lastEl = focusables[focusables.length - 1]!;
+      if (e.shiftKey && document.activeElement === firstEl) {
+        e.preventDefault();
+        lastEl.focus();
+      } else if (!e.shiftKey && document.activeElement === lastEl) {
+        e.preventDefault();
+        firstEl.focus();
+      }
+    }
+    el.addEventListener("keydown", onKey);
+    return () => el.removeEventListener("keydown", onKey);
+  }, [target]);
+
   if (!target) return null;
 
   const size = target.kind === "board" && advanced ? ADVANCED_SIZE : POPOVER_SIZE;

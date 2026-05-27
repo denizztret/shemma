@@ -5,6 +5,12 @@ import { StylesSection } from "../sections/StylesSection";
 import { SPACING_PRESETS, reverseMapPreset, type PresetName } from "../presets";
 import type { LayoutParams } from "@shemma/domain";
 
+const PRESET_HINTS: Record<PresetName, string> = {
+  Compact: "Tighter spacing — fits more on screen",
+  Normal: "Default spacing",
+  Roomy: "Generous spacing — easier to read",
+};
+
 export type BoardPanelProps = {
   effective: LayoutParams;
   onDirectionChange: (d: DirectionValue) => void;
@@ -31,16 +37,19 @@ export const BoardPanel: FC<BoardPanelProps> = ({
         <div className="settings-section__label">Layout</div>
         <div className="settings-section__row" role="radiogroup" aria-label="Spacing preset">
           {(Object.keys(SPACING_PRESETS) as PresetName[]).map((name) => (
-            <button
-              key={name}
-              type="button"
-              role="radio"
-              aria-checked={currentPreset === name}
-              onClick={() => onPresetSelect(name)}
-              className={`settings-btn${currentPreset === name ? " settings-btn--on" : ""}`}
-            >
-              {name}
-            </button>
+            <span key={name} className="settings-preset-cell">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={currentPreset === name}
+                aria-describedby={`preset-hint-${name}`}
+                onClick={() => onPresetSelect(name)}
+                className={`settings-btn${currentPreset === name ? " settings-btn--on" : ""}`}
+              >
+                {name}
+              </button>
+              <span id={`preset-hint-${name}`} className="sr-only">{PRESET_HINTS[name]}</span>
+            </span>
           ))}
           {currentPreset === null && <span className="settings-section__hint">Custom</span>}
         </div>
