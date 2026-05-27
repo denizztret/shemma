@@ -316,7 +316,7 @@ function makeGroupBoundaryShape(opts: {
       geo: "rectangle",
       color: "grey",
       labelColor: "black",
-      fill: "semi",
+      fill: "solid",
       dash: "dashed",
       size: "m",
       font: "draw",

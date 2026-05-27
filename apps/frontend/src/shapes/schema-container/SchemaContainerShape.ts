@@ -67,6 +67,6 @@ export const DEFAULT_SCHEMA_CONTAINER_PROPS: SchemaContainerProps = {
   direction: "TB",
   titlePosition: "inside-center",
   color: "grey",
-  fill: "semi",
+  fill: "solid",
   dash: "dashed",
 };
