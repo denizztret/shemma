@@ -8,6 +8,7 @@ import {
 } from "./shapes/schema-container";
 import type { SchemaContainerDirection } from "./shapes/schema-container";
 import "tldraw/tldraw.css";
+import "./settings/styles.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
 import { importMermaid, isBoundsContained, unionBoundsOf } from "./canvas/mermaid-import";
