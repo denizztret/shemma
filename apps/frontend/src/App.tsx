@@ -8,12 +8,14 @@ import {
 } from "./shapes/schema-container";
 import type { SchemaContainerDirection } from "./shapes/schema-container";
 import "tldraw/tldraw.css";
+import "./settings/styles.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
 import { importMermaid, isBoundsContained, unionBoundsOf } from "./canvas/mermaid-import";
 import { backfillStoreRecords } from "./canvas/schema-placeholder";
 import { makeExportHotkeyHandler } from "./canvas/export-hotkey";
-import { makeTidyHotkeyHandler, tidyLayout } from "./canvas/tidy-layout";
+import { makeForceReLayoutHotkeyHandler, makeTidyHotkeyHandler, tidyLayout } from "./canvas/tidy-layout";
+import { postLayoutSelection } from "./settings/api";
 import {
   classifySelection,
   makeRolePickerHandler,
@@ -173,6 +175,27 @@ export function App({
     );
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
+  }, [editor, space, room]);
+
+  // ⌘⌥⇧L / Ctrl+Alt+Shift+L — force re-layout: backend ignores meta.pinned /
+  // meta.didrawSizePinned for this single layout pass without clearing flags.
+  // Capture phase + window: tldraw input system also listens on keydown, so we
+  // intercept before it (otherwise Alt-mod combos can be swallowed by the
+  // editor's own shortcut router).
+  useEffect(() => {
+    const handler = makeForceReLayoutHotkeyHandler(
+      () => (editor ? (editor.getSelectedShapeIds() as unknown as string[]) : []),
+      async (ids) => {
+        if (!editor) return;
+        try {
+          await postLayoutSelection(space, room, { ids, forceUnpin: true });
+        } catch (e) {
+          console.warn("[force-relayout] failed", e);
+        }
+      },
+    );
+    window.addEventListener("keydown", handler, { capture: true });
+    return () => window.removeEventListener("keydown", handler, { capture: true });
   }, [editor, space, room]);
 
   // ⌘⇧E / Ctrl+Shift+E — open Export to Miro modal for current selection.

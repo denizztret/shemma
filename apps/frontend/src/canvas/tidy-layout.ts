@@ -83,11 +83,32 @@ export function makeTidyHotkeyHandler(
   onTidy: (ids: string[]) => void,
 ): (e: KeyboardEvent) => void {
   return (e: KeyboardEvent) => {
-    // ⌘⇧L on Mac, Ctrl+Shift+L on Linux/Windows
     const isModifier = e.metaKey || e.ctrlKey;
-    if (!isModifier || !e.shiftKey || e.key.toLowerCase() !== "l") return;
+    if (!isModifier || !e.shiftKey || e.altKey || e.key.toLowerCase() !== "l") return;
     e.preventDefault();
     const ids = getSelectedIds();
     onTidy(ids);
+  };
+}
+
+/**
+ * makeForceReLayoutHotkeyHandler — ⌘⌥⇧L / Ctrl+Alt+Shift+L. POST the same
+ * /api/agent/layout-selection endpoint with `forceUnpin: true` so the layout
+ * pass ignores meta.pinned / meta.didrawSizePinned for this one call (the
+ * flags themselves stay on the shapes).
+ */
+export function makeForceReLayoutHotkeyHandler(
+  getSelectedIds: () => string[],
+  onForce: (ids: string[]) => void,
+): (e: KeyboardEvent) => void {
+  return (e: KeyboardEvent) => {
+    const isModifier = e.metaKey || e.ctrlKey;
+    if (!isModifier || !e.shiftKey || !e.altKey) return;
+    const isL = e.code === "KeyL" || e.key.toLowerCase() === "l";
+    if (!isL) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const ids = getSelectedIds();
+    onForce(ids);
   };
 }

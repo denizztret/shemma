@@ -12,6 +12,7 @@ import { tokens } from "../design-tokens";
 import type { SchemaContainerDirection } from "../shapes/schema-container/SchemaContainerShape";
 import { GalleryLink } from "./GalleryLink";
 import { RoomBadge } from "./RoomBadge";
+import { SettingsPopover } from "../settings/SettingsPopover";
 
 /**
  * Build the `components` prop for `<Tldraw />`.
@@ -200,6 +201,7 @@ export function buildTldrawComponents(
         ) : null}
       </DefaultToolbar>
     ),
+    InFrontOfTheCanvas: () => <SettingsPopover space={space} room={room} />,
     ContextMenu: (onTidySelection || onExportSelection || onSetContainerDirection) ? TidyContextMenu : undefined,
   };
 }

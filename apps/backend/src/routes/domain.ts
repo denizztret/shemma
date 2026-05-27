@@ -1,4 +1,4 @@
-import type { LayoutMode, Spacing } from "@shemma/domain";
+import type { LayoutMode, LayoutParams, Spacing } from "@shemma/domain";
 import { Hono } from "hono";
 import { config } from "../config";
 import { compile } from "../domain/compile";
@@ -284,6 +284,7 @@ export function domainRoutes(bus: StoreChangeBus) {
           room.store,
           { ...effectiveHint, affectedIds },
           room.didrawIndex,
+          (room.meta?.layoutParams as Partial<LayoutParams> | undefined) ?? undefined,
         );
         if (lr.reason) {
           layoutInfo = { applied: false, reason: lr.reason };

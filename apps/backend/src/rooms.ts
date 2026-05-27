@@ -163,6 +163,11 @@ export class Rooms {
     return p;
   }
 
+  /** Synchronous in-memory peek — returns state only if already loaded. */
+  peek(id: RoomId): RoomState | undefined {
+    return this.map.get(id);
+  }
+
   touch(id: RoomId) {
     const s = this.map.get(id);
     if (s) s.lastTouched = Date.now();

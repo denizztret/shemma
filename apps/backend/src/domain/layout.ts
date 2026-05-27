@@ -1319,20 +1319,22 @@ export async function runLayout(
   // biome-ignore lint/correctness/noUnusedFunctionParameters: kept for API stability, see jsdoc
   index: Map<string, string>,
   paramsPartial?: Partial<LayoutParams>,
-): Promise<{ batch: StoreChangeBatch; affected: string[]; reason?: string }> {
+): Promise<{ batch: StoreChangeBatch; affected: string[]; reason?: string; appliedParams: LayoutParams }> {
   const params = applyLayoutParamsDefaults(paramsPartial ?? {});
   const fullHint: Required<LayoutHint> = {
     mode: (hint.mode ?? "layered-lr") as LayoutMode,
     scope: hint.scope ?? "affected",
     spacing: (hint.spacing ?? "normal") as Spacing,
     affectedIds: hint.affectedIds ?? new Set(),
+    containerScope: hint.containerScope ?? "auto",
+    forceUnpin: hint.forceUnpin ?? false,
   };
 
   const emptyBatch: StoreChangeBatch = { added: {}, updated: {}, removed: {} };
 
   const shapes = collectShapes(store);
   if (shapes.length === 0) {
-    return { batch: emptyBatch, affected: [] };
+    return { batch: emptyBatch, affected: [], appliedParams: params };
   }
 
   // DRW-178 Task 2.6: auto-infer direction for containers without explicit setting.
@@ -1357,7 +1359,7 @@ export async function runLayout(
   const containerIds = new Set<string>();
   const shapeById = new Map<string, ShapeRec>();
   for (const s of shapesForLayout) {
-    if (isPinned(s)) pinnedSet.add(s.id);
+    if (!fullHint.forceUnpin && isPinned(s)) pinnedSet.add(s.id);
     if (isContainerShape(s)) containerIds.add(s.id);
     shapeById.set(s.id, s);
   }
@@ -1405,7 +1407,7 @@ export async function runLayout(
     // DRW-099: hierarchical multi-pass layout
     const result = await runLayoutSubgraph(storeForLayout, shapesForLayout, fullHint, affectedIds, params, hint.containerScope ?? "auto");
     if (!result) {
-      return { batch: emptyBatch, affected: [], reason: "elk-error" };
+      return { batch: emptyBatch, affected: [], reason: "elk-error", appliedParams: params };
     }
     positions = result.positions;
     anchorFrameIds = result.anchorFrameIds;
@@ -1419,7 +1421,7 @@ export async function runLayout(
     try {
       res = await elk.layout(graph as never);
     } catch (_e) {
-      return { batch: emptyBatch, affected: [], reason: "elk-error" };
+      return { batch: emptyBatch, affected: [], reason: "elk-error", appliedParams: params };
     }
     positions = collectPositions(res);
   }
@@ -1592,7 +1594,7 @@ export async function runLayout(
   // runAndBroadcastAnchors (route layer) AFTER computeAnchors has written
   // meta.didrawSourcePort / meta.didrawTargetPort, so midpoints see correct ports.
 
-  return { batch, affected };
+  return { batch, affected, appliedParams: params };
 }
 
 export type { ElementId };

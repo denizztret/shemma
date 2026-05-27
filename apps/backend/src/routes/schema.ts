@@ -14,7 +14,7 @@
 
 import { randomBytes } from "node:crypto";
 import { connectionPreset } from "@shemma/domain";
-import type { OverlayEntry, SchemaAction } from "@shemma/domain";
+import type { LayoutParams, OverlayEntry, SchemaAction } from "@shemma/domain";
 import type { NodeId } from "@shemma/domain";
 import { Hono } from "hono";
 import { config } from "../config";
@@ -848,6 +848,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
           room.store,
           { mode: layoutMode, scope: "affected", affectedIds },
           room.didrawIndex,
+          (room.meta?.layoutParams as Partial<LayoutParams> | undefined) ?? undefined,
         );
         if (!isEmptyBatch(lr.batch)) {
           room.store = applyStoreChanges(room.store, lr.batch);
@@ -1016,6 +1017,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
             room.store,
             { mode: layoutMode, scope: "affected", affectedIds },
             room.didrawIndex,
+            (room.meta?.layoutParams as Partial<LayoutParams> | undefined) ?? undefined,
           );
           if (!isEmptyBatch(lr.batch)) {
             room.store = applyStoreChanges(room.store, lr.batch);
@@ -1364,6 +1366,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
           room.store,
           { mode: layoutMode, scope: "affected", affectedIds: new Set([frameId]) },
           room.didrawIndex,
+          (room.meta?.layoutParams as Partial<LayoutParams> | undefined) ?? undefined,
         );
         if (!isEmptyBatch(lr.batch)) {
           room.store = applyStoreChanges(room.store, lr.batch);

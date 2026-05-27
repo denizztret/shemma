@@ -15,6 +15,7 @@
 //   all unresolved → 400
 //   invalid room → 422
 
+import type { LayoutParams } from "@shemma/domain";
 import { Hono } from "hono";
 import { config } from "../config";
 import { runLayout } from "../domain/layout";
@@ -73,6 +74,7 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
       spacing?: string;
       directions?: unknown;
       scope?: unknown;
+      forceUnpin?: boolean;
     };
 
     const rawIds: string[] = Array.isArray(body.ids)
@@ -240,11 +242,17 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
       spacing: (body.spacing ?? "normal") as never,
       affectedIds,
       containerScope,
+      forceUnpin: body.forceUnpin === true,
     };
 
     let lr: Awaited<ReturnType<typeof runLayout>>;
     try {
-      lr = await runLayout(r.store, hint, r.didrawIndex);
+      lr = await runLayout(
+        r.store,
+        hint,
+        r.didrawIndex,
+        (r.meta?.layoutParams as Partial<LayoutParams> | undefined) ?? undefined,
+      );
     } catch (e) {
       return c.json({ ok: false, error: (e as Error).message }, 500);
     }
