@@ -154,13 +154,20 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
   }
 
   const size = target.kind === "board" && advanced ? ADVANCED_SIZE : POPOVER_SIZE;
-  // DRW-188: editor.getViewportScreenBounds() returns canvas-area bounds
-  // (excludes chrome toolbar). Popover top-left default = under chrome.
+  // DRW-188/DRW-189: editor.getViewportScreenBounds() returns canvas-area
+  // BUT chrome (Menu / Page / Undo / etc.) рендерится поверх canvas — vp.y=0.
+  // Query .tlui-menu-zone (top-left chrome group) bottom edge через DOM,
+  // чтобы поместить popover НИЖЕ chrome с видимым gap (margin handles gap).
   const vp = editor.getViewportScreenBounds();
+  const chromeZone = document.querySelector(".tlui-menu-zone");
+  const chromeBottom = chromeZone instanceof HTMLElement
+    ? chromeZone.getBoundingClientRect().bottom
+    : 0;
+  const topOffset = Math.max(vp.y, chromeBottom);
   const anchoredPos = computePopoverPosition({
     anchor: target.anchor,
     popoverSize: size,
-    viewport: { width: vp.w, height: vp.h, top: vp.y, left: vp.x },
+    viewport: { width: vp.w, height: vp.h, top: topOffset, left: vp.x },
     margin: 16,
   });
   const pos = userPos ?? anchoredPos;
