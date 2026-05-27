@@ -19,3 +19,11 @@ describe("LAYOUT_ACTIONS", () => {
     expect(LAYOUT_ACTIONS.find((a) => a.id === "force-unpin")?.shortcut).toBe("⌘⇧⌥L");
   });
 });
+
+import { PIN_FIELDS } from "./PinSection";
+
+describe("PIN_FIELDS", () => {
+  test("has size + position", () => {
+    expect(PIN_FIELDS.map((f) => f.field)).toEqual(["size", "position"]);
+  });
+});
