@@ -18,6 +18,9 @@ export type LayoutHint = {
   /** When "self": skip anchor-frame expansion and Pass B — only re-layout
    * the internal children of the directly selected containers (DRW-166/167). */
   containerScope?: "self" | "auto";
+  /** Settings popover "Force re-layout": ignore meta.pinned for this layout pass.
+   * Pin flags on shapes are NOT cleared — they're just bypassed once. */
+  forceUnpin?: boolean;
 };
 
 export type DefineAction = {

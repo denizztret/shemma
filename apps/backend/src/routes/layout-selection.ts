@@ -73,6 +73,7 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
       spacing?: string;
       directions?: unknown;
       scope?: unknown;
+      forceUnpin?: boolean;
     };
 
     const rawIds: string[] = Array.isArray(body.ids)
@@ -240,6 +241,7 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
       spacing: (body.spacing ?? "normal") as never,
       affectedIds,
       containerScope,
+      forceUnpin: body.forceUnpin === true,
     };
 
     let lr: Awaited<ReturnType<typeof runLayout>>;

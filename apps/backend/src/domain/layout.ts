@@ -1326,6 +1326,8 @@ export async function runLayout(
     scope: hint.scope ?? "affected",
     spacing: (hint.spacing ?? "normal") as Spacing,
     affectedIds: hint.affectedIds ?? new Set(),
+    containerScope: hint.containerScope ?? "auto",
+    forceUnpin: hint.forceUnpin ?? false,
   };
 
   const emptyBatch: StoreChangeBatch = { added: {}, updated: {}, removed: {} };
@@ -1357,7 +1359,7 @@ export async function runLayout(
   const containerIds = new Set<string>();
   const shapeById = new Map<string, ShapeRec>();
   for (const s of shapesForLayout) {
-    if (isPinned(s)) pinnedSet.add(s.id);
+    if (!fullHint.forceUnpin && isPinned(s)) pinnedSet.add(s.id);
     if (isContainerShape(s)) containerIds.add(s.id);
     shapeById.set(s.id, s);
   }
