@@ -1,6 +1,6 @@
 import type { FC } from "react";
 import { DirectionSection, type DirectionValue } from "../sections/DirectionSection";
-import { LayoutSection, type LayoutAction } from "../sections/LayoutSection";
+import { LayoutActionsSection, type LayoutAction } from "../sections/LayoutActionsSection";
 import { PinSection } from "../sections/PinSection";
 
 export type SelectionCounts = { containers: number; nodes: number };
@@ -56,7 +56,7 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
       {selectionHasContainer(counts) && (
         <DirectionSection current={direction} onChange={onDirectionChange} />
       )}
-      <LayoutSection onAction={onLayoutAction} pending={pending} />
+      <LayoutActionsSection onAction={onLayoutAction} pending={pending} />
       <PinSection values={pinValues} onToggle={onPinToggle} bulkLabel={total > 1} />
       <div className="settings-popover__footer">{selectionFooterCounter(counts)}</div>
     </div>

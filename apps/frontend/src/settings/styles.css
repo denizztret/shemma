@@ -112,6 +112,20 @@
   background: none; border: none; color: #4a8af0; cursor: pointer; font-size: 11px; padding: 0;
 }
 .settings-link:hover:not(:disabled) { text-decoration: underline; }
+.settings-link--muted { color: #8a8d91; font-size: 11px; }
+.settings-link--muted:hover:not(:disabled) { color: #555; }
+.settings-btn--indeterminate {
+  background: repeating-linear-gradient(
+    45deg,
+    #f5f5f5,
+    #f5f5f5 4px,
+    #ececec 4px,
+    #ececec 8px
+  );
+  color: #777;
+  border-color: #d0d0d0;
+}
+.settings-btn--indeterminate:hover:not(:disabled) { color: #444; border-color: #b8b8b8; }
 .settings-popover__footer { font-size: 10px; color: #aaa; padding-top: 6px; border-top: 1px solid #eee; }
 .settings-popover__header { display: flex; justify-content: space-between; margin-bottom: 10px; }
 .settings-popover__form { display: flex; flex-direction: column; gap: 12px; max-height: 460px; overflow-y: auto; padding-right: 4px; }
