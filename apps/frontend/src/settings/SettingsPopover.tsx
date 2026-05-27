@@ -19,6 +19,9 @@ export type SettingsPopoverProps = { space: string; room: string };
 const POPOVER_SIZE = { width: 240, height: 280 };
 const ADVANCED_SIZE = { width: 320, height: 480 };
 
+const isContainerShape = (s: { type: string }): boolean =>
+  s.type === "schema-container" || s.type === "frame";
+
 export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
   const editor = useEditor();
   const { target, close, pinned, setPinned } = useSettingsTrigger(editor);
@@ -230,16 +233,25 @@ const SelectionPanelContainer: FC<{
 }> = ({ editor, space, room, pending, setPending }) => {
   const counts = useValue("selectionCounts", () => {
     const selected = editor.getSelectedShapes() as unknown as Array<{ type: string }>;
-    const containers = selected.filter((s) => s.type === "schema-container").length;
+    const containers = selected.filter(isContainerShape).length;
     return { containers, nodes: selected.length - containers };
   }, [editor]);
 
+  const showContainerSections = counts.containers > 0 && counts.nodes === 0;
+
   const direction = useValue("dir", () => {
-    const containers = (editor.getSelectedShapes() as unknown as Array<{ type: string; props?: { direction?: string } }>)
-      .filter((s) => s.type === "schema-container");
+    const containers = (editor.getSelectedShapes() as unknown as Array<{
+      type: string;
+      props?: { direction?: string };
+      meta?: { didrawDirection?: string };
+    }>).filter(isContainerShape);
     if (containers.length === 0) return null;
-    const first = containers[0]?.props?.direction ?? null;
-    return containers.every((c) => (c.props?.direction ?? null) === first) ? first : null;
+    const readDir = (s: { type: string; props?: { direction?: string }; meta?: { didrawDirection?: string } }) =>
+      s.type === "schema-container"
+        ? (s.props?.direction ?? null)
+        : (s.meta?.didrawDirection ?? null);
+    const first = readDir(containers[0]!);
+    return containers.every((c) => readDir(c) === first) ? first : null;
   }, [editor]) as "TB" | "LR" | "BT" | "RL" | "custom" | null;
 
   const pinValues = useValue("pinValues", () => {
@@ -253,6 +265,7 @@ const SelectionPanelContainer: FC<{
   return (
     <SelectionPanel
       counts={counts}
+      showContainerSections={showContainerSections}
       direction={direction}
       onDirectionChange={(d) => {
         if (d === "custom") return;

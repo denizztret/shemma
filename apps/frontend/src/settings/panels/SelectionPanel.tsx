@@ -33,6 +33,12 @@ export function selectionHasContainer(c: SelectionCounts): boolean {
 
 export type SelectionPanelProps = {
   counts: SelectionCounts;
+  /**
+   * Conservative rule: показывать Direction/Layout sections только если все
+   * selected — containers (нет leaf-узлов вне). Task 12 будет full-wire через
+   * rendering rule; currently passed for forward compatibility.
+   */
+  showContainerSections?: boolean;
   direction: DirectionValue | null;
   onDirectionChange: (d: DirectionValue) => void;
   onLayoutAction: (id: LayoutAction["id"]) => void;
@@ -42,7 +48,7 @@ export type SelectionPanelProps = {
 };
 
 export const SelectionPanel: FC<SelectionPanelProps> = ({
-  counts, direction, onDirectionChange, onLayoutAction, pinValues, onPinToggle, pending,
+  counts, showContainerSections: _showContainerSections, direction, onDirectionChange, onLayoutAction, pinValues, onPinToggle, pending,
 }) => {
   const total = counts.containers + counts.nodes;
   return (
