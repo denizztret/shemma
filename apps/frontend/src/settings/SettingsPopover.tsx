@@ -9,6 +9,7 @@ import { BoardPanelAdvanced } from "./panels/BoardPanelAdvanced";
 import {
   getLayoutParams, postLayoutParams, postLayoutSelection,
   getStyleDefaults, postStyleDefaults,
+  getContainerTitlePosition, postContainerTitlePosition,
   type LayoutParamsResponse, type StyleDefaultsResponse,
 } from "./api";
 import { applyPreset, type PresetName } from "./presets";
@@ -21,6 +22,11 @@ import type { LayoutParams, Role, StyleDefaults, StyleDash, StyleFont, StyleSize
 import { DEFAULT_STYLE_DEFAULTS } from "@shemma/domain";
 import { applyStyleToSelection, collectDescendantIds } from "../shapes/style-apply";
 import { deriveUnifiedStyleState, type StyleStateInput } from "../shapes/derive-unified-style-state";
+import {
+  normalizeTitlePosition,
+  type SchemaContainerTitlePosition,
+} from "../shapes/schema-container/title-position";
+import type { SchemaContainerShape } from "../shapes/schema-container/SchemaContainerShape";
 
 export type SettingsPopoverProps = { space: string; room: string };
 
@@ -37,6 +43,8 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
   const [advanced, setAdvanced] = useState(false);
   const [boardParams, setBoardParams] = useState<LayoutParamsResponse | null>(null);
   const [styleDefaults, setStyleDefaults] = useState<StyleDefaultsResponse | null>(null);
+  const [containerTitlePosition, setContainerTitlePosition] =
+    useState<SchemaContainerTitlePosition>("inside-center");
   const [pending, setPending] = useState<"tidy" | "force-unpin" | null>(null);
   const [userPos, setUserPos] = useState<{ x: number; y: number } | null>(null);
 
@@ -50,6 +58,42 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
       getStyleDefaults(space, room).then(setStyleDefaults).catch(() => setStyleDefaults(null));
     }
   }, [target, space, room]);
+
+  // Board-default container title position: fetch on mount / room switch.
+  useEffect(() => {
+    getContainerTitlePosition(space, room)
+      .then((r) => setContainerTitlePosition(normalizeTitlePosition(r.value)))
+      .catch(() => setContainerTitlePosition("inside-center"));
+  }, [space, room]);
+
+  // Mirror current value into editor.documentSettings.meta so SchemaContainerTool
+  // can read board-default at shape-creation time via resolveBoardTitlePosition().
+  useEffect(() => {
+    if (!editor) return;
+    const meta = (editor.getDocumentSettings().meta ?? {}) as Record<string, unknown>;
+    if (meta.containerTitlePosition !== containerTitlePosition) {
+      editor.updateDocumentSettings({
+        meta: { ...meta, containerTitlePosition },
+      });
+    }
+  }, [editor, containerTitlePosition]);
+
+  const onContainerTitlePositionChange = async (
+    next: SchemaContainerTitlePosition,
+  ) => {
+    // Optimistic update; revert on POST failure.
+    setContainerTitlePosition(next);
+    try {
+      await postContainerTitlePosition(space, room, next);
+    } catch {
+      try {
+        const r = await getContainerTitlePosition(space, room);
+        setContainerTitlePosition(normalizeTitlePosition(r.value));
+      } catch {
+        setContainerTitlePosition("inside-center");
+      }
+    }
+  };
 
   useEffect(() => {
     if (!target || pinned) return;
@@ -235,6 +279,8 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
           onStyleDash={(v) => handleBoardStyle("dash", v)}
           onStyleFont={(v) => handleBoardStyle("font", v)}
           onStyleSize={(v) => handleBoardStyle("size", v)}
+          containerTitlePosition={containerTitlePosition}
+          onContainerTitlePositionChange={onContainerTitlePositionChange}
         />
       )}
       {target.kind === "board" && advanced && boardParams && (
@@ -353,6 +399,84 @@ const SelectionPanelContainer: FC<{
     return selected.some(isContainerShape);
   }, [editor]);
 
+  // Per-container titlePosition override (Task 9): visible only when ровно один
+  // SchemaContainer выбран. Writeback идёт напрямую в `shape.props.titlePosition`
+  // (render-time SSOT по спецификации §Title position resolution).
+  const singleContainer = useValue(
+    "single-container",
+    () => {
+      const ids = editor.getSelectedShapeIds();
+      if (ids.length !== 1) return null;
+      const shape = editor.getShape(ids[0]!);
+      return shape?.type === "schema-container"
+        ? (shape as SchemaContainerShape)
+        : null;
+    },
+    [editor],
+  );
+
+  const onSingleContainerTitlePositionChange = (
+    next: SchemaContainerTitlePosition,
+  ) => {
+    if (!singleContainer) return;
+    editor.updateShape({
+      id: singleContainer.id,
+      type: "schema-container",
+      props: { titlePosition: next },
+    });
+  };
+
+  // DRW-186 frame-scope: визуально такой же 4-toggle, но scope — bulk-apply
+  // на всех SchemaContainer-детей внутри выбранного Frame'а + memo на
+  // frame.meta.didrawContainerTitlePosition (используется при создании новых
+  // child-контейнеров — см. registerContainerTitlePositionInherit).
+  const singleFrame = useValue(
+    "single-frame",
+    () => {
+      const ids = editor.getSelectedShapeIds();
+      if (ids.length !== 1) return null;
+      const shape = editor.getShape(ids[0]!);
+      return shape?.type === "frame"
+        ? (shape as { id: string; type: string; meta?: Record<string, unknown> })
+        : null;
+    },
+    [editor],
+  );
+
+  const singleFrameContainerTitlePosition: SchemaContainerTitlePosition | undefined =
+    singleFrame
+      ? normalizeTitlePosition(
+          (singleFrame.meta as Record<string, unknown> | undefined)
+            ?.didrawContainerTitlePosition,
+        )
+      : undefined;
+
+  const onSingleFrameContainerTitlePositionChange = (
+    next: SchemaContainerTitlePosition,
+  ) => {
+    if (!singleFrame) return;
+    editor.run(() => {
+      // 1. Memo на Frame meta — для inheritance newly-created child containers.
+      // biome-ignore lint/suspicious/noExplicitAny: tldraw meta untyped
+      editor.updateShape({
+        id: singleFrame.id as never,
+        type: "frame" as never,
+        meta: { ...(singleFrame.meta ?? {}), didrawContainerTitlePosition: next },
+      } as any);
+      // 2. Bulk-apply ко всем existing SchemaContainer-детям.
+      const childIds = editor.getSortedChildIdsForParent(singleFrame.id as never);
+      for (const childId of childIds) {
+        const child = editor.getShape(childId);
+        if (child?.type !== "schema-container") continue;
+        editor.updateShape({
+          id: child.id,
+          type: "schema-container",
+          props: { titlePosition: next },
+        });
+      }
+    });
+  };
+
   // Derive unified style state from selected + descendants.
   const styleState = useValue<StyleSectionValue>("styleState", () => {
     const selectedIds = editor.getSelectedShapeIds() as unknown as string[];
@@ -463,6 +587,14 @@ const SelectionPanelContainer: FC<{
         const ids = editor.getSelectedShapeIds() as unknown as string[];
         void applyStyleToSelection(editor, ids, { size: v });
       }}
+      singleContainerTitlePosition={singleContainer?.props.titlePosition}
+      onSingleContainerTitlePositionChange={
+        singleContainer ? onSingleContainerTitlePositionChange : undefined
+      }
+      singleFrameContainerTitlePosition={singleFrameContainerTitlePosition}
+      onSingleFrameContainerTitlePositionChange={
+        singleFrame ? onSingleFrameContainerTitlePositionChange : undefined
+      }
     />
   );
 };

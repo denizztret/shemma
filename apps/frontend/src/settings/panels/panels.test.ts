@@ -128,6 +128,8 @@ function renderBoardPanel() {
     onStyleDash: () => {},
     onStyleFont: () => {},
     onStyleSize: () => {},
+    containerTitlePosition: "inside-center",
+    onContainerTitlePositionChange: () => {},
   });
 }
 
@@ -254,5 +256,83 @@ describe("SelectionPanel", () => {
     });
     expect(hasText(tree, "Для нового содержимого")).toBe(false);
     expect(hasClassName(tree, "settings-popover__badge")).toBe(false);
+  });
+
+  test("singleContainerTitlePosition defined → ContainerTitlePositionSection rendered с подписью per-container", () => {
+    const tree = renderSelectionPanel({
+      showContainerSections: true,
+      singleContainerTitlePosition: "inside-center",
+      onSingleContainerTitlePositionChange: () => {},
+    });
+    const section = findComponent(tree, "ContainerTitlePositionSection");
+    expect(section).not.toBeNull();
+    expect(section!.props.title).toBe("Заголовок этого контейнера");
+    expect(section!.props.current).toBe("inside-center");
+  });
+
+  test("singleContainerTitlePosition undefined → секция скрыта", () => {
+    const tree = renderSelectionPanel({
+      showContainerSections: true,
+      singleContainerTitlePosition: undefined,
+      onSingleContainerTitlePositionChange: undefined,
+    });
+    expect(hasComponent(tree, "ContainerTitlePositionSection")).toBe(false);
+  });
+
+  test("showContainerSections=false + singleContainerTitlePosition defined → секция всё равно скрыта (защита от mixed selection)", () => {
+    const tree = renderSelectionPanel({
+      counts: { containers: 1, nodes: 1 },
+      showContainerSections: false,
+      singleContainerTitlePosition: "outside-banner",
+      onSingleContainerTitlePositionChange: () => {},
+    });
+    expect(hasComponent(tree, "ContainerTitlePositionSection")).toBe(false);
+  });
+
+  // DRW-186 frame-scope (extension) — single Frame показывает bulk-apply section.
+  test("singleFrameContainerTitlePosition defined → ContainerTitlePositionSection с подписью frame-scope", () => {
+    const tree = renderSelectionPanel({
+      counts: { containers: 1, nodes: 0 },
+      showContainerSections: true,
+      singleFrameContainerTitlePosition: "inside-left",
+      onSingleFrameContainerTitlePositionChange: () => {},
+    });
+    const section = findComponent(tree, "ContainerTitlePositionSection");
+    expect(section).not.toBeNull();
+    expect(section!.props.title).toBe("Заголовок контейнеров в этом фрейме");
+    expect(section!.props.current).toBe("inside-left");
+  });
+
+  test("singleFrameContainerTitlePosition=inside-center (default) → секция всё равно рендерится", () => {
+    const tree = renderSelectionPanel({
+      counts: { containers: 1, nodes: 0 },
+      showContainerSections: true,
+      singleFrameContainerTitlePosition: "inside-center",
+      onSingleFrameContainerTitlePositionChange: () => {},
+    });
+    const section = findComponent(tree, "ContainerTitlePositionSection");
+    expect(section).not.toBeNull();
+    expect(section!.props.current).toBe("inside-center");
+  });
+
+  test("singleFrame*=undefined → frame-scope секция скрыта", () => {
+    const tree = renderSelectionPanel({
+      counts: { containers: 1, nodes: 0 },
+      showContainerSections: true,
+      singleFrameContainerTitlePosition: undefined,
+      onSingleFrameContainerTitlePositionChange: undefined,
+    });
+    // Если singleContainerTitlePosition тоже undefined — секция вообще не должна появиться.
+    expect(hasComponent(tree, "ContainerTitlePositionSection")).toBe(false);
+  });
+
+  test("showContainerSections=false + singleFrameContainerTitlePosition defined → frame-scope секция скрыта", () => {
+    const tree = renderSelectionPanel({
+      counts: { containers: 1, nodes: 1 },
+      showContainerSections: false,
+      singleFrameContainerTitlePosition: "outside-banner",
+      onSingleFrameContainerTitlePositionChange: () => {},
+    });
+    expect(hasComponent(tree, "ContainerTitlePositionSection")).toBe(false);
   });
 });

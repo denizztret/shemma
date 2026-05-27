@@ -56,7 +56,7 @@ function makeContainer(
       h: 200,
       name: "C",
       direction,
-      titlePosition: "inside",
+      titlePosition: "inside-center",
       color: "grey",
       fill: "semi",
       dash: "dashed",

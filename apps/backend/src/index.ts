@@ -35,6 +35,7 @@ import { makeHealthRoutes } from "./routes/health";
 import { importMermaidRoutes } from "./routes/import-mermaid";
 import { boardLayoutParamsRoutes } from "./routes/board-layout-params";
 import { boardStyleDefaultsRoutes } from "./routes/board-style-defaults";
+import { boardContainerTitlePositionRoutes } from "./routes/board-container-title-position";
 import { styleApplyRoutes } from "./routes/style-apply";
 import { layoutRoutes } from "./routes/layout";
 import { layoutSelectionRoutes } from "./routes/layout-selection";
@@ -314,6 +315,22 @@ export function makeApp(opts: AppOpts = {}) {
     broadcastRoomMeta: () => {},
   }));
   app.route("/", boardStyleDefaultsRoutes({
+    getRoom: async (space, room) => {
+      const bundle = bundles.get(space) ?? legacyBundle;
+      try {
+        return await bundle.rooms.get(room);
+      } catch {
+        return undefined;
+      }
+    },
+    persistRoom: (space, room) => {
+      const bundle = bundles.get(space) ?? legacyBundle;
+      const state = bundle.rooms.peek(room);
+      if (state) bundle.scheduleSave(room, state);
+    },
+    broadcastRoomMeta: () => {},
+  }));
+  app.route("/", boardContainerTitlePositionRoutes({
     getRoom: async (space, room) => {
       const bundle = bundles.get(space) ?? legacyBundle;
       try {

@@ -121,6 +121,20 @@
 .settings-section__row--stacked { flex-direction: column; }
 .settings-section__row--wrap { flex-wrap: wrap; }
 .settings-section__hint { font-size: 10px; color: #aaa; }
+
+/* DRW-186 — 4-toggle "Заголовок контейнеров"/"Заголовок этого контейнера"
+ * должен влезать в одну строку в узкой popover. Tight padding + no-wrap. */
+.settings-section--container-title-position .settings-section__row {
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+.settings-section--container-title-position .settings-btn {
+  padding: 4px 7px;
+  font-size: 11px;
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+}
 .settings-btn {
   padding: 5px 10px;
   border: 1px solid #d6d6d6;

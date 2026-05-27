@@ -82,7 +82,7 @@ function makeSchemaContainer(
     x,
     y,
     parentId,
-    props: { w, h, name, direction, titlePosition: "inside", color: "grey", fill: "semi", dash: "dashed" },
+    props: { w, h, name, direction, titlePosition: "inside-center", color: "grey", fill: "semi", dash: "dashed" },
     meta: { didrawName: name },
   } as TLRecord;
 }
