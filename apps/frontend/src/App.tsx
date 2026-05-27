@@ -14,6 +14,7 @@ import { getDidrawName } from "./canvas/id-prefix";
 import { importMermaid, isBoundsContained, unionBoundsOf } from "./canvas/mermaid-import";
 import { backfillStoreRecords } from "./canvas/schema-placeholder";
 import { registerStyleDefaultsSync } from "./canvas/style-defaults-sync";
+import { registerPinAutoToggle } from "./canvas/pin-auto-toggle";
 import { makeExportHotkeyHandler } from "./canvas/export-hotkey";
 import { makeForceReLayoutHotkeyHandler, makeTidyHotkeyHandler, tidyLayout } from "./canvas/tidy-layout";
 import { postLayoutSelection } from "./settings/api";
@@ -108,6 +109,8 @@ export function App({
   const autoFlipDisposerRef = useRef<(() => void) | null>(null);
   // DRW-180 style-propagation Task 9: disposer for registerStyleDefaultsSync.
   const styleSyncDisposerRef = useRef<(() => void) | null>(null);
+  // DRW-185: disposer for registerPinAutoToggle.
+  const pinAutoToggleDisposerRef = useRef<(() => void) | null>(null);
   onExportSelection.current = (ids: string[]) => {
     if (ids.length === 0) return;
     setExportOpen(true);
@@ -131,6 +134,8 @@ export function App({
       autoFlipDisposerRef.current = null;
       styleSyncDisposerRef.current?.();
       styleSyncDisposerRef.current = null;
+      pinAutoToggleDisposerRef.current?.();
+      pinAutoToggleDisposerRef.current = null;
     };
   }, []);
 
@@ -711,6 +716,9 @@ export function App({
           // editor.stylesForNextShape + container resolution chain at create-time.
           styleSyncDisposerRef.current?.();
           styleSyncDisposerRef.current = registerStyleDefaultsSync(ed, space, room);
+          // DRW-185: auto-pin on drag/resize end.
+          pinAutoToggleDisposerRef.current?.();
+          pinAutoToggleDisposerRef.current = registerPinAutoToggle(ed);
           // DRW-150: wire direction callback for context-menu (requires live editor).
           // Task #6 (frame-container-direction-layout): explicit "custom" stays as
           // schema-container props write (auto-flip parity); cardinal directions

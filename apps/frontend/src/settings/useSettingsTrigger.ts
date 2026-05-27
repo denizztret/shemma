@@ -80,13 +80,18 @@ export type TriggerState = {
   target: Target | null;
 };
 
+// DRW-185: default-pinned mode — popover открывается в закреплённом состоянии.
+// User может вернуть к floating через close button (на pinned клик закрывает popover).
+// Persistence не реализована (YAGNI) — каждая сессия начинается с этим default.
+export const SETTINGS_POPOVER_DEFAULT_PINNED = true;
+
 export function useSettingsTrigger(editor: Editor | null): TriggerState & {
   close: () => void;
   pinned: boolean;
   setPinned: (next: boolean) => void;
 } {
   const [target, setTarget] = useState<Target | null>(null);
-  const [pinned, setPinnedState] = useState(false);
+  const [pinned, setPinnedState] = useState(SETTINGS_POPOVER_DEFAULT_PINNED);
   const editorRef = useRef(editor);
   editorRef.current = editor;
   const pinnedRef = useRef(pinned);

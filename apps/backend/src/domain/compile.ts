@@ -124,12 +124,13 @@ export function compile(
         const oldShape = existingId ? stagingStore.store[existingId] : undefined;
         if (existingId && oldShape) {
           const old = oldShape;
-          // preserve user-owned meta (pinned/position/styleOwnedBy)
+          // preserve user-owned meta (pinned/position/styleOwnedBy/didrawSizePinned)
           const oldMeta = (old.meta ?? {}) as Record<string, unknown>;
-          const { pinned, position, styleOwnedBy, ...rest } = oldMeta as {
+          const { pinned, position, styleOwnedBy, didrawSizePinned, ...rest } = oldMeta as {
             pinned?: unknown;
             position?: unknown;
             styleOwnedBy?: unknown;
+            didrawSizePinned?: unknown;
             [key: string]: unknown;
           };
           const newMeta: Record<string, unknown> = {
@@ -141,6 +142,7 @@ export function compile(
           if (pinned !== undefined) newMeta.pinned = pinned;
           if (position !== undefined) newMeta.position = position;
           if (styleOwnedBy !== undefined) newMeta.styleOwnedBy = styleOwnedBy;
+          if (didrawSizePinned !== undefined) newMeta.didrawSizePinned = didrawSizePinned;
           const newR: TLRecord = { ...old, meta: newMeta };
           if (a.label !== undefined) {
             (newR as { props?: Record<string, unknown> }).props = {

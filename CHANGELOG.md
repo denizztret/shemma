@@ -1,5 +1,30 @@
 ## Unreleased
 
+### Pin auto-toggle (DRW-185)
+
+- Frontend: после ручного drag/resize shape автоматически проставляются `meta.pinned`
+  (для position) и `meta.didrawSizePinned` (для size). Trigger — переход
+  `select.translating`/`select.resizing` → `select.idle` с реальным движением
+  (≥1px delta). Реализовано через `react()` listener из `tldraw` в новом
+  модуле `apps/frontend/src/canvas/pin-auto-toggle.ts`. Arrows исключены из
+  auto-pin (отдельная binding/anchor semantics). Multi-select: pin'ятся все
+  shapes в selection с measurable delta. Undo: `markHistoryStoppingPoint` —
+  первое undo снимает pin, второе reverse'ит drag.
+- Frontend: `SettingsPopover` открывается в pinned mode по умолчанию через
+  exported `SETTINGS_POPOVER_DEFAULT_PINNED` constant (`useSettingsTrigger.ts`).
+- Backend: `compile.define` preserves `meta.didrawSizePinned` при upsert (рядом
+  с pinned / position / styleOwnedBy).
+- Backend: `shapeBounds` (теперь exported) игнорирует `growY` override для shapes с
+  `meta.didrawSizePinned === true`. Новый optional param `ignoreSizePin` (default `false`)
+  позволяет `forceUnpin: true` (⌘⌥⇧L / Ctrl+Alt+Shift+L) bypass'ить этот guard для
+  одного layout pass'а.
+- Tests: +16 frontend (pin-auto-toggle pure helpers — shouldPin + computePinUpdates),
+  +2 useSettingsTrigger (default constant), +10 backend
+  (layout-size-pin-discipline + compile preservation extension).
+
+Followups: arrow manual pin к стороне-якорю (interacts с DRW-172),
+SettingsPopover pin state persistence, global toggle "auto-pin on/off".
+
 ### Added
 
 - **Style propagation (sub-project 3 после DRW-180)** — централизованное управление стилем линии (Draw/Solid), шрифтом (Draw/Sans/Mono) и размером (S/M/L/XL) для shapes. BoardPanel: defaults для нового содержимого, persistent в `room.meta.styleDefaults`. SelectionPanel: переключатель видим когда в selection ≥1 frame/schema-container; один клик атомарно меняет всех selected + всех recursive descendants + пишет sticky `meta.didrawStyleDefaults` на frame/container. Spec: `docs/superpowers/specs/2026-05-27-style-propagation-design.md` v0.2.
