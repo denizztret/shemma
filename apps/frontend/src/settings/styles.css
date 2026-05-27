@@ -61,6 +61,31 @@
 .settings-popover__pin-btn--on:hover { background: #fde9e9; color: #c44; opacity: 1; }
 .settings-popover__panel { display: flex; flex-direction: column; gap: 14px; }
 .settings-popover__panel--empty { gap: 0; }
+.settings-popover__title {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.settings-popover__badge {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #f2f3f5;
+  color: #5f6368;
+  font-size: 11px;
+  font-weight: 500;
+  margin: 4px 0 8px;
+}
+.settings-popover__hint {
+  font-size: 11px;
+  color: #8a8d91;
+  margin: 0 0 8px;
+}
 .settings-popover__empty {
   padding: 6px 4px 4px;
   color: #999;

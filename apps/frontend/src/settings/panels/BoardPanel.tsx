@@ -44,6 +44,8 @@ export const BoardPanel: FC<BoardPanelProps> = ({
 
   return (
     <div className="settings-popover__panel" role="dialog" aria-label="Настройки доски">
+      <h2 className="settings-popover__title">По умолчанию</h2>
+      <span className="settings-popover__badge">Для нового содержимого</span>
       <DirectionSection
         current={effective.defaultDirection}
         onChange={onDirectionChange}

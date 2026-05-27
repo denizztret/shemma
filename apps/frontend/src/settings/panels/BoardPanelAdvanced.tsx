@@ -59,6 +59,8 @@ export const BoardPanelAdvanced: FC<BoardPanelAdvancedProps> = ({ effective, onF
       <button type="button" onClick={onBack} className="settings-link">← Назад</button>
       <button type="button" onClick={onReset} className="settings-link">Сбросить</button>
     </div>
+    <span className="settings-popover__badge">Для нового содержимого</span>
+    <p className="settings-popover__hint">Эти значения работают как defaults для всего room</p>
     <div className="settings-popover__form">
       {GROUPS.map((group) => (
         <div key={group.title} className="settings-popover__group">

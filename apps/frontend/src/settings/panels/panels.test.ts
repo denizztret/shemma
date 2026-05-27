@@ -1,5 +1,40 @@
 import { describe, expect, test } from "bun:test";
+import { isValidElement, type ReactElement } from "react";
 import { selectionFooterCounter, selectionHasContainer } from "./SelectionPanel";
+
+type AnyElement = ReactElement<{ children?: unknown; className?: string; [key: string]: unknown }>;
+
+function flatten(node: unknown): AnyElement[] {
+  if (node === null || node === undefined || node === false || node === true) return [];
+  if (Array.isArray(node)) return node.flatMap(flatten);
+  if (isValidElement(node)) {
+    const el = node as AnyElement;
+    const childResults = flatten(el.props.children);
+    return [el, ...childResults];
+  }
+  return [];
+}
+
+function renderText(node: unknown): string {
+  if (node === null || node === undefined || node === false || node === true) return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(renderText).join("");
+  if (isValidElement(node)) {
+    return renderText((node as AnyElement).props.children);
+  }
+  return "";
+}
+
+function hasText(root: unknown, needle: string): boolean {
+  return flatten(root).some((el) => renderText(el).includes(needle));
+}
+
+function hasClassName(root: unknown, className: string): boolean {
+  return flatten(root).some((el) => {
+    const cls = el.props.className;
+    return typeof cls === "string" && cls.split(/\s+/).includes(className);
+  });
+}
 
 describe("selectionFooterCounter", () => {
   test("1 контейнер only", () => {
@@ -37,17 +72,78 @@ describe("NodePanel", () => {
 });
 
 import { BoardPanel } from "./BoardPanel";
+import type { LayoutParams } from "@shemma/domain";
+
+const defaultEffective: LayoutParams = {
+  defaultDirection: "TB",
+  autoDirectionEnabled: true,
+  midpointDistribution: "even",
+  nodeMinWidth: 120,
+  nodeMinHeight: 60,
+  nodePadding: 24,
+  containerPadding: 32,
+  containerLabelHeight: 24,
+  edgeSpacing: 16,
+  edgeNodeSpacing: 24,
+  edgeLabelMaxWidth: 120,
+  edgeLabelMaxLines: 2,
+  edgeLabelMargin: 4,
+  edgeLabelFontSize: 11,
+};
+
+function renderBoardPanel() {
+  return BoardPanel({
+    effective: defaultEffective,
+    onDirectionChange: () => {},
+    onPresetSelect: () => {},
+    onToggleAutoDirection: () => {},
+    onMidpointModeChange: () => {},
+    onOpenAdvanced: () => {},
+  });
+}
 
 describe("BoardPanel", () => {
   test("exports a component", () => {
     expect(typeof BoardPanel).toBe("function");
   });
+
+  test("renders header \"По умолчанию\"", () => {
+    const tree = renderBoardPanel();
+    expect(hasText(tree, "По умолчанию")).toBe(true);
+  });
+
+  test("renders top badge \"Для нового содержимого\"", () => {
+    const tree = renderBoardPanel();
+    expect(hasText(tree, "Для нового содержимого")).toBe(true);
+    expect(hasClassName(tree, "settings-popover__badge")).toBe(true);
+  });
 });
 
 import { BoardPanelAdvanced } from "./BoardPanelAdvanced";
 
+function renderBoardPanelAdvanced() {
+  return BoardPanelAdvanced({
+    effective: defaultEffective,
+    onFieldChange: () => {},
+    onReset: () => {},
+    onBack: () => {},
+  });
+}
+
 describe("BoardPanelAdvanced", () => {
   test("exports a component", () => {
     expect(typeof BoardPanelAdvanced).toBe("function");
+  });
+
+  test("renders top badge \"Для нового содержимого\"", () => {
+    const tree = renderBoardPanelAdvanced();
+    expect(hasText(tree, "Для нового содержимого")).toBe(true);
+    expect(hasClassName(tree, "settings-popover__badge")).toBe(true);
+  });
+
+  test("renders helper text about defaults", () => {
+    const tree = renderBoardPanelAdvanced();
+    expect(hasText(tree, "Эти значения работают как defaults для всего room")).toBe(true);
+    expect(hasClassName(tree, "settings-popover__hint")).toBe(true);
   });
 });
