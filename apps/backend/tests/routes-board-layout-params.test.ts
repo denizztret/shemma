@@ -46,10 +46,10 @@ describe("GET /api/board/layout-params", () => {
 describe("POST /api/board/layout-params", () => {
   test("persists params, returns effective merged with defaults", async () => {
     const app = buildApp();
-    const res = await app.request("/api/board/layout-params", {
+    const res = await app.request("/api/board/layout-params?space=default&room=r2", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ space: "default", room: "r2", params: { edgeSpacing: 24 } }),
+      body: JSON.stringify({ params: { edgeSpacing: 24 } }),
     });
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -60,10 +60,10 @@ describe("POST /api/board/layout-params", () => {
 
   test("params=null clears overrides", async () => {
     const app = buildApp();
-    const res = await app.request("/api/board/layout-params", {
+    const res = await app.request("/api/board/layout-params?space=default&room=r1", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ space: "default", room: "r1", params: null }),
+      body: JSON.stringify({ params: null }),
     });
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -72,10 +72,10 @@ describe("POST /api/board/layout-params", () => {
 
   test("400 on invalid LayoutParams (negative number)", async () => {
     const app = buildApp();
-    const res = await app.request("/api/board/layout-params", {
+    const res = await app.request("/api/board/layout-params?space=default&room=r1", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ space: "default", room: "r1", params: { nodePadding: -5 } }),
+      body: JSON.stringify({ params: { nodePadding: -5 } }),
     });
     expect(res.status).toBe(400);
   });
@@ -91,10 +91,10 @@ describe("POST /api/board/layout-params", () => {
       persistRoom: (s, r) => { persisted = `${s}::${r}`; },
       broadcastRoomMeta: (s, r) => { broadcasted = `${s}::${r}`; },
     }));
-    await app.request("/api/board/layout-params", {
+    await app.request("/api/board/layout-params?space=default&room=r1", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ space: "default", room: "r1", params: { edgeSpacing: 12 } }),
+      body: JSON.stringify({ params: { edgeSpacing: 12 } }),
     });
     expect(persisted).toBe("default::r1");
     expect(broadcasted).toBe("default::r1");

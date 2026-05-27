@@ -39,10 +39,13 @@ describe("postLayoutParams", () => {
 
     const result = await postLayoutParams("default", "drw-test", { nodePadding: 8 });
     const call = fetchMock.mock.calls[0];
-    expect(call?.[0]).toBe("/api/board/layout-params");
+    const url = call?.[0] as string;
+    expect(url).toContain("/api/board/layout-params");
+    expect(url).toContain("space=default");
+    expect(url).toContain("room=drw-test");
     expect(call?.[1]?.method).toBe("POST");
     expect(JSON.parse((call?.[1]?.body as string) ?? "{}")).toEqual({
-      space: "default", room: "drw-test", params: { nodePadding: 8 },
+      params: { nodePadding: 8 },
     });
     expect(result.effective.nodePadding).toBe(8);
   });

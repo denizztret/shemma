@@ -24,10 +24,11 @@ export async function postLayoutParams(
   room: string,
   params: Partial<LayoutParams> | null,
 ): Promise<{ ok: true; effective: LayoutParams }> {
-  const res = await fetch("/api/board/layout-params", {
+  const url = `/api/board/layout-params?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room)}`;
+  const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ space, room, params }),
+    body: JSON.stringify({ params }),
   });
   return jsonOrThrow(res);
 }

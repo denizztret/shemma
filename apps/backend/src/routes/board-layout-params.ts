@@ -24,13 +24,14 @@ export function boardLayoutParamsRoutes(deps: BoardLayoutParamsDeps) {
       return c.json({ raw, effective });
     })
     .post("/api/board/layout-params", async (c) => {
-      const body = await c.req.json<{
-        space?: string;
-        room?: string;
-        params?: Partial<LayoutParams> | null;
-      }>().catch(() => ({} as { space?: string; room?: string; params?: Partial<LayoutParams> | null }));
-      const { space, room, params } = body;
+      const space = c.req.query("space");
+      const room = c.req.query("room");
       if (!space || !room) return c.json({ error: "space and room required" }, 400);
+
+      const body = await c.req.json<{
+        params?: Partial<LayoutParams> | null;
+      }>().catch(() => ({} as { params?: Partial<LayoutParams> | null }));
+      const { params } = body;
 
       if (params !== null && params !== undefined) {
         try {
