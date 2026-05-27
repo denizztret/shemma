@@ -29,3 +29,11 @@ describe("NodePanel", () => {
     expect(typeof NodePanel).toBe("function");
   });
 });
+
+import { BoardPanel } from "./BoardPanel";
+
+describe("BoardPanel", () => {
+  test("exports a component", () => {
+    expect(typeof BoardPanel).toBe("function");
+  });
+});
