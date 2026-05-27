@@ -96,11 +96,13 @@ describe("NodePanel", () => {
 
 import { BoardPanel } from "./BoardPanel";
 import type { LayoutParams } from "@shemma/domain";
+import { DEFAULT_STYLE_DEFAULTS } from "@shemma/domain";
 
 const defaultEffective: LayoutParams = {
   defaultDirection: "TB",
   autoDirectionEnabled: true,
   midpointDistribution: "even",
+  anchorOffsetMode: "distribute",
   nodeMinWidth: 120,
   nodeMinHeight: 60,
   nodePadding: 24,
@@ -122,6 +124,10 @@ function renderBoardPanel() {
     onToggleAutoDirection: () => {},
     onMidpointModeChange: () => {},
     onOpenAdvanced: () => {},
+    styleEffective: DEFAULT_STYLE_DEFAULTS,
+    onStyleDash: () => {},
+    onStyleFont: () => {},
+    onStyleSize: () => {},
   });
 }
 
@@ -190,6 +196,11 @@ function renderSelectionPanel(overrides: Partial<SelectionPanelProps> = {}): Ret
     pinValues: { size: false, position: false },
     onPinToggle: () => {},
     pending: null,
+    showStyles: false,
+    styleState: { dash: null, font: null, size: null },
+    onStyleDash: () => {},
+    onStyleFont: () => {},
+    onStyleSize: () => {},
     ...overrides,
   };
   return SelectionPanel(props);

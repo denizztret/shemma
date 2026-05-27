@@ -1,4 +1,4 @@
-import type { LayoutParams } from "@shemma/domain";
+import type { LayoutParams, StyleDefaults, ResolvedStyleDefaults } from "@shemma/domain";
 
 export type LayoutParamsResponse = {
   raw: Partial<LayoutParams> | null;
@@ -47,6 +47,54 @@ export async function postLayoutSelection(
   input: LayoutSelectionInput,
 ): Promise<{ ok: true }> {
   const url = `/api/agent/layout-selection?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room)}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return jsonOrThrow(res);
+}
+
+export type StyleDefaultsResponse = {
+  raw: StyleDefaults | null;
+  effective: ResolvedStyleDefaults;
+};
+
+export async function getStyleDefaults(
+  space: string,
+  room: string,
+): Promise<StyleDefaultsResponse> {
+  const url = `/api/board/style-defaults?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room)}`;
+  const res = await fetch(url, { method: "GET" });
+  return jsonOrThrow(res);
+}
+
+export async function postStyleDefaults(
+  space: string,
+  room: string,
+  defaults: StyleDefaults | null,
+): Promise<{ ok: true; effective: ResolvedStyleDefaults }> {
+  const url = `/api/board/style-defaults?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room)}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ defaults }),
+  });
+  return jsonOrThrow(res);
+}
+
+export type StyleApplyInput = {
+  selectedIds: string[];
+  styles: StyleDefaults;
+  respectUserOwned?: boolean;
+};
+
+export async function postStyleApply(
+  space: string,
+  room: string,
+  input: StyleApplyInput,
+): Promise<{ ok: true; count: number }> {
+  const url = `/api/agent/style-apply?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room)}`;
   const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },

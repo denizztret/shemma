@@ -7,14 +7,20 @@ import { NodePanel } from "./panels/NodePanel";
 import { BoardPanel } from "./panels/BoardPanel";
 import { BoardPanelAdvanced } from "./panels/BoardPanelAdvanced";
 import {
-  getLayoutParams, postLayoutParams, postLayoutSelection, type LayoutParamsResponse,
+  getLayoutParams, postLayoutParams, postLayoutSelection,
+  getStyleDefaults, postStyleDefaults,
+  type LayoutParamsResponse, type StyleDefaultsResponse,
 } from "./api";
 import { applyPreset, type PresetName } from "./presets";
 import { setContainerDirection } from "../shapes/schema-container/SchemaContainerActions";
 import { setContainerLayoutParams } from "../shapes/container-layout-params";
 import { scopeFor } from "../canvas/tidy-layout";
 import type { LayoutSettingsValue } from "./sections/LayoutSettingsSection";
-import type { LayoutParams, Role } from "@shemma/domain";
+import type { StyleSectionValue } from "./sections/StylesSection";
+import type { LayoutParams, Role, StyleDefaults, StyleDash, StyleFont, StyleSize, ResolvedStyleDefaults } from "@shemma/domain";
+import { DEFAULT_STYLE_DEFAULTS } from "@shemma/domain";
+import { applyStyleToSelection, collectDescendantIds } from "../shapes/style-apply";
+import { deriveUnifiedStyleState, type StyleStateInput } from "../shapes/derive-unified-style-state";
 
 export type SettingsPopoverProps = { space: string; room: string };
 
@@ -30,16 +36,18 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const [advanced, setAdvanced] = useState(false);
   const [boardParams, setBoardParams] = useState<LayoutParamsResponse | null>(null);
+  const [styleDefaults, setStyleDefaults] = useState<StyleDefaultsResponse | null>(null);
   const [pending, setPending] = useState<"tidy" | "force-unpin" | null>(null);
   const [userPos, setUserPos] = useState<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
-    if (!target) { setAdvanced(false); setBoardParams(null); setUserPos(null); }
+    if (!target) { setAdvanced(false); setBoardParams(null); setStyleDefaults(null); setUserPos(null); }
   }, [target]);
 
   useEffect(() => {
     if (target?.kind === "board") {
       getLayoutParams(space, room).then(setBoardParams).catch(() => setBoardParams(null));
+      getStyleDefaults(space, room).then(setStyleDefaults).catch(() => setStyleDefaults(null));
     }
   }, [target, space, room]);
 
@@ -81,6 +89,25 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
   }, [target]);
 
   if (!target) return null;
+
+  async function handleBoardStyle<K extends keyof StyleDefaults>(
+    key: K,
+    value: NonNullable<StyleDefaults[K]>,
+  ) {
+    const prev = styleDefaults;
+    const nextRaw: StyleDefaults = { ...(prev?.raw ?? {}), [key]: value };
+    const nextEffective: ResolvedStyleDefaults = {
+      ...(prev?.effective ?? DEFAULT_STYLE_DEFAULTS),
+      [key]: value,
+    };
+    setStyleDefaults({ raw: nextRaw, effective: nextEffective });
+    try {
+      const r = await postStyleDefaults(space, room, nextRaw);
+      setStyleDefaults({ raw: nextRaw, effective: r.effective });
+    } catch {
+      setStyleDefaults(prev);
+    }
+  }
 
   const size = target.kind === "board" && advanced ? ADVANCED_SIZE : POPOVER_SIZE;
   const anchoredPos = computePopoverPosition({
@@ -204,6 +231,10 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
             catch { setBoardParams(boardParams); }
           }}
           onOpenAdvanced={() => setAdvanced(true)}
+          styleEffective={styleDefaults?.effective ?? DEFAULT_STYLE_DEFAULTS}
+          onStyleDash={(v) => handleBoardStyle("dash", v)}
+          onStyleFont={(v) => handleBoardStyle("font", v)}
+          onStyleSize={(v) => handleBoardStyle("size", v)}
         />
       )}
       {target.kind === "board" && advanced && boardParams && (
@@ -316,6 +347,29 @@ const SelectionPanelContainer: FC<{
     };
   }, [editor]);
 
+  // Style section: visible if selection contains ≥1 frame/schema-container.
+  const showStyles = useValue("showStyles", () => {
+    const selected = editor.getSelectedShapes() as unknown as Array<{ type: string }>;
+    return selected.some(isContainerShape);
+  }, [editor]);
+
+  // Derive unified style state from selected + descendants.
+  const styleState = useValue<StyleSectionValue>("styleState", () => {
+    const selectedIds = editor.getSelectedShapeIds() as unknown as string[];
+    if (selectedIds.length === 0) return { dash: null, font: null, size: null };
+
+    const visited = collectDescendantIds(editor, selectedIds);
+    const inputs: StyleStateInput[] = [];
+    for (const id of visited) {
+      const s = editor.getShape(id as never) as
+        | { type: string; props?: Record<string, unknown> }
+        | undefined;
+      if (!s) continue;
+      inputs.push({ type: s.type, props: (s.props ?? {}) as Record<string, unknown> });
+    }
+    return deriveUnifiedStyleState(inputs);
+  }, [editor]);
+
   // Spec 4.1 + 7.4: writer пишет `meta.didrawLayoutParams = partial` целиком (replace).
   // Если user меняет ONE field — без accumulate он бы потерял остальные overrides.
   // Frontend accumulate: читаем existing override у первого selected container'а и
@@ -395,6 +449,20 @@ const SelectionPanelContainer: FC<{
         });
       }}
       pending={pending}
+      showStyles={showStyles}
+      styleState={styleState}
+      onStyleDash={(v) => {
+        const ids = editor.getSelectedShapeIds() as unknown as string[];
+        void applyStyleToSelection(editor, ids, { dash: v });
+      }}
+      onStyleFont={(v) => {
+        const ids = editor.getSelectedShapeIds() as unknown as string[];
+        void applyStyleToSelection(editor, ids, { font: v });
+      }}
+      onStyleSize={(v) => {
+        const ids = editor.getSelectedShapeIds() as unknown as string[];
+        void applyStyleToSelection(editor, ids, { size: v });
+      }}
     />
   );
 };

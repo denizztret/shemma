@@ -13,6 +13,7 @@ import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { getDidrawName } from "./canvas/id-prefix";
 import { importMermaid, isBoundsContained, unionBoundsOf } from "./canvas/mermaid-import";
 import { backfillStoreRecords } from "./canvas/schema-placeholder";
+import { registerStyleDefaultsSync } from "./canvas/style-defaults-sync";
 import { makeExportHotkeyHandler } from "./canvas/export-hotkey";
 import { makeForceReLayoutHotkeyHandler, makeTidyHotkeyHandler, tidyLayout } from "./canvas/tidy-layout";
 import { postLayoutSelection } from "./settings/api";
@@ -105,6 +106,8 @@ export function App({
   const onSetContainerDirection = useRef<((direction: SchemaContainerDirection) => void) | null>(null);
   // DRW-150: disposer for registerAutoFlipDirection — prevents listener accumulation on HMR/room-switch.
   const autoFlipDisposerRef = useRef<(() => void) | null>(null);
+  // DRW-180 style-propagation Task 9: disposer for registerStyleDefaultsSync.
+  const styleSyncDisposerRef = useRef<(() => void) | null>(null);
   onExportSelection.current = (ids: string[]) => {
     if (ids.length === 0) return;
     setExportOpen(true);
@@ -121,10 +124,13 @@ export function App({
   );
 
   // DRW-150: cleanup auto-flip listener on unmount
+  // DRW-180: + style-defaults sync disposer
   useEffect(() => {
     return () => {
       autoFlipDisposerRef.current?.();
       autoFlipDisposerRef.current = null;
+      styleSyncDisposerRef.current?.();
+      styleSyncDisposerRef.current = null;
     };
   }, []);
 
@@ -701,6 +707,10 @@ export function App({
           // DRW-150: store disposer to prevent listener accumulation on HMR/room-switch
           autoFlipDisposerRef.current?.();
           autoFlipDisposerRef.current = registerAutoFlipDirection(ed);
+          // DRW-180 style-propagation Task 9: bidirectional sync board defaults ↔
+          // editor.stylesForNextShape + container resolution chain at create-time.
+          styleSyncDisposerRef.current?.();
+          styleSyncDisposerRef.current = registerStyleDefaultsSync(ed, space, room);
           // DRW-150: wire direction callback for context-menu (requires live editor).
           // Task #6 (frame-container-direction-layout): explicit "custom" stays as
           // schema-container props write (auto-flip parity); cardinal directions
