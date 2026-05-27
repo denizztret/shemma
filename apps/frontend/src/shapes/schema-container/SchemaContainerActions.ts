@@ -116,6 +116,12 @@ async function triggerLayoutSelection(
           ids,
           directions,
           scope: "self",
+          // Direction change implies full re-layout of subgraph: pinned children
+          // were positioned для PREVIOUS direction; preserving them означает что
+          // визуально ничего не происходит (см. DRW-180 live feedback). Все pinned
+          // children unpin'нутся для этого re-layout pass; pin meta сохраняется
+          // server-side (forceUnpin = per-request override).
+          forceUnpin: true,
         }),
       },
     );

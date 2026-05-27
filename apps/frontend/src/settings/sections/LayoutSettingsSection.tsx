@@ -23,8 +23,8 @@ export const PRESET_HINTS: Record<"compact" | "normal" | "loose", string> = {
 };
 
 const MIDPOINT_LABELS: Record<"even" | "fixed-0.5", string> = {
-  even: "равномерно",
-  "fixed-0.5": "по центру",
+  even: "Равномерно",
+  "fixed-0.5": "По центру",
 };
 
 const MIDPOINT_HINTS: Record<"even" | "fixed-0.5", string> = {
