@@ -1,7 +1,7 @@
 # Frame & Container Direction + Layout — design spec
 
 - **Date:** 2026-05-27
-- **Status:** Draft v0.1 (brainstorm → spec; awaits user review)
+- **Status:** Draft v0.1.1 (self-review pass; awaits user review)
 - **Author:** brainstorm session 2026-05-27 (Settings Popover follow-up, sub-project 1+2)
 - **Related:** [[next-session-board-panel-layout-ux]], [[next-session-frame-direction]], DRW-179 (merged 2026-05-27 as `ad5825d`)
 - **Baseline:** main HEAD `ad5825d` (after DRW-179 Settings Popover merge), git describe `0.27.1-57-gad5825d`
@@ -81,10 +81,11 @@ User explicit decision: board настройки = defaults для нового,
 
 **Invariants:**
 
-- `didrawLayoutParams: Partial<LayoutParams>` — храним diff, не full snapshot. Если user сбрасывает → backend deletes key.
+- `didrawLayoutParams: Partial<LayoutParams>` — храним diff, не full snapshot. Если user сбрасывает → backend deletes key; frontend optimistically пишет `undefined` через `editor.updateShape({meta: {didrawLayoutParams: undefined}})` (tldraw трактует это как delete).
 - `didrawDirection: "custom"` для frame и schema-container = legitimate state ("user разложил руками"); backend skip автолейаут этого subgraph (как уже работает для schema-container через `isCustomDirection`).
 - Schema-container продолжает использовать `props.direction` (не дублируем в meta).
 - Frame `meta.didrawDirection` — единственный канал (нет `props.direction` у native frame).
+- **Frame НЕ участвует в DRW-178 auto-direction inference** — `inferContainerDirections` skip'ает контейнеры с типом `frame` целиком. Без этого `meta.didrawDirection` для frame'а становится ambiguous (user-set vs inferred). Schema-container остаётся в DRW-178 inference (existing semantics: `props.direction` = user, `meta.didrawDirection` = inferred).
 
 ### 4.2 Backend chain — `readContainerDirection` extension
 
@@ -159,8 +160,8 @@ Backend semantics (atomic, BEFORE layout call):
 1. Apply `directions` patch (existing).
 2. **NEW:** Apply `layoutParamsOverride`:
    - `null` value → `delete shape.meta.didrawLayoutParams`.
-   - `Partial<LayoutParams>` → `shape.meta.didrawLayoutParams = partial`.
-   - Validation: только если shape is frame or schema-container; иначе skip + warn.
+   - `Partial<LayoutParams>` → validate через `validateLayoutParams(partial)` из `@shemma/domain` (existing helper); если invalid → 400 с error details, atomic abort (никакие changes не применяются — ни directions, ни override).
+   - Validation: shape должна быть frame OR schema-container; иначе skip ID + добавить в response `unresolved` (как existing pattern для unknown ids).
 3. Trigger `runLayout` with updated store. `runLayoutSubgraph` now reads per-anchor override (см. 4.3).
 4. Broadcast WS как раньше (with `layoutAction: true`).
 
@@ -218,7 +219,11 @@ function scopeFor(ids: string[], editor: Editor): "self" | "auto" {
 
 ### 5.4 Backend guard (defense in depth)
 
-В `runLayoutSubgraph` уже работает `containerScope === "self"` (line 856-861: skip Pass B). Дополнительно проверить что Pass C (apply) при `scope === "self"` **не пишет frame props.w/h** для frame'ов, которых нет в `filterToIds`. Если такая утечка есть — fix + регрессионный тест.
+В `runLayoutSubgraph` уже работает `containerScope === "self"` (line 856-861: skip Pass B). Однако исследование Pass C (apply phase) на возможную утечку — **обязательный первый шаг** task #5: 
+
+1. Запустить existing test suite + regression-тест с фиксацией bug repro (`scope:"self"` + `ids=[container внутри frame]` + observe batch).
+2. Если frame `props.w/h` присутствует в `batch.updated` для frame, который НЕ в `filterToIds` → найти точку записи и fix'нуть guard `if (!filterToIds.has(frameId) && containerScope === "self") continue` или эквивалент.
+3. Если утечки нет — issue в frontend и fix self-contained через scope heuristic (секция 5.2). В этом случае task #5 ограничивается добавлением regression-теста.
 
 ## 6. BoardPanel rebrand — visual layer
 
@@ -265,14 +270,21 @@ GET/POST `/api/board/layout-params` остаются как есть. Это **�
 ### 7.1 Полиморфный counts и direction (в `SettingsPopover.tsx::useValue`)
 
 ```ts
-const containers = selected.filter(
-  (s) => s.type === "schema-container" || s.type === "frame"
-).length;
+const isContainerShape = (s) => s.type === "schema-container" || s.type === "frame";
+
+const counts = useValue("selectionCounts", () => {
+  const selected = editor.getSelectedShapes();
+  const containers = selected.filter(isContainerShape).length;
+  const nodes = selected.length - containers;
+  return { containers, nodes };
+}, [editor]);
+
+// SelectionPanel decision rule: показывать Direction/Layout sections только если
+// ВСЕ selected — containers/frames (no leaves вне). Mixed → sections hidden.
+const showContainerSections = counts.containers > 0 && counts.nodes === 0;
 
 const direction = useValue("dir", () => {
-  const containers = selected.filter(
-    (s) => s.type === "schema-container" || s.type === "frame"
-  );
+  const containers = (editor.getSelectedShapes() as ...).filter(isContainerShape);
   if (containers.length === 0) return null;
 
   const readDir = (s) =>
@@ -285,13 +297,20 @@ const direction = useValue("dir", () => {
 }, [editor]);
 ```
 
+**Note:** `showContainerSections === counts.containers > 0 && counts.nodes === 0` — conservative rule, mixed selection (container + leaf вне container) → Direction/Layout скрыты. Это соответствует section 7.5 rendering table.
+
 ### 7.2 Polymorphic writer `setContainerDirection`
 
 `apps/frontend/src/shapes/schema-container/SchemaContainerActions.ts` либо новый helper `apps/frontend/src/shapes/container-actions.ts`:
 
 ```ts
-export function setContainerDirection(editor, dir: Direction): void {
-  const ids = editor.getSelectedShapeIds();
+// Принимает explicit ids (consistent с setContainerLayoutParams в 7.4).
+// Caller передаёт editor.getSelectedShapeIds() или filtered subset.
+export function setContainerDirection(
+  editor,
+  ids: string[],
+  dir: Direction,
+): void {
   const directions: Record<string, Direction> = {};
 
   editor.run(() => {
@@ -313,7 +332,9 @@ export function setContainerDirection(editor, dir: Direction): void {
 }
 ```
 
-**Note:** старый `setSchemaContainerDirection` помечается deprecated или сразу удаляется (см. секция 9 task #6). Callers переключаются на `setContainerDirection`.
+**API consistency:** оба writer'а (`setContainerDirection`, `setContainerLayoutParams`) принимают explicit `ids: string[]` — caller извлекает их из editor по своей логике.
+
+**Note:** старый `setSchemaContainerDirection(editor, dir)` (читал selection сам) — удаляется. Callers переключаются на `setContainerDirection(editor, ids, dir)` с явным `editor.getSelectedShapeIds()` (см. секция 9 task #6).
 
 ### 7.3 Новый компонент `LayoutSettingsSection`
 
@@ -322,9 +343,9 @@ export function setContainerDirection(editor, dir: Direction): void {
 ```tsx
 // apps/frontend/src/settings/sections/LayoutSettingsSection.tsx
 export type LayoutSettingsValue = {
-  preset: "compact" | "normal" | "roomy" | null;     // null = mixed / custom
-  autoDirection: boolean;
-  midpoint: "even" | "fixed-0.5";
+  preset: "compact" | "normal" | "roomy" | null;             // null = mixed / custom
+  autoDirection: boolean | null;                              // null = mixed across multi-selection
+  midpoint: "even" | "fixed-0.5" | null;                      // null = mixed across multi-selection
 };
 
 export const LayoutSettingsSection: FC<{
@@ -338,7 +359,9 @@ export const LayoutSettingsSection: FC<{
 }> = (...) => (...);
 ```
 
-В SelectionPanel: `current` derived from `selected[i].meta.didrawLayoutParams` (если 1 frame/container) или first.
+**Mixed semantics:** для multi-selection если values разные — toggle/preset показывает indeterminate state (нет подсветки), клик устанавливает explicit value ко всем.
+
+В SelectionPanel: `current` derived from `selected[i].meta.didrawLayoutParams` (если 1 frame/container) или агрегация across multi-selection (все совпадают → значение, иначе null).
 
 ### 7.4 Writer `setContainerLayoutParams`
 
@@ -348,17 +371,18 @@ export async function setContainerLayoutParams(
   ids: string[],
   partial: Partial<LayoutParams> | null,
 ): Promise<void> {
-  // Optimistic local update
+  // Optimistic local update. partial=null → пишем undefined (tldraw deletes meta key).
+  const metaValue = partial === null ? undefined : partial;
   editor.run(() => {
     for (const id of ids) {
       const s = editor.getShape(id);
       if (s?.type === "schema-container" || s?.type === "frame") {
-        editor.updateShape({ id, type: s.type, meta: { didrawLayoutParams: partial }});
+        editor.updateShape({ id, type: s.type, meta: { didrawLayoutParams: metaValue }});
       }
     }
   });
 
-  // Backend POST
+  // Backend POST — partial=null transmitted as null in JSON (backend deletes server-side).
   const override: Record<string, Partial<LayoutParams> | null> = {};
   for (const id of ids) override[id] = partial;
 
@@ -368,6 +392,14 @@ export async function setContainerLayoutParams(
   });
 }
 ```
+
+**Reset (partial=null) semantics:**
+- Frontend: `editor.updateShape({meta: {didrawLayoutParams: undefined}})` → tldraw deletes the meta key locally.
+- Network: `JSON.stringify` сериализует `null` (frontend wire representation для reset).
+- Backend: получает `null` → `delete shape.meta.didrawLayoutParams`.
+- WS broadcast: backend echo'ит meta-delete patch (existing WS protocol patches handle key-removal).
+
+Это устраняет ambiguity между "null-saved" и "deleted" — оба маршрута сходятся к "key absent в meta".
 
 ### 7.5 SelectionPanel rendering rules
 
@@ -420,25 +452,29 @@ export async function setContainerLayoutParams(
 
 | # | Task | Files (Create/Modify/Test) | Depends |
 |---|---|---|---|
-| 1 | `meta.didrawLayoutParams` type alias в `@shemma/domain` (для shared use) | Modify `packages/shemma-domain/src/layout-params.ts` | — |
-| 2 | `readContainerDirection` + `isCustomDirection` extension для frame | Modify `apps/backend/src/domain/layout.ts`; New `layout-direction-frame.test.ts` | 1 |
-| 3 | `runLayoutSubgraph` per-anchor params override (читает meta) | Modify `apps/backend/src/domain/layout.ts`; New `layout-params-override-per-frame.test.ts` | 2 |
-| 4 | POST `layoutParamsOverride` body validation + atomic meta write | Modify `apps/backend/src/routes/layout-selection.ts`; Extend `routes-layout-selection-payload.test.ts` | 3 |
-| 5 | Scope invariant fix + regression | Modify `apps/backend/src/domain/layout.ts` (если найдём утечку в Pass C); New `layout-selection-scope-invariant.test.ts` | 4 |
-| 6 | `setContainerDirection` polymorphic writer (заменяет `setSchemaContainerDirection`) | Modify `apps/frontend/src/shapes/schema-container/SchemaContainerActions.ts` или new; New `container-actions.test.ts` | — |
-| 7 | `setContainerLayoutParams` writer + API wrapper | New `apps/frontend/src/settings/api.ts` extension; New `container-layout-params.test.ts` | 4 |
-| 8 | `tidyLayout` scope heuristic + caller updates | Modify `apps/frontend/src/canvas/tidy-layout.ts` + `apps/frontend/src/App.tsx`; Extend `tidy-layout.test.ts` | 5 |
-| 9 | SettingsPopover useValue: counts + direction polymorphic (frame + container) | Modify `apps/frontend/src/settings/SettingsPopover.tsx` | 6 |
-| 10 | Новый `LayoutSettingsSection` + rename existing → `LayoutActionsSection` | New `apps/frontend/src/settings/sections/LayoutSettingsSection.tsx`; Rename + adjust callers; Extend `sections.test.ts` | 7 |
-| 11 | BoardPanel rebrand (header + badge + CSS) | Modify `apps/frontend/src/settings/panels/BoardPanel.tsx` + `styles.css` | — |
-| 12 | SelectionPanel wiring (Direction для frame, новая LayoutSettings секция, Reset, no badge) | Modify `apps/frontend/src/settings/panels/SelectionPanel.tsx`; Extend `panels.test.ts` | 9, 10 |
-| 13 | Live verification + changelog + Backlog DRW ticket | Manual; Modify `CHANGELOG.md` | 1–12 |
+| 0 | **Investigate Pass C leak** (precondition для task #5): repro bug в test, измерить если frame `props.w/h` пишется при `scope:"self"` + container внутри frame | Manual diagnostics (`bun test` + tracing); New `layout-selection-scope-invariant.test.ts` skeleton с repro case | — |
+| 1 | `meta.didrawLayoutParams` type alias `ContainerLayoutOverride = Partial<LayoutParams> \| null` в `@shemma/domain` (export для shared use frontend+backend) | Modify `packages/shemma-domain/src/layout-params.ts` (re-export `ContainerLayoutOverride`) | — |
+| 2 | `readContainerDirection` + `isCustomDirection` extension для frame + frame skip из `inferContainerDirections` | Modify `apps/backend/src/domain/layout.ts`; New `layout-direction-frame.test.ts` | 1 |
+| 3 | `runLayoutSubgraph` per-anchor params override (читает `meta.didrawLayoutParams` каждого anchor) | Modify `apps/backend/src/domain/layout.ts`; New `layout-params-override-per-frame.test.ts` | 2 |
+| 4 | POST `layoutParamsOverride` body validation (через `validateLayoutParams`) + atomic meta write | Modify `apps/backend/src/routes/layout-selection.ts`; Extend `routes-layout-selection-payload.test.ts` | 3 |
+| 5 | Scope invariant fix (based on task #0 findings) + regression test green | Modify `apps/backend/src/domain/layout.ts` (если task #0 нашёл утечку); Complete `layout-selection-scope-invariant.test.ts` | 0, 4 |
+| 6 | `setContainerDirection(editor, ids, dir)` polymorphic writer; replace ALL callers (включая `SettingsPopover.tsx::onDirectionChange`, context menu actions) | Modify `apps/frontend/src/shapes/schema-container/SchemaContainerActions.ts` (or new file); Modify `SettingsPopover.tsx`, любые context-menu callers; New `container-actions.test.ts` | — |
+| 7 | `setContainerLayoutParams(editor, ids, partial)` writer + API wrapper в `settings/api.ts`; reset semantics (partial=null → meta key delete) | Modify `apps/frontend/src/settings/api.ts`; New `apps/frontend/src/shapes/container-layout-params.ts` (или sibling файл с writer); New `container-layout-params.test.ts` | 4 |
+| 8 | `tidyLayout` scope heuristic (single container/frame → "self") + all caller updates (⌘⇧L, ⌘⌥⇧L, SelectionPanel Layout action) | Modify `apps/frontend/src/canvas/tidy-layout.ts` + `apps/frontend/src/App.tsx`; Extend `tidy-layout.test.ts` | 5 |
+| 9 | SettingsPopover useValue: counts + direction polymorphic (frame + container) + `showContainerSections` rule (containers > 0 && nodes === 0) | Modify `apps/frontend/src/settings/SettingsPopover.tsx` | 6 |
+| 10 | Новый `LayoutSettingsSection` (preset + autoDirection + midpoint + Advanced + Reset) + rename existing `LayoutSection` → `LayoutActionsSection` | New `apps/frontend/src/settings/sections/LayoutSettingsSection.tsx`; Rename + adjust callers; Extend `sections.test.ts` | 7 |
+| 11 | BoardPanel rebrand (header "По умолчанию" + badge + CSS + BoardPanelAdvanced helper text) | Modify `apps/frontend/src/settings/panels/BoardPanel.tsx` + `BoardPanelAdvanced.tsx` + `styles.css` | — |
+| 12 | SelectionPanel wiring (Direction для frame, новая LayoutSettings секция, Reset visibility, no badge) | Modify `apps/frontend/src/settings/panels/SelectionPanel.tsx`; Extend `panels.test.ts` | 9, 10 |
+| 13 | Live verification (chrome-devtools MCP, controller сам) + changelog + Backlog DRW ticket | Manual; Modify `CHANGELOG.md`; backlog task create | 1–12 |
 
 **Estimated parallel-safe groups:**
-- Backend chain (tasks 1→5)
-- Frontend writers (tasks 6→8) — parallel to backend after task 4 lands
-- UI rebrand (task 11) — independent, can go in parallel
+- Task #0 — investigative, first thing
+- Backend chain (tasks 1→2→3→4→5) — sequential
+- Frontend writers (tasks 6, 7) — parallel to backend after task 4 lands; task 7 depends on task 4 (API contract)
+- UI rebrand (task 11) — независимая, можно параллельно
 - UI extension (tasks 9, 10, 12) — sequential after 6+7
+- Task 8 (tidy heuristic) — sequential после task 5
+- Task 13 — финальный sweep
 
 ## 10. Open knobs (resolved in brainstorm)
 
@@ -460,32 +496,45 @@ export async function setContainerLayoutParams(
 4. **Global re-layout всего room** при изменении board defaults — explicitly не делаем. User contribution.
 5. **Per-anchor params override во время scope:"all" / ⌘⌥⇧L global force re-layout** — оставляем board defaults для top-level Pass B. Per-frame override применяется только в Pass A subgraph layout этого anchor. Это compromise: full per-anchor scope в global re-layout — отдельная задача.
 
-## 12. Open questions (not blocking, future-facing)
+## 12. Open questions (resolved or deferred)
 
-1. **Mixed selection precise rule** — сейчас `counts.containers` считается через filter; если selection = [container, leaf_inside_container] → containers=1, nodes=1 (leaf is child) → SelectionPanel показывает Direction секцию? Уточнить во время impl.
-2. **`meta.didrawLayoutParams` для schema-container** — backend всегда читает `meta`; frontend writer тоже. Но `meta` на schema-container сейчас уже used для `didrawDirectionInherited` etc. — нужно убедиться что не пересекается.
-3. **Bulk write на multi-selection** — POST с `layoutParamsOverride: {id1: p, id2: p, id3: p}` всё в одном запросе. Backend atomic — либо все, либо никто (validation). Это уже design contract.
+1. **Mixed selection precise rule** — RESOLVED: section 7.1 → `showContainerSections = counts.containers > 0 && counts.nodes === 0`. Mixed (leaf вне container) → sections скрыты. Это conservative но детерминированно.
+2. **`meta.didrawLayoutParams` ключ collision** — RESOLVED через code check: `meta.didrawDirection` уже skipped DRW-178 inference если set (layout.ts:1153). Для frame дополнительно skip из `inferContainerDirections` (см. section 4.1 invariants). `didrawLayoutParams` — новый ключ, не пересекается с existing (`didrawDirectionInherited`, `didrawSubgraphDirection`, etc.).
+3. **Bulk write на multi-selection** — RESOLVED: section 4.4 step #2 backend validation atomic (либо все changes applied, либо 400 abort при invalid value).
+4. **Menu disappears bug** (отдельный report от 2026-05-27) — DEFERRED: separate backlog ticket после live-repro user'ом. Не в scope этого spec.
 
-## 13. Self-review (inline)
+## 13. Self-review log (v0.1 → v0.1.1)
 
-✅ **Placeholders:** прошёлся — нет TBD кроме section 12 "open questions" которые marked as not blocking.
+**Findings из второго прохода свежим взглядом и fixes inline:**
 
-✅ **Internal consistency:**
-- Section 4.3 + 7.4 oба ссылаются на `meta.didrawLayoutParams` chain — согласовано.
-- Section 5 scope heuristic + section 7 SelectionPanel rules — `scope:"self"` для container/frame везде согласовано.
-- Section 9 decomposition покрывает все компоненты из секций 4-8.
+1. **API inconsistency (FIXED 7.2):** `setContainerDirection(editor, dir)` читал selection сам; `setContainerLayoutParams(editor, ids, partial)` принимал explicit ids → теперь оба принимают `ids: string[]`. Caller извлекает.
 
-✅ **Scope:** focused — это объединённый sub-project 1+2 (frame+container direction/layout + board rebrand). Sub-projects 3 (style) и 4 (container shape UX) явно declared non-goals.
+2. **`partial=null` lifecycle (FIXED 4.1, 4.4 step 2, 7.4):** frontend пишет `undefined` в meta (tldraw deletes locally); JSON.stringify сериализует `null`; backend deletes server-side. Convergent semantics — key absent в meta.
 
-✅ **Ambiguity:**
-- "Apply ко всем" (multi-selection) уточнено: backend atomic, frontend optimistic для каждого.
-- `meta.didrawLayoutParams = null` → backend delete (явно прописано).
-- Frame Custom direction → skip Pass A (явно прописано).
+3. **Task #1 unclear (FIXED task #1):** теперь экспортирует именованный type alias `ContainerLayoutOverride = Partial<LayoutParams> | null` — конкретное deliverable.
 
-✅ **No vague requirements:** все API contracts с типами, все file paths указаны.
+4. **`LayoutSettingsValue` mixed semantics (FIXED 7.3):** `autoDirection: boolean | null` + `midpoint: ... | null` — null для mixed multi-selection. Indeterminate state в UI.
 
-Минор замечание — section 12 "Open questions" есть, но они помечены как not-blocking + future-facing. Impl сможет принять решение на месте.
+5. **Backend validation gap (FIXED 4.4 step 2):** добавлено `validateLayoutParams(partial)` из `@shemma/domain` (existing helper) + atomic abort при invalid value.
+
+6. **Section 5.4 implicit investigation step (FIXED tasks #0, #5):** разбито на task #0 (diagnostics-first, repro в тесте) и task #5 (fix based on findings или просто scope heuristic enough).
+
+7. **7.1 vs 7.5 ambiguity (FIXED 7.1):** добавлена explicit rule `showContainerSections = counts.containers > 0 && counts.nodes === 0`. Mixed (leaf вне) → sections скрыты, соответствует table в 7.5.
+
+8. **Task #6 missing caller updates (FIXED task #6):** теперь явно перечислены `SettingsPopover.tsx::onDirectionChange` + context menu callers.
+
+9. **Open question #2 проверена в коде (RESOLVED, section 12):** `meta.didrawDirection` уже skipped DRW-178 inference если set. Для frame дополнительно skip из `inferContainerDirections` целиком (новое требование, добавлено в section 4.1 invariants).
+
+10. **Menu-disappears bug (NOTED, section 12 #4):** отдельный bug from earlier message — DEFERRED в отдельный backlog ticket после live-repro user'ом. Не в scope.
+
+**Final checklist:**
+
+✅ **Placeholders:** только `// ... existing ... //` elisions в code snippets (acceptable for spec, не TBD).
+✅ **Internal consistency:** все meta key references, scope:"self" usages, и file paths согласованы между секциями 4-12.
+✅ **Scope:** focused на sub-project 1+2; sub-projects 3, 4 + menu-disappears bug explicitly declared non-goals/deferred.
+✅ **Ambiguity:** все resolved выше.
+✅ **Type consistency:** `ContainerLayoutOverride`, `LayoutParams`, `Direction`, `LayoutSettingsValue` все имеют точку определения.
 
 ---
 
-**Ready for user review.** Если apprup'нуто — следующий шаг writing-plans skill → создание `docs/superpowers/plans/2026-05-27-frame-container-direction-layout-plan.md` с пошаговыми bite-sized task'ами (per task #1-13).
+**Ready for user review.** Если apprup'нуто — следующий шаг writing-plans skill → создание `docs/superpowers/plans/2026-05-27-frame-container-direction-layout-plan.md` с пошаговыми bite-sized task'ами (per task #0-13).
