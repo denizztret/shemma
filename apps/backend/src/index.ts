@@ -33,6 +33,7 @@ import { domainRoutes } from "./routes/domain";
 import { exportRoutes } from "./routes/export";
 import { makeHealthRoutes } from "./routes/health";
 import { importMermaidRoutes } from "./routes/import-mermaid";
+import { boardLayoutParamsRoutes } from "./routes/board-layout-params";
 import { layoutRoutes } from "./routes/layout";
 import { layoutSelectionRoutes } from "./routes/layout-selection";
 import { smartInsertRoutes } from "./routes/smart-insert";
@@ -294,6 +295,11 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", stateRoutes());
   app.route("/", layoutRoutes(bus));
   app.route("/", layoutSelectionRoutes(bus));
+  app.route("/", boardLayoutParamsRoutes({
+    getRoom: (space, room) => bundles.get(space)?.rooms.peek(room) ?? legacyBundle.rooms.peek(room),
+    persistRoom: () => {},
+    broadcastRoomMeta: () => {},
+  }));
   app.route("/", smartInsertRoutes(bus));
   app.route("/", promptRoutes(bus));
   app.route("/", aiRoutes(bus));
