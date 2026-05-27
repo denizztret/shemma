@@ -37,3 +37,11 @@ describe("BoardPanel", () => {
     expect(typeof BoardPanel).toBe("function");
   });
 });
+
+import { BoardPanelAdvanced } from "./BoardPanelAdvanced";
+
+describe("BoardPanelAdvanced", () => {
+  test("exports a component", () => {
+    expect(typeof BoardPanelAdvanced).toBe("function");
+  });
+});
