@@ -35,3 +35,11 @@ describe("RoleSection", () => {
     expect(typeof RoleSection).toBe("function");
   });
 });
+
+import { StylesSection } from "./StylesSection";
+
+describe("StylesSection", () => {
+  test("exports a component", () => {
+    expect(typeof StylesSection).toBe("function");
+  });
+});
