@@ -8,14 +8,18 @@
 
 ## 1. Goal
 
-Дать пользователю unified, opt-in UI для управления настройками, специфичными для shemma, которых нет в default tldraw style panel: per-shape (Direction для schema-container, Pin size/position, Role), per-selection (Tidy, Force re-layout, групповой Direction, bulk Pin) и per-board (LayoutParams с presets + Advanced drill-down).
+Дать пользователю unified, opt-in UI для управления настройками, специфичными для shemma, которых нет в default tldraw style panel. Три panel'а в одном popover'е:
+
+- **SelectionPanel** — для одиночного schema-container, multi-selection или single Frame: Direction (для containers), Tidy, Force re-layout, Pin size/position.
+- **NodePanel** — для одиночной non-container shape с semantic meta: Pin size/position, Role.
+- **BoardPanel** — для пустого канваса: default Direction, spacing presets (Compact/Normal/Roomy), Advanced drill-down ко всем 16 LayoutParams.
 
 UI не появляется автоматически при выделении — открывается только по явному gesture'у (Option + click), не конкурирует с tldraw'овской style panel.
 
 ## 2. Non-goals (out of scope v1)
 
 - BoardPanel · `Styles` секция — пустой stub в v1; реальные default style controls — следующая итерация.
-- Per-container `layoutParamsOverride` (drill-down "Tune layout params →" из ContainerPanel) — отложен; v1 только board-level + per-container Direction (уже работает).
+- Per-container `layoutParamsOverride` (drill-down "Tune layout params →" из SelectionPanel) — отложен; v1 только board-level + per-container Direction (уже работает).
 - Mobile / touch — desktop-only.
 - Анимация popover'а (slide-in, fade) — instant show/hide.
 - Drag-handle для перемещения popover'а — anchor'нут к target, без free move.
@@ -92,6 +96,8 @@ on pointerdown (capture):
 
 **Note 2:** для shapes без `meta.didrawId` (default tldraw shapes без semantic meta) popover НЕ открывается; Alt-click работает по tldraw default behavior (e.g. Alt-drag clone).
 
+**Note 3:** если на момент Alt-click selection непустой, но hit shape **не входит** в выборку — popover открывается по hit (не по выборке). Это intent: user тычет в конкретную shape, ожидая её settings; chord на пустое место сохраняет board-popover behavior.
+
 ### Closing conditions
 
 Popover закрывается на любое из:
@@ -99,7 +105,7 @@ Popover закрывается на любое из:
 - pointerdown outside `.settings-popover` (внутри popover'а — клики не закрывают)
 - camera move (programmatic `setCamera` ИЛИ user pan/zoom; detection через `editor.store.listen({ scope: "session" })`)
 - subject shape deleted (для `kind: "node"` / `kind: "selection"` — Panel ловит `useValue(... → undefined)` и зовёт `close()`)
-- selection changes на kind="selection" — простая модель: close (можно re-open Option-click'ом)
+- selection changes (любой kind, кроме `board`) — простая модель: close (можно re-open Option-click'ом)
 
 ### Positioning
 
@@ -178,32 +184,17 @@ Footer-counter: `"1 container"`, `"2 containers, 5 nodes"`, `"7 shapes"`.
 
 ### Storage locations
 
-| Что                           | Где                                                | API endpoint                                                |
+| Что                           | Где                                                | Write path                                                  |
 |-------------------------------|----------------------------------------------------|-------------------------------------------------------------|
 | Direction (per container)     | `shape.props.direction` + `shape.meta.didrawDirectionInherited` | existing `POST /api/agent/layout-selection` with `direction` |
-| Pin position (per shape)      | `shape.meta.pinned: boolean`                       | new `POST /api/shape/:id/pin` `{ position: bool }`         |
-| Pin size (per shape)          | `shape.meta.didrawSizePinned: boolean`             | new `POST /api/shape/:id/pin` `{ size: bool }`             |
-| Role (per shape)              | `shape.meta.didrawRole: string`                    | existing role-picker write path                            |
+| Pin position (per shape)      | `shape.meta.pinned: boolean`                       | `editor.updateShape({ meta: { pinned } })` + WS sync (как role-picker) |
+| Pin size (per shape)          | `shape.meta.didrawSizePinned: boolean`             | `editor.updateShape({ meta: { didrawSizePinned } })` + WS sync |
+| Role (per shape)              | `shape.meta.didrawRole: string`                    | existing role-picker write path (editor.updateShape)        |
 | LayoutParams (board)          | `room.meta.layoutParams: Partial<LayoutParams>`    | new `POST /api/board/layout-params`                        |
 
+**Rationale (Pin):** все per-shape mutations в shemma идут через `editor.updateShape` — WS sync передаёт изменения backend'у автоматически. Меньшая API-surface, единая модель с role-picker.
+
 ### New endpoints
-
-#### `POST /api/shape/:id/pin`
-
-```ts
-// Request
-{
-  size?: boolean,
-  position?: boolean,
-  space?: string,
-  room?: string,
-}
-
-// Response
-{ ok: true }
-```
-
-Idempotent. Если оба поля `undefined` → 400. Записывает соответствующие `meta.*` поля атомарно; broadcast через WS как layoutAction-free meta update.
 
 #### `GET /api/board/layout-params`
 
@@ -270,7 +261,7 @@ useEffect(() => {
 
 ### Concurrency
 
-LWW по timestamp. Параллельные mutation'ы из двух вкладок — последний выигрывает. Совпадает с моделью DRW-149/166.
+LWW: для shape-level mutations — стандартный tldraw/WS-sync (последняя пришедшая в backend mutation побеждает); для board-params — server-side `Date.now()` timestamp в обработчике `POST /api/board/layout-params`, последний writer wins. Совпадает с моделью DRW-149/166.
 
 ## 7. Error handling
 
@@ -306,8 +297,8 @@ LWW по timestamp. Параллельные mutation'ы из двух вкла�
 | Sections (Direction / Layout / Pin / Role) | render given props, click → callback fires      | `apps/frontend/src/settings/sections/*.test.tsx`                   |
 | Panels                  | composition: правильные sections shown for given target       | `apps/frontend/src/settings/panels/*.test.tsx`                     |
 | `api.ts`                | request shape, response decoding, error path                  | `apps/frontend/src/settings/api.test.ts` (fetch mock)              |
-| Backend `pin`           | input validation, persistence, idempotency                    | `apps/backend/tests/routes-shape-pin.test.ts`                      |
-| Backend `layout-params` | validation, defaults application, broadcast                   | `apps/backend/tests/routes-board-layout-params.test.ts`            |
+| Pin write path          | `editor.updateShape({meta})` → WS sync → backend persistence  | reuse существующих WS-sync тестов; нет нового endpoint'а           |
+| Backend `layout-params` | GET/POST validation, defaults application, broadcast          | `apps/backend/tests/routes-board-layout-params.test.ts`            |
 | Backend `forceUnpin`    | layout-selection respects flag                                | `apps/backend/tests/routes-layout-selection-force-unpin.test.ts`   |
 | Integration (manual)    | open popover → click button → state updates → backend sync   | chrome-devtools MCP, один happy-path per Panel kind                |
 
@@ -332,9 +323,9 @@ LWW по timestamp. Параллельные mutation'ы из двух вкла�
 
 - **`Force re-layout` hotkey ⌘⇧⌥L** — формально часть DRW-180 (user-pinned dimensions). Popover-кнопка не блокируется наличием hotkey'я: она зовёт ту же backend-функцию (`POST /api/agent/layout-selection` с `forceUnpin: true`). Если эта спецификация реализуется раньше DRW-180 — кнопка работает, hotkey может появиться позже без изменений UI.
 - **`room.meta.layoutParams`** — новое room-scoped поле. Backend должен:
-  - Прочитать его в каждом месте вызова `runLayout` в `apps/backend/src/routes/schema.ts` (~3 точки по DRW-178 notes: lines 843, 1009, 1357 — числа могут сдвинуться, искать по `runLayout(`).
+  - Прочитать его в каждом месте вызова `runLayout` в `apps/backend/src/routes/schema.ts` (искать по `runLayout(` — на момент написания spec'а ~3 точки в schema-routes; конкретные строки уточнить в plan'е).
   - Применить `applyLayoutParamsDefaults(roomMeta.layoutParams ?? {})` перед передачей в helpers.
-  - Хранить и broadcast'ить через существующий roomMeta-механизм (тот же, что используется для других room-level meta).
+  - `room.meta` mutation mechanism уже существует в backend — используется для `room.meta.miroExports` (`apps/backend/src/export/miro/tracking.ts`) и `room.meta.didrawProtocol` auto-upgrade (`apps/backend/src/routes/schema.ts:804`). Никакой новой инфраструктуры не требуется.
 - **Tldraw `InFrontOfTheCanvas` слот** — в shemma пока не использован. Убедиться, что DRW-134 (canvas-AI protocol overlay) не претендует на тот же слот; они должны coexist (наш popover открывается по требованию, overlay DRW-134 — постоянный canvas-aware overlay в другой плоскости).
 
 ## 11. Risks / open angles
@@ -351,7 +342,7 @@ LWW по timestamp. Параллельные mutation'ы из двух вкла�
 1. **Foundation** — `useSettingsTrigger` + skeleton `SettingsPopover` + `InFrontOfTheCanvas` slot wiring. Демо: Option+click открывает пустой popover, Esc закрывает.
 2. **Sections** — `DirectionSection`, `LayoutSection`, `PinSection`, `RoleSection`, `StylesSection` (stub). Все atomic, с tests.
 3. **Panels** — `SelectionPanel`, `NodePanel`, `BoardPanel` composition.
-4. **Backend new endpoints** — `pin`, `board/layout-params`, расширение `layout-selection` с `forceUnpin`.
+4. **Backend new endpoints** — `GET+POST /api/board/layout-params` (read/write `room.meta.layoutParams`), расширение `POST /api/agent/layout-selection` с `forceUnpin`. Pin для shape — без отдельного endpoint'а (через editor.updateShape + WS).
 5. **Wiring** — `api.ts` + optimistic/rollback + WS sync.
 6. **A11y polish** — focus trap, roles, keyboard nav.
 7. **Manual visual gate** — Option+click on container/node/selection/board → verify per phase.
