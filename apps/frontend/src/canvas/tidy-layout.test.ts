@@ -5,20 +5,23 @@
 //   - tidyLayout returns noop result on empty ids
 //   - hotkey handler calls tidyLayout on ⌘⇧L / Ctrl+Shift+L
 //   - hotkey does NOT fire on unrelated keys
+//   - scopeFor heuristic (frame-container, spec 5.2)
+//   - tidyLayout passes scope to backend
 
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import type { Editor } from "tldraw";
 
 // ---------------------------------------------------------------------------
 // Minimal fake editor for test purposes
 // ---------------------------------------------------------------------------
-type FakeEditor = {
-  getSelectedShapeIds: () => string[];
-};
+type FakeShape = { id: string; type: string };
 
-function makeFakeEditor(selectedIds: string[] = []): FakeEditor {
+function makeFakeEditor(shapes: FakeShape[] = []): Editor {
+  const map = new Map(shapes.map((s) => [s.id, s]));
   return {
-    getSelectedShapeIds: () => selectedIds,
-  };
+    getShape: (id: string) => map.get(id),
+    getSelectedShapeIds: () => shapes.map((s) => s.id),
+  } as unknown as Editor;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,22 +120,29 @@ function fakeKey(opts: {
 describe("makeTidyHotkeyHandler hotkey wiring", () => {
   test("fires callback on Cmd+Shift+L (Mac)", async () => {
     const { makeTidyHotkeyHandler } = await import("./tidy-layout");
-    const calls: string[][] = [];
+    const calls: Array<{ ids: string[]; scope: string }> = [];
+    const editor = makeFakeEditor([
+      { id: "shape:a", type: "geo" },
+      { id: "shape:b", type: "geo" },
+    ]);
     const handler = makeTidyHotkeyHandler(
       () => ["shape:a", "shape:b"],
-      (ids) => { calls.push(ids); },
+      editor,
+      (ids, scope) => { calls.push({ ids, scope }); },
     );
     // biome-ignore lint/suspicious/noExplicitAny: plain object substituting KeyboardEvent in Bun test env
     handler(fakeKey({ key: "L", metaKey: true, shiftKey: true }) as any);
-    expect(calls).toEqual([["shape:a", "shape:b"]]);
+    expect(calls).toEqual([{ ids: ["shape:a", "shape:b"], scope: "auto" }]);
   });
 
   test("fires callback on Ctrl+Shift+L (non-Mac)", async () => {
     const { makeTidyHotkeyHandler } = await import("./tidy-layout");
-    const calls: string[][] = [];
+    const calls: Array<{ ids: string[]; scope: string }> = [];
+    const editor = makeFakeEditor([{ id: "shape:a", type: "geo" }]);
     const handler = makeTidyHotkeyHandler(
       () => ["shape:a"],
-      (ids) => { calls.push(ids); },
+      editor,
+      (ids, scope) => { calls.push({ ids, scope }); },
     );
     // biome-ignore lint/suspicious/noExplicitAny: plain object substituting KeyboardEvent in Bun test env
     handler(fakeKey({ key: "L", ctrlKey: true, shiftKey: true }) as any);
@@ -141,10 +151,15 @@ describe("makeTidyHotkeyHandler hotkey wiring", () => {
 
   test("does NOT fire on unrelated key combo", async () => {
     const { makeTidyHotkeyHandler } = await import("./tidy-layout");
-    const calls: string[][] = [];
+    const calls: Array<{ ids: string[]; scope: string }> = [];
+    const editor = makeFakeEditor([
+      { id: "shape:a", type: "geo" },
+      { id: "shape:b", type: "geo" },
+    ]);
     const handler = makeTidyHotkeyHandler(
       () => ["shape:a", "shape:b"],
-      (ids) => { calls.push(ids); },
+      editor,
+      (ids, scope) => { calls.push({ ids, scope }); },
     );
     // Ctrl+L without Shift
     // biome-ignore lint/suspicious/noExplicitAny: plain object substituting KeyboardEvent in Bun test env
@@ -157,13 +172,100 @@ describe("makeTidyHotkeyHandler hotkey wiring", () => {
 
   test("passes empty array when no shapes selected → callback still called (let tidyLayout handle)", async () => {
     const { makeTidyHotkeyHandler } = await import("./tidy-layout");
-    const calls: string[][] = [];
+    const calls: Array<{ ids: string[]; scope: string }> = [];
+    const editor = makeFakeEditor([]);
     const handler = makeTidyHotkeyHandler(
       () => [],
-      (ids) => { calls.push(ids); },
+      editor,
+      (ids, scope) => { calls.push({ ids, scope }); },
     );
     // biome-ignore lint/suspicious/noExplicitAny: plain object substituting KeyboardEvent in Bun test env
     handler(fakeKey({ key: "L", metaKey: true, shiftKey: true }) as any);
-    expect(calls).toEqual([[]]);
+    expect(calls).toEqual([{ ids: [], scope: "auto" }]);
+  });
+
+  test("derives scope='self' for single schema-container selection (frame-container fix)", async () => {
+    const { makeTidyHotkeyHandler } = await import("./tidy-layout");
+    const calls: Array<{ ids: string[]; scope: string }> = [];
+    const editor = makeFakeEditor([{ id: "shape:cont", type: "schema-container" }]);
+    const handler = makeTidyHotkeyHandler(
+      () => ["shape:cont"],
+      editor,
+      (ids, scope) => { calls.push({ ids, scope }); },
+    );
+    // biome-ignore lint/suspicious/noExplicitAny: plain object substituting KeyboardEvent in Bun test env
+    handler(fakeKey({ key: "L", metaKey: true, shiftKey: true }) as any);
+    expect(calls).toEqual([{ ids: ["shape:cont"], scope: "self" }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// scopeFor heuristic — frame-container fix (spec 5.2)
+// ---------------------------------------------------------------------------
+describe("scopeFor heuristic", () => {
+  test("single schema-container → 'self'", async () => {
+    const { scopeFor } = await import("./tidy-layout");
+    const editor = makeFakeEditor([{ id: "shape:cont", type: "schema-container" }]);
+    expect(scopeFor(["shape:cont"], editor)).toBe("self");
+  });
+
+  test("single frame → 'self'", async () => {
+    const { scopeFor } = await import("./tidy-layout");
+    const editor = makeFakeEditor([{ id: "shape:frame", type: "frame" }]);
+    expect(scopeFor(["shape:frame"], editor)).toBe("self");
+  });
+
+  test("single leaf (geo) → 'auto'", async () => {
+    const { scopeFor } = await import("./tidy-layout");
+    const editor = makeFakeEditor([{ id: "shape:leaf", type: "geo" }]);
+    expect(scopeFor(["shape:leaf"], editor)).toBe("auto");
+  });
+
+  test("multi selection → 'auto'", async () => {
+    const { scopeFor } = await import("./tidy-layout");
+    const editor = makeFakeEditor([
+      { id: "shape:cont", type: "schema-container" },
+      { id: "shape:leaf", type: "geo" },
+    ]);
+    expect(scopeFor(["shape:cont", "shape:leaf"], editor)).toBe("auto");
+  });
+
+  test("empty selection → 'auto'", async () => {
+    const { scopeFor } = await import("./tidy-layout");
+    const editor = makeFakeEditor([]);
+    expect(scopeFor([], editor)).toBe("auto");
+  });
+
+  test("unknown id (getShape returns undefined) → 'auto'", async () => {
+    const { scopeFor } = await import("./tidy-layout");
+    const editor = makeFakeEditor([]);
+    expect(scopeFor(["shape:missing"], editor)).toBe("auto");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// tidyLayout — scope passthrough to backend
+// ---------------------------------------------------------------------------
+describe("tidyLayout scope passthrough", () => {
+  test("forwards scope='self' to backend POST body", async () => {
+    let capturedBody: unknown;
+    mockFetch((_url, init) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return { body: { ok: true, count: 1, affected: ["shape:cont"] } };
+    });
+    const { tidyLayout } = await import("./tidy-layout");
+    await tidyLayout(["shape:cont"], "space", "room", "self");
+    expect((capturedBody as { ids: string[]; scope: string }).scope).toBe("self");
+  });
+
+  test("defaults scope='auto' when omitted (back-compat)", async () => {
+    let capturedBody: unknown;
+    mockFetch((_url, init) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return { body: { ok: true, count: 0, affected: [] } };
+    });
+    const { tidyLayout } = await import("./tidy-layout");
+    await tidyLayout(["shape:a"], "space", "room");
+    expect((capturedBody as { scope: string }).scope).toBe("auto");
   });
 });

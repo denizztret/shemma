@@ -11,6 +11,7 @@ import {
 } from "./api";
 import { applyPreset, type PresetName } from "./presets";
 import { setContainerDirection } from "../shapes/schema-container/SchemaContainerActions";
+import { scopeFor } from "../canvas/tidy-layout";
 import type { LayoutParams, Role } from "@shemma/domain";
 
 export type SettingsPopoverProps = { space: string; room: string };
@@ -262,7 +263,11 @@ const SelectionPanelContainer: FC<{
         setPending(id);
         const ids = editor.getSelectedShapeIds() as unknown as string[];
         try {
-          await postLayoutSelection(space, room, { ids, forceUnpin: id === "force-unpin" });
+          await postLayoutSelection(space, room, {
+            ids,
+            scope: scopeFor(ids, editor),
+            forceUnpin: id === "force-unpin",
+          });
         } catch (e) { console.warn("[settings] layout action failed", e); }
         finally { setPending(null); }
       }}

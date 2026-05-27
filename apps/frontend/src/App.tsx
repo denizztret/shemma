@@ -163,11 +163,12 @@ export function App({
   // at component level (not inside editor useEffect) so they activate before the
   // editor mounts (handler is a no-op while editor is null).
   useEffect(() => {
+    if (!editor) return;
     const handler = makeTidyHotkeyHandler(
-      () => (editor ? (editor.getSelectedShapeIds() as unknown as string[]) : []),
-      async (ids) => {
-        if (!editor) return;
-        const result = await tidyLayout(ids, space, room);
+      () => editor.getSelectedShapeIds() as unknown as string[],
+      editor,
+      async (ids, scope) => {
+        const result = await tidyLayout(ids, space, room, scope);
         if (result.kind === "ok") {
           maybeZoomToAffected(editor, result.affected, inProgrammaticCameraOp);
         }
@@ -183,12 +184,13 @@ export function App({
   // intercept before it (otherwise Alt-mod combos can be swallowed by the
   // editor's own shortcut router).
   useEffect(() => {
+    if (!editor) return;
     const handler = makeForceReLayoutHotkeyHandler(
-      () => (editor ? (editor.getSelectedShapeIds() as unknown as string[]) : []),
-      async (ids) => {
-        if (!editor) return;
+      () => editor.getSelectedShapeIds() as unknown as string[],
+      editor,
+      async (ids, scope) => {
         try {
-          await postLayoutSelection(space, room, { ids, forceUnpin: true });
+          await postLayoutSelection(space, room, { ids, scope, forceUnpin: true });
         } catch (e) {
           console.warn("[force-relayout] failed", e);
         }
