@@ -1,43 +1,105 @@
-import type { Editor } from "tldraw";
-import type { SchemaContainerDirection, SchemaContainerProps, SchemaContainerShape } from "./SchemaContainerShape";
+import type { Editor, TLShapeId } from "tldraw";
+import type {
+  SchemaContainerProps,
+  SchemaContainerShape,
+} from "./SchemaContainerShape";
 
 /**
- * DRW-166/167: Set direction prop on all selected schema-container shapes.
+ * Direction value applied through `setContainerDirection`.
  *
- * Sends a single combined request to the backend: the `directions` map is
- * applied atomically before the layout pass, eliminating the race between
- * optimistic `editor.updateShape` and the WS 50ms debounce. `scope: "self"`
- * prevents the layout pass from collapsing parent frames (DRW-167).
- *
- * The optimistic local update is kept for instant UI feedback.
+ * The polymorphic writer never receives `"custom"` — `"custom"` is the
+ * auto-flip result, set by `SchemaContainerAutoFlip` when the user manually
+ * drags a child inside a container. Explicit user selection through the
+ * Direction submenu / SelectionPanel always picks one of the four cardinal
+ * directions; callers guard against `"custom"` and early-return.
  */
-export function setSchemaContainerDirection(
+export type ContainerDirection = "TB" | "BT" | "LR" | "RL";
+
+/**
+ * Task #6 (frame-container-direction-layout): polymorphic Direction writer
+ * for schema-container AND frame.
+ *
+ * - **schema-container** — пишет `props.direction` (existing v0 invariant).
+ * - **frame** — пишет `meta.didrawDirection` (introduced in Task #2;
+ *   `runLayout::readContainerDirection` reads it server-side).
+ * - **other shape types** — silently skipped.
+ *
+ * После optimistic local update отправляется POST `/api/agent/layout-selection`
+ * с `directions` map + `scope:"self"`:
+ * - `directions` map даёт backend атомарную возможность перезаписать
+ *   `props.direction` для schema-container до layout pass'а (eliminates the
+ *   race с WS-debounce, see DRW-166).
+ * - Frame entries в `directions` map backend пока игнорирует (validation
+ *   ограничена schema-container'ом, см. `apps/backend/src/routes/layout-selection.ts`);
+ *   meta.didrawDirection доедет до backend через WS sync. Сам POST всё равно
+ *   нужен — `affectedIds` включает frame id, и `scope:"self"` гарантирует, что
+ *   layout pass пройдёт по subgraph'у конкретного container'а без схлопывания
+ *   parent frame (см. DRW-167 + task #5).
+ *
+ * Explicit `ids` parameter — consistency с upcoming `setContainerLayoutParams`
+ * (task #7); вызывающие сами решают, что в селекшене.
+ */
+export function setContainerDirection(
   editor: Editor,
-  direction: SchemaContainerDirection,
+  ids: string[],
+  direction: ContainerDirection,
 ): void {
-  const targets = editor
-    .getSelectedShapes()
-    .filter((s) => s.type === "schema-container");
-  if (targets.length === 0) return;
+  if (ids.length === 0) return;
 
-  // Optimistic local update for instant visual feedback.
-  for (const t of targets) {
-    const props = t.props as SchemaContainerProps;
-    if (props.direction === direction) continue;
-    editor.updateShape<SchemaContainerShape>({
-      id: t.id,
-      type: "schema-container",
-      props: { ...props, direction },
-    });
-  }
+  const accepted: string[] = [];
 
-  const containerIds = targets.map((t) => t.id as string);
-  void triggerLayoutSelection(containerIds, direction);
+  // Optimistic local updates для instant visual feedback. Single `editor.run`
+  // batches changes в одну undo entry (consistency с предыдущим помощником
+  // DRW-166).
+  editor.run(() => {
+    for (const id of ids) {
+      const shape = editor.getShape(id as TLShapeId);
+      if (!shape) continue;
+
+      if (shape.type === "schema-container") {
+        const props = shape.props as SchemaContainerProps;
+        // Skip no-op write (already same direction) — mirrors предыдущее
+        // поведение `setSchemaContainerDirection` (избегаем лишний store event).
+        if (props.direction !== direction) {
+          editor.updateShape<SchemaContainerShape>({
+            id: shape.id,
+            type: "schema-container",
+            props: { ...props, direction },
+          });
+        }
+        accepted.push(id);
+        continue;
+      }
+
+      if (shape.type === "frame") {
+        const meta = (shape.meta ?? {}) as Record<string, unknown>;
+        if (meta.didrawDirection !== direction) {
+          // biome-ignore lint/suspicious/noExplicitAny: tldraw frame meta untyped
+          editor.updateShape({
+            id: shape.id,
+            type: "frame",
+            meta: { ...meta, didrawDirection: direction },
+          } as never);
+        }
+        accepted.push(id);
+        continue;
+      }
+
+      // Non-container shape — skipped (no updateShape, не попадает в POST).
+    }
+  });
+
+  if (accepted.length === 0) return;
+
+  const directions: Record<string, ContainerDirection> = {};
+  for (const id of accepted) directions[id] = direction;
+
+  void triggerLayoutSelection(accepted, directions);
 }
 
 async function triggerLayoutSelection(
-  containerIds: string[],
-  direction: SchemaContainerDirection,
+  ids: string[],
+  directions: Record<string, ContainerDirection>,
 ): Promise<void> {
   // Read space + room from current URL (SSR-safe guard)
   if (typeof window === "undefined") return;
@@ -51,9 +113,15 @@ async function triggerLayoutSelection(
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          ids: containerIds,
-          directions: Object.fromEntries(containerIds.map((id) => [id, direction])),
+          ids,
+          directions,
           scope: "self",
+          // Direction change implies full re-layout of subgraph: pinned children
+          // were positioned для PREVIOUS direction; preserving them означает что
+          // визуально ничего не происходит (см. DRW-180 live feedback). Все pinned
+          // children unpin'нутся для этого re-layout pass; pin meta сохраняется
+          // server-side (forceUnpin = per-request override).
+          forceUnpin: true,
         }),
       },
     );
@@ -61,3 +129,9 @@ async function triggerLayoutSelection(
     // Non-fatal: user can manually trigger via Cmd+Shift+L
   }
 }
+
+// `SchemaContainerDirection` (TB/LR/BT/RL/custom) остаётся домейном
+// `props.direction` schema-container'а — пишется напрямую в `App.tsx` для
+// explicit "custom" choice context-menu'я. Этот writer работает только с
+// cardinal directions; "custom" — отдельная responsibility (auto-flip и
+// explicit context-menu select).

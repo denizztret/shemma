@@ -15,6 +15,7 @@ export {
 export {
   type LayoutParams,
   type Direction as LayoutDirection,
+  type ContainerLayoutOverride,
   DEFAULT_LAYOUT_PARAMS,
   applyLayoutParamsDefaults,
   validateLayoutParams,

@@ -61,6 +61,53 @@
 .settings-popover__pin-btn--on:hover { background: #fde9e9; color: #c44; opacity: 1; }
 .settings-popover__panel { display: flex; flex-direction: column; gap: 14px; }
 .settings-popover__panel--empty { gap: 0; }
+.settings-popover__title {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  letter-spacing: 0;
+  text-transform: none;
+}
+/* Fast CSS-only tooltip — replaces native title= which has ~1s delay.
+ * Usage: <element className="settings-tooltip" data-tooltip="Text"> */
+.settings-tooltip {
+  position: relative;
+}
+.settings-tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1000;
+  padding: 6px 10px;
+  background: #2d2d2d;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+  border-radius: 4px;
+  white-space: normal;
+  max-width: 260px;
+  width: max-content;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 80ms ease 120ms, transform 80ms ease 120ms;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+.settings-tooltip:hover::after,
+.settings-tooltip:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+.settings-popover__hint {
+  font-size: 11px;
+  color: #8a8d91;
+  margin: 0 0 8px;
+}
 .settings-popover__empty {
   padding: 6px 4px 4px;
   color: #999;
@@ -112,6 +159,20 @@
   background: none; border: none; color: #4a8af0; cursor: pointer; font-size: 11px; padding: 0;
 }
 .settings-link:hover:not(:disabled) { text-decoration: underline; }
+.settings-link--muted { color: #8a8d91; font-size: 11px; }
+.settings-link--muted:hover:not(:disabled) { color: #555; }
+.settings-btn--indeterminate {
+  background: repeating-linear-gradient(
+    45deg,
+    #f5f5f5,
+    #f5f5f5 4px,
+    #ececec 4px,
+    #ececec 8px
+  );
+  color: #777;
+  border-color: #d0d0d0;
+}
+.settings-btn--indeterminate:hover:not(:disabled) { color: #444; border-color: #b8b8b8; }
 .settings-popover__footer { font-size: 10px; color: #aaa; padding-top: 6px; border-top: 1px solid #eee; }
 .settings-popover__header { display: flex; justify-content: space-between; margin-bottom: 10px; }
 .settings-popover__form { display: flex; flex-direction: column; gap: 12px; max-height: 460px; overflow-y: auto; padding-right: 4px; }

@@ -3,10 +3,37 @@
 // tidyLayout — вызывает POST /api/agent/layout-selection для subset shapes.
 // makeTidyHotkeyHandler — фабрика KeyboardEvent-хэндлера для ⌘⇧L / Ctrl+Shift+L.
 
+import type { Editor, TLShapeId } from "tldraw";
+
 export type TidyLayoutResult =
   | { kind: "noop"; reason: string }
   | { kind: "ok"; count: number; affected: string[]; version?: number }
   | { kind: "error"; message: string };
+
+export type LayoutScope = "self" | "auto";
+
+/**
+ * Frame-container heuristic: determines layout scope based on selection shape.
+ *
+ * | Selection                 | Scope    |
+ * |---------------------------|----------|
+ * | Single leaf               | "auto"   |
+ * | Single container OR frame | "self"   |
+ * | Multi (anything)          | "auto"   |
+ *
+ * Корневой fix для бага "parent frame схлопывается при Tidy одного контейнера":
+ * frontend не передавал scope → backend defaults к "auto" → frame becomes anchor
+ * → Pass B resize. Heuristic возвращает "self" для single container/frame чтобы
+ * backend пропускал Pass B и parent frame оставался intact.
+ *
+ * Spec: 2026-05-27-frame-container-direction-layout-design.md §5.2.
+ */
+export function scopeFor(ids: string[], editor: Editor): LayoutScope {
+  if (ids.length !== 1) return "auto";
+  const s = editor.getShape(ids[0] as TLShapeId);
+  if (!s) return "auto";
+  return s.type === "frame" || s.type === "schema-container" ? "self" : "auto";
+}
 
 /**
  * Call backend layout-selection endpoint for the given shape ids.
@@ -18,11 +45,16 @@ export type TidyLayoutResult =
  * DRW-116 Task 15: accepts `space` so multi-space gallery can address the
  * correct per-space bundle. Legacy callers pass `LEGACY_SPACE_ID` (the
  * backend ignores it when the space middleware is off).
+ *
+ * Frame-container fix (spec 5.2): `scope` parameter. Default "auto" preserves
+ * existing behavior (multi-selection, leafs). Callers should pass `scopeFor(ids,
+ * editor)` to apply the heuristic.
  */
 export async function tidyLayout(
   ids: string[],
   space: string,
   room: string,
+  scope: LayoutScope = "auto",
 ): Promise<TidyLayoutResult> {
   if (ids.length === 0) {
     return {
@@ -37,7 +69,7 @@ export async function tidyLayout(
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids }),
+        body: JSON.stringify({ ids, scope }),
       },
     );
 
@@ -69,25 +101,29 @@ export async function tidyLayout(
  * Factory for ⌘⇧L / Ctrl+Shift+L keyboard handler.
  *
  * @param getSelectedIds  — returns current selected shape ids (from editor)
- * @param onTidy          — called with ids when hotkey fires; caller initiates layout
+ * @param editor          — required для scopeFor heuristic (single container/frame → "self")
+ * @param onTidy          — called with (ids, scope) when hotkey fires
  *
  * Usage:
  *   const handler = makeTidyHotkeyHandler(
  *     () => editor.getSelectedShapeIds() as unknown as string[],
- *     (ids) => void tidyLayout(ids, space, room),
+ *     editor,
+ *     (ids, scope) => void tidyLayout(ids, space, room, scope),
  *   );
  *   window.addEventListener("keydown", handler);
  */
 export function makeTidyHotkeyHandler(
   getSelectedIds: () => string[],
-  onTidy: (ids: string[]) => void,
+  editor: Editor,
+  onTidy: (ids: string[], scope: LayoutScope) => void,
 ): (e: KeyboardEvent) => void {
   return (e: KeyboardEvent) => {
     const isModifier = e.metaKey || e.ctrlKey;
     if (!isModifier || !e.shiftKey || e.altKey || e.key.toLowerCase() !== "l") return;
     e.preventDefault();
     const ids = getSelectedIds();
-    onTidy(ids);
+    const scope = scopeFor(ids, editor);
+    onTidy(ids, scope);
   };
 }
 
@@ -96,10 +132,13 @@ export function makeTidyHotkeyHandler(
  * /api/agent/layout-selection endpoint with `forceUnpin: true` so the layout
  * pass ignores meta.pinned / meta.didrawSizePinned for this one call (the
  * flags themselves stay on the shapes).
+ *
+ * Frame-container fix (spec 5.2): передаёт scope из scopeFor(ids, editor).
  */
 export function makeForceReLayoutHotkeyHandler(
   getSelectedIds: () => string[],
-  onForce: (ids: string[]) => void,
+  editor: Editor,
+  onForce: (ids: string[], scope: LayoutScope) => void,
 ): (e: KeyboardEvent) => void {
   return (e: KeyboardEvent) => {
     const isModifier = e.metaKey || e.ctrlKey;
@@ -109,6 +148,7 @@ export function makeForceReLayoutHotkeyHandler(
     e.preventDefault();
     e.stopPropagation();
     const ids = getSelectedIds();
-    onForce(ids);
+    const scope = scopeFor(ids, editor);
+    onForce(ids, scope);
   };
 }

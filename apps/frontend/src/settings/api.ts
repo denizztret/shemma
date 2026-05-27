@@ -37,6 +37,8 @@ export type LayoutSelectionInput = {
   ids: string[];
   direction?: "TB" | "BT" | "LR" | "RL" | "custom";
   forceUnpin?: boolean;
+  /** Frame-container fix (spec 5.2): "self" skips Pass B (parent preserved); "auto" — existing behavior. */
+  scope?: "self" | "auto";
 };
 
 export async function postLayoutSelection(

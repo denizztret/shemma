@@ -68,6 +68,13 @@ function readContainerDirection(container: ShapeRec): string | undefined {
     if (d === "custom") return undefined;
     if (typeof d === "string" && MERMAID_DIR_TO_ELK[d]) return MERMAID_DIR_TO_ELK[d];
   }
+  // Frame: meta.didrawDirection is the canonical user-set direction
+  // (no props.direction on native tldraw frame). See spec §4.1.
+  if (container.type === "frame") {
+    const d = container.meta?.didrawDirection;
+    if (d === "custom") return undefined;
+    if (typeof d === "string" && MERMAID_DIR_TO_ELK[d]) return MERMAID_DIR_TO_ELK[d];
+  }
   // Fallback: explicit-but-not-via-props inferred direction (rare path).
   if (typeof inferred === "string" && MERMAID_DIR_TO_ELK[inferred]) {
     return MERMAID_DIR_TO_ELK[inferred];
@@ -79,8 +86,13 @@ function readContainerDirection(container: ShapeRec): string | undefined {
 }
 
 function isCustomDirection(container: ShapeRec): boolean {
-  if (container.type !== "schema-container") return false;
-  return (container.props as Record<string, unknown> | undefined)?.direction === "custom";
+  if (container.type === "schema-container") {
+    return (container.props as Record<string, unknown> | undefined)?.direction === "custom";
+  }
+  if (container.type === "frame") {
+    return container.meta?.didrawDirection === "custom";
+  }
+  return false;
 }
 
 // DRW-003 displacement constants (preserved from Phase 2.x layout.ts).
@@ -563,15 +575,21 @@ type ContainerPassResult = {
  * Запускает ELK на детях этого контейнера (только те, что в filteredChildren).
  * Возвращает parent-relative coords детей и новый размер контейнера.
  * Рекурсивно обрабатывает вложенные контейнеры.
+ *
+ * `optsForContainer` — callback возвращающий ELK options для конкретного
+ * container.id. Используется для per-anchor `meta.didrawLayoutParams` override
+ * (frame-container-direction-layout task #3). Если override отсутствует —
+ * callback возвращает board-level opts.
  */
 async function runPassA(
   store: TLStoreSnapshot,
   container: ShapeRec,
   filteredChildren: ShapeRec[],
-  opts: Record<string, unknown>,
+  optsForContainer: (containerId: string) => Record<string, unknown>,
   allShapes: ShapeRec[],
   filterToIds: Set<string>,
 ): Promise<ContainerPassResult | null> {
+  const opts = optsForContainer(container.id);
   // DRW-152/DRW-150: override ELK direction if container has didrawSubgraphDirection (legacy)
   // or schema-container props.direction (new). custom direction → undefined (no override).
   const elkDir = readContainerDirection(container);
@@ -586,6 +604,8 @@ async function runPassA(
   // Сначала рекурсивно обработаем вложенные контейнеры (Pass A рекурсия).
   // Для каждого child-контейнера соберём его direct selected non-container children
   // и запустим Pass A рекурсивно. Container collectShapes уже отфильтровал arrows.
+  // Nested container получает СВОИ opts из optsForContainer (если у него
+  // тоже есть meta.didrawLayoutParams override).
   const nestedResults = new Map<string, ContainerPassResult>();
   for (const cc of childContainers) {
     if (isCustomDirection(cc)) continue; // DRW-150: custom direction → preserve children positions
@@ -593,7 +613,7 @@ async function runPassA(
       (s) => s.parentId === cc.id && !isContainerShape(s) && filterToIds.has(s.id),
     );
     if (ccSelectedChildren.length === 0) continue;
-    const nestedRes = await runPassA(store, cc, ccSelectedChildren, opts, allShapes, filterToIds);
+    const nestedRes = await runPassA(store, cc, ccSelectedChildren, optsForContainer, allShapes, filterToIds);
     if (nestedRes) nestedResults.set(cc.id, nestedRes);
   }
 
@@ -736,14 +756,48 @@ async function runLayoutSubgraph(
   params: LayoutParams,
   containerScope: "self" | "auto" = "auto",
 ): Promise<{ positions: Positions; anchorFrameIds: Set<string> } | null> {
-  const opts = modeToElkOptions(hint.mode, hint.spacing);
+  // Board-level ELK options + labelDerivedSpacing (используются для Pass B
+  // top-level и как fallback для anchor без override).
+  const boardOpts = modeToElkOptions(hint.mode, hint.spacing);
   // DRW-178: reserve horizontal layer spacing for the widest arrow label so
   // labels never overflow into neighbouring shapes/arrows.
-  const labelDerivedSpacing = computeLabelDerivedSpacing(store, params);
-  if (labelDerivedSpacing > 0) {
+  const boardLabelSpacing = computeLabelDerivedSpacing(store, params);
+  if (boardLabelSpacing > 0) {
     const key = "elk.layered.spacing.nodeNodeBetweenLayers";
-    opts[key] = String(Math.max(Number(opts[key] ?? 0), labelDerivedSpacing));
+    boardOpts[key] = String(Math.max(Number(boardOpts[key] ?? 0), boardLabelSpacing));
   }
+
+  // Per-anchor params resolver (frame-container-direction-layout task #3).
+  // Каждый anchor container (frame OR schema-container) может иметь
+  // meta.didrawLayoutParams: Partial<LayoutParams>. Override merges OVER board
+  // params; результат применяется только к ELK options ВНУТРИ Pass A subgraph
+  // этого anchor (см. spec §4.3). Board defaults остаются для Pass B и для
+  // anchor'ов без override.
+  const shapeByIdLocal = new Map(shapes.map((s) => [s.id, s]));
+  const paramsForAnchor = (anchorId: string): LayoutParams => {
+    const anchor = shapeByIdLocal.get(anchorId);
+    const override = anchor?.meta?.didrawLayoutParams as Partial<LayoutParams> | undefined;
+    return override ? applyLayoutParamsDefaults({ ...params, ...override }) : params;
+  };
+  const optsForContainer = (containerId: string): Record<string, unknown> => {
+    const anchor = shapeByIdLocal.get(containerId);
+    const override = anchor?.meta?.didrawLayoutParams as Partial<LayoutParams> | undefined;
+    // Fast path: no override → reuse board opts (стабильность для shape-noop).
+    if (!override) return boardOpts;
+    const anchorParams = paramsForAnchor(containerId);
+    // Spacing override: если override.spacing задан — используем его; иначе
+    // оставляем hint.spacing (board level).
+    const anchorSpacing = anchorParams.spacing ?? hint.spacing;
+    const anchorOpts: Record<string, string> = modeToElkOptions(hint.mode, anchorSpacing);
+    // labelDerivedSpacing — пересчитываем с anchor-specific params (edge label
+    // measurements могут отличаться, см. computeLabelDerivedSpacing).
+    const anchorLabelSpacing = computeLabelDerivedSpacing(store, anchorParams);
+    if (anchorLabelSpacing > 0) {
+      const key = "elk.layered.spacing.nodeNodeBetweenLayers";
+      anchorOpts[key] = String(Math.max(Number(anchorOpts[key] ?? 0), anchorLabelSpacing));
+    }
+    return anchorOpts;
+  };
 
   const frames = shapes.filter(isContainerShape);
   const leaves = shapes.filter((s) => !isContainerShape(s));
@@ -838,7 +892,7 @@ async function runLayoutSubgraph(
     const allDirectChildren = [...directSelectedChildrenOf(anchorId), ...directAnchorChildren];
     if (allDirectChildren.length === 0) continue;
 
-    const res = await runPassA(store, anchor, allDirectChildren, opts, shapes, filterToIds);
+    const res = await runPassA(store, anchor, allDirectChildren, optsForContainer, shapes, filterToIds);
     if (res) passAResults.set(anchorId, res);
   }
 
@@ -848,7 +902,7 @@ async function runLayoutSubgraph(
     const directFilteredChildren = directSelectedChildrenOf(sc.id);
     if (directFilteredChildren.length === 0) continue;
 
-    const res = await runPassA(store, sc, directFilteredChildren, opts, shapes, filterToIds);
+    const res = await runPassA(store, sc, directFilteredChildren, optsForContainer, shapes, filterToIds);
     if (res) passAResults.set(sc.id, res);
   }
 
@@ -1003,7 +1057,7 @@ async function runLayoutSubgraph(
 
   const passBGraph: ElkGraph = {
     id: "root",
-    layoutOptions: opts,
+    layoutOptions: boardOpts,
     children: elkChildren,
     edges: passBEdges,
   };
@@ -1115,7 +1169,10 @@ function inferContainerDirections(
   if (params.autoDirectionEnabled === false) return batch;
 
   const containers = shapes.filter(isContainerShape);
-  if (containers.length === 0) return batch;
+  // Frame не участвует в auto-direction inference — meta.didrawDirection для frame
+  // зарезервирован под user-set value (spec 4.1).
+  const eligibleContainers = containers.filter((c) => c.type !== "frame");
+  if (eligibleContainers.length === 0) return batch;
 
   const shapeById = new Map(shapes.map((s) => [s.id, s]));
 
@@ -1139,7 +1196,7 @@ function inferContainerDirections(
     if (ep) arrows.push(ep);
   }
 
-  for (const container of containers) {
+  for (const container of eligibleContainers) {
     // Skip if explicit direction is set.
     if (container.type === "schema-container") {
       const d = (container.props as Record<string, unknown> | undefined)?.direction;

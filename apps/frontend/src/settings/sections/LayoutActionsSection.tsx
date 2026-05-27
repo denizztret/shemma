@@ -1,4 +1,4 @@
-// apps/frontend/src/settings/sections/LayoutSection.tsx
+// apps/frontend/src/settings/sections/LayoutActionsSection.tsx
 import type { FC } from "react";
 
 export type LayoutAction = {
@@ -23,13 +23,13 @@ export const LAYOUT_ACTIONS: ReadonlyArray<LayoutAction> = [
   },
 ];
 
-export type LayoutSectionProps = {
+export type LayoutActionsSectionProps = {
   onAction: (id: LayoutAction["id"]) => void;
   disabled?: boolean;
   pending?: LayoutAction["id"] | null;
 };
 
-export const LayoutSection: FC<LayoutSectionProps> = ({ onAction, disabled, pending }) => (
+export const LayoutActionsSection: FC<LayoutActionsSectionProps> = ({ onAction, disabled, pending }) => (
   <div className="settings-section settings-section--layout">
     <div className="settings-section__label">Компоновка</div>
     <div className="settings-section__row settings-section__row--stacked">

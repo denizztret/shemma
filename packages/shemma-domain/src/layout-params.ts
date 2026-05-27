@@ -4,6 +4,8 @@
 // pipeline. Replaces hardcoded numbers in apps/backend/src/domain/layout.ts
 // helpers so that callers (route, future UI panel) can override per-call.
 
+import type { Spacing } from "./layout-modes";
+
 export type Direction = "TB" | "BT" | "LR" | "RL";
 
 export type LayoutParams = {
@@ -31,6 +33,12 @@ export type LayoutParams = {
   // Anchor + midpoint behavior
   anchorOffsetMode: "distribute" | "center";
   midpointDistribution: "even" | "fixed-0.5";
+
+  // Per-anchor ELK spacing preset override (frame-container-direction-layout
+  // task #3). Если задано — runLayoutSubgraph будет использовать это значение
+  // вместо hint.spacing для subgraph anchor'а. Optional: на board-level
+  // используется hint.spacing (см. apps/backend/src/domain/layout.ts).
+  spacing?: Spacing;
 };
 
 export const DEFAULT_LAYOUT_PARAMS: LayoutParams = {
@@ -68,6 +76,7 @@ const NUMERIC_FIELDS: ReadonlyArray<keyof LayoutParams> = [
 const VALID_DIRECTIONS: ReadonlySet<Direction> = new Set(["TB", "BT", "LR", "RL"]);
 const VALID_ANCHOR_MODES = new Set(["distribute", "center"]);
 const VALID_MID_MODES = new Set(["even", "fixed-0.5"]);
+const VALID_SPACINGS = new Set<Spacing>(["compact", "normal", "loose"]);
 
 export function applyLayoutParamsDefaults(partial: Partial<LayoutParams>): LayoutParams {
   return { ...DEFAULT_LAYOUT_PARAMS, ...partial };
@@ -93,4 +102,12 @@ export function validateLayoutParams(p: Partial<LayoutParams>): void {
   if (p.autoDirectionEnabled !== undefined && typeof p.autoDirectionEnabled !== "boolean") {
     throw new Error(`LayoutParams.autoDirectionEnabled must be boolean; got ${typeof p.autoDirectionEnabled}`);
   }
+  if (p.spacing !== undefined && !VALID_SPACINGS.has(p.spacing as Spacing)) {
+    throw new Error(`LayoutParams.spacing must be compact|normal|loose; got ${String(p.spacing)}`);
+  }
 }
+
+// Container-level override для layout params (frame OR schema-container).
+// `null` — сигнализирует backend удалить meta key (см. spec 4.1).
+// Stored on `shape.meta.didrawLayoutParams`.
+export type ContainerLayoutOverride = Partial<LayoutParams> | null;

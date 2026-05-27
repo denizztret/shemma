@@ -55,7 +55,10 @@ export type BoardPanelAdvancedProps = {
 
 export const BoardPanelAdvanced: FC<BoardPanelAdvancedProps> = ({ effective, onFieldChange, onReset, onBack }) => (
   <div className="settings-popover__panel settings-popover__panel--advanced" role="dialog" aria-label="Расширенные параметры компоновки">
-    <div className="settings-popover__header">
+    <div
+      className="settings-popover__header settings-tooltip"
+      data-tooltip="Применяется к новому содержимому, импорту и AI-агенту. На уже размещённые на доске схемы не влияет."
+    >
       <button type="button" onClick={onBack} className="settings-link">← Назад</button>
       <button type="button" onClick={onReset} className="settings-link">Сбросить</button>
     </div>
