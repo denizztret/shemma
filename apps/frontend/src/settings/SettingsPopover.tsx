@@ -10,7 +10,7 @@ import {
   getLayoutParams, postLayoutParams, postLayoutSelection, type LayoutParamsResponse,
 } from "./api";
 import { applyPreset, type PresetName } from "./presets";
-import { setSchemaContainerDirection } from "../shapes/schema-container/SchemaContainerActions";
+import { setContainerDirection } from "../shapes/schema-container/SchemaContainerActions";
 import type { LayoutParams, Role } from "@shemma/domain";
 
 export type SettingsPopoverProps = { space: string; room: string };
@@ -255,7 +255,8 @@ const SelectionPanelContainer: FC<{
       direction={direction}
       onDirectionChange={(d) => {
         if (d === "custom") return;
-        setSchemaContainerDirection(editor, d);
+        const ids = editor.getSelectedShapeIds() as unknown as string[];
+        setContainerDirection(editor, ids, d);
       }}
       onLayoutAction={async (id) => {
         setPending(id);

@@ -4,7 +4,7 @@ import { triggerAutoSize } from "./canvas/auto-size";
 import {
   SchemaContainerShapeUtil,
   registerAutoFlipDirection,
-  setSchemaContainerDirection,
+  setContainerDirection,
 } from "./shapes/schema-container";
 import type { SchemaContainerDirection } from "./shapes/schema-container";
 import "tldraw/tldraw.css";
@@ -699,9 +699,29 @@ export function App({
           // DRW-150: store disposer to prevent listener accumulation on HMR/room-switch
           autoFlipDisposerRef.current?.();
           autoFlipDisposerRef.current = registerAutoFlipDirection(ed);
-          // DRW-150: wire direction callback for context-menu (requires live editor)
-          onSetContainerDirection.current = (direction) =>
-            setSchemaContainerDirection(ed, direction);
+          // DRW-150: wire direction callback for context-menu (requires live editor).
+          // Task #6 (frame-container-direction-layout): explicit "custom" stays as
+          // schema-container props write (auto-flip parity); cardinal directions
+          // go through polymorphic setContainerDirection (frame + schema-container).
+          onSetContainerDirection.current = (direction) => {
+            if (direction === "custom") {
+              ed.run(() => {
+                for (const id of ed.getSelectedShapeIds()) {
+                  const s = ed.getShape(id);
+                  if (s?.type !== "schema-container") continue;
+                  ed.updateShape({
+                    id,
+                    type: "schema-container",
+                    props: { ...(s.props as object), direction: "custom" },
+                    // biome-ignore lint/suspicious/noExplicitAny: tldraw props untyped here
+                  } as any);
+                }
+              });
+              return;
+            }
+            const ids = ed.getSelectedShapeIds() as unknown as string[];
+            setContainerDirection(ed, ids, direction);
+          };
           if (import.meta.env.DEV) {
             // biome-ignore lint/suspicious/noExplicitAny: dev-only debug hook
             (window as any).__editor = ed;
