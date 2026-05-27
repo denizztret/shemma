@@ -21,3 +21,11 @@ describe("selectionHasContainer", () => {
     expect(selectionHasContainer({ containers: 0, nodes: 5 })).toBe(false);
   });
 });
+
+import { NodePanel } from "./NodePanel";
+
+describe("NodePanel", () => {
+  test("exports a component", () => {
+    expect(typeof NodePanel).toBe("function");
+  });
+});
