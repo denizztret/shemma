@@ -204,28 +204,45 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
         continue;
       }
       const shapeType = (shape as { type?: unknown }).type;
-      if (shapeType !== "schema-container") {
-        unresolved.push(shapeId);
+      if (shapeType === "schema-container") {
+        const oldProps = ((shape as { props?: Record<string, unknown> }).props ?? {});
+        // DRW-178 fix: explicit user direction choice must defeat the Phase 2.6
+        // auto-inference. Clear `meta.didrawDirectionInherited` (so
+        // readContainerDirection no longer treats props.direction as
+        // inherited-default) AND clear `meta.didrawDirection` (the inferred
+        // value) so it doesn't linger as a competing source of truth.
+        const oldMeta = ((shape as { meta?: Record<string, unknown> }).meta ?? {});
+        const newMeta = { ...oldMeta };
+        delete newMeta.didrawDirectionInherited;
+        delete newMeta.didrawDirection;
+        const newShape: TLRecord = {
+          ...shape,
+          props: { ...oldProps, direction: dir },
+          meta: newMeta,
+        } as TLRecord;
+        shapeUpdated[shapeId] = [shape, newShape];
+        // Ensure shape is in affectedIds so it participates in layout.
+        affectedIds.add(shapeId);
         continue;
       }
-      const oldProps = ((shape as { props?: Record<string, unknown> }).props ?? {});
-      // DRW-178 fix: explicit user direction choice must defeat the Phase 2.6
-      // auto-inference. Clear `meta.didrawDirectionInherited` (so
-      // readContainerDirection no longer treats props.direction as
-      // inherited-default) AND clear `meta.didrawDirection` (the inferred
-      // value) so it doesn't linger as a competing source of truth.
-      const oldMeta = ((shape as { meta?: Record<string, unknown> }).meta ?? {});
-      const newMeta = { ...oldMeta };
-      delete newMeta.didrawDirectionInherited;
-      delete newMeta.didrawDirection;
-      const newShape: TLRecord = {
-        ...shape,
-        props: { ...oldProps, direction: dir },
-        meta: newMeta,
-      } as TLRecord;
-      shapeUpdated[shapeId] = [shape, newShape];
-      // Ensure shape is in affectedIds so it participates in layout.
-      affectedIds.add(shapeId);
+      if (shapeType === "frame") {
+        // Frame не имеет props.direction — direction живёт в meta.didrawDirection
+        // (см. apps/backend/src/domain/layout.ts::readContainerDirection ветку
+        // "Frame: meta.didrawDirection is the canonical user-set direction").
+        // Это закрывает race с WS 50ms debounce: frontend оптимистично делает
+        // editor.updateShape({meta: {didrawDirection}}) + POST одновременно;
+        // без атомарного backend-write — runLayout читал stale meta.
+        const oldMeta = ((shape as { meta?: Record<string, unknown> }).meta ?? {});
+        const newMeta = { ...oldMeta, didrawDirection: dir };
+        const newShape: TLRecord = {
+          ...shape,
+          meta: newMeta,
+        } as TLRecord;
+        shapeUpdated[shapeId] = [shape, newShape];
+        affectedIds.add(shapeId);
+        continue;
+      }
+      unresolved.push(shapeId);
     }
 
     // Task #4: apply layoutParamsOverride. Mirrors directions write pattern —
