@@ -89,6 +89,7 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
             onAdvanced={onAdvanced}
             onReset={onReset}
             showReset={showReset}
+            showAdvanced={false}
           />
         </>
       )}

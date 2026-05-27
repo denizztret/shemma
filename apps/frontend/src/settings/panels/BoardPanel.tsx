@@ -19,9 +19,12 @@ const DIRECTION_HINTS: Record<DirectionValue, string> = {
 };
 
 const MIDPOINT_HINTS = {
-  even: "Развести стрелки равномерно по доступным точкам",
-  "fixed-0.5": "Все стрелки крепятся в центр",
+  even: "Стрелки на одной стороне распределяются равномерно (1/3, 2/3 и т.д.)",
+  "fixed-0.5": "Все стрелки на одной стороне сходятся в её середину",
 } as const;
+
+const AUTO_DIRECTION_HINT =
+  "Подбирать направление подграфов автоматически по топологии связей (только для контейнеров без явного direction). На уже заданные вручную направления не влияет.";
 
 export type BoardPanelProps = {
   effective: LayoutParams;
@@ -44,8 +47,12 @@ export const BoardPanel: FC<BoardPanelProps> = ({
 
   return (
     <div className="settings-popover__panel" role="dialog" aria-label="Настройки доски">
-      <h2 className="settings-popover__title">По умолчанию</h2>
-      <span className="settings-popover__badge">Для нового содержимого</span>
+      <h2
+        className="settings-popover__title settings-tooltip"
+        data-tooltip="Применяется к новому содержимому, импорту и AI-агенту. На уже размещённые на доске схемы не влияет."
+      >
+        По умолчанию
+      </h2>
       <DirectionSection
         current={effective.defaultDirection}
         onChange={onDirectionChange}
@@ -77,7 +84,7 @@ export const BoardPanel: FC<BoardPanelProps> = ({
             type="button"
             role="switch"
             aria-checked={effective.autoDirectionEnabled}
-            title="Подбирать направление вложенных контейнеров автоматически по топологии связей"
+            title={AUTO_DIRECTION_HINT}
             onClick={() => onToggleAutoDirection(!effective.autoDirectionEnabled)}
             className={`settings-btn${effective.autoDirectionEnabled ? " settings-btn--on" : ""}`}
           >
@@ -103,7 +110,7 @@ export const BoardPanel: FC<BoardPanelProps> = ({
       <StylesSection />
       <div className="settings-section">
         <button type="button" className="settings-link" onClick={onOpenAdvanced}>
-          Все 16 параметров →
+          Дополнительно ›
         </button>
       </div>
     </div>

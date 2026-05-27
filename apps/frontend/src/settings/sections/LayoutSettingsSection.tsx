@@ -28,9 +28,12 @@ const MIDPOINT_LABELS: Record<"even" | "fixed-0.5", string> = {
 };
 
 const MIDPOINT_HINTS: Record<"even" | "fixed-0.5", string> = {
-  even: "Распределить стрелки равномерно на одной стороне",
-  "fixed-0.5": "Все стрелки сходятся в центр стороны",
+  even: "Стрелки на одной стороне распределяются равномерно (1/3, 2/3 и т.д.)",
+  "fixed-0.5": "Все стрелки на одной стороне сходятся в её середину",
 };
+
+const AUTO_DIRECTION_HINT =
+  "Подбирать направление подграфов автоматически по топологии связей (только для контейнеров без явного direction). На уже заданные вручную направления не влияет.";
 
 export type LayoutSettingsSectionProps = {
   current: LayoutSettingsValue;
@@ -40,6 +43,7 @@ export type LayoutSettingsSectionProps = {
   onAdvanced: () => void;
   onReset: () => void;
   showReset: boolean;
+  showAdvanced?: boolean; // default true (BoardPanel); SelectionPanel passes false until per-frame Advanced UX готов
 };
 
 function autoDirLabel(v: boolean | null): string {
@@ -55,6 +59,7 @@ export const LayoutSettingsSection: FC<LayoutSettingsSectionProps> = ({
   onAdvanced,
   onReset,
   showReset,
+  showAdvanced = true,
 }) => (
   <div className="settings-section settings-section--layout-settings">
     <div className="settings-section__label">Компоновка</div>
@@ -75,7 +80,7 @@ export const LayoutSettingsSection: FC<LayoutSettingsSectionProps> = ({
     <button
       type="button"
       data-role="auto-direction"
-      title="Автоматически выбирать направление компоновки по топологии"
+      title={AUTO_DIRECTION_HINT}
       onClick={() => onAutoDirection(!(current.autoDirection ?? false))}
       className={
         "settings-btn" +
@@ -99,14 +104,16 @@ export const LayoutSettingsSection: FC<LayoutSettingsSectionProps> = ({
         </button>
       ))}
     </div>
-    <button
-      type="button"
-      data-role="advanced"
-      onClick={onAdvanced}
-      className="settings-link"
-    >
-      Advanced ›
-    </button>
+    {showAdvanced && (
+      <button
+        type="button"
+        data-role="advanced"
+        onClick={onAdvanced}
+        className="settings-link"
+      >
+        Дополнительно ›
+      </button>
+    )}
     {showReset && (
       <button
         type="button"

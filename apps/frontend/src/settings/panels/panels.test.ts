@@ -36,6 +36,14 @@ function hasClassName(root: unknown, className: string): boolean {
   });
 }
 
+function hasAttribute(root: unknown, attr: string, valueMatcher: string | RegExp): boolean {
+  return flatten(root).some((el) => {
+    const v = (el.props as Record<string, unknown>)[attr];
+    if (typeof v !== "string") return false;
+    return typeof valueMatcher === "string" ? v.includes(valueMatcher) : valueMatcher.test(v);
+  });
+}
+
 function hasComponent(root: unknown, componentName: string): boolean {
   return flatten(root).some((el) => {
     const t = el.type as unknown;
@@ -127,10 +135,10 @@ describe("BoardPanel", () => {
     expect(hasText(tree, "По умолчанию")).toBe(true);
   });
 
-  test("renders top badge \"Для нового содержимого\"", () => {
+  test("header has tooltip about defaults semantics", () => {
     const tree = renderBoardPanel();
-    expect(hasText(tree, "Для нового содержимого")).toBe(true);
-    expect(hasClassName(tree, "settings-popover__badge")).toBe(true);
+    // h2 title carries title= attribute with defaults explanation
+    expect(hasAttribute(tree, "data-tooltip", /Применяется к новому содержимому/)).toBe(true);
   });
 });
 
@@ -150,16 +158,9 @@ describe("BoardPanelAdvanced", () => {
     expect(typeof BoardPanelAdvanced).toBe("function");
   });
 
-  test("renders top badge \"Для нового содержимого\"", () => {
+  test("header has tooltip about defaults semantics", () => {
     const tree = renderBoardPanelAdvanced();
-    expect(hasText(tree, "Для нового содержимого")).toBe(true);
-    expect(hasClassName(tree, "settings-popover__badge")).toBe(true);
-  });
-
-  test("renders helper text about defaults", () => {
-    const tree = renderBoardPanelAdvanced();
-    expect(hasText(tree, "Эти значения работают как defaults для всего room")).toBe(true);
-    expect(hasClassName(tree, "settings-popover__hint")).toBe(true);
+    expect(hasAttribute(tree, "data-tooltip", /Применяется к новому содержимому/)).toBe(true);
   });
 });
 
