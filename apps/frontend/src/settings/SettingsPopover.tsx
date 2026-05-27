@@ -10,6 +10,7 @@ import {
   getLayoutParams, postLayoutParams, postLayoutSelection, type LayoutParamsResponse,
 } from "./api";
 import { applyPreset, type PresetName } from "./presets";
+import { setSchemaContainerDirection } from "../shapes/schema-container/SchemaContainerActions";
 import type { LayoutParams, Role } from "@shemma/domain";
 
 export type SettingsPopoverProps = { space: string; room: string };
@@ -19,14 +20,15 @@ const ADVANCED_SIZE = { width: 320, height: 480 };
 
 export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
   const editor = useEditor();
-  const { target, close } = useSettingsTrigger(editor);
+  const { target, close, pinned, setPinned } = useSettingsTrigger(editor);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const [advanced, setAdvanced] = useState(false);
   const [boardParams, setBoardParams] = useState<LayoutParamsResponse | null>(null);
   const [pending, setPending] = useState<"tidy" | "force-unpin" | null>(null);
+  const [userPos, setUserPos] = useState<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
-    if (!target) { setAdvanced(false); setBoardParams(null); }
+    if (!target) { setAdvanced(false); setBoardParams(null); setUserPos(null); }
   }, [target]);
 
   useEffect(() => {
@@ -36,14 +38,14 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
   }, [target, space, room]);
 
   useEffect(() => {
-    if (!target) return;
+    if (!target || pinned) return;
     function onDown(e: PointerEvent) {
       const el = popoverRef.current;
       if (el && !el.contains(e.target as Node)) close();
     }
     window.addEventListener("pointerdown", onDown);
     return () => window.removeEventListener("pointerdown", onDown);
-  }, [target, close]);
+  }, [target, pinned, close]);
 
   useEffect(() => {
     if (!target) return;
@@ -75,12 +77,35 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
   if (!target) return null;
 
   const size = target.kind === "board" && advanced ? ADVANCED_SIZE : POPOVER_SIZE;
-  const pos = computePopoverPosition({
+  const anchoredPos = computePopoverPosition({
     anchor: target.anchor,
     popoverSize: size,
     viewport: { width: window.innerWidth, height: window.innerHeight },
     margin: 16,
   });
+  const pos = userPos ?? anchoredPos;
+
+  function onDragStart(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const origin = userPos ?? anchoredPos;
+    const margin = 8;
+    const clamp = (x: number, y: number) => ({
+      x: Math.max(margin, Math.min(x, window.innerWidth - size.width - margin)),
+      y: Math.max(margin, Math.min(y, window.innerHeight - margin - 32)),
+    });
+    function onMove(ev: PointerEvent) {
+      setUserPos(clamp(origin.x + (ev.clientX - startX), origin.y + (ev.clientY - startY)));
+    }
+    function onUp() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
 
   return (
     <div
@@ -94,6 +119,41 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
         zIndex: 1,
       }}
     >
+      <div className="settings-popover__top-bar">
+        <div
+          className="settings-popover__drag-handle"
+          onPointerDown={onDragStart}
+          title="Перетащить"
+          aria-hidden="true"
+        >
+          <span className="settings-popover__drag-dots">⋯</span>
+        </div>
+        <button
+          type="button"
+          className={`settings-popover__pin-btn${pinned ? " settings-popover__pin-btn--on" : ""}`}
+          onClick={() => {
+            if (pinned) {
+              close();
+            } else {
+              setUserPos(pos);
+              setPinned(true);
+            }
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          title={pinned ? "Закрыть" : "Закрепить — менюшка останется открытой, контент будет меняться по выделению"}
+          aria-pressed={pinned}
+          aria-label={pinned ? "Закрыть" : "Закрепить"}
+        >
+          {pinned ? "✕" : "📌"}
+        </button>
+      </div>
+      {target.kind === "empty" && (
+        <div className="settings-popover__panel settings-popover__panel--empty" role="status">
+          <div className="settings-popover__empty">
+            Для текущего выделения нет настраиваемых параметров
+          </div>
+        </div>
+      )}
       {target.kind === "selection" && (
         <SelectionPanelContainer
           editor={editor}
@@ -193,10 +253,9 @@ const SelectionPanelContainer: FC<{
     <SelectionPanel
       counts={counts}
       direction={direction}
-      onDirectionChange={async (d) => {
-        const ids = editor.getSelectedShapeIds() as unknown as string[];
-        try { await postLayoutSelection(space, room, { ids, direction: d }); }
-        catch (e) { console.warn("[settings] direction change failed", e); }
+      onDirectionChange={(d) => {
+        if (d === "custom") return;
+        setSchemaContainerDirection(editor, d);
       }}
       onLayoutAction={async (id) => {
         setPending(id);
