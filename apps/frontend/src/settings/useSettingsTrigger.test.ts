@@ -1,6 +1,6 @@
 // apps/frontend/src/settings/useSettingsTrigger.test.ts
-import { describe, expect, test } from "bun:test";
-import { resolveTarget, type ResolveInput, type Target } from "./useSettingsTrigger";
+import { describe, expect, it, test } from "bun:test";
+import { resolveTarget, SETTINGS_POPOVER_DEFAULT_PINNED, type ResolveInput, type Target } from "./useSettingsTrigger";
 
 function shape(id: string, type: string, didrawId?: string) {
   return { id, type, meta: didrawId ? { didrawId } : {} };
@@ -79,5 +79,15 @@ describe("resolveTarget", () => {
       subjectId: "s:other",
       anchor: { x: 1, y: 2, w: 3, h: 4 },
     });
+  });
+});
+
+describe("useSettingsTrigger — DRW-185 default-pinned mode", () => {
+  it("exports SETTINGS_POPOVER_DEFAULT_PINNED constant", () => {
+    expect(typeof SETTINGS_POPOVER_DEFAULT_PINNED).toBe("boolean");
+  });
+
+  it("default popover state is pinned (true)", () => {
+    expect(SETTINGS_POPOVER_DEFAULT_PINNED).toBe(true);
   });
 });

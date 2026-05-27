@@ -48,6 +48,37 @@ describe("compile.define", () => {
     expect(newR.meta?.position).toEqual({ x: 100, y: 50 });
     expect(newR.meta?.role).toBe("service");
   });
+
+  it("upsert mode — preserves meta.didrawSizePinned even when action.meta overrides", () => {
+    const s = emptyStore();
+    s.store["shape:sized"] = {
+      id: "shape:sized",
+      typeName: "shape",
+      type: "geo",
+      x: 0,
+      y: 0,
+      meta: { didrawName: "svc", role: "service", didrawSizePinned: true },
+    } as TLRecord;
+    const idx = rebuildDidrawIndex(s);
+    // action.meta contains didrawSizePinned: false — whitelist must win over a.meta spread
+    const r = compile(
+      [
+        {
+          kind: "define",
+          name: "svc",
+          role: "service",
+          label: "My Service",
+          meta: { didrawSizePinned: false } as Record<string, unknown>,
+        },
+      ],
+      s,
+      idx,
+    );
+    expect(Object.keys(r.batch.added).length).toBe(0);
+    expect(r.batch.updated["shape:sized"]).toBeDefined();
+    const newR = r.batch.updated["shape:sized"]![1];
+    expect(newR.meta?.didrawSizePinned).toBe(true);
+  });
 });
 
 describe("compile.connect", () => {

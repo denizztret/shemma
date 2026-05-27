@@ -129,7 +129,9 @@ function readNumberProp(props: Record<string, unknown> | undefined, key: string,
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
 
-function shapeBounds(r: ShapeRec): Bounds {
+// DRW-185: exported для прямого unit-testing size-pin guard.
+// ignoreSizePin (default false) — forceUnpin path bypass'ит guard для одного pass'а.
+export function shapeBounds(r: ShapeRec, ignoreSizePin = false): Bounds {
   const isFrame = r.type === "frame";
   const w = readNumberProp(r.props, "w", isFrame ? DEFAULT_FRAME_W : DEFAULT_W);
   const baseH = readNumberProp(
@@ -142,8 +144,12 @@ function shapeBounds(r: ShapeRec): Bounds {
   // see effective height so frame Pass A computes newH covering the full child
   // visual bounds. Without this growY ignored → frame.props.h stays at the
   // estimate while children visually overflow.
+  // DRW-185: size-pinned shapes (meta.didrawSizePinned) — strict props.h как
+  // ground truth, growY ignored. Pin discipline parallel к meta.pinned (position).
+  // ignoreSizePin=true (forceUnpin path) bypass'ит guard для одного layout pass'а.
+  const sizePinned = !ignoreSizePin && isSizePinned(r);
   const growY =
-    r.type === "geo" || r.type === "note"
+    (r.type === "geo" || r.type === "note") && !sizePinned
       ? readNumberProp(r.props, "growY", 0)
       : 0;
   const h = baseH + growY;
@@ -211,6 +217,13 @@ function isContainerShape(r: ShapeRec): boolean {
 
 function isPinned(r: ShapeRec): boolean {
   return r.meta?.pinned === true;
+}
+
+// DRW-185: size-pin — AI layout игнорирует growY для shape с этим флагом.
+// Ортогонален meta.pinned (position pin): size-pinned shape может двигаться,
+// но его высота не переопределяется growY.
+export function isSizePinned(r: ShapeRec): boolean {
+  return r.meta?.didrawSizePinned === true;
 }
 
 function collectShapes(store: TLStoreSnapshot): ShapeRec[] {
@@ -515,7 +528,7 @@ function buildElkGraph(
   }
 
   const buildLeaf = (s: ShapeRec): ElkNode => {
-    const b = effectiveShapeBounds(s, shapeBounds(s));
+    const b = effectiveShapeBounds(s, shapeBounds(s, hint.forceUnpin));
     return { id: s.id, width: Math.max(20, b.w), height: Math.max(20, b.h), ports: [] };
   };
 
@@ -523,7 +536,7 @@ function buildElkGraph(
   // ranks + edge routing. Не зажимаем размер: ELK сам вычислит compound size под
   // реальный children layout, мы это запишем в frame.props.w/h.
   const buildFrame = (f: ShapeRec): ElkNode => {
-    const b = shapeBounds(f);
+    const b = shapeBounds(f, hint.forceUnpin);
     return {
       id: f.id,
       width: b.w,
@@ -588,6 +601,7 @@ async function runPassA(
   optsForContainer: (containerId: string) => Record<string, unknown>,
   allShapes: ShapeRec[],
   filterToIds: Set<string>,
+  forceUnpin = false,
 ): Promise<ContainerPassResult | null> {
   const opts = optsForContainer(container.id);
   // DRW-152/DRW-150: override ELK direction if container has didrawSubgraphDirection (legacy)
@@ -613,7 +627,7 @@ async function runPassA(
       (s) => s.parentId === cc.id && !isContainerShape(s) && filterToIds.has(s.id),
     );
     if (ccSelectedChildren.length === 0) continue;
-    const nestedRes = await runPassA(store, cc, ccSelectedChildren, optsForContainer, allShapes, filterToIds);
+    const nestedRes = await runPassA(store, cc, ccSelectedChildren, optsForContainer, allShapes, filterToIds, forceUnpin);
     if (nestedRes) nestedResults.set(cc.id, nestedRes);
   }
 
@@ -624,7 +638,7 @@ async function runPassA(
   // Листья-контейнеры (selected child-контейнеры трактуются как leaf в pass A parent layout)
   for (const cc of childContainers) {
     const nested = nestedResults.get(cc.id);
-    const origB = shapeBounds(cc);
+    const origB = shapeBounds(cc, forceUnpin);
     const w = nested ? nested.newW : origB.w;
     const h = nested ? nested.newH : origB.h;
     elkChildren.push({ id: cc.id, width: Math.max(20, w), height: Math.max(20, h) });
@@ -632,7 +646,7 @@ async function runPassA(
 
   // Обычные листья — используем effective bounds чтобы ELK учитывал props.size
   for (const s of childLeaves) {
-    const b = effectiveShapeBounds(s, shapeBounds(s));
+    const b = effectiveShapeBounds(s, shapeBounds(s, forceUnpin));
     elkChildren.push({ id: s.id, width: Math.max(20, b.w), height: Math.max(20, b.h) });
   }
 
@@ -892,7 +906,7 @@ async function runLayoutSubgraph(
     const allDirectChildren = [...directSelectedChildrenOf(anchorId), ...directAnchorChildren];
     if (allDirectChildren.length === 0) continue;
 
-    const res = await runPassA(store, anchor, allDirectChildren, optsForContainer, shapes, filterToIds);
+    const res = await runPassA(store, anchor, allDirectChildren, optsForContainer, shapes, filterToIds, hint.forceUnpin);
     if (res) passAResults.set(anchorId, res);
   }
 
@@ -902,7 +916,7 @@ async function runLayoutSubgraph(
     const directFilteredChildren = directSelectedChildrenOf(sc.id);
     if (directFilteredChildren.length === 0) continue;
 
-    const res = await runPassA(store, sc, directFilteredChildren, optsForContainer, shapes, filterToIds);
+    const res = await runPassA(store, sc, directFilteredChildren, optsForContainer, shapes, filterToIds, hint.forceUnpin);
     if (res) passAResults.set(sc.id, res);
   }
 
@@ -919,7 +933,7 @@ async function runLayoutSubgraph(
       // Include the container itself so its w/h gets updated to the Pass A result.
       const container = frameById.get(passARes.containerId);
       if (container) {
-        const origB = shapeBounds(container);
+        const origB = shapeBounds(container, hint.forceUnpin);
         positions[passARes.containerId] = {
           x: origB.x,
           y: origB.y,
@@ -940,7 +954,7 @@ async function runLayoutSubgraph(
   const sizeFor = (s: ShapeRec): { w: number; h: number } => {
     const passARes = passAResults.get(s.id);
     if (passARes) return { w: passARes.newW, h: passARes.newH };
-    const b = shapeBounds(s);
+    const b = shapeBounds(s, hint.forceUnpin);
     return { w: b.w, h: b.h };
   };
 
@@ -951,7 +965,7 @@ async function runLayoutSubgraph(
     elkChildren.push({ id: sc.id, width: Math.max(20, w), height: Math.max(20, h) });
   }
   for (const s of topLevelSelectedLeaves) {
-    const b = effectiveShapeBounds(s, shapeBounds(s));
+    const b = effectiveShapeBounds(s, shapeBounds(s, hint.forceUnpin));
     elkChildren.push({ id: s.id, width: Math.max(20, b.w), height: Math.max(20, b.h) });
   }
 
@@ -964,7 +978,7 @@ async function runLayoutSubgraph(
     for (const anchorId of anchorFrameIds) {
       const anchor = frameById.get(anchorId);
       if (!anchor) continue;
-      const origB = shapeBounds(anchor);
+      const origB = shapeBounds(anchor, hint.forceUnpin);
       const passARes = passAResults.get(anchorId);
       const w = passARes ? passARes.newW : origB.w;
       const h = passARes ? passARes.newH : origB.h;
@@ -1041,7 +1055,7 @@ async function runLayoutSubgraph(
     if (node) {
       const origShape = shapeById.get(node.id);
       if (origShape) {
-        const b = shapeBounds(origShape);
+        const b = shapeBounds(origShape, hint.forceUnpin);
         positions[node.id] = { x: b.x, y: b.y, w: node.width, h: node.height };
       }
     }
@@ -1101,7 +1115,7 @@ async function runLayoutSubgraph(
   for (const anchorId of anchorFrameIds) {
     const anchor = frameById.get(anchorId);
     if (!anchor) continue;
-    const origB = shapeBounds(anchor);
+    const origB = shapeBounds(anchor, hint.forceUnpin);
     const { w, h } = sizeFor(anchor);
     positions[anchorId] = { x: origB.x, y: origB.y, w, h };
   }
@@ -1514,7 +1528,7 @@ export async function runLayout(
       let elkCY = 0;
       let count = 0;
       for (const s of anchorShapes) {
-        const ob = shapeBounds(s);
+        const ob = shapeBounds(s, fullHint.forceUnpin);
         origCX += ob.x + ob.w / 2;
         origCY += ob.y + ob.h / 2;
         const ep = positions[s.id];
@@ -1576,7 +1590,7 @@ export async function runLayout(
     const isAnchor = anchorFrameIds.has(s.id);
     // In subgraph mode: только shapes из filterToIds или anchor-frames попадают в batch.
     if (isSubgraphMode && !isAnchor && affectedIds && !affectedIds.has(s.id)) continue;
-    const oldB = shapeBounds(s);
+    const oldB = shapeBounds(s, fullHint.forceUnpin);
     const isFrame = containerIds.has(s.id);
     const parentIsFrame =
       typeof s.parentId === "string" && containerIds.has(s.parentId);
