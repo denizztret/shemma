@@ -94,3 +94,8 @@ export function validateLayoutParams(p: Partial<LayoutParams>): void {
     throw new Error(`LayoutParams.autoDirectionEnabled must be boolean; got ${typeof p.autoDirectionEnabled}`);
   }
 }
+
+// Container-level override для layout params (frame OR schema-container).
+// `null` — сигнализирует backend удалить meta key (см. spec 4.1).
+// Stored on `shape.meta.didrawLayoutParams`.
+export type ContainerLayoutOverride = Partial<LayoutParams> | null;
