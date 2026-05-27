@@ -296,8 +296,19 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", layoutRoutes(bus));
   app.route("/", layoutSelectionRoutes(bus));
   app.route("/", boardLayoutParamsRoutes({
-    getRoom: (space, room) => bundles.get(space)?.rooms.peek(room) ?? legacyBundle.rooms.peek(room),
-    persistRoom: () => {},
+    getRoom: async (space, room) => {
+      const bundle = bundles.get(space) ?? legacyBundle;
+      try {
+        return await bundle.rooms.get(room);
+      } catch {
+        return undefined;
+      }
+    },
+    persistRoom: (space, room) => {
+      const bundle = bundles.get(space) ?? legacyBundle;
+      const state = bundle.rooms.peek(room);
+      if (state) bundle.scheduleSave(room, state);
+    },
     broadcastRoomMeta: () => {},
   }));
   app.route("/", smartInsertRoutes(bus));
