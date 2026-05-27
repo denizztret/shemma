@@ -27,3 +27,11 @@ describe("PIN_FIELDS", () => {
     expect(PIN_FIELDS.map((f) => f.field)).toEqual(["size", "position"]);
   });
 });
+
+import { RoleSection } from "./RoleSection";
+
+describe("RoleSection", () => {
+  test("exports a component", () => {
+    expect(typeof RoleSection).toBe("function");
+  });
+});
