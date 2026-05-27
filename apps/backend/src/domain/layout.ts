@@ -68,6 +68,13 @@ function readContainerDirection(container: ShapeRec): string | undefined {
     if (d === "custom") return undefined;
     if (typeof d === "string" && MERMAID_DIR_TO_ELK[d]) return MERMAID_DIR_TO_ELK[d];
   }
+  // Frame: meta.didrawDirection is the canonical user-set direction
+  // (no props.direction on native tldraw frame). See spec §4.1.
+  if (container.type === "frame") {
+    const d = container.meta?.didrawDirection;
+    if (d === "custom") return undefined;
+    if (typeof d === "string" && MERMAID_DIR_TO_ELK[d]) return MERMAID_DIR_TO_ELK[d];
+  }
   // Fallback: explicit-but-not-via-props inferred direction (rare path).
   if (typeof inferred === "string" && MERMAID_DIR_TO_ELK[inferred]) {
     return MERMAID_DIR_TO_ELK[inferred];
@@ -79,8 +86,13 @@ function readContainerDirection(container: ShapeRec): string | undefined {
 }
 
 function isCustomDirection(container: ShapeRec): boolean {
-  if (container.type !== "schema-container") return false;
-  return (container.props as Record<string, unknown> | undefined)?.direction === "custom";
+  if (container.type === "schema-container") {
+    return (container.props as Record<string, unknown> | undefined)?.direction === "custom";
+  }
+  if (container.type === "frame") {
+    return container.meta?.didrawDirection === "custom";
+  }
+  return false;
 }
 
 // DRW-003 displacement constants (preserved from Phase 2.x layout.ts).
@@ -1115,7 +1127,10 @@ function inferContainerDirections(
   if (params.autoDirectionEnabled === false) return batch;
 
   const containers = shapes.filter(isContainerShape);
-  if (containers.length === 0) return batch;
+  // Frame не участвует в auto-direction inference — meta.didrawDirection для frame
+  // зарезервирован под user-set value (spec 4.1).
+  const eligibleContainers = containers.filter((c) => c.type !== "frame");
+  if (eligibleContainers.length === 0) return batch;
 
   const shapeById = new Map(shapes.map((s) => [s.id, s]));
 
@@ -1139,7 +1154,7 @@ function inferContainerDirections(
     if (ep) arrows.push(ep);
   }
 
-  for (const container of containers) {
+  for (const container of eligibleContainers) {
     // Skip if explicit direction is set.
     if (container.type === "schema-container") {
       const d = (container.props as Record<string, unknown> | undefined)?.direction;
