@@ -100,3 +100,69 @@ describe("POST /api/board/layout-params", () => {
     expect(broadcasted).toBe("default::r1");
   });
 });
+
+import { runLayout } from "../src/domain/layout";
+import { rebuildDidrawIndex } from "../src/store-ops";
+import type { TLRecord, TLStoreSnapshot } from "../src/store-types";
+
+function emptySnapshot(): TLStoreSnapshot {
+  return {
+    schema: { schemaVersion: 1, storeVersion: 4, recordVersions: {} },
+    store: {
+      "document:document": { id: "document:document", typeName: "document" } as TLRecord,
+      "page:page": { id: "page:page", typeName: "page" } as TLRecord,
+    },
+  };
+}
+
+function makeShape(id: string, x: number, y: number, name: string): TLRecord {
+  return {
+    id,
+    typeName: "shape",
+    type: "geo",
+    x,
+    y,
+    parentId: "page:page",
+    props: { w: 120, h: 60, geo: "rectangle" },
+    meta: { didrawName: name },
+  } as TLRecord;
+}
+
+describe("runLayout exposes appliedParams", () => {
+  test("returns default params when no paramsPartial", async () => {
+    const snap = emptySnapshot();
+    snap.store["shape:a"] = makeShape("shape:a", 0, 0, "a");
+    snap.store["shape:b"] = makeShape("shape:b", 0, 0, "b");
+    const idx = rebuildDidrawIndex(snap);
+    const r = await runLayout(snap, { mode: "layered-lr", scope: "all" }, idx);
+    expect(r.appliedParams.nodePadding).toBe(16);
+    expect(r.appliedParams.containerPadding).toBe(24);
+  });
+
+  test("returns merged params when paramsPartial provided", async () => {
+    const snap = emptySnapshot();
+    snap.store["shape:a"] = makeShape("shape:a", 0, 0, "a");
+    snap.store["shape:b"] = makeShape("shape:b", 0, 0, "b");
+    const idx = rebuildDidrawIndex(snap);
+    const r = await runLayout(
+      snap,
+      { mode: "layered-lr", scope: "all" },
+      idx,
+      { nodePadding: 999 },
+    );
+    expect(r.appliedParams.nodePadding).toBe(999);
+    expect(r.appliedParams.containerPadding).toBe(24);
+  });
+
+  test("returns merged params even on empty-store early return", async () => {
+    const snap = emptySnapshot();
+    const idx = rebuildDidrawIndex(snap);
+    const r = await runLayout(
+      snap,
+      { mode: "layered-lr", scope: "all" },
+      idx,
+      { nodePadding: 999 },
+    );
+    expect(r.appliedParams.nodePadding).toBe(999);
+  });
+});
