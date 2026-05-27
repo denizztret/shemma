@@ -3,35 +3,20 @@ import type { Anchor } from "./useSettingsTrigger";
 
 type Size = { width: number; height: number };
 
+/**
+ * DRW-187: default-открытие popover'а в bottom-right углу viewport'а.
+ * Stationary default упрощает muscle-memory; manual drag (userPos) overrides.
+ * Anchor параметр ignored — оставлен в signature для backward compat сo вызовом.
+ */
 export function computePopoverPosition(input: {
   anchor: Anchor;
   popoverSize: Size;
   viewport: Size;
   margin: number;
 }): { x: number; y: number } {
-  const { anchor, popoverSize, viewport, margin } = input;
-  const isPoint = anchor.w === undefined || anchor.h === undefined;
-
-  let x: number;
-  let y: number;
-
-  if (isPoint) {
-    x = anchor.x + 12;
-    y = anchor.y + 12;
-  } else {
-    x = anchor.x;
-    const below = anchor.y + (anchor.h ?? 0) + 8;
-    if (below + popoverSize.height <= viewport.height - margin) {
-      y = below;
-    } else {
-      y = anchor.y - popoverSize.height - 8;
-    }
-  }
-
-  const maxX = viewport.width - popoverSize.width - margin;
-  const maxY = viewport.height - popoverSize.height - margin;
-  x = Math.max(margin, Math.min(x, maxX));
-  y = Math.max(margin, Math.min(y, maxY));
-
-  return { x, y };
+  const { popoverSize, viewport, margin } = input;
+  return {
+    x: Math.max(margin, viewport.width - popoverSize.width - margin),
+    y: Math.max(margin, viewport.height - popoverSize.height - margin),
+  };
 }
