@@ -17,6 +17,7 @@ import { importMermaid, isBoundsContained, unionBoundsOf } from "./canvas/mermai
 import { backfillStoreRecords } from "./canvas/schema-placeholder";
 import { registerStyleDefaultsSync } from "./canvas/style-defaults-sync";
 import { registerPinAutoToggle } from "./canvas/pin-auto-toggle";
+import { registerArrowAnchorPin } from "./canvas/arrow-anchor-pin";
 import { registerContainerTitlePositionInherit } from "./canvas/container-title-position-inherit";
 import { makeExportHotkeyHandler } from "./canvas/export-hotkey";
 import { makeForceReLayoutHotkeyHandler, makeTidyHotkeyHandler, tidyLayout } from "./canvas/tidy-layout";
@@ -114,6 +115,8 @@ export function App({
   const styleSyncDisposerRef = useRef<(() => void) | null>(null);
   // DRW-185: disposer for registerPinAutoToggle.
   const pinAutoToggleDisposerRef = useRef<(() => void) | null>(null);
+  // DRW-190: disposer for registerArrowAnchorPin.
+  const arrowAnchorPinDisposerRef = useRef<(() => void) | null>(null);
   // DRW-186 frame-scope: disposer for registerContainerTitlePositionInherit.
   const titlePosInheritDisposerRef = useRef<(() => void) | null>(null);
   onExportSelection.current = (ids: string[]) => {
@@ -735,6 +738,9 @@ export function App({
           // DRW-185: auto-pin on drag/resize end.
           pinAutoToggleDisposerRef.current?.();
           pinAutoToggleDisposerRef.current = registerPinAutoToggle(ed);
+          // DRW-190: auto-pin arrow endpoint anchors on manual drag.
+          arrowAnchorPinDisposerRef.current?.();
+          arrowAnchorPinDisposerRef.current = registerArrowAnchorPin(ed);
           // DRW-186 frame-scope: inherit titlePosition из parent Frame.meta при создании SchemaContainer'а.
           titlePosInheritDisposerRef.current?.();
           titlePosInheritDisposerRef.current = registerContainerTitlePositionInherit(ed);
