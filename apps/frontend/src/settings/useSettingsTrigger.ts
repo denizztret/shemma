@@ -30,7 +30,7 @@ export function resolveTarget(input: ResolveInput): Target | null {
       if (!a) return null;
       return { kind: "selection", anchor: a };
     }
-    if (hit.meta?.didrawId) {
+    if (hit.meta?.didrawId || hit.meta?.didrawName) {
       const a = bbox([hit.id]);
       if (!a) return null;
       return { kind: "node", subjectId: hit.id, anchor: a };
@@ -56,17 +56,21 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & { clos
 
   useEffect(() => {
     if (!editor) return;
-    const container = editor.getContainer();
 
     function onPointerDown(e: PointerEvent) {
       if (!e.altKey) return;
-      e.preventDefault();
-      e.stopPropagation();
-
       const ed = editorRef.current;
       if (!ed) return;
-
       const screen = { x: e.clientX, y: e.clientY };
+      const viewportBounds = ed.getViewportScreenBounds();
+      if (
+        screen.x < viewportBounds.x ||
+        screen.x > viewportBounds.x + viewportBounds.w ||
+        screen.y < viewportBounds.y ||
+        screen.y > viewportBounds.y + viewportBounds.h
+      ) {
+        return;
+      }
       const page = ed.screenToPage(screen);
       const hit = ed.getShapeAtPoint(page);
       const selected = ed.getSelectedShapeIds() as unknown as string[];
@@ -98,13 +102,27 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & { clos
       if (e.key === "Escape") setTarget(null);
     }
 
-    container.addEventListener("pointerdown", onPointerDown, { capture: true });
+    window.addEventListener("pointerdown", onPointerDown, { capture: true });
     window.addEventListener("keydown", onKey);
 
-    const dispose = editor.store.listen(() => setTarget(null), { scope: "session" });
+    let prevCamera = editor.getCamera();
+    let prevSelection = (editor.getSelectedShapeIds() as unknown as string[]).join(",");
+    const dispose = editor.store.listen(() => {
+      const ed = editorRef.current;
+      if (!ed) return;
+      const cam = ed.getCamera();
+      const sel = (ed.getSelectedShapeIds() as unknown as string[]).join(",");
+      const cameraChanged = cam.x !== prevCamera.x || cam.y !== prevCamera.y || cam.z !== prevCamera.z;
+      const selectionChanged = sel !== prevSelection;
+      if (cameraChanged || selectionChanged) {
+        prevCamera = cam;
+        prevSelection = sel;
+        setTarget(null);
+      }
+    }, { scope: "session" });
 
     return () => {
-      container.removeEventListener("pointerdown", onPointerDown, { capture: true });
+      window.removeEventListener("pointerdown", onPointerDown, { capture: true });
       window.removeEventListener("keydown", onKey);
       dispose();
     };
