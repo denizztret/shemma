@@ -3,6 +3,8 @@ import { DirectionSection, type DirectionValue } from "../sections/DirectionSect
 import { LayoutActionsSection, type LayoutAction } from "../sections/LayoutActionsSection";
 import { LayoutSettingsSection, type LayoutSettingsValue } from "../sections/LayoutSettingsSection";
 import { PinSection } from "../sections/PinSection";
+import { StylesSection, type StyleSectionValue } from "../sections/StylesSection";
+import type { StyleDash, StyleFont, StyleSize } from "@shemma/domain";
 
 export type SelectionCounts = { containers: number; nodes: number };
 
@@ -56,6 +58,12 @@ export type SelectionPanelProps = {
   pinValues: { size: boolean; position: boolean };
   onPinToggle: (field: "size" | "position") => void;
   pending: LayoutAction["id"] | null;
+  /** Style section visibility — true когда в selection ≥1 frame/schema-container. */
+  showStyles: boolean;
+  styleState: StyleSectionValue;
+  onStyleDash: (v: StyleDash) => void;
+  onStyleFont: (v: StyleFont) => void;
+  onStyleSize: (v: StyleSize) => void;
 };
 
 export const SelectionPanel: FC<SelectionPanelProps> = ({
@@ -74,6 +82,11 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
   pinValues,
   onPinToggle,
   pending,
+  showStyles,
+  styleState,
+  onStyleDash,
+  onStyleFont,
+  onStyleSize,
 }) => {
   const total = counts.containers + counts.nodes;
   return (
@@ -95,6 +108,15 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
       )}
       <LayoutActionsSection onAction={onLayoutAction} pending={pending} />
       <PinSection values={pinValues} onToggle={onPinToggle} bulkLabel={total > 1} />
+      {showStyles && (
+        <StylesSection
+          current={styleState}
+          onDash={onStyleDash}
+          onFont={onStyleFont}
+          onSize={onStyleSize}
+          subtitle="Для выделения"
+        />
+      )}
       <div className="settings-popover__footer">{selectionFooterCounter(counts)}</div>
     </div>
   );

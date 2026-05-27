@@ -4,9 +4,12 @@ import {
   LayoutSettingsSection,
   type LayoutSettingsValue,
 } from "../sections/LayoutSettingsSection";
-import { StylesSection } from "../sections/StylesSection";
+import { StylesSection, type StyleSectionValue } from "../sections/StylesSection";
 import type { PresetName } from "../presets";
-import type { LayoutParams, Spacing } from "@shemma/domain";
+import type {
+  LayoutParams, Spacing,
+  ResolvedStyleDefaults, StyleDash, StyleFont, StyleSize,
+} from "@shemma/domain";
 
 const DIRECTION_HINTS: Record<DirectionValue, string> = {
   TB: "Сверху вниз",
@@ -30,16 +33,34 @@ export type BoardPanelProps = {
   onToggleAutoDirection: (enabled: boolean) => void;
   onMidpointModeChange: (mode: "even" | "fixed-0.5") => void;
   onOpenAdvanced: () => void;
+  styleEffective: ResolvedStyleDefaults;
+  onStyleDash: (v: StyleDash) => void;
+  onStyleFont: (v: StyleFont) => void;
+  onStyleSize: (v: StyleSize) => void;
 };
 
 export const BoardPanel: FC<BoardPanelProps> = ({
-  effective, onDirectionChange, onPresetSelect, onToggleAutoDirection, onMidpointModeChange, onOpenAdvanced,
+  effective,
+  onDirectionChange,
+  onPresetSelect,
+  onToggleAutoDirection,
+  onMidpointModeChange,
+  onOpenAdvanced,
+  styleEffective,
+  onStyleDash,
+  onStyleFont,
+  onStyleSize,
 }) => {
-  // Convert effective LayoutParams → LayoutSettingsValue (shared с SelectionPanel).
   const layoutSettings: LayoutSettingsValue = {
     preset: effective.spacing ?? null,
     autoDirection: effective.autoDirectionEnabled,
     midpoint: effective.midpointDistribution,
+  };
+
+  const styleValue: StyleSectionValue = {
+    dash: styleEffective.dash,
+    font: styleEffective.font,
+    size: styleEffective.size,
   };
 
   return (
@@ -65,7 +86,12 @@ export const BoardPanel: FC<BoardPanelProps> = ({
         showReset={false}
         showAdvanced={true}
       />
-      <StylesSection />
+      <StylesSection
+        current={styleValue}
+        onDash={onStyleDash}
+        onFont={onStyleFont}
+        onSize={onStyleSize}
+      />
     </div>
   );
 };

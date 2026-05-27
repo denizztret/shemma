@@ -20,3 +20,13 @@ export {
   applyLayoutParamsDefaults,
   validateLayoutParams,
 } from "./layout-params";
+export {
+  type StyleDefaults,
+  type ResolvedStyleDefaults,
+  type StyleDash,
+  type StyleFont,
+  type StyleSize,
+  DEFAULT_STYLE_DEFAULTS,
+  validateStyleDefaults,
+  applyStyleDefaultsResolution,
+} from "./style-defaults";
