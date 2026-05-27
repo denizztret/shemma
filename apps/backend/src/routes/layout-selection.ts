@@ -15,7 +15,7 @@
 //   all unresolved → 400
 //   invalid room → 422
 
-import type { LayoutParams } from "@shemma/domain";
+import { validateLayoutParams, type LayoutParams } from "@shemma/domain";
 import { Hono } from "hono";
 import { config } from "../config";
 import { runLayout } from "../domain/layout";
@@ -75,6 +75,7 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
       directions?: unknown;
       scope?: unknown;
       forceUnpin?: boolean;
+      layoutParamsOverride?: unknown;
     };
 
     const rawIds: string[] = Array.isArray(body.ids)
@@ -135,11 +136,50 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
       }
     }
 
+    // Task #4 (frame-container-direction-layout): parse + validate
+    // `layoutParamsOverride: Record<ElementId, Partial<LayoutParams> | null>`.
+    //
+    // Validation runs BEFORE any store mutation так что invalid value → 400
+    // atomic abort (никакие changes — ни directions, ни override — не пишутся).
+    const rawOverride =
+      body.layoutParamsOverride !== null &&
+      typeof body.layoutParamsOverride === "object" &&
+      !Array.isArray(body.layoutParamsOverride)
+        ? (body.layoutParamsOverride as Record<string, unknown>)
+        : null;
+
+    const parsedOverride: Record<string, Partial<LayoutParams> | null> = {};
+    if (rawOverride) {
+      for (const [shapeId, val] of Object.entries(rawOverride)) {
+        if (val === null) {
+          parsedOverride[shapeId] = null;
+          continue;
+        }
+        if (typeof val !== "object" || Array.isArray(val)) continue;
+        try {
+          validateLayoutParams(val as Partial<LayoutParams>);
+        } catch (err) {
+          return c.json(
+            {
+              ok: false,
+              error: `invalid layoutParamsOverride for ${shapeId}: ${(err as Error).message}`,
+            },
+            400,
+          );
+        }
+        parsedOverride[shapeId] = val as Partial<LayoutParams>;
+      }
+    }
+
     const containerScope: "self" | "auto" =
       body.scope === "self" ? "self" : "auto";
 
-    // All ids unresolved AND no direction updates pending → 400
-    if (affectedIds.size === 0 && Object.keys(parsedDirections).length === 0) {
+    // All ids unresolved AND no direction updates pending AND no override → 400
+    if (
+      affectedIds.size === 0 &&
+      Object.keys(parsedDirections).length === 0 &&
+      Object.keys(parsedOverride).length === 0
+    ) {
       return c.json(
         {
           ok: false,
@@ -150,9 +190,13 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
       );
     }
 
-    // Apply directions prop patch atomically BEFORE layout (DRW-166: eliminates
-    // the race between optimistic updateShape on frontend and the WS 50ms debounce).
-    const directionUpdated: Record<string, [TLRecord, TLRecord]> = {};
+    // Apply directions prop patch AND layoutParamsOverride atomically BEFORE
+    // layout (DRW-166 + task #4): eliminates the race between optimistic
+    // updateShape on frontend and the WS 50ms debounce, AND ensures
+    // runLayoutSubgraph (task #3) sees updated meta.didrawLayoutParams.
+    //
+    // Both mutations land in a single batch — атомарность guaranteed.
+    const shapeUpdated: Record<string, [TLRecord, TLRecord]> = {};
     for (const [shapeId, dir] of Object.entries(parsedDirections)) {
       const shape = r.store.store[shapeId];
       if (!shape || shape.typeName !== "shape") {
@@ -179,13 +223,45 @@ export function layoutSelectionRoutes(bus: StoreChangeBus) {
         props: { ...oldProps, direction: dir },
         meta: newMeta,
       } as TLRecord;
-      directionUpdated[shapeId] = [shape, newShape];
+      shapeUpdated[shapeId] = [shape, newShape];
       // Ensure shape is in affectedIds so it participates in layout.
       affectedIds.add(shapeId);
     }
 
-    if (Object.keys(directionUpdated).length > 0) {
-      const dirBatch = { added: {}, updated: directionUpdated, removed: {} };
+    // Task #4: apply layoutParamsOverride. Mirrors directions write pattern —
+    // если shape уже изменён directions loop'ом, продолжаем поверх newShape.
+    for (const [shapeId, partial] of Object.entries(parsedOverride)) {
+      const baseShape = shapeUpdated[shapeId]?.[1] ?? r.store.store[shapeId];
+      if (!baseShape || baseShape.typeName !== "shape") {
+        unresolved.push(shapeId);
+        continue;
+      }
+      const shapeType = (baseShape as { type?: unknown }).type;
+      if (shapeType !== "frame" && shapeType !== "schema-container") {
+        unresolved.push(shapeId);
+        continue;
+      }
+      const oldMeta = ((baseShape as { meta?: Record<string, unknown> }).meta ?? {});
+      const newMeta = { ...oldMeta };
+      if (partial === null) {
+        delete newMeta.didrawLayoutParams;
+      } else {
+        newMeta.didrawLayoutParams = partial;
+      }
+      const newShape: TLRecord = {
+        ...baseShape,
+        meta: newMeta,
+      } as TLRecord;
+      // Pre-image = original store record (sticks even if directions touched it
+      // first — applyStoreChanges replaces the record outright).
+      const preImage = shapeUpdated[shapeId]?.[0] ?? r.store.store[shapeId]!;
+      shapeUpdated[shapeId] = [preImage, newShape];
+      // Ensure shape participates in layout — overrides affect its subgraph.
+      affectedIds.add(shapeId);
+    }
+
+    if (Object.keys(shapeUpdated).length > 0) {
+      const dirBatch = { added: {}, updated: shapeUpdated, removed: {} };
       r.store = applyStoreChanges(r.store, dirBatch);
       r.didrawIndex = rebuildDidrawIndex(r.store);
       r.version += 1;
