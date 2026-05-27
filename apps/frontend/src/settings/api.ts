@@ -1,4 +1,5 @@
 import type { LayoutParams, StyleDefaults, ResolvedStyleDefaults } from "@shemma/domain";
+import type { SchemaContainerTitlePosition } from "../shapes/schema-container/title-position";
 
 export type LayoutParamsResponse = {
   raw: Partial<LayoutParams> | null;
@@ -99,6 +100,33 @@ export async function postStyleApply(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
+  });
+  return jsonOrThrow(res);
+}
+
+export type ContainerTitlePositionResponse = {
+  value: SchemaContainerTitlePosition | null;
+};
+
+export async function getContainerTitlePosition(
+  space: string,
+  room: string,
+): Promise<ContainerTitlePositionResponse> {
+  const url = `/api/board/container-title-position?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room)}`;
+  const res = await fetch(url, { method: "GET" });
+  return jsonOrThrow(res);
+}
+
+export async function postContainerTitlePosition(
+  space: string,
+  room: string,
+  value: SchemaContainerTitlePosition | null,
+): Promise<{ ok: true }> {
+  const url = `/api/board/container-title-position?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room)}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ value }),
   });
   return jsonOrThrow(res);
 }

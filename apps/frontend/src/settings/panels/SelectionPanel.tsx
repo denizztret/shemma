@@ -4,7 +4,9 @@ import { LayoutActionsSection, type LayoutAction } from "../sections/LayoutActio
 import { LayoutSettingsSection, type LayoutSettingsValue } from "../sections/LayoutSettingsSection";
 import { PinSection } from "../sections/PinSection";
 import { StylesSection, type StyleSectionValue } from "../sections/StylesSection";
+import { ContainerTitlePositionSection } from "../sections/ContainerTitlePositionSection";
 import type { StyleDash, StyleFont, StyleSize } from "@shemma/domain";
+import type { SchemaContainerTitlePosition } from "../../shapes/schema-container/title-position";
 
 export type SelectionCounts = { containers: number; nodes: number };
 
@@ -64,6 +66,24 @@ export type SelectionPanelProps = {
   onStyleDash: (v: StyleDash) => void;
   onStyleFont: (v: StyleFont) => void;
   onStyleSize: (v: StyleSize) => void;
+  /**
+   * Per-container titlePosition override. Defined только когда выбран ровно
+   * один SchemaContainer; иначе оба поля undefined и секция скрывается.
+   * Render-time SSOT — `shape.props.titlePosition` (spec §Title position resolution).
+   */
+  singleContainerTitlePosition?: SchemaContainerTitlePosition;
+  onSingleContainerTitlePositionChange?: (next: SchemaContainerTitlePosition) => void;
+  /**
+   * Frame-scope bulk-apply (DRW-186 frame-scope extension). Defined только когда
+   * выбран ровно один Frame. Изменение значения:
+   *   1. Сохраняет `next` в `frame.meta.didrawContainerTitlePosition` (memo для
+   *      inheritance newly-created child SchemaContainer'ов).
+   *   2. Bulk-apply `next` в `props.titlePosition` всех existing child
+   *      SchemaContainer'ов внутри этого Frame'а.
+   * Сам Frame визуально НЕ меняется.
+   */
+  singleFrameContainerTitlePosition?: SchemaContainerTitlePosition;
+  onSingleFrameContainerTitlePositionChange?: (next: SchemaContainerTitlePosition) => void;
 };
 
 export const SelectionPanel: FC<SelectionPanelProps> = ({
@@ -87,6 +107,10 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
   onStyleDash,
   onStyleFont,
   onStyleSize,
+  singleContainerTitlePosition,
+  onSingleContainerTitlePositionChange,
+  singleFrameContainerTitlePosition,
+  onSingleFrameContainerTitlePositionChange,
 }) => {
   const total = counts.containers + counts.nodes;
   return (
@@ -104,6 +128,21 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
             showReset={showReset}
             showAdvanced={false}
           />
+          {singleContainerTitlePosition && onSingleContainerTitlePositionChange && (
+            <ContainerTitlePositionSection
+              current={singleContainerTitlePosition}
+              onChange={onSingleContainerTitlePositionChange}
+              title="Заголовок этого контейнера"
+            />
+          )}
+          {singleFrameContainerTitlePosition !== undefined &&
+            onSingleFrameContainerTitlePositionChange && (
+              <ContainerTitlePositionSection
+                current={singleFrameContainerTitlePosition}
+                onChange={onSingleFrameContainerTitlePositionChange}
+                title="Заголовок контейнеров в этом фрейме"
+              />
+            )}
         </>
       )}
       <LayoutActionsSection onAction={onLayoutAction} pending={pending} />

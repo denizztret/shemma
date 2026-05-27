@@ -5,11 +5,13 @@ import {
   type LayoutSettingsValue,
 } from "../sections/LayoutSettingsSection";
 import { StylesSection, type StyleSectionValue } from "../sections/StylesSection";
+import { ContainerTitlePositionSection } from "../sections/ContainerTitlePositionSection";
 import type { PresetName } from "../presets";
 import type {
   LayoutParams, Spacing,
   ResolvedStyleDefaults, StyleDash, StyleFont, StyleSize,
 } from "@shemma/domain";
+import type { SchemaContainerTitlePosition } from "../../shapes/schema-container/title-position";
 
 const DIRECTION_HINTS: Record<DirectionValue, string> = {
   TB: "Сверху вниз",
@@ -37,6 +39,8 @@ export type BoardPanelProps = {
   onStyleDash: (v: StyleDash) => void;
   onStyleFont: (v: StyleFont) => void;
   onStyleSize: (v: StyleSize) => void;
+  containerTitlePosition: SchemaContainerTitlePosition;
+  onContainerTitlePositionChange: (next: SchemaContainerTitlePosition) => void;
 };
 
 export const BoardPanel: FC<BoardPanelProps> = ({
@@ -50,6 +54,8 @@ export const BoardPanel: FC<BoardPanelProps> = ({
   onStyleDash,
   onStyleFont,
   onStyleSize,
+  containerTitlePosition,
+  onContainerTitlePositionChange,
 }) => {
   const layoutSettings: LayoutSettingsValue = {
     preset: effective.spacing ?? null,
@@ -91,6 +97,10 @@ export const BoardPanel: FC<BoardPanelProps> = ({
         onDash={onStyleDash}
         onFont={onStyleFont}
         onSize={onStyleSize}
+      />
+      <ContainerTitlePositionSection
+        current={containerTitlePosition}
+        onChange={onContainerTitlePositionChange}
       />
     </div>
   );

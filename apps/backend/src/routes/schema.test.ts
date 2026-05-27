@@ -1135,7 +1135,7 @@ describe("POST /api/schema/create — DRW-153 mermaid style directives applied t
     expect(wrapper.type).toBe("schema-container");
     expect(wrapper.props.name).toBe("Вход");
     expect(wrapper.props.direction).toBe("TB");
-    expect(wrapper.props.titlePosition).toBe("inside");
+    expect(wrapper.props.titlePosition).toBe("inside-center");
     expect(wrapper.props.dash).toBe("dashed");
     expect(wrapper.meta.didrawSubgraph).toBe(true);
   });

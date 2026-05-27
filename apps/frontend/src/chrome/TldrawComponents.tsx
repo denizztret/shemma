@@ -5,10 +5,10 @@ import {
   DefaultToolbar,
   DefaultToolbarContent,
   type TLComponents,
+  TldrawUiMenuToolItem,
   useEditor,
   useValue,
 } from "tldraw";
-import { tokens } from "../design-tokens";
 import type { SchemaContainerDirection } from "../shapes/schema-container/SchemaContainerShape";
 import { GalleryLink } from "./GalleryLink";
 import { RoomBadge } from "./RoomBadge";
@@ -18,10 +18,11 @@ import { SettingsPopover } from "../settings/SettingsPopover";
  * Build the `components` prop for `<Tldraw />`.
  *
  * - `SharePanel` injects our chrome (Gallery link + Room badge).
- * - `Toolbar` wraps the default tldraw toolbar and appends a "Mermaid"
- *   button that invokes the provided callback (used by App.tsx to open the
- *   MermaidImportModal). Hotkey ⌘M остаётся primary trigger; кнопка —
- *   discoverability.
+ * - `Toolbar` — pass-through to default tldraw toolbar. DRW-186 Task 6:
+ *   inline "M" Mermaid button удалён; Mermaid + SchemaContainer теперь
+ *   зарегистрированы как нативные tool item'ы через `TLUiOverrides.tools`
+ *   (см. `apps/frontend/src/ui-overrides.ts`) и автоматически попадают в
+ *   overflow popover.
  * - `ContextMenu` extends default context menu with "Tidy" + "Export to Miro"
  *   items when selection is non-empty. Hotkeys remain primary triggers.
  */
@@ -29,13 +30,12 @@ export function buildTldrawComponents(
   space: string,
   room: string,
   opts: {
-    onMermaidImport?: () => void;
     onTidySelection?: (ids: string[]) => void;
     onExportSelection?: (ids: string[]) => void;
     onSetContainerDirection?: (direction: SchemaContainerDirection) => void;
   } = {},
 ): TLComponents {
-  const { onMermaidImport, onTidySelection, onExportSelection, onSetContainerDirection } = opts;
+  const { onTidySelection, onExportSelection, onSetContainerDirection } = opts;
 
   // We wrap DefaultContextMenu and append items as children — DefaultContextMenu
   // overrides its inner content while keeping the Radix shell + canvas rendering.
@@ -168,37 +168,13 @@ export function buildTldrawComponents(
     Toolbar: () => (
       <DefaultToolbar>
         <DefaultToolbarContent />
-        {onMermaidImport ? (
-          <button
-            type="button"
-            onClick={onMermaidImport}
-            title="Import Mermaid (⌘M)"
-            aria-label="Import Mermaid"
-            // Inline-styled mini-button: визуально похож на tldraw tool item,
-            // но не пытается mimic'ать full TLUiToolItem (тот требует tool
-            // registration + icon asset). Минимальный wrap — достаточно для
-            // discoverability hotkey'я.
-            style={{
-              marginLeft: 4,
-              padding: "0 10px",
-              height: 32,
-              minWidth: 36,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontFamily: tokens.font.mono,
-              fontSize: tokens.font.base,
-              fontWeight: 600,
-              color: tokens.color.text,
-              background: "transparent",
-              border: "none",
-              borderRadius: tokens.radius.sm,
-              cursor: "pointer",
-            }}
-          >
-            M
-          </button>
-        ) : null}
+        {/* DRW-186: custom tools зарегистрированы через TLUiOverrides.tools
+         * (см. apps/frontend/src/ui-overrides.ts). Render-side нужен явный
+         * TldrawUiMenuToolItem — DefaultToolbarContent рендерит fixed list
+         * нативных tools и кастомные ID не подхватывает автоматически.
+         * OverflowingToolbar сам переместит их в "More" popover при нехватке места. */}
+        <TldrawUiMenuToolItem toolId="schema-container" />
+        <TldrawUiMenuToolItem toolId="mermaid-import" />
       </DefaultToolbar>
     ),
     InFrontOfTheCanvas: () => <SettingsPopover space={space} room={room} />,

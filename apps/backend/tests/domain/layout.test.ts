@@ -892,7 +892,7 @@ describe("runLayout", () => {
       x: 0,
       y: 0,
       parentId: "shape:e_frame",
-      props: { w: 400, h: 300, name: "cont", direction: "custom", titlePosition: "inside",
+      props: { w: 400, h: 300, name: "cont", direction: "custom", titlePosition: "inside-center",
                color: "grey", fill: "semi", dash: "dashed" },
       meta: { didrawName: "cont" },
     } as TLRecord;

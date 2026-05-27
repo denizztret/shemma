@@ -1,5 +1,110 @@
 ## Unreleased
 
+### SchemaContainer UX cluster (DRW-186)
+
+**Toolbar restructure:**
+- M-кнопка Mermaid удалена из primary toolbar slot. Mermaid и SchemaContainer
+  теперь зарегистрированы как нативные tool item'ы через `TLUiOverrides.tools`
+  и автоматически попадают в native overflow popover (chevron `^`). Hotkey
+  ⌘M остаётся primary trigger (`apps/frontend/src/ui-overrides.ts`).
+
+**SchemaContainer creation tool:**
+- Drag-from-corner gesture (parity с Frame) — `SchemaContainerTool` extends
+  `BaseBoxShapeTool` (5 строк). Стиль defaults (color / fill / dash) inherit
+  автоматически из `editor.getStyleForNextShape`. Title position нового
+  контейнера = `room.meta.containerTitlePosition` (board-default), читается
+  через `resolveBoardTitlePosition(editor)` из `editor.documentSettings.meta`.
+
+**Inline label edit:**
+- Double-click на label → edit mode (HTML overlay `<input>`); Esc реверт,
+  Enter / blur коммит к `props.name`. Child text shape больше не создаётся
+  внутри контейнера (`canEdit() => true` через `BaseFrameLikeShapeUtil` гейт).
+- Label рендерится HTML overlay'ем через `<HTMLContainer>` с
+  `var(--tl-font-sans)` CSS variable — parity с Frame, заменяет hardcoded
+  SVG `<text fontSize=20 fontWeight=500>`.
+
+**Title position 4-way + board policy + frame-scope:**
+- `props.titlePosition` расширен с `"inside" | "outside"` до
+  `"outside-frame" | "outside-banner" | "inside-center" | "inside-left"`
+  (phase 2 — split phase-1 `"outside"` на два визуально разных варианта).
+  Migrations sequence:
+  - `/1` — `"inside"` → `"inside-center"` (phase 1, без изменений).
+  - `/2` — `"outside"` → `"outside-banner"` (phase 2, визуал phase-1 outside
+    был coloured banner). Unknown values defensive-coerce к `inside-center`.
+- **outside-banner** рендерится с monolith corners — banner и body соединены
+  без gap'а, верхние углы скруглены только на баннере, нижние — только на
+  body, поверх кладётся единый rect-outline с `rx=4`. Реализовано через два
+  SVG `<path>` (banner + body) + один outline rect.
+- **outside-frame** — native tldraw Frame parity: ТОЛЬКО body rect со своим
+  stroke'ом, label плавает над body как plain text (без bg, без outline,
+  top-left aligned, neutral dark text). Никакого encompassing outline'а
+  вокруг combined area (banner + body) — это ключевое отличие от banner
+  варианта.
+- Font size всех label вариантов унифицирован под 13px (Frame parity) —
+  было 14/18px. Font weight: 400 (regular) для frame/inside вариантов
+  (native Frame parity), 500 (medium) только для banner — контраст на
+  saturated цветном bg.
+- Persistent `room.meta.containerTitlePosition` (board-default) через
+  endpoint `GET/POST /api/board/container-title-position` (Hono factory
+  + DI, mirrors `/api/board/style-defaults` pattern). Endpoint VALID enum
+  обновлён до 4 значений; legacy `"outside"` теперь отвечает 400 (миграция
+  на стороне frontend нормализатором).
+- **BoardPanel** секция "Заголовок контейнеров" с 4-toggle UI
+  (`Frame / Баннер / Центр / Слева` — подписи укорочены под single-row layout).
+  **SelectionPanel** per-container override "Заголовок этого контейнера"
+  visible только при единичном выборе SchemaContainer.
+- Resolution chain: board-default применяется только при creation;
+  `shape.props.titlePosition` — render-time SSOT (никакого retroactive
+  flip существующих контейнеров при смене board-default).
+- **Frame-scope (extension):** Opt+RightClick на Frame теперь открывает
+  SelectionPanel с секцией "Заголовок контейнеров в этом фрейме".
+  Поведение:
+  - Изменение значения = (a) bulk-apply `props.titlePosition` ВСЕМ existing
+    SchemaContainer-детям этого Frame'а, (b) сохранение memo в
+    `frame.meta.didrawContainerTitlePosition` для inheritance newly-created
+    child SchemaContainer'ов.
+  - Frame сам визуально НЕ меняется — остаётся нативным tldraw Frame.
+  - Creation-time resolution chain (`resolveTitlePositionForNew`):
+    parent Frame meta → board-default → `"inside-center"` fallback.
+  - Frame inheritance применяется через
+    `editor.sideEffects.registerBeforeCreateHandler("shape", ...)` —
+    срабатывает только для local creates (не для WS-applied shapes,
+    которые приходят с готовыми props).
+  - `useSettingsTrigger` теперь recognizes Frame как valid Opt+RightClick
+    target (auto-selects на hit + `kind: "selection"`).
+
+**Fill rendering parity:**
+- `fill: "solid"` теперь рендерится translucent (matches native tldraw
+  rectangle) вместо 100% saturated. Inline replication внутреннего tldraw
+  mapping `DEFAULT_FILL_COLOR_NAMES` (не public-exported) в новом модуле
+  `apps/frontend/src/shapes/schema-container/fill.ts`. До fix'а: container
+  с `fill='solid'` red рендерился как `#e03131` (full saturation), native
+  rect — как `#f4dadb` (pastel translucent overlay). После fix: визуально
+  идентичны для всех 12 цветов × {none, semi, solid}.
+
+**Tests:** +11 frontend (title-position migration helpers), +6 backend
+(/api/board/container-title-position endpoint), +5 frontend (fill resolver),
++3 frontend (resolveBoardTitlePosition smoke), +3 frontend (BoardPanel /
+SelectionPanel section visibility) = **+28 tests** (2095 → 2123 / 0 fail).
+
+**Fixes during Task 13 live verify:**
+- Migration sequence id namespace — tldraw enforces `com.tldraw.shape.<type>/<n>`;
+  custom `com.shemma.*` валится на validateMigrationId при первой загрузке
+  shape'а.
+- Custom tools в overflow popover — `uiOverrides.tools` регистрирует tool
+  в registry, но `DefaultToolbarContent` рендерит fixed list нативных
+  toolbar items; нужны явные `<TldrawUiMenuToolItem toolId="...">` children
+  для `<DefaultToolbar>`.
+
+**Followups (out of scope):**
+- Font selector для SchemaContainer label (отложен; Frame тоже без selector).
+- "Apply title position to all containers" bulk action в BoardPanel.
+- DRW-182 broadcastRoomMeta extension для `containerTitlePosition` (cross-tab sync).
+- Pattern fill mode (4th variant) — сейчас falls back к semi.
+
+Spec: `docs/superpowers/specs/2026-05-27-schema-container-ux-design.md`
+Plan: `docs/superpowers/plans/2026-05-27-schema-container-ux-plan.md`
+
 ### Pin auto-toggle (DRW-185)
 
 - Frontend: после ручного drag/resize shape автоматически проставляются `meta.pinned`

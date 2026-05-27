@@ -25,7 +25,9 @@ export function resolveTarget(input: ResolveInput): Target | null {
     return { kind: "selection", anchor: a };
   }
   if (hit) {
-    if (hit.type === "schema-container") {
+    // DRW-186 frame-scope: Frame trated as "selection" target — popover показывает
+    // SelectionPanel, который single-frame detection делает через editor.getSelectedShapes().
+    if (hit.type === "schema-container" || hit.type === "frame") {
       const a = bbox([hit.id]);
       if (!a) return null;
       return { kind: "selection", anchor: a };
@@ -96,6 +98,12 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & {
   editorRef.current = editor;
   const pinnedRef = useRef(pinned);
   pinnedRef.current = pinned;
+  // DRW-186: targetRef нужен в store.listen — без него закрытый popover
+  // авто-открывался на первой смене selection (pinned=true default).
+  // Гейт: store.listen обновляет target только если popover УЖЕ открыт.
+  // Opt+RightClick — единственный способ открыть.
+  const targetRef = useRef(target);
+  targetRef.current = target;
 
   const setPinned = (next: boolean) => setPinnedState(next);
 
@@ -133,6 +141,11 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & {
 
       const ed = editorRef.current;
       if (!ed) return;
+
+      // DRW-186: каждый Opt+RightClick перезапускает popover в default-pinned
+      // состоянии. Иначе после close() (который sets pinned=false) следующий
+      // Opt+RightClick открывал unpinned.
+      setPinnedState(SETTINGS_POPOVER_DEFAULT_PINNED);
       const screen = { x: e.clientX, y: e.clientY };
       const viewportBounds = ed.getViewportScreenBounds();
       if (
@@ -146,6 +159,17 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & {
 
       const page = ed.screenToPage(screen);
       const hit = ed.getShapeAtPoint(page);
+      // DRW-186 frame-scope: если Opt+RightClick попал по Frame или SchemaContainer'у
+      // и этот shape сейчас НЕ в selection — выставляем его как single-selection.
+      // Иначе SelectionPanel internals (singleContainer / singleFrame) не увидят
+      // shape через editor.getSelectedShapes().
+      if (
+        hit &&
+        (hit.type === "frame" || hit.type === "schema-container") &&
+        !ed.getSelectedShapeIds().includes(hit.id)
+      ) {
+        ed.setSelectedShapes([hit.id]);
+      }
       const selected = ed.getSelectedShapeIds() as unknown as string[];
 
       const result = resolveTarget({
@@ -225,6 +249,9 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & {
 
       if (pinnedRef.current) {
         if (!selectionChanged) return;
+        // Гейт: не открываем popover автоматически. Только tracking
+        // существующего открытого popover'а при смене selection.
+        if (targetRef.current === null) return;
         const selectedShapes = ed.getSelectedShapes().map((s) => ({
           id: s.id as unknown as string,
           type: s.type,

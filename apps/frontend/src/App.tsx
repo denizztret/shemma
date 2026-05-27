@@ -3,10 +3,12 @@ import { type Editor, Tldraw } from "tldraw";
 import { triggerAutoSize } from "./canvas/auto-size";
 import {
   SchemaContainerShapeUtil,
+  SchemaContainerTool,
   registerAutoFlipDirection,
   setContainerDirection,
 } from "./shapes/schema-container";
 import type { SchemaContainerDirection } from "./shapes/schema-container";
+import { SHEMMA_ASSET_URLS, buildUiOverrides } from "./ui-overrides";
 import "tldraw/tldraw.css";
 import "./settings/styles.css";
 import { loadCamera, saveCamera } from "./canvas/camera-persist";
@@ -15,6 +17,7 @@ import { importMermaid, isBoundsContained, unionBoundsOf } from "./canvas/mermai
 import { backfillStoreRecords } from "./canvas/schema-placeholder";
 import { registerStyleDefaultsSync } from "./canvas/style-defaults-sync";
 import { registerPinAutoToggle } from "./canvas/pin-auto-toggle";
+import { registerContainerTitlePositionInherit } from "./canvas/container-title-position-inherit";
 import { makeExportHotkeyHandler } from "./canvas/export-hotkey";
 import { makeForceReLayoutHotkeyHandler, makeTidyHotkeyHandler, tidyLayout } from "./canvas/tidy-layout";
 import { postLayoutSelection } from "./settings/api";
@@ -111,6 +114,8 @@ export function App({
   const styleSyncDisposerRef = useRef<(() => void) | null>(null);
   // DRW-185: disposer for registerPinAutoToggle.
   const pinAutoToggleDisposerRef = useRef<(() => void) | null>(null);
+  // DRW-186 frame-scope: disposer for registerContainerTitlePositionInherit.
+  const titlePosInheritDisposerRef = useRef<(() => void) | null>(null);
   onExportSelection.current = (ids: string[]) => {
     if (ids.length === 0) return;
     setExportOpen(true);
@@ -118,12 +123,18 @@ export function App({
   const tldrawComponents = useMemo(
     () =>
       buildTldrawComponents(space, room, {
-        onMermaidImport: () => setMermaidOpen(true),
         onTidySelection: (ids) => onTidySelection.current?.(ids),
         onExportSelection: (ids) => onExportSelection.current?.(ids),
         onSetContainerDirection: (direction) => onSetContainerDirection.current?.(direction),
       }),
     [space, room],
+  );
+  // DRW-186 Task 6: register tools (schema-container + mermaid-import) via
+  // TLUiOverrides.tools — both land in tldraw native overflow popover.
+  // Stable ref via useMemo (deps: setter is stable from React).
+  const tldrawUiOverrides = useMemo(
+    () => buildUiOverrides({ onMermaidImport: () => setMermaidOpen(true) }),
+    [],
   );
 
   // DRW-150: cleanup auto-flip listener on unmount
@@ -136,6 +147,8 @@ export function App({
       styleSyncDisposerRef.current = null;
       pinAutoToggleDisposerRef.current?.();
       pinAutoToggleDisposerRef.current = null;
+      titlePosInheritDisposerRef.current?.();
+      titlePosInheritDisposerRef.current = null;
     };
   }, []);
 
@@ -707,6 +720,9 @@ export function App({
         // источник правды; IndexedDB persistence создавал split-brain между
         // tab'ами и бэкендом (см. spec §3.x). Refresh → /api/state → loadSnapshot.
         shapeUtils={[SchemaContainerShapeUtil]}
+        tools={[SchemaContainerTool]}
+        overrides={tldrawUiOverrides}
+        assetUrls={SHEMMA_ASSET_URLS}
         onMount={(ed) => {
           setEditor(ed);
           // DRW-150: store disposer to prevent listener accumulation on HMR/room-switch
@@ -719,6 +735,9 @@ export function App({
           // DRW-185: auto-pin on drag/resize end.
           pinAutoToggleDisposerRef.current?.();
           pinAutoToggleDisposerRef.current = registerPinAutoToggle(ed);
+          // DRW-186 frame-scope: inherit titlePosition из parent Frame.meta при создании SchemaContainer'а.
+          titlePosInheritDisposerRef.current?.();
+          titlePosInheritDisposerRef.current = registerContainerTitlePositionInherit(ed);
           // DRW-150: wire direction callback for context-menu (requires live editor).
           // Task #6 (frame-container-direction-layout): explicit "custom" stays as
           // schema-container props write (auto-flip parity); cardinal directions

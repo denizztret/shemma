@@ -23,7 +23,10 @@ declare module "tldraw" {
 }
 
 export type SchemaContainerDirection = "TB" | "LR" | "BT" | "RL" | "custom";
-export type SchemaContainerTitlePosition = "inside" | "outside";
+// SchemaContainerTitlePosition canonically lives в title-position.ts;
+// re-export сохраняем для обратной совместимости старых import-сайтов.
+export type { SchemaContainerTitlePosition } from "./title-position";
+import type { SchemaContainerTitlePosition } from "./title-position";
 
 export interface SchemaContainerProps {
   w: number;
@@ -46,7 +49,12 @@ export const schemaContainerShapeProps: RecordProps<SchemaContainerShape> = {
   h: T.nonZeroNumber,
   name: T.string,
   direction: T.literalEnum("TB", "LR", "BT", "RL", "custom"),
-  titlePosition: T.literalEnum("inside", "outside"),
+  titlePosition: T.literalEnum(
+    "outside-frame",
+    "outside-banner",
+    "inside-center",
+    "inside-left",
+  ),
   color: DefaultColorStyle,
   fill: DefaultFillStyle,
   dash: DefaultDashStyle,
@@ -57,7 +65,7 @@ export const DEFAULT_SCHEMA_CONTAINER_PROPS: SchemaContainerProps = {
   h: 200,
   name: "Container",
   direction: "TB",
-  titlePosition: "inside",
+  titlePosition: "inside-center",
   color: "grey",
   fill: "semi",
   dash: "dashed",

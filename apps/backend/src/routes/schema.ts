@@ -268,7 +268,7 @@ function makeSchemaContainerShape(opts: {
       // but we mark the meta so inferContainerDirections can distinguish "TB because user said so"
       // from "TB as a structural default that inference should override".
       direction: normalizeDirection(opts.direction),
-      titlePosition: "inside",
+      titlePosition: "inside-center",
       color: styleProps.color ?? "grey",
       fill: styleProps.fill ?? "semi",
       dash: styleProps.dash ?? "dashed",
