@@ -154,10 +154,13 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
   }
 
   const size = target.kind === "board" && advanced ? ADVANCED_SIZE : POPOVER_SIZE;
+  // DRW-188: editor.getViewportScreenBounds() returns canvas-area bounds
+  // (excludes chrome toolbar). Popover top-left default = under chrome.
+  const vp = editor.getViewportScreenBounds();
   const anchoredPos = computePopoverPosition({
     anchor: target.anchor,
     popoverSize: size,
-    viewport: { width: window.innerWidth, height: window.innerHeight },
+    viewport: { width: vp.w, height: vp.h, top: vp.y, left: vp.x },
     margin: 16,
   });
   const pos = userPos ?? anchoredPos;
