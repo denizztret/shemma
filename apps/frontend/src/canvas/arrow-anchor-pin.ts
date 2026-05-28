@@ -143,7 +143,7 @@ export function registerArrowAnchorPin(editor: Editor): () => void {
               props: { ...b.props, isExact: true },
             };
           })
-          .filter((u): u is { id: string; type: string; props: object } => u !== null);
+          .filter((u): u is NonNullable<typeof u> => u !== null);
         if (updates.length === 0) return;
         // biome-ignore lint/suspicious/noExplicitAny: tldraw updateBindings accepts partial bindings
         (editor as any).updateBindings(updates);
