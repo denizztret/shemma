@@ -1,4 +1,11 @@
-## Unreleased
+## 0.28.0 — 2026-05-28 — Settings popover + SchemaContainer UX + auto-pin cluster (DRW-171/172/174/178..191)
+
+### Post-186 polish (DRW-187..191)
+
+- **DRW-187/188/189 — SettingsPopover default placement.** Заменили anchor-based positioning на stationary default под tldraw chrome toolbar (`top-left`). DRW-187 пробовал `bottom-right` (отвалилось из-за canvas-area bounds vs window bounds), DRW-188 переехал в `top-left` с offset из `editor.getViewportScreenBounds()`, DRW-189 — top offset через `.tlui-menu-zone` bottom edge (chrome рендерится overlay поверх canvas, `vp.y=0` не учитывал chrome). Manual drag (`userPos`) overrides текущую сессию; после close+reopen возврат к default. 4 + 4 unit tests на `position.ts` (placement, offsets, anchor ignored, viewport clamp, margin).
+- **DRW-189 — Schema-container default `fill: "solid"`.** Раньше новые контейнеры (toolbar tool) и Mermaid-imported subgraph'и получали `fill: "semi"` (почти прозрачный page-contrast). Поменяли default на `"solid"` (pastel-tinted, рендерится translucent после DRW-186 fill parity) для visual parity с Mermaid-style блоками. Две точки правки: `DEFAULT_SCHEMA_CONTAINER_PROPS` + `makeGroupBoundaryShape` (legacy geo+boundary) и `makeSchemaContainerShape` в `apps/backend/src/routes/schema.ts:240` (Mermaid import). Existing контейнеры с `fill="semi"` не мигрируются — user-data preserved.
+- **DRW-190 — Arrow endpoint manual pin.** После ручного drag endpoint'а стрелки backend post-layout `computeAnchors` всё равно redistribute'ил anchor через cardinal-snap → user не мог "запомнить" конкретную точку привязки. Fix: state-machine listener `select.dragging_handle` exit → diff arrow bindings → `isExact: true`. `computeAnchors` уже skip'ает bindings с `isExact=true` (`apps/backend/src/domain/anchors.ts:195`) — standard tldraw "lock to exact point" контракт. Архитектура зеркалит DRW-185 pin-auto-toggle: pure helpers (`shouldPinBinding`, `computeBindingPinUpdates`) + thin `react()`/`getPath()` wiring (`registerArrowAnchorPin`). 8 unit tests на pure helpers, live verified end-to-end.
+- **DRW-191 — PromptDrawer button reposition.** Кнопка `💬 N` переехала с (`left:8, top:30%`) на (`top:4, left:320, zIndex:301`) — сразу после tldraw menu zone (Menu/Page/Undo/Redo/Delete/Copy/More) и перед SharePanel (Gallery/version/room). `zIndex:301` — поверх SharePanel zone (300), иначе перекрывается Gallery. Expanded prompts panel открывается вниз от этой точки.
 
 ### SchemaContainer UX cluster (DRW-186)
 
