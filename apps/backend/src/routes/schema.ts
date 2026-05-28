@@ -270,7 +270,7 @@ function makeSchemaContainerShape(opts: {
       direction: normalizeDirection(opts.direction),
       titlePosition: "inside-center",
       color: styleProps.color ?? "grey",
-      fill: styleProps.fill ?? "semi",
+      fill: styleProps.fill ?? "solid",
       dash: styleProps.dash ?? "dashed",
     },
     meta: {
