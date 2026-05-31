@@ -1,3 +1,20 @@
+## 0.30.0 — 2026-05-31 — Schema AI-insert fixes (container-nested connect, user-triggered layout, smart-insert)
+
+Исправления объектного редактирования v2 schema-фреймов агентом через MCP: связи к узлам внутри контейнеров теперь материализуются, AI-правки больше не перевыравнивают/схлопывают схему, новый узел вставляется в свободное место с авто-расширением фрейма.
+
+### Fixes
+
+- **Связи к узлам внутри контейнеров (subgraph).** `shemma_connect` / `schema-connect` к узлу, лежащему в schema-container, молча терял стрелку: резолвер эндпоинтов (`apply.ts` `findShapeByNodeId`/`extractExistingNodeIds`) искал только прямых детей фрейма. Теперь резолвер обходит всё поддерево фрейма → arrow + bindings создаются для любого вложенного эндпоинта.
+- **AI-правки не перевыравнивают схему (layout — только по пользователю).** Убран автоматический re-layout на каждой инкрементальной AI-вставке: post-apply `runLayout` в `patch_schema` и re-layout в `measured-bounds`. Раньше это репозиционировало ручную раскладку пользователя и **схлопывало фрейм с контейнерами** до размера нового блока. Раскладка теперь запускается только пользователем (`⌘⇧L`) или явным `shemma_layout`. `measured-bounds` по-прежнему применяет измеренные размеры (текст влезает), но узлы не двигает.
+
+### Features
+
+- **Smart-insert размещение.** Новый узел при AI-вставке ставится в свободное место внутри фрейма (`findEmptySlot`); если слот не влезает — фрейм расширяется (`computeExpansion`) и узел кладётся на новый край, **не сдвигая существующие узлы** (DRW-178 helpers подключены к `patch_schema`).
+- **MCP-инструкции: object-first редактирование.** `shemma_get_instructions` (overview) + описание `shemma_patch_schema`: читать живой граф (`shemma_canvas_view`), править объектными вербами, не трогать raw mermaid (вспомогательный производный срез), layout — по запросу.
+
+**Tests:** backend 1108 + MCP 246 зелёные (TDD RED→GREEN). Live-verified на доске (chrome-devtools): связи к вложенным узлам, отсутствие схлопывания фрейма, smart-insert размещение + авто-рост фрейма.
+**Follow-ups (Backlog):** DRW-204 (board-canonical: доска = source of truth, mermaid = производная), + проверочная задача (re-test/дополнительные работы).
+
 ## 0.29.0 — 2026-05-31 — Autolayout rebuild + UX/bugfix batch
 
 Крупный **autolayout-rebuild** (pluggable placement + arrow routing) и **UX/bugfix-батч** (10 задач + polish). Релиз также включает подготовку репозитория к публикации как open-source: MIT license, agent-agnostic документация (README/CLAUDE/AGENTS), анонимная установка для публичного репозитория (`curl … | sh`).
