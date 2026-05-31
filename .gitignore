@@ -32,6 +32,9 @@ docs/.obsidian/
 # Local per-machine permission allowlist (personal, not shared)
 .claude/settings.local.json
 
+# Internal maintainer notes (process/policy, not public)
+CLAUDE.local.md
+
 # Spike / throwaway scripts (local-only, never committed)
 scratch/
 

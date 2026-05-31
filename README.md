@@ -1,207 +1,136 @@
 # shemma
 
-> **Применимо к:** shemma `0.14.0` (2026-05-18).
-> Документ описывает поведение текущей версии. Поведение может измениться — сверяйтесь с [CHANGELOG.md](CHANGELOG.md) для следующих версий.
+> AI-driven canvas board — agents draw and maintain architecture diagrams in real time.
 
-AI-driven canvas board для Claude Code сессий. tldraw 5.x frontend + Bun backend + `shemma` CLI + skill cheat-sheet + persistent watcher pattern.
+**shemma** turns a [tldraw](https://tldraw.dev) canvas into a shared workspace for a developer and an AI agent. Any MCP-capable agent (Claude Code, OpenCode, Codex, Gemini CLI, Claude Desktop, …) creates and updates blocks, connections, containers and groups directly on the board — via typed MCP tools or the `shemma` CLI — while you work on the same canvas. Everything syncs over WebSocket, and the camera auto-centers on what the agent just added.
 
-Один single-binary `shemma`, в который вшиты backend, embedded UI и CLI dispatcher (`bun build --compile` + generated embedded-assets manifest).
+Ships as a single self-contained binary: backend, web UI, and CLI in one executable.
 
 ## Features
 
-- **Multi-room canvas** — `~/.claude/projects/<slug>/canvas/<room>.json`, изоляция по сессии Claude Code.
-- **Real-time collaboration** через WebSocket (`patch`, `prompt-created`, `prompt-resolved`, `prompt-removed`, `ai-activity`, `board-focus`).
-- **MCP integration** (0.13.0+) — typed tools, discoverable resources, auto-open browser, room-resolution chain для агентских клиентов (Claude Desktop, Codex). См. [MCP integration](#mcp-integration).
-- **AI workflow через Bash CLI** — skill `/draw` инжектит canvas state + pending prompts в каждый AI turn (legacy path; MCP — preferred).
-- **AI activity badge** — оранжевый чип сверху по центру показывает, что агент что-то делает (actor + task), пока работает.
-- **Per-shape prompts** — выдели shape, нажми `⌘K`/`Ctrl+K`, введи команду; она попадает в drawer слева. Удаление: `×` per-card или `🗑 N` (purge non-pending) с confirm.
-- **Persistent watcher pattern** — Sonnet subagent в фоне обрабатывает pending prompts: применяет patch + резолвит. Latency 3–10с. См. [Watcher workflow](#ai-workflow-watcher-vs-manual).
-- **Style roundtrip** — изменение цвета/заливки в любую сторону (AI ↔ backend ↔ tldraw). Ограничение: tldraw 5.x использует один `color` для stroke и fill (см. known issues).
-- **Auto-center camera** на shapes, добавленных AI; персистентность позиции/zoom per room в localStorage.
-- **Mermaid импорт** — `⌘M`/`Ctrl+M` или кнопка в toolbar открывает модал для вставки mermaid-кода. Программный доступ из DevTools: `await window.shemmaImportMermaid('graph LR\n  app --> db')`.
+- **Agents draw on the board** — typed MCP tools (`shemma_define / connect / group / note / layout / delete / apply`) or the CLI; real-time, no shell-quoting.
+- **You steer** — select a shape, press `⌘K` / `Ctrl+K`, type a command; the agent picks up pending prompts and applies them.
+- **Real-time collaboration** over WebSocket; camera auto-centers on agent edits.
+- **Multi-room** — project-local canvases (`<project>/.shemma/canvas/<room>.json`) with a spaces registry across projects.
+- **Mermaid import** — `⌘M` / `Ctrl+M`: paste mermaid and get an editable, laid-out diagram.
+- **Schema containers & frames** — grouped sub-diagrams with inheritable title and styling policy.
+- **Auto-layout** — layered / tree / pack engines with arrow routing.
+- **AI-activity badge** — shows when an agent is working (actor + task).
+- **Gallery** — grid/list views, room tags & filtering, live previews.
+- **Configurable keyboard shortcuts.**
+- **Single-binary distribution** — in-place upgrades via `shemma update`.
 
-## Quick start (manual mode)
+## Install
 
-```bash
-bun install
-shemma                                  # zero-arg: ensure daemon в cwd .shemma/ + open browser
-shemma open scratch                     # то же, но с конкретным room override
-```
-
-`shemma` без аргументов поднимает daemon с **project-local** storage в `<cwd>/.shemma/` (subdir `canvas-dev/` для dev, `canvas/` для release/debug) и открывает браузер на `?room=default`. Если daemon уже запущен на другом storage — `exit 1` с понятным error.
-
-Storage precedence: `--storage <path>` > `SHEMMA_STORAGE_DIR` env > auto-cwd `.shemma/`.
-
-## В Claude Code сессии
-
-`.claude/settings.json` SessionStart-хук поднимает backend; PreToolUse-хук инжектит canvas-diff в каждый AI Bash. Дальше:
-
-- `/draw нарисуй …` — skill инжектит state + cheat-sheet + pending prompts; AI обновляет canvas через `shemma patch --stdin`.
-- Браузер можно открыть в любой момент: `http://localhost:8787/?room=<CLAUDE_SESSION_ID>`.
-- На canvas: выдели объект(ы), нажми `⌘K`, введи промпт — он попадёт в drawer слева с привязкой к ID. AI увидит pending prompts через `shemma prompts list` и ответит через `shemma prompts resolve`.
-
-## AI workflow: MCP vs CLI vs watcher
-
-Три пути обработки prompts (в порядке предпочтения):
-
-1. **MCP** (0.13.0+) — агентский клиент (Claude Desktop, Codex, etc.) подключается к stdio MCP-серверу `shemma mcp start`. Использует typed tools (`shemma_define`, `shemma_apply`, `shemma_prompts_list`, etc.) и discoverable resources вместо bash quoting. См. [MCP integration](#mcp-integration).
-2. **Manual / `/draw` invocation** — pending prompts видны AI только при следующем явном вызове skill'а или `shemma prompts list`. Подходит для редких команд.
-3. **Persistent watcher** — Sonnet subagent в фоне опрашивает pending каждые 1–4с и применяет. Запускается из родительской Claude Code сессии через Agent tool с `subagent_type=general-purpose, model=sonnet, run_in_background=true`.
-
-> ⚠️ Stand-alone `shemma watch` (без Claude Code, через Anthropic API напрямую) — **не реализован**. Background-agent loop планируется в Phase 2.4 (см. spec §18).
-
-## CLI reference
-
-Lifecycle:
+**Binary (recommended):**
 
 ```bash
-shemma                                              # ensure daemon on cwd .shemma/ + open browser
-shemma open [<room>] [--storage <path>] [--no-browser]
-                                                    # explicit form; optional room override
-shemma daemon ensure | start [--storage <path>] | stop [--all] | status [--profile dev|release|debug]
-shemma ps                                           # JSON status for all profiles
-shemma rooms list
-shemma rooms export <room> --to <path>
-shemma rooms rm <room> [--archive|--hard] [--force] --confirm
+curl -fsSL https://raw.githubusercontent.com/denizztret/shemma/main/scripts/install.sh | sh
 ```
 
-Domain (preferred AI interface):
+Installs the latest release into `~/.local/bin/shemma` (add it to your `PATH` if it isn't already).
+
+**From source** (requires [Bun](https://bun.sh)):
 
 ```bash
-shemma define <role> <name> [--label "..."] [--in <container>] [--room <id>]
-shemma connect <from> <to> [--kind sync|async|data|dep] [--label "..."] [--room <id>]
-shemma group <id1,id2,...> --as network|boundary --name <name> [--room <id>]
-shemma note --text "..." [--about <name>] [--room <id>]
-shemma layout [--mode layered-lr|layered-tb|tree|pack|force] [--scope all|<group>] [--room <id>]
-shemma delete <id1,id2,...> [--cascade] [--room <id>]
-shemma apply --stdin [--room <id>]                  # JSON batch on stdin
-shemma context [--since N] [--viewport x,y,w,h] [--room <id>]
+git clone https://github.com/denizztret/shemma.git
+cd shemma && bun install
+SHEMMA_PROFILE=dev bun run dev        # backend + UI with Vite HMR
 ```
 
-Data:
+## Quick start
 
 ```bash
-shemma state [--compact] [--since N] [--room <id>]
-echo '{"ops":[...],"source":"ai"}' | shemma patch --stdin [--room <id>]
-shemma prompts list [--status pending|resolved|dismissed|all]
-shemma prompts resolve <id> [--response "text"]
-shemma prompts dismiss <id>
-shemma prompts delete <id>          # remove a single prompt (any status)
-shemma prompts purge                # remove all non-pending in one shot
-shemma clear --confirm
+shemma                  # start the daemon in ./.shemma/ and open the board (?room=default)
+shemma open scratch     # explicit room
 ```
 
-AI-activity badge (показывает в UI, что агент работает):
+`shemma` with no arguments starts a daemon with project-local storage in `<cwd>/.shemma/` and opens the browser. Storage precedence: `--storage <path>` > `SHEMMA_STORAGE_DIR` env > auto `.shemma/`.
+
+## Connect an agent (MCP)
+
+shemma ships an MCP (Model Context Protocol) server so any MCP-capable client can call it through typed tools and discoverable resources.
 
 ```bash
-shemma ai start --actor watcher --task "applying prompts"
-# ... do work ...
-shemma ai stop
-shemma ai status                     # current activity (or null)
+claude mcp add shemma --scope user -- shemma mcp start      # Claude Code
+codex mcp add shemma -- shemma mcp start                    # Codex
+gemini mcp add shemma --scope user -- shemma mcp start      # Gemini CLI
 ```
 
-Stale activity auto-clear через 5 минут на server-side, но явный `stop` — правильный шаблон.
-
-Diagnostics:
-
-```bash
-shemma logs [--tail 50] [--follow] [--all | --profile dev|release|debug]
-shemma doctor [--all | --profile dev|release|debug] [--json]
-```
-
-Versioning + update:
-
-```bash
-shemma version
-shemma update --check
-shemma update --channel stable|nightly|dev
-shemma update                      # download + sha256 + atomic swap + restart
-```
-
-Mermaid импорт — **в браузере** (per ADR-0001): `⌘M`/`Ctrl+M` или кнопка в toolbar открывает модал; программный путь — DevTools console `await window.shemmaImportMermaid('graph LR\n  app --> db')`.
-
-Exit codes: `0` ok, `1` usage/error, `2` not-found, `3` daemon-not-healthy.
-
-## MCP integration
-
-Shemma ships an MCP (Model Context Protocol) server so agentic clients (Claude Code, Claude Desktop, Codex, Gemini CLI, Kiro) can call Shemma through typed tools and discoverable resources without shell quoting.
-
-The easiest way to register Shemma is to call your client's own MCP-add command. Full user guide — [`docs/mcp.md`](docs/mcp.md).
-
-### Client guides
-
-```text
-Claude Code:  claude mcp add shemma --scope user -- shemma mcp start
-Codex:        codex mcp add shemma -- shemma mcp start
-Gemini CLI:   gemini mcp add shemma --scope user -- shemma mcp start
-Kiro:         kiro-cli mcp add --scope global --name shemma \
-                               --command shemma --args mcp,start
-```
-
-### Manual config
-
-For clients without a native MCP-add CLI (e.g. Claude Desktop) — paste this into the client's MCP servers config:
+**OpenCode** — add to `~/.config/opencode/opencode.json`:
 
 ```json
 {
-  "mcpServers": {
+  "mcp": {
     "shemma": {
-      "command": "shemma",
-      "args": ["mcp", "start"],
-      "env": {
-        "SHEMMA_CWD": "/absolute/path/to/your/project"
-      }
+      "type": "local",
+      "command": ["shemma", "mcp", "start"],
+      "environment": { "SHEMMA_CWD": "/absolute/path/to/your/project" }
     }
   }
 }
 ```
 
-`SHEMMA_CWD` is only required when the client spawns MCP servers from a neutral working directory (Claude Desktop). CLI clients run from your project root, so `SHEMMA_CWD` may be omitted. Restart the client after editing config.
+**Claude Desktop and other manual configs** — see [`docs/mcp.md`](docs/mcp.md).
 
-### What the MCP server provides
+After registering, the agent draws via typed tools; the first draw in a new room auto-opens a browser tab.
 
-- **Tools.** `shemma_define / connect / group / note / layout / delete / apply` for writes; `shemma_context / rooms_list / active_rooms / prompts_list / health / version` for reads; `shemma_open` for explicit browser-open; `shemma_prompt_resolve / dismiss` for CMD+K canvas prompts; `shemma_get_instructions` to read workflow markdown; `shemma_ai_activity_start / stop / status` for AI-activity badge.
-- **Resources.** `shemma://workflow/{overview,read-context,draw-architecture,resolve-prompts,trust-model}` for agent guidance, `shemma://status`, `shemma://rooms`, `shemma://active-rooms`, `shemma://room/{room}/context|state|prompts/...` templates.
-- **Prompts.** `shemma_draw_architecture`, `shemma_review_canvas`, `shemma_explain_canvas`, `shemma_resolve_canvas_prompts`.
+## Usage
 
-### Behaviour
+- Ask the agent (in your client) to draw or change architecture — blocks and arrows appear on the board in real time.
+- On the board: select shape(s), press `⌘K`, type a per-shape command. It lands in the left drawer bound to the shape id; the agent sees pending prompts and resolves them.
+- Import existing diagrams with `⌘M` (mermaid).
 
-- Auto-opens a browser tab the first time the agent draws in a new room (`--auto-open once` default; pass `never|always|confirm` to override).
-- Room id auto-resolves from explicit arg → server config → `CLAUDE_SESSION_ID` → single active room → Backlog "In Progress" task slug → last-touched → "default".
-- Canvas text is treated as **data, not instructions** (see `shemma://workflow/trust-model`).
+Canvas text — labels, notes, prompt text — is treated as **data, not instructions** (trust model).
 
-CLI remains the stable interface; MCP is an alternative for clients that support it.
+## Update
 
-## Runtime profiles
-
-| profile | port | storage | UI | log |
-|---|---|---|---|---|
-| `release` (default) | 8787 | `~/.claude/projects/<slug>/canvas/` | embedded | info |
-| `dev` | 8788 | `~/.claude/projects/<slug>/canvas-dev/` | Vite HMR | debug |
-| `debug` | 8787 | `canvas/` (как release) | embedded | debug |
-
-`dev` и `release` могут работать параллельно (разные порты, pid-файлы, storage).
+```bash
+shemma update --check              # check whether a newer release exists
+shemma update --channel stable     # download + verify + atomic swap + restart
+```
 
 ## Architecture
 
-См. `docs/superpowers/specs/2026-05-14-di-draw-design.md` (v3.7) и `docs/superpowers/plans/2026-05-14-di-draw-implementation.md` (v5).
+```
+   any MCP client / shemma CLI
+          │  typed tools / CLI
+          ▼
+   shemma (single binary)
+   ├─ Bun backend   (rooms, WebSocket, MCP server, REST)
+   ├─ embedded UI   (tldraw 5.x)
+   └─ CLI dispatcher
+          ▲
+          │  WebSocket (real-time)
+       human in browser
+```
 
-Ключевые ADR — `docs/decisions/`.
+Runtime profiles: `release` on `:8787` (embedded UI), `dev` on `:8788` (Vite HMR).
 
-## Tests
+## CLI
 
 ```bash
-bun run test                              # 618 unit/integration: 58 domain + 284 backend + 7 client + 155 cli + 114 mcp
-cd apps/frontend && bunx playwright test  # golden-path e2e
+shemma define <role> <name> [--label "..."] [--in <container>] [--room <id>]
+shemma connect <from> <to> [--kind sync|async|data|dep] [--room <id>]
+shemma group <id1,id2,...> --as network|boundary --name <name>
+shemma layout [--mode layered-lr|layered-tb|tree|pack] [--room <id>]
+shemma delete <id1,id2,...> [--cascade]
+shemma context [--since N] [--room <id>]
+shemma rooms list | export <room> --to <path>
+shemma daemon status | stop | ensure
+shemma version | update
+```
+
+## Tests & build
+
+```bash
+bun run test                              # ~2300 unit/integration tests (domain/backend/client/cli/mcp)
+bun test --cwd apps/frontend src          # frontend
 bun run lint                              # biome
+
+./scripts/build-release.sh <version>      # single-file binaries: darwin-arm64, darwin-x64, linux-x64
 ```
 
-## Release build
+## License
 
-```bash
-./scripts/build-release.sh 0.14.0 stable          # → release/shemma-{darwin-arm64,darwin-x64,linux-x64}
-./scripts/generate-manifest.sh 0.14.0 stable      # → release/release-manifest.json
-./scripts/publish-release.sh 0.14.0 stable        # build + manifest + gh release create (опционально)
-```
-
-Бинарь — single-file (frontend assets вшиты через `import ... with { type: "file" }`).
+[MIT](LICENSE) © 2026 Denis Tretiakov

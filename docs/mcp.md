@@ -1,11 +1,10 @@
 # Shemma MCP — user guide
 
-> **Применимо к:** shemma `0.14.0+`.
-> Этот документ описывает поведение MCP-адаптера с точки зрения пользователя. Для архитектурных деталей см. [`docs/superpowers/specs/2026-05-17-di-draw-mcp-adapter-design.md`](superpowers/specs/2026-05-17-di-draw-mcp-adapter-design.md) (Phase 2.3 spec) и [`docs/superpowers/specs/2026-05-18-mcp-install-rewrite-design.md`](superpowers/specs/2026-05-18-mcp-install-rewrite-design.md) (install rewrite).
+> Пользовательский гайд по MCP-адаптеру shemma — установка, конфигурация клиентов, жизненный цикл.
 
 ## Что это
 
-MCP-сервер (Model Context Protocol) для агентских клиентов — **Claude Code**, **Claude Desktop**, **Codex**, **Gemini CLI**, **Kiro**. Вместо того чтобы агент дёргал `bash shemma define ...` со всеми quoting-проблемами, он вызывает **typed tools** (`shemma_define`, `shemma_apply`, `shemma_context`) с валидацией параметров.
+MCP-сервер (Model Context Protocol) для агентских клиентов — **Claude Code**, **OpenCode**, **Codex**, **Gemini CLI**, **Claude Desktop**, **Kiro**. Вместо того чтобы агент дёргал `bash shemma define ...` со всеми quoting-проблемами, он вызывает **typed tools** (`shemma_define`, `shemma_apply`, `shemma_context`) с валидацией параметров.
 
 CLI остаётся стабильным интерфейсом; MCP — альтернатива для клиентов, которые его поддерживают.
 
@@ -29,7 +28,7 @@ gemini mcp add shemma --scope user -- shemma mcp start
 kiro-cli mcp add --scope global --name shemma --command shemma --args mcp,start
 ```
 
-> **Verification status:** Claude Code и Codex проверены локально на CLI `--help` 2026-05-18. Gemini — по [официальной reference](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/cli-reference.md). Kiro — скопировано из Backlog.md README, не verified локально (open). Если в твоём клиенте синтаксис отличается — открой issue / PR.
+> **Verification status:** Claude Code и Codex проверены локально на CLI `--help` 2026-05-18. Gemini — по [официальной reference](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/cli-reference.md). Kiro — скопировано из Backlog.md README, не verified локально (open). OpenCode — схема MCP-секции сверена с `https://opencode.ai/config.json` ($defs.McpLocalConfig) и валидируется на старте (2026-05-28); MCP-add CLI у OpenCode не задокументирован — используем только manual config. Если в твоём клиенте синтаксис отличается — открой issue / PR.
 
 ### Manual config
 
@@ -58,6 +57,29 @@ args = ["mcp", "start"]
 env = { SHEMMA_CWD = "/absolute/path/to/your/project" }
 ```
 
+**OpenCode** (`~/.config/opencode/opencode.json`):
+```json
+{
+  "mcp": {
+    "shemma": {
+      "type": "local",
+      "command": ["shemma", "mcp", "start"],
+      "environment": {
+        "SHEMMA_CWD": "/absolute/path/to/your/project"
+      }
+    }
+  }
+}
+```
+
+> **OpenCode quirks** (отличия от Claude Desktop):
+> - `type: "local"` — обязательное поле (для stdio-сервера; для HTTP было бы `"remote"` + `url`).
+> - `command` — **массив**, объединяющий бинарь и аргументы (нет отдельного `args`).
+> - `environment` (не `env`).
+> - Опциональные поля: `enabled: boolean`, `timeout: ms` (default 5000).
+>
+> Если хотя бы одно поле в неправильной форме — OpenCode на старте выкидывает `Configuration is invalid at ~/.config/opencode/opencode.json ↳ Invalid input mcp.shemma`. Полная схема — `https://opencode.ai/config.json` (`$defs.McpLocalConfig`).
+
 ### `SHEMMA_CWD` explained
 
 `SHEMMA_CWD` — это абсолютный путь к корню твоего проекта (где лежит `backlog/` и `.shemma/`). MCP-сервер использует его для:
@@ -74,7 +96,7 @@ env = { SHEMMA_CWD = "/absolute/path/to/your/project" }
 
 Член команды получает доступ к репо, собирает бинарь локально (`./scripts/build-release.sh` или забирает готовый из shared storage), кладёт `shemma` в PATH (`~/.local/bin/shemma`), затем запускает ту же команду из списка выше — указывая свой путь к проекту в `SHEMMA_CWD` (если нужно). Никакого общего state между членами команды нет; каждый управляет своей установкой.
 
-Публичный distribution channel (npm / brew / curl install) — пока не сделан; решение private/public репо обсуждается отдельно.
+Публичная установка — one-liner: `curl -fsSL https://raw.githubusercontent.com/denizztret/shemma/main/scripts/install.sh | sh` (ставит последний релиз в `~/.local/bin/shemma`).
 
 ## Апдейт
 
@@ -92,7 +114,7 @@ MCP-сервер — это **stdio-процесс, который спавни�
 Внутри `shemma mcp start`:
 1. Резолвит project working directory из `SHEMMA_CWD` env (fallback — `process.cwd()`); вызывает `process.chdir()`.
 2. Создаёт HTTP-клиент к локальному daemon на `:8787`. **Daemon должен быть уже запущен** — MCP-сервер не поднимает daemon автоматически в текущей версии (auto-ensure запланирован как отдельный follow-up; `shemma_health` tool с `ensure: true` возвращает warning о nyet-implemented). Если daemon не запущен — запусти его через `shemma daemon ensure` или просто `shemma open` (последний автоматически ensure'ит daemon).
-3. Регистрирует 20 tools + 14 resources + 4 prompts.
+3. Регистрирует typed tools, resources и prompts (список — в разделе «Что предоставляет MCP»).
 4. Слушает JSON-RPC на stdin, отвечает на stdout (stderr зарезервирован для диагностики).
 
 ## Что предоставляет MCP
@@ -153,6 +175,7 @@ Cascade delete: `shemma_delete` на container с children без `cascade: true
 |--|--|
 | Установить MCP (Claude Code / Codex / Gemini / Kiro) | Запустить однострочник из "Client guides" |
 | Установить MCP (Claude Desktop) | Открыть `claude_desktop_config.json`, вставить snippet из "Manual config" |
+| Установить MCP (OpenCode) | Открыть `~/.config/opencode/opencode.json`, вставить snippet из "Manual config" (`type: "local"` + `command` массивом + `environment`) |
 | Обновить shemma | `shemma update` — обновит только бинарь; конфиг клиента не трогаем |
 | Удалить MCP | `<client> mcp remove shemma` (CLI) или удалить entry в JSON руками |
 | Сменить проект | Изменить `SHEMMA_CWD` env (Claude Desktop) или перезапустить CLI из другой папки |
@@ -161,7 +184,5 @@ Cascade delete: `shemma_delete` на container с children без `cascade: true
 
 ## См. также
 
-- [`README.md`](../README.md) — краткое описание в "MCP integration" секции.
-- [`docs/superpowers/specs/2026-05-17-di-draw-mcp-adapter-design.md`](superpowers/specs/2026-05-17-di-draw-mcp-adapter-design.md) v0.4 — Phase 2.3 spec (tools/resources/prompts).
-- [`docs/superpowers/specs/2026-05-18-mcp-install-rewrite-design.md`](superpowers/specs/2026-05-18-mcp-install-rewrite-design.md) — install rewrite spec.
-- [`CHANGELOG.md`](../CHANGELOG.md) entry `0.14.0` — что изменилось в install flow.
+- [`README.md`](../README.md) — обзор и быстрый старт.
+- [`CHANGELOG.md`](../CHANGELOG.md) — история изменений.
