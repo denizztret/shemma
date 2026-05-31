@@ -289,9 +289,12 @@ export function registerSchemaWriteTools(
     "shemma_patch_schema",
     {
       description:
-        "Apply incremental SchemaAction[] to an existing schema-frame. " +
+        "Apply incremental SchemaAction[] to an existing schema-frame — this is the object-first " +
+        "edit path for v2 schemas (the board is the source of truth; do not hand-edit raw Mermaid). " +
         "**Always call shemma_canvas_view first** to get frameId and current nodeIds — " +
         "referencing unknown nodeIds returns `unknown-node` errors. " +
+        "schema-connect endpoints may live inside containers (subgraphs); they resolve fine. " +
+        "After structural changes (added nodes/edges) run shemma_layout so the frame re-fits. " +
         "If frameId is omitted and the room has exactly 1 schema-frame, it is auto-picked. " +
         "If ≥2 schema-frames exist, frameId is required (ambiguous-schema-frame error otherwise). " +
         "Supported action kinds: schema-define, schema-connect, schema-rename, schema-set-role, " +

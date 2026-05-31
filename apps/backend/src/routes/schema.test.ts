@@ -767,7 +767,7 @@ describe("POST /api/schema/:frameId/measured-bounds (DRW-174)", () => {
     return { frameId, childShapeId: child.id };
   }
 
-  test("apply measured bounds → 200, child.h updated, frame.h grew via re-layout", async () => {
+  test("apply measured bounds → 200, child.h updated, frame NOT auto-resized (layout stays user-triggered)", async () => {
     const { app, rooms } = makeApp({ inMemory: true });
     const { frameId, childShapeId } = await setupFrameWithChild(app, rooms);
 
@@ -776,6 +776,8 @@ describe("POST /api/schema/:frameId/measured-bounds (DRW-174)", () => {
     const childBefore = r1.store.store[childShapeId];
     const childOldH = (childBefore?.props as { h?: number } | undefined)?.h ?? 0;
     const frameOldH = (frameBefore?.props as { h?: number } | undefined)?.h ?? 0;
+    const frameOldX = (frameBefore as { x?: number } | undefined)?.x ?? 0;
+    const frameOldY = (frameBefore as { y?: number } | undefined)?.y ?? 0;
 
     const measuredH = childOldH + 60; // simulate autosize growing child by 60px
 
@@ -794,11 +796,17 @@ describe("POST /api/schema/:frameId/measured-bounds (DRW-174)", () => {
 
     const r2 = await rooms.get("bounds-room");
     const childAfter = r2.store.store[childShapeId];
+    // Child is resized to the measured height...
     expect((childAfter?.props as { h?: number }).h).toBeCloseTo(measuredH, 1);
 
+    // ...but the frame is NOT repositioned/resized: measured-bounds no longer
+    // re-runs layout (that disturbed the user's arrangement and could collapse
+    // the frame). Frame-fit-to-text is now part of user-triggered layout.
     const frameAfter = r2.store.store[frameId];
     const frameNewH = (frameAfter?.props as { h?: number } | undefined)?.h ?? 0;
-    expect(frameNewH).toBeGreaterThan(frameOldH);
+    expect(frameNewH).toBe(frameOldH);
+    expect((frameAfter as { x?: number } | undefined)?.x ?? 0).toBe(frameOldX);
+    expect((frameAfter as { y?: number } | undefined)?.y ?? 0).toBe(frameOldY);
   });
 
   test("shape not descendant of frame → skipped, applied=0", async () => {

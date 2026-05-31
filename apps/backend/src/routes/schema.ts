@@ -1033,11 +1033,15 @@ export function schemaRoutes(bus: StoreChangeBus) {
         destructiveScore,
       } = result;
 
-      // Update frame meta in the batch.
+      // Update frame meta in the batch. Smart placement (apply) may have grown
+      // the frame (props.w/h) to make room for a new node — start from that
+      // grown frame so the meta merge preserves the expansion instead of
+      // resetting props back to the original bounds.
+      const grownFrame = (batch.updated[frameId]?.[1] as TLRecord | undefined) ?? frame;
       const updatedFrame: TLRecord = {
-        ...frame,
+        ...grownFrame,
         meta: {
-          ...(frame.meta ?? {}),
+          ...(grownFrame.meta ?? {}),
           mermaidSource: newRaw,
           didrawOverlays: newOverlays,
         },
@@ -1068,47 +1072,15 @@ export function schemaRoutes(bus: StoreChangeBus) {
         });
       }
 
-      // Run layout post-apply (spec §Write semantics step 9).
-      // Re-use prior frame's layout mode from meta if available, else default layered-lr.
-      try {
-        const frameMeta = (frame.meta ?? {}) as Record<string, unknown>;
-        const layoutMode = (typeof frameMeta.layoutMode === "string"
-          ? frameMeta.layoutMode
-          : "layered-lr") as import("@shemma/domain").LayoutMode;
-        const affectedIds = new Set<string>(Object.keys(frameBatch.added).filter((k) => {
-          const r = room.store.store[k];
-          return r?.typeName === "shape";
-        }));
-        if (affectedIds.size > 0) {
-          const lr = await runLayout(
-            room.store,
-            { mode: layoutMode, scope: "affected", affectedIds },
-            room.didrawIndex,
-            (room.meta?.layoutParams as Partial<LayoutParams> | undefined) ?? undefined,
-          );
-          if (!isEmptyBatch(lr.batch)) {
-            room.store = applyStoreChanges(room.store, lr.batch);
-            room.didrawIndex = rebuildDidrawIndex(room.store);
-            room.version += 1;
-            pushOpLog(
-              room,
-              { ops: lr.batch, source: "ai", version: room.version, at: Date.now() },
-              config.opLogMaxSize,
-            );
-            room.dirty = true;
-            scheduleSave(id, room);
-            bus.publish(spaceId, id, {
-              changes: lr.batch,
-              source: "ai",
-              version: room.version,
-            });
-          }
-        }
-      } catch {
-        // Layout failure is non-fatal; shapes remain at their computed positions.
-      }
+      // NB: no positional re-layout post-apply. Incremental AI edits must NOT
+      // reposition the user's arrangement — re-running layout (even scope:affected)
+      // recomputed/collapsed the frame bounds on insert. New shapes keep their
+      // apply-computed position; layout stays user-triggered (Cmd+Shift+L /
+      // explicit shemma_layout). See routes/schema.ts measured-bounds for the
+      // matching change.
 
-      // DRW-172: post-layout anchor distribution.
+      // DRW-172: anchor distribution — re-attaches arrows to current geometry,
+      // does not move nodes.
       runAndBroadcastAnchors(room, bus, spaceId, id, scheduleSave);
 
       const resp: SchemaPatchResponse = {
@@ -1420,43 +1392,15 @@ export function schemaRoutes(bus: StoreChangeBus) {
         originClientId: body.clientOpId,
       });
 
-      // Re-run layout: frame-expand inside runLayout will discover children.
-      // Layout mode из frame.meta.layoutMode (DRW-160 wrote it for v2 frames)
-      // или default "layered-tb" (наиболее распространённое для mermaid `graph TB`).
-      const frameMeta = (frame.meta ?? {}) as Record<string, unknown>;
-      const layoutMode = (typeof frameMeta.layoutMode === "string"
-        ? frameMeta.layoutMode
-        : "layered-tb") as import("@shemma/domain").LayoutMode;
+      // NB: no positional re-layout here. `measureBatch` above only resizes the
+      // measured shapes (text-fit). Re-running layout would reposition the user's
+      // arrangement on every text measurement — and on frames with containers it
+      // collapsed the frame to the newly-measured shape. Layout stays
+      // user-triggered (Cmd+Shift+L / explicit shemma_layout); frame-fit-to-text
+      // on resize is therefore deferred to that explicit layout.
 
-      try {
-        const lr = await runLayout(
-          room.store,
-          { mode: layoutMode, scope: "affected", affectedIds: new Set([frameId]) },
-          room.didrawIndex,
-          (room.meta?.layoutParams as Partial<LayoutParams> | undefined) ?? undefined,
-        );
-        if (!isEmptyBatch(lr.batch)) {
-          room.store = applyStoreChanges(room.store, lr.batch);
-          room.didrawIndex = rebuildDidrawIndex(room.store);
-          room.version += 1;
-          pushOpLog(
-            room,
-            { ops: lr.batch, source: "ai", version: room.version, at: Date.now() },
-            config.opLogMaxSize,
-          );
-          room.dirty = true;
-          scheduleSave(id, room);
-          bus.publish(spaceId, id, {
-            changes: lr.batch,
-            source: "ai",
-            version: room.version,
-          });
-        }
-      } catch {
-        // Layout failure non-fatal; measure batch is already persisted.
-      }
-
-      // DRW-172: post-layout anchor distribution.
+      // DRW-172: anchor distribution — re-attaches arrows to current geometry,
+      // does not move nodes.
       runAndBroadcastAnchors(room, bus, spaceId, id, scheduleSave);
 
       return c.json({

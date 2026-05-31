@@ -40,6 +40,7 @@ import type { RoomState } from "../../types";
 import { parseMermaidFlowchart } from "./mermaid-parser";
 import type { ParseResult, MermaidDirection } from "./mermaid-parser";
 import { generateMermaid } from "./mermaid-generator";
+import { computeExpansion, findEmptySlot, type Rect } from "../empty-space";
 import { diffSchemas } from "./diff";
 import { generateNodeIdServer } from "./identity";
 import { assignBatchIndices } from "./index-key";
@@ -539,7 +540,35 @@ function applyActionsToState(
   return result;
 }
 
-// ---- Extract NodeIds from frame children ----
+// ---- Extract NodeIds from frame subtree ----
+
+/** Max ancestry hops when walking the parentId chain (cycle guard). */
+const MAX_FRAME_ANCESTRY_HOPS = 64;
+
+/**
+ * True if `shape` is a direct OR indirect child of `frameId`.
+ *
+ * Nodes nested inside schema-containers (mermaid subgraphs) have
+ * `parentId === <container id>`, not the frame — yet they ARE part of the
+ * frame's schema. We must resolve them too, otherwise edges touching a
+ * container-nested endpoint silently fail to materialize an arrow.
+ */
+function isWithinFrameSubtree(
+  shape: TLRecord,
+  frameId: string,
+  store: Record<string, TLRecord | undefined>,
+): boolean {
+  let currentParent: string | undefined = shape.parentId;
+  let hops = 0;
+  while (currentParent && hops < MAX_FRAME_ANCESTRY_HOPS) {
+    if (currentParent === frameId) return true;
+    const parent = store[currentParent];
+    if (!parent) return false;
+    currentParent = parent.parentId;
+    hops++;
+  }
+  return false;
+}
 
 function extractExistingNodeIds(
   frame: TLRecord,
@@ -549,7 +578,7 @@ function extractExistingNodeIds(
   for (const id in store) {
     const r = store[id];
     if (!r || r.typeName !== "shape") continue;
-    if (r.parentId !== frame.id) continue;
+    if (!isWithinFrameSubtree(r, frame.id, store)) continue;
     const meta = (r.meta ?? {}) as Record<string, unknown>;
     if (typeof meta.didrawId === "string") {
       ids.add(meta.didrawId);
@@ -558,7 +587,7 @@ function extractExistingNodeIds(
   return ids;
 }
 
-/** Find the tldraw shape id for a given nodeId within frame children. */
+/** Find the tldraw shape id for a given nodeId within the frame subtree. */
 function findShapeByNodeId(
   nodeId: NodeId,
   frame: TLRecord,
@@ -567,7 +596,7 @@ function findShapeByNodeId(
   for (const id in store) {
     const r = store[id];
     if (!r || r.typeName !== "shape") continue;
-    if (r.parentId !== frame.id) continue;
+    if (!isWithinFrameSubtree(r, frame.id, store)) continue;
     const meta = (r.meta ?? {}) as Record<string, unknown>;
     if (meta.didrawId === nodeId) return id;
   }
@@ -928,6 +957,78 @@ export function applySchemaActions(opts: {
         if (binding) {
           batch.removed[bid] = binding;
         }
+      }
+    }
+  }
+
+  // Smart placement (DRW-178 wiring): position newly-added nodes in free space
+  // inside the frame WITHOUT repositioning existing children. If no slot fits,
+  // grow the frame and place the node at the new (positive) edge. New-node-only,
+  // so the user's arrangement is preserved — incremental inserts never trigger a
+  // full re-layout.
+  {
+    const PADDING = 24;
+    const fProps = (frame.props ?? {}) as { w?: number; h?: number };
+    let frameW = typeof fProps.w === "number" ? fProps.w : 0;
+    let frameH = typeof fProps.h === "number" ? fProps.h : 0;
+
+    if (frameW > 0 && frameH > 0) {
+      // Occupants: existing direct children of the frame (non-arrow, with bounds).
+      const occupants: Rect[] = [];
+      for (const sid in store) {
+        const s = store[sid];
+        if (!s || s.typeName !== "shape") continue;
+        if (s.parentId !== frame.id) continue;
+        if (s.type === "arrow") continue;
+        const p = (s.props ?? {}) as { w?: number; h?: number };
+        const w = typeof p.w === "number" ? p.w : 0;
+        const h = typeof p.h === "number" ? p.h : 0;
+        if (w <= 0 || h <= 0) continue;
+        occupants.push({
+          x: typeof s.x === "number" ? s.x : 0,
+          y: typeof s.y === "number" ? s.y : 0,
+          w,
+          h,
+        });
+      }
+
+      let frameGrew = false;
+      for (const addedNode of diff.added) {
+        // A user-pinned overlay position always wins — never relocate it.
+        if (oldOverlays[addedNode.nodeId]?.position) continue;
+        const sid = resolveShapeId(addedNode.nodeId);
+        if (!sid) continue;
+        const shape = batch.added[sid];
+        if (!shape || shape.parentId !== frame.id) continue;
+        const sp = (shape.props ?? {}) as { w?: number; h?: number };
+        const size = {
+          w: typeof sp.w === "number" ? sp.w : 220,
+          h: typeof sp.h === "number" ? sp.h : 80,
+        };
+
+        const slot = findEmptySlot({ w: frameW, h: frameH }, occupants, size, PADDING);
+        let pos: { x: number; y: number };
+        if (slot) {
+          pos = slot;
+        } else {
+          // Grow along the shorter side to keep the frame balanced; TB/LR both
+          // place the node at a positive edge, so existing children don't move.
+          const dir = frameW >= frameH ? "TB" : "LR";
+          const exp = computeExpansion({ w: frameW, h: frameH }, size, PADDING, dir);
+          pos = exp.position;
+          frameW += exp.dw;
+          frameH += exp.dh;
+          frameGrew = true;
+        }
+        batch.added[sid] = { ...shape, x: pos.x, y: pos.y };
+        occupants.push({ x: pos.x, y: pos.y, w: size.w, h: size.h });
+      }
+
+      if (frameGrew) {
+        batch.updated[frame.id] = [
+          frame,
+          { ...frame, props: { ...(frame.props ?? {}), w: frameW, h: frameH } },
+        ];
       }
     }
   }
