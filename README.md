@@ -64,12 +64,13 @@ gemini mcp add shemma --scope user -- shemma mcp start      # Gemini CLI
   "mcp": {
     "shemma": {
       "type": "local",
-      "command": ["shemma", "mcp", "start"],
-      "environment": { "SHEMMA_CWD": "/absolute/path/to/your/project" }
+      "command": ["shemma", "mcp", "start"]
     }
   }
 }
 ```
+
+`SHEMMA_CWD` is optional. CLI clients run from your current directory, so shemma uses it automatically (and falls back to a `default` space when you're not inside a project). Add `"environment": { "SHEMMA_CWD": "/absolute/path/to/project" }` only for GUI clients that spawn from a neutral directory (e.g. Claude Desktop) or to pin a specific project.
 
 **Claude Desktop and other manual configs** — see [`docs/mcp.md`](docs/mcp.md).
 
