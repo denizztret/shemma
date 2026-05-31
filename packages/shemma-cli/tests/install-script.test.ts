@@ -66,6 +66,36 @@ describe("install.sh argument parsing", () => {
 });
 
 describe("install.sh remote mode", () => {
+  test("--version latest surfaces a clean error without tools/network", async () => {
+    const prefix = mkdtempSync(join(tmpdir(), "shemma-install-latest-"));
+    try {
+      const r = await runScript(
+        [
+          "--prefix",
+          prefix,
+          "--version",
+          "latest",
+          "--repo",
+          "denizztret/this-repo-does-not-exist-xyz",
+        ],
+        { SHEMMA_GITHUB_TOKEN: "" },
+      );
+      expect(r.status).not.toBe(0);
+      const out = r.stderr + r.stdout;
+      const ok =
+        out.includes("could not resolve the latest") ||
+        out.includes("need curl + jq") ||
+        out.includes("jq is required") ||
+        out.includes("curl is required");
+      if (!ok) {
+        console.error("unexpected install.sh latest-mode output:\n" + out);
+      }
+      expect(ok).toBe(true);
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+    }
+  });
+
   test("--version without gh/PAT surfaces helpful error", async () => {
     const prefix = mkdtempSync(join(tmpdir(), "shemma-install-remote-"));
     try {
