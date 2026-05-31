@@ -1,6 +1,6 @@
-## [Unreleased] — ветка `feature/autolayout-rebuild`
+## 0.29.0 — 2026-05-31 — Autolayout rebuild + UX/bugfix batch
 
-> Ещё НЕ смержено в `main` и НЕ зарелизено. Ветка несёт крупный **autolayout-rebuild** (pluggable placement + arrow routing; детали в memory `next-session-autolayout-rebuild`) и **UX/bugfix-батч** ниже (10 задач + polish, приняты пользователем 2026-05-31). Версия следующего релиза будет назначена при merge.
+Крупный **autolayout-rebuild** (pluggable placement + arrow routing) и **UX/bugfix-батч** (10 задач + polish). Релиз также включает подготовку репозитория к публикации как open-source: MIT license, agent-agnostic документация (README/CLAUDE/AGENTS), анонимная установка для публичного репозитория (`curl … | sh`).
 
 ### UX/bugfix batch (10 задач + polish)
 
