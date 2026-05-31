@@ -90,6 +90,8 @@ tldraw 5.x frontend + Bun backend (singleton daemon на `:8787` release+debug, 
 
 **Phase 2.2 SHIPPED как 0.3.0.** Новые фазы пока НЕ запускаем. Текущий режим — интенсивное тестирование + bug-fix из backlog.
 
+**Активная ветка (2026-05-31): `feature/autolayout-rebuild`** — НЕ смержена, НЕ зарелизена. Несёт два пласта: (1) **autolayout-rebuild** (pluggable placement + arrow routing; детали в auto-memory `next-session-autolayout-rebuild`) и (2) **UX/bugfix-батч** (10 задач + polish: room tags, gallery grid/list, configurable shortcuts, copy-link `⇧⌘S`, reveal-room-in-Finder, gallery auto-refresh, styled-subgraph fill `solid`, layout-engine UI cleanup — приняты пользователем; детали в `next-session-ux-batch` + `CHANGELOG.md` § Unreleased). Merge/release — по явному сигналу пользователя; версия назначается при merge. Follow-ups: DRW-195/196/197.
+
 **Где живут задачи:**
 - **Backlog.md** (primary, с этого момента) — `backlog/tasks/` (gitignored, local-only), task prefix `DRW`. CLI + MCP-сервер `backlog`.
 - **`docs/backlog.md`** (legacy) — справочник по немигрированным D2/D4-D11/B-T*/B-F*/P-2.x задачам. Новые задачи туда НЕ добавлять — только в Backlog.md.

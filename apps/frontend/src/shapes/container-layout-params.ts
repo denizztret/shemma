@@ -1,5 +1,5 @@
-import type { Editor, TLShapeId } from "tldraw";
 import type { ContainerLayoutOverride } from "@shemma/domain";
+import type { Editor, TLShapeId } from "tldraw";
 
 /**
  * Task #7 (frame-container-direction-layout): per-container layout params
@@ -27,8 +27,13 @@ export async function setContainerLayoutParams(
   editor: Editor,
   ids: string[],
   partial: ContainerLayoutOverride,
+  opts?: { triggerLayout?: boolean },
 ): Promise<void> {
   if (ids.length === 0) return;
+  // Autolayout rebuild: `triggerLayout: false` lets the caller own layout via
+  // frontend elk without the legacy backend layout-selection POST racing it.
+  // The meta write still persists to the backend store via WS sync.
+  const triggerLayout = opts?.triggerLayout !== false;
 
   // tldraw convention: meta.<key> = undefined deletes the key locally.
   const metaValue: ContainerLayoutOverride | undefined =
@@ -60,6 +65,7 @@ export async function setContainerLayoutParams(
   });
 
   if (accepted.length === 0) return;
+  if (!triggerLayout) return;
 
   await triggerLayoutSelection(accepted, override);
 }

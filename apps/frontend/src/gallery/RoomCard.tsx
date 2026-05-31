@@ -1,16 +1,9 @@
 import { useRef, useState } from "react";
 import { tokens } from "../design-tokens";
-import {
-  LEGACY_SPACE_ID,
-  archiveRoom,
-  deleteRoom,
-  duplicateRoomAuto,
-  exportRoom,
-  renameRoom,
-  restoreRoom,
-} from "../transport/api";
-import { pushError } from "../state/error-bus";
+import type { RoomTag } from "../transport/api";
 import { humanize } from "./humanize";
+import { RoomTagsRow } from "./RoomTagsRow";
+import { useRoomActions } from "./use-room-actions";
 
 const inlineInputStyle: React.CSSProperties = {
   fontFamily: tokens.font.mono,
@@ -28,7 +21,7 @@ const inlineInputStyle: React.CSSProperties = {
   width: "100%",
 };
 
-const actionBtnStyle: React.CSSProperties = {
+export const actionBtnStyle: React.CSSProperties = {
   fontFamily: tokens.font.sans,
   fontSize: tokens.font.sm,
   color: tokens.color.textMuted,
@@ -50,11 +43,7 @@ export type RoomCardData = {
   projectDir?: string;
   projectName?: string;
   archived?: boolean;
-};
-
-type UndoState = {
-  roomId: string;
-  timer: ReturnType<typeof setTimeout>;
+  tags?: RoomTag[];
 };
 
 export function RoomCard({
@@ -65,6 +54,8 @@ export function RoomCard({
   onRestored,
   onDeleted,
   onRefresh,
+  onTagClick,
+  onTagsChanged,
 }: {
   space: string;
   room: RoomCardData;
@@ -73,136 +64,38 @@ export function RoomCard({
   onRestored: (id: string) => void;
   onDeleted: (id: string) => void;
   onRefresh?: () => void;
+  onTagClick?: (tag: RoomTag) => void;
+  onTagsChanged?: (roomId: string, tags: RoomTag[]) => void;
 }) {
-  const [undoState, setUndoState] = useState<UndoState | null>(null);
-  const [renameEditing, setRenameEditing] = useState(false);
-  const [renameValue, setRenameValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const {
+    undoState,
+    renameEditing,
+    renameValue,
+    setRenameValue,
+    openRoom,
+    startRename,
+    cancelRename,
+    handleTitleKeyDown,
+    handleDuplicate,
+    handleArchive,
+    handleUndo,
+    handleRestore,
+    handleDeletePermanently,
+    handleExport,
+  } = useRoomActions({
+    space,
+    room,
+    onArchived,
+    onRestored,
+    onDeleted,
+    onRefresh,
+  });
 
   const isLinked =
     room.linkedSession !== undefined &&
     sessionId !== null &&
     room.linkedSession === sessionId;
-
-  function openRoom() {
-    const href =
-      space === LEGACY_SPACE_ID
-        ? `/?room=${encodeURIComponent(room.id)}`
-        : `/?space=${encodeURIComponent(space)}&room=${encodeURIComponent(room.id)}`;
-    location.assign(href);
-  }
-
-  function startRename() {
-    setRenameValue(room.id);
-    setRenameEditing(true);
-    // Focus happens via the input's autoFocus
-  }
-
-  function cancelRename() {
-    setRenameEditing(false);
-    setRenameValue("");
-  }
-
-  async function submitRename() {
-    const to = renameValue.trim();
-    if (!to || to === room.id) {
-      cancelRename();
-      return;
-    }
-    const res = await renameRoom(space, room.id, to);
-    if (!res.ok) {
-      pushError(
-        res.error === "room-exists"
-          ? `Cannot rename: room "${res.existingId}" already exists`
-          : `Rename failed: ${res.error ?? "unknown error"}`,
-      );
-      return;
-    }
-    setRenameEditing(false);
-    setRenameValue("");
-    onRefresh?.();
-  }
-
-  function handleTitleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter") void submitRename();
-    else if (e.key === "Escape") cancelRename();
-  }
-
-  async function handleDuplicate() {
-    const res = await duplicateRoomAuto(space, room.id);
-    if (!res.ok) {
-      pushError(`Duplicate failed: ${res.error ?? "unknown error"}`);
-      return;
-    }
-    onRefresh?.();
-  }
-
-  async function handleArchive() {
-    onArchived(room.id);
-    try {
-      await archiveRoom(space, room.id);
-    } catch (e) {
-      onRestored(room.id);
-      pushError(`Failed to archive "${room.id}": ${(e as Error).message}`);
-      return;
-    }
-    const timer = setTimeout(() => {
-      setUndoState(null);
-    }, 5000);
-    setUndoState({ roomId: room.id, timer });
-  }
-
-  async function handleUndo() {
-    if (!undoState) return;
-    clearTimeout(undoState.timer);
-    setUndoState(null);
-    try {
-      await restoreRoom(space, room.id);
-      onRestored(room.id);
-    } catch (e) {
-      pushError(`Failed to undo archive "${room.id}": ${(e as Error).message}`);
-    }
-  }
-
-  async function handleRestore() {
-    try {
-      await restoreRoom(space, room.id);
-      onRestored(room.id);
-    } catch (e) {
-      pushError(`Failed to restore "${room.id}": ${(e as Error).message}`);
-    }
-  }
-
-  async function handleDeletePermanently() {
-    if (
-      !window.confirm(
-        `Permanently delete "${room.id}"? This cannot be undone.`,
-      )
-    )
-      return;
-    onDeleted(room.id);
-    try {
-      await deleteRoom(space, room.id, { mode: "hard", force: true });
-    } catch (e) {
-      onRestored(room.id);
-      pushError(
-        `Failed to permanently delete "${room.id}": ${(e as Error).message}`,
-      );
-    }
-  }
-
-  async function handleExport() {
-    const dest = window.prompt(
-      `Export "${room.id}" to file path:`,
-      `/tmp/${room.id}.json`,
-    );
-    if (!dest) return;
-    try {
-      await exportRoom(space, room.id, dest);
-    } catch (e) {
-      pushError(`Export failed: ${(e as Error).message}`);
-    }
-  }
 
   const thumbnailSrc = `/api/rooms/${encodeURIComponent(room.id)}/thumbnail?space=${encodeURIComponent(space)}&v=${room.version}${room.archived ? "&archived=true" : ""}`;
 
@@ -256,6 +149,7 @@ export function RoomCard({
           <button
             type="button"
             onClick={openRoom}
+            title="Open room"
             style={{
               fontFamily: tokens.font.mono,
               fontSize: tokens.font.base,
@@ -270,10 +164,14 @@ export function RoomCard({
               textAlign: "left",
             }}
             onMouseEnter={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.background = "rgba(0,0,0,0.06)";
+              const el = e.currentTarget as HTMLButtonElement;
+              el.style.background = "rgba(0,0,0,0.06)";
+              el.style.color = tokens.color.accent;
             }}
             onMouseLeave={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+              const el = e.currentTarget as HTMLButtonElement;
+              el.style.background = "transparent";
+              el.style.color = tokens.color.text;
             }}
           >
             {room.id}
@@ -333,6 +231,16 @@ export function RoomCard({
         <span title={room.lastTouched}>{humanize(room.lastTouched)}</span>
         {room.projectName && <span>{room.projectName}</span>}
       </div>
+
+      {/* Tags */}
+      <RoomTagsRow
+        space={space}
+        roomId={room.id}
+        tags={room.tags ?? []}
+        archived={room.archived}
+        onTagClick={onTagClick}
+        onTagsChanged={onTagsChanged}
+      />
 
       {/* Undo toast */}
       {undoState && (

@@ -449,6 +449,23 @@ describe("POST /api/rooms/:id/export", () => {
   });
 });
 
+describe("POST /api/rooms/:id/reveal", () => {
+  // Only the 404 path is covered — the success path spawns `open -R` (pops
+  // Finder) and is non-deterministic in CI, so we deliberately don't exercise it.
+  test("404 with stable error token when room file does not exist", async () => {
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/no-such-room/reveal", {
+        method: "POST",
+      }),
+    );
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("room file not found");
+  });
+});
+
 describe("POST /api/rooms/import", () => {
   async function exportRoom(srcId: string, target: string) {
     const { app } = makeApp({ storageDir: dir });
@@ -1072,5 +1089,161 @@ describe("POST /api/rooms/:id/duplicate-auto", () => {
       new Request("http://localhost/api/rooms/nonexistent/duplicate-auto", { method: "POST" }),
     );
     expect(res.status).toBe(404);
+  });
+});
+
+describe("PUT /api/rooms/:id/tags", () => {
+  async function putTags(app: { fetch: (r: Request) => Promise<Response> }, id: string, tags: unknown) {
+    return app.fetch(
+      new Request(`http://localhost/api/rooms/${id}/tags`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tags }),
+      }),
+    );
+  }
+
+  test("persists tags + GET /api/rooms returns them", async () => {
+    seedRoom("tagged", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    const putRes = await putTags(app, "tagged", [
+      { name: "infra", color: "blue" },
+      { name: "wip", color: "orange" },
+    ]);
+    expect(putRes.status).toBe(200);
+    const putBody = (await putRes.json()) as {
+      ok: boolean;
+      tags: Array<{ name: string; color: string }>;
+    };
+    expect(putBody.ok).toBe(true);
+    expect(putBody.tags).toEqual([
+      { name: "infra", color: "blue" },
+      { name: "wip", color: "orange" },
+    ]);
+
+    // Tags survive to disk → GET /api/rooms exposes them.
+    const listRes = await app.fetch(new Request("http://localhost/api/rooms"));
+    const listBody = (await listRes.json()) as {
+      rooms: Array<{ id: string; tags?: Array<{ name: string; color: string }> }>;
+    };
+    const room = listBody.rooms.find((r) => r.id === "tagged");
+    expect(room?.tags).toEqual([
+      { name: "infra", color: "blue" },
+      { name: "wip", color: "orange" },
+    ]);
+  });
+
+  test("set is idempotent — second PUT replaces the whole array", async () => {
+    seedRoom("retag", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    await putTags(app, "retag", [{ name: "old", color: "gray" }]);
+    const res = await putTags(app, "retag", [{ name: "fresh", color: "green" }]);
+    expect(res.status).toBe(200);
+
+    const listRes = await app.fetch(new Request("http://localhost/api/rooms"));
+    const listBody = (await listRes.json()) as {
+      rooms: Array<{ id: string; tags?: Array<{ name: string; color: string }> }>;
+    };
+    const room = listBody.rooms.find((r) => r.id === "retag");
+    expect(room?.tags).toEqual([{ name: "fresh", color: "green" }]);
+  });
+
+  test("empty array clears tags (meta.tags removed)", async () => {
+    seedRoom("cleared", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    await putTags(app, "cleared", [{ name: "tmp", color: "red" }]);
+    const res = await putTags(app, "cleared", []);
+    expect(res.status).toBe(200);
+
+    const listRes = await app.fetch(new Request("http://localhost/api/rooms"));
+    const listBody = (await listRes.json()) as {
+      rooms: Array<{ id: string; tags?: unknown }>;
+    };
+    const room = listBody.rooms.find((r) => r.id === "cleared");
+    expect(room?.tags).toBeUndefined();
+  });
+
+  test("dedupes tags by name (case-insensitive, first wins)", async () => {
+    seedRoom("dedupe", () => {});
+    const { app } = makeApp({ storageDir: dir });
+
+    const res = await putTags(app, "dedupe", [
+      { name: "Infra", color: "blue" },
+      { name: "infra", color: "red" },
+    ]);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { tags: Array<{ name: string; color: string }> };
+    expect(body.tags).toEqual([{ name: "Infra", color: "blue" }]);
+  });
+
+  test("trims tag names", async () => {
+    seedRoom("trim", () => {});
+    const { app } = makeApp({ storageDir: dir });
+    const res = await putTags(app, "trim", [{ name: "  spaced  ", color: "purple" }]);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { tags: Array<{ name: string; color: string }> };
+    expect(body.tags).toEqual([{ name: "spaced", color: "purple" }]);
+  });
+
+  test("422 on invalid color", async () => {
+    seedRoom("badcolor", () => {});
+    const { app } = makeApp({ storageDir: dir });
+    const res = await putTags(app, "badcolor", [{ name: "x", color: "fuchsia" }]);
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toMatch(/color/);
+  });
+
+  test("422 on empty name", async () => {
+    seedRoom("emptyname", () => {});
+    const { app } = makeApp({ storageDir: dir });
+    const res = await putTags(app, "emptyname", [{ name: "   ", color: "blue" }]);
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(body.error).toMatch(/non-empty/);
+  });
+
+  test("422 on name exceeding max length", async () => {
+    seedRoom("longname", () => {});
+    const { app } = makeApp({ storageDir: dir });
+    const res = await putTags(app, "longname", [{ name: "x".repeat(25), color: "blue" }]);
+    expect(res.status).toBe(422);
+  });
+
+  test("422 on more than 12 tags", async () => {
+    seedRoom("toomany", () => {});
+    const { app } = makeApp({ storageDir: dir });
+    const tags = Array.from({ length: 13 }, (_, i) => ({ name: `t${i}`, color: "blue" }));
+    const res = await putTags(app, "toomany", tags);
+    expect(res.status).toBe(422);
+  });
+
+  test("400 when body missing tags field", async () => {
+    seedRoom("notags", () => {});
+    const { app } = makeApp({ storageDir: dir });
+    const res = await app.fetch(
+      new Request("http://localhost/api/rooms/notags/tags", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  test("404 on non-existent room", async () => {
+    const { app } = makeApp({ storageDir: dir });
+    const res = await putTags(app, "ghost-room", [{ name: "a", color: "blue" }]);
+    expect(res.status).toBe(404);
+  });
+
+  test("422 on path-param injection", async () => {
+    const { app } = makeApp({ storageDir: dir });
+    const res = await putTags(app, "bad%20id", [{ name: "a", color: "blue" }]);
+    expect(res.status).toBe(422);
   });
 });

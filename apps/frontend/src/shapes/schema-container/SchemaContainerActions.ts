@@ -43,8 +43,13 @@ export function setContainerDirection(
   editor: Editor,
   ids: string[],
   direction: ContainerDirection,
+  opts?: { triggerLayout?: boolean },
 ): void {
   if (ids.length === 0) return;
+  // Autolayout rebuild: when the caller drives layout itself (frontend elk),
+  // it passes `triggerLayout: false` so the legacy backend layout-selection POST
+  // doesn't race the elk pass. The meta/props write still persists via WS.
+  const triggerLayout = opts?.triggerLayout !== false;
 
   const accepted: string[] = [];
 
@@ -58,13 +63,25 @@ export function setContainerDirection(
 
       if (shape.type === "schema-container") {
         const props = shape.props as SchemaContainerProps;
-        // Skip no-op write (already same direction) — mirrors предыдущее
-        // поведение `setSchemaContainerDirection` (избегаем лишний store event).
-        if (props.direction !== direction) {
+        const meta = (shape.meta ?? {}) as Record<string, unknown>;
+        const propChanged = props.direction !== direction;
+        // A cardinal direction set through the panel is a deliberate user choice:
+        // clear the inherited-placeholder marker (didrawDirectionInherited) so the
+        // inherit-include layout treats it as EXPLICIT. Without this the marker —
+        // stamped at import for subgraphs with no `direction` — would keep the
+        // container "inherit" and the user's pick would be ignored. Parity with
+        // backend layout-selection.ts clearing.
+        const markerSet = meta.didrawDirectionInherited === true;
+        if (propChanged || markerSet) {
           editor.updateShape<SchemaContainerShape>({
             id: shape.id,
             type: "schema-container",
             props: { ...props, direction },
+            // Only touch meta when the marker is actually set — keeps the common
+            // path (no marker) meta-free and avoids polluting it with `false`.
+            ...(markerSet
+              ? { meta: { ...meta, didrawDirectionInherited: false } }
+              : {}),
           });
         }
         accepted.push(id);
@@ -90,6 +107,8 @@ export function setContainerDirection(
   });
 
   if (accepted.length === 0) return;
+
+  if (!triggerLayout) return;
 
   const directions: Record<string, ContainerDirection> = {};
   for (const id of accepted) directions[id] = direction;

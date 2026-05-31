@@ -24,12 +24,41 @@ export type AiActivity = {
   startedAt: number;
 };
 
+/** Fixed tag colour palette (room-list metadata, not canvas-domain). */
+export type RoomTagColor =
+  | "red"
+  | "orange"
+  | "yellow"
+  | "green"
+  | "blue"
+  | "purple"
+  | "gray";
+
+/** A single room tag. Identity is `name`; `color` is from the fixed palette. */
+export type RoomTag = { name: string; color: RoomTagColor };
+
+export const ROOM_TAG_COLORS: readonly RoomTagColor[] = [
+  "red",
+  "orange",
+  "yellow",
+  "green",
+  "blue",
+  "purple",
+  "gray",
+];
+
+/** Validation caps for room tags. */
+export const ROOM_TAG_MAX_COUNT = 12;
+export const ROOM_TAG_MAX_NAME_LENGTH = 24;
+
 export interface RoomMeta {
   miroExports?: MiroExportsMap;
   /** DRW-134 v2 protocol marker. Presence === "v2" → backend routes на v2 handlers. */
   didrawProtocol?: "v2";
   /** DRW-134 NodeId suffix length, range [3..12]. Default 6 если undefined. */
   didrawIdSuffixLength?: number;
+  /** Room-list tags. Each tag = { name, color }. Set wholesale via PUT /api/rooms/:id/tags. */
+  tags?: RoomTag[];
 }
 
 export type MiroExportsMap = Record<

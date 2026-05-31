@@ -29,6 +29,11 @@ docs/.obsidian/
 
 # Claude Code runtime artifacts
 .claude/scheduled_tasks.lock
+# Local per-machine permission allowlist (personal, not shared)
+.claude/settings.local.json
+
+# Spike / throwaway scripts (local-only, never committed)
+scratch/
 
 # Manual-test / dogfood screenshots — local-only history, не пушим
 docs/screenshots/

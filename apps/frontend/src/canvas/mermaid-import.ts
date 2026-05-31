@@ -57,6 +57,98 @@ export function unionBoundsOf(
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
 
+/** Зазор между импортами на доске (spec A §4). */
+export const IMPORT_GAP = 200;
+
+/**
+ * Левый край (page-X) для нового импорта: правее существующего контента,
+ * либо в видимой области на пустой странице.
+ * @param pageBounds editor.getCurrentPageBounds() — Box | undefined
+ * @param viewportBounds editor.getViewportPageBounds() — Box
+ */
+export function computeImportOriginX(
+  pageBounds: { maxX: number } | undefined,
+  viewportBounds: { minX: number },
+  gap: number = IMPORT_GAP,
+): number {
+  return pageBounds ? pageBounds.maxX + gap : viewportBounds.minX;
+}
+
+/**
+ * Сдвигает корневые шейпы импорта так, чтобы левый край union-bbox всех новых
+ * шейпов совпал с originX. Дети двигаются вместе с корнями. No-op, если bbox
+ * пуст или сдвиг < 0.5px.
+ */
+export function repositionToOriginX(
+  editor: Editor,
+  rootIds: TLShapeId[],
+  allNewIds: TLShapeId[],
+  originX: number,
+): void {
+  const bbox = unionBoundsOf(editor, allNewIds);
+  if (!bbox) return;
+  const dx = originX - bbox.x;
+  if (Math.abs(dx) < 0.5) return;
+  // biome-ignore lint/suspicious/noExplicitAny: tldraw updateShapes partial typing verbose; safe by id+type
+  const updates: any[] = [];
+  for (const id of rootIds) {
+    const s = editor.getShape(id);
+    if (!s) continue;
+    // biome-ignore lint/suspicious/noExplicitAny: tldraw shape.x not in public TLShape
+    updates.push({ id, type: s.type, x: (s as any).x + dx });
+  }
+  if (updates.length > 0) editor.updateShapes(updates);
+}
+
+/**
+ * Best-effort: дождаться появления frame (создаётся backend'ом, приходит через
+ * WS асинхронно) и сдвинуть его левый край к originX. Если за timeoutMs frame
+ * не появился — тихо выходит (логирует). Throwaway-сравнение: pin/echo-семантику
+ * не трогаем; backend-ownership может перетереть позицию (известное ограничение).
+ */
+export async function repositionCustomFrameWhenReady(
+  editor: Editor,
+  frameId: string | undefined,
+  originX: number,
+  opts: { intervalMs?: number; timeoutMs?: number } = {},
+): Promise<void> {
+  if (!frameId) return;
+  const intervalMs = opts.intervalMs ?? 50;
+  const timeoutMs = opts.timeoutMs ?? 2000;
+  const deadline = Date.now() + timeoutMs;
+  const id = frameId as unknown as TLShapeId;
+  while (Date.now() < deadline) {
+    try {
+      const shape = editor.getShape(id);
+      if (shape) {
+        const b = editor.getShapePageBounds(id);
+        if (b) {
+          const dx = originX - b.x;
+          if (Math.abs(dx) >= 0.5) {
+            editor.updateShape({
+              id,
+              type: shape.type,
+              // biome-ignore lint/suspicious/noExplicitAny: tldraw shape.x not in public TLShape
+              x: (shape as any).x + dx,
+            });
+          }
+        }
+        return;
+      }
+    } catch (e) {
+      // Editor torn down / room switched mid-poll (best-effort, throwaway): bail
+      // quietly. AbortSignal-cancellation не плетём — 2s-poll безвреден для A.
+      console.warn("[shemma] custom-import reposition aborted", e);
+      return;
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  console.warn(
+    "[shemma] custom-import frame did not settle in time; skip reposition",
+    frameId,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // DRW-134 Task 2.6: v2 protocol — POST /api/schema/create path
 // ---------------------------------------------------------------------------
@@ -135,6 +227,7 @@ export async function createSchemaViaBackend(opts: {
   raw: string;
   space?: string;
   room?: string;
+  positionsOverride?: Record<string, { x: number; y: number; w?: number; h?: number }>;
 }): Promise<SchemaCreateResponse> {
   const space =
     opts.space ??
@@ -151,7 +244,7 @@ export async function createSchemaViaBackend(opts: {
   const r = await fetch(`/api/schema/create?${qs}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ label: opts.label, raw: opts.raw }),
+    body: JSON.stringify({ label: opts.label, raw: opts.raw, positionsOverride: opts.positionsOverride }),
   });
 
   if (!r.ok) {
@@ -182,6 +275,193 @@ export async function createSchemaViaBackend(opts: {
 // пользователь реально импортирует.
 async function loadMermaid() {
   return await import("@tldraw/mermaid");
+}
+
+/** tldraw 5.0.0 mapper input wrapper (MermaidNodeRenderMapper): geometry on .node, id on .nodeId.
+ *  Verified empirically against @tldraw/mermaid@5.0.0 on a live board. */
+type MermaidMapperInput = {
+  nodeId: string;
+  node: { id: string; x: number; y: number; w: number; h: number; kind?: string; parentId?: string };
+};
+
+/** Records a blueprint node's flat layout coords into `out`, keyed by mermaid id.
+ *  Returns undefined so createMermaidDiagram keeps its default render. */
+export function harvestRecordFromBlueprintNode(
+  out: Record<string, { x: number; y: number; w: number; h: number }>,
+  input: MermaidMapperInput,
+): undefined {
+  const n = input.node;
+  out[input.nodeId] = { x: n.x, y: n.y, w: n.w, h: n.h };
+  return undefined;
+}
+
+/** Deep-equal сравнение двух position-карт (ключи + точные x/y/w/h).
+ *  Тёплые mermaid-рендеры детерминированы → побайтовое равенство валидно. */
+export function samePositions(
+  a: Record<string, { x: number; y: number; w: number; h: number }>,
+  b: Record<string, { x: number; y: number; w: number; h: number }>,
+): boolean {
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) {
+    const va = a[k];
+    const vb = b[k];
+    if (!va || !vb) return false;
+    if (va.x !== vb.x || va.y !== vb.y || va.w !== vb.w || va.h !== vb.h) return false;
+  }
+  return true;
+}
+
+/** Прогрет ли mermaid-layout в текущем page-load (elk-worker + шрифты).
+ *  Сбрасывается при перезагрузке страницы (re-init модуля). */
+let mermaidLayoutWarmed = false;
+
+/** Один offscreen-проход: рендер на throwaway-странице + harvest + cleanup. */
+async function harvestMermaidPositionsOnce(
+  editor: Editor,
+  source: string,
+  opts: { layout?: "elk" },
+): Promise<{
+  positions: Record<string, { x: number; y: number; w: number; h: number }>;
+  meta: Record<string, { kind?: string; parentId?: string }>;
+}> {
+  const mod = await loadMermaid();
+  // biome-ignore lint/suspicious/noExplicitAny: createMermaidDiagram/blueprintRender не в public d.ts
+  const mermaidMod = mod as any;
+
+  const positions: Record<string, { x: number; y: number; w: number; h: number }> = {};
+  // kind + parentId per mermaid id для nested-guard (R8) — НЕ уходит в backend.
+  const meta: Record<string, { kind?: string; parentId?: string }> = {};
+  const createOptions: Record<string, unknown> = {
+    blueprintRender: {
+      mapNodeToRenderSpec: (input: MermaidMapperInput) => {
+        meta[input.nodeId] = { kind: input.node.kind, parentId: input.node.parentId };
+        return harvestRecordFromBlueprintNode(positions, input);
+      },
+    },
+  };
+  if (opts.layout === "elk") createOptions.mermaidConfig = { layout: "elk" };
+
+  const prevPageId = editor.getCurrentPageId();
+  // biome-ignore lint/suspicious/noExplicitAny: getPages not on public Editor type alias
+  const before = new Set((editor as any).getPages().map((p: { id: string }) => p.id));
+  // biome-ignore lint/suspicious/noExplicitAny: createPage/run not on public Editor type alias
+  (editor as any).run(() => { (editor as any).createPage({ name: "__mermaid_harvest__" }); }, { history: "ignore" });
+  // biome-ignore lint/suspicious/noExplicitAny: getPages not on public Editor type alias
+  const scratch = (editor as any).getPages().map((p: { id: string }) => p.id).find((pid: string) => !before.has(pid));
+  if (!scratch) throw new Error("harvestMermaidPositions: failed to create scratch page");
+  // biome-ignore lint/suspicious/noExplicitAny: setCurrentPage/run not on public Editor type alias
+  (editor as any).run(() => { (editor as any).setCurrentPage(scratch); }, { history: "ignore" });
+
+  try {
+    await mermaidMod.createMermaidDiagram(editor, source, createOptions);
+  } finally {
+    // biome-ignore lint/suspicious/noExplicitAny: setCurrentPage/deletePage/run not on public Editor type alias
+    (editor as any).run(() => {
+      (editor as any).setCurrentPage(prevPageId);
+      (editor as any).deletePage(scratch);
+    }, { history: "ignore" });
+  }
+
+  return { positions, meta };
+}
+
+/** Snapshot mermaid dagre/elk layout positions keyed by mermaid id, WITHOUT
+ *  leaving any shapes on the user's page. Runs createMermaidDiagram on a
+ *  throwaway page (id discovered by diffing getPages()), harvests via the public
+ *  blueprintRender hook, then deletes the throwaway page entirely.
+ *  Throws on nested subgraphs (Stage-1 is single-level).
+ *
+ *  Stability loop: на первом page-load elk-worker и шрифты ещё не прогреты →
+ *  первый рендер даёт вырожденную раскладку. Ждём fonts.ready, затем повторяем
+ *  до совпадения двух подряд harvest'ов (warm mermaid output детерминирован).
+ *  Флаг mermaidLayoutWarmed мемоизирован на время жизни модуля. */
+export async function harvestMermaidPositions(
+  editor: Editor,
+  source: string,
+  opts: { layout?: "elk" } = {},
+): Promise<Record<string, { x: number; y: number; w: number; h: number }>> {
+  // Fonts must be loaded before mermaid measures text, and elk's async worker
+  // must initialize — both race on the FIRST render in a fresh page and yield a
+  // degenerate layout. Await fonts, then render until two consecutive harvests
+  // agree (warm mermaid output is deterministic). Memoized per page-load.
+  if (typeof document !== "undefined" && (document as { fonts?: { ready?: Promise<unknown> } }).fonts?.ready) {
+    try {
+      await (document as unknown as { fonts: { ready: Promise<unknown> } }).fonts.ready;
+    } catch {
+      // font readiness is best-effort
+    }
+  }
+
+  let result = await harvestMermaidPositionsOnce(editor, source, opts);
+  if (!mermaidLayoutWarmed) {
+    let prev = result;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const next = await harvestMermaidPositionsOnce(editor, source, opts);
+      result = next;
+      if (samePositions(prev.positions, next.positions)) {
+        mermaidLayoutWarmed = true;
+        break;
+      }
+      prev = next;
+    }
+  }
+
+  // Nested-subgraph guard (R8): subgraph чей parentId — другой subgraph → не поддержано в Stage-1.
+  const meta = result.meta;
+  const subgraphIds = new Set(Object.keys(meta).filter((id) => meta[id]?.kind === "subgraph"));
+  for (const id of subgraphIds) {
+    const p = meta[id]?.parentId;
+    if (p && subgraphIds.has(p)) {
+      throw new Error(`nested subgraphs not supported in Stage-1 import (${id} inside ${p})`);
+    }
+  }
+  return result.positions;
+}
+
+/** Движок размещения, выбираемый в paste-окне (spec A). */
+export type LayoutEngine = "dagre" | "elk" | "custom";
+
+// ELK loader регистрируется на прямом инстансе пакета `mermaid` (НЕ через
+// loadMermaid()=@tldraw/mermaid). createMermaidDiagram внутри импортирует тот
+// же физический инстанс (bun дедуплицирует mermaid@11.12.2), поэтому
+// registerLayoutLoaders на нём активирует layout:"elk" в createMermaidDiagram.
+let elkLoaderRegistered = false;
+let elkLoaderFailed = false;
+
+/** ТОЛЬКО для тестов: сброс idempotency-флагов между кейсами. */
+export function __resetElkLoaderForTest(): void {
+  elkLoaderRegistered = false;
+  elkLoaderFailed = false;
+  mermaidLayoutWarmed = false;
+}
+
+/**
+ * Идемпотентно регистрирует ELK layout-loader в mermaid. Возвращает true, если
+ * ELK доступен (зарегистрирован сейчас или ранее), false — если регистрация
+ * не удалась (тогда вызывающий фоллбэчит на dagre, не молча).
+ */
+export async function ensureElkLoader(): Promise<boolean> {
+  if (elkLoaderRegistered) return true;
+  // Постоянный сбой: не спамим dynamic import + warn на каждый ELK-импорт.
+  if (elkLoaderFailed) return false;
+  try {
+    const mermaid = (await import("mermaid")).default as {
+      registerLayoutLoaders: (loaders: unknown) => void;
+    };
+    const elkLayouts = (await import("@mermaid-js/layout-elk")).default;
+    mermaid.registerLayoutLoaders(elkLayouts);
+    elkLoaderRegistered = true;
+    return true;
+  } catch (e) {
+    elkLoaderFailed = true;
+    console.warn(
+      "[shemma] ELK layout loader registration failed; falling back to dagre",
+      e,
+    );
+    return false;
+  }
 }
 
 function plaintextLabel(editor: Editor, s: TLShape): string | undefined {
@@ -232,6 +512,10 @@ export type MermaidImportResult = {
   shapeIds: TLShapeId[];
   /** Subset of shapeIds где сохранён meta.mermaidSource (root frame'ы импорта). */
   sourceTargetIds: TLShapeId[];
+  /** Spec A: какой движок реально применён. */
+  engineUsed?: LayoutEngine;
+  /** Spec A: true, если ELK запрошен, но loader не активен → применён dagre. */
+  engineFallback?: boolean;
 };
 
 /**
@@ -256,6 +540,8 @@ export async function importMermaid(
     space?: string;
     /** Room для backend call. Default из location.search. */
     room?: string;
+    /** Stage-1 import: mermaid-id-keyed позиции для backend position-injection. */
+    positionsOverride?: Record<string, { x: number; y: number; w?: number; h?: number }>;
   } = {},
 ): Promise<MermaidImportResult> {
   // DRW-141: aligned with MCP `extractMermaidLabel`; fixes browser-mode leaking
@@ -267,6 +553,7 @@ export async function importMermaid(
     raw: source,
     space: opts.space,
     room: opts.room,
+    positionsOverride: opts.positionsOverride,
   });
   // v2 path — shapes arrive via WS; return immediately with backend IDs.
   // editor param kept in signature for API compatibility (callers pass it in).
@@ -293,6 +580,7 @@ export async function importMermaid(
 export async function importMermaidLegacy(
   editor: Editor,
   source: string,
+  opts: { layout?: "elk" } = {},
 ): Promise<MermaidImportResult> {
   const mod = await loadMermaid();
   // biome-ignore lint/suspicious/noExplicitAny: createMermaidDiagram не в public d.ts'ках
@@ -302,8 +590,11 @@ export async function importMermaidLegacy(
     editor.getCurrentPageShapes().map((s) => s.id as unknown as string),
   );
 
-  // DRW-093: source passes through as-is.
-  await mermaidMod.createMermaidDiagram(editor, source);
+  // DRW-093: source passes through as-is. opts.layout (если задан) включает
+  // mermaid-native ELK через mermaidConfig (loader уже должен быть зарегистрирован).
+  const createOptions =
+    opts.layout === "elk" ? { mermaidConfig: { layout: "elk" } } : undefined;
+  await mermaidMod.createMermaidDiagram(editor, source, createOptions);
 
   const after = editor.getCurrentPageShapes();
   const newShapes = after.filter(
@@ -450,4 +741,49 @@ export async function importMermaidLegacy(
     shapeIds: newShapes.map((s) => s.id),
     sourceTargetIds: Array.from(sourceTargetIds) as unknown as TLShapeId[],
   };
+}
+
+/**
+ * Spec A: единая точка импорта mermaid с выбором движка размещения.
+ * - dagre/elk → throwaway mermaid-native (createMermaidDiagram), sync-сдвиг.
+ * - custom    → backend v2 (как раньше), best-effort сдвиг после WS-settle.
+ * Origin вычисляется ДО импорта (правее существующего контента).
+ */
+export async function importMermaidWithEngine(
+  editor: Editor,
+  source: string,
+  engine: LayoutEngine,
+  opts: { label?: string; space?: string; room?: string } = {},
+): Promise<MermaidImportResult> {
+  // biome-ignore lint/suspicious/noExplicitAny: getCurrentPageBounds/getViewportPageBounds not on minimal Editor type alias here
+  const ed = editor as any;
+  const originX = computeImportOriginX(
+    ed.getCurrentPageBounds(),
+    ed.getViewportPageBounds(),
+  );
+
+  if (engine === "custom") {
+    const res = await importMermaid(editor, source, opts);
+    void repositionCustomFrameWhenReady(editor, res.frameId, originX);
+    return { ...res, engineUsed: "custom" };
+  }
+
+  // dagre/elk: harvest mermaid-native positions offscreen, then build OUR v2
+  // objects on those coords through the backend (replaces native-stub legacy path).
+  let engineUsed: LayoutEngine = engine;
+  let engineFallback = false;
+  if (engine === "elk") {
+    const ok = await ensureElkLoader();
+    if (!ok) {
+      engineUsed = "dagre";
+      engineFallback = true;
+    }
+  }
+  const positions = await harvestMermaidPositions(
+    editor,
+    source,
+    engineUsed === "elk" ? { layout: "elk" } : {},
+  );
+  const res = await importMermaid(editor, source, { ...opts, positionsOverride: positions });
+  return { ...res, engineUsed, engineFallback };
 }

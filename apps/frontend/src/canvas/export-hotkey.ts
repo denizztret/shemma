@@ -1,11 +1,14 @@
-/** Factory for the ⌘⇧E / Ctrl+Shift+E export hotkey handler. */
+import { getActiveBinding } from "../settings/shortcuts/config";
+import { matchShortcut } from "../settings/shortcuts/match";
+
+/** Factory for the export hotkey handler (default ⌘⇧E / Ctrl+Shift+E). */
 export function makeExportHotkeyHandler(
   getSelectedIds: () => string[],
   onExport: (ids: string[]) => void,
 ): (e: KeyboardEvent) => void {
   return (e: KeyboardEvent) => {
-    const isModifier = e.metaKey || e.ctrlKey;
-    if (!isModifier || !e.shiftKey || e.key.toLowerCase() !== "e") return;
+    // Shortcut registry: read the active binding at event time.
+    if (!matchShortcut(getActiveBinding("export-miro"), e)) return;
     e.preventDefault();
     onExport(getSelectedIds());
   };

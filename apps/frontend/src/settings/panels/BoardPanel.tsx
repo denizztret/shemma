@@ -32,9 +32,8 @@ export type BoardPanelProps = {
   effective: LayoutParams;
   onDirectionChange: (d: DirectionValue) => void;
   onPresetSelect: (preset: PresetName) => void;
-  onToggleAutoDirection: (enabled: boolean) => void;
-  onMidpointModeChange: (mode: "even" | "fixed-0.5") => void;
   onOpenAdvanced: () => void;
+  onOpenShortcuts: () => void;
   styleEffective: ResolvedStyleDefaults;
   onStyleDash: (v: StyleDash) => void;
   onStyleFont: (v: StyleFont) => void;
@@ -47,9 +46,8 @@ export const BoardPanel: FC<BoardPanelProps> = ({
   effective,
   onDirectionChange,
   onPresetSelect,
-  onToggleAutoDirection,
-  onMidpointModeChange,
   onOpenAdvanced,
+  onOpenShortcuts,
   styleEffective,
   onStyleDash,
   onStyleFont,
@@ -59,8 +57,6 @@ export const BoardPanel: FC<BoardPanelProps> = ({
 }) => {
   const layoutSettings: LayoutSettingsValue = {
     preset: effective.spacing ?? null,
-    autoDirection: effective.autoDirectionEnabled,
-    midpoint: effective.midpointDistribution,
   };
 
   const styleValue: StyleSectionValue = {
@@ -85,8 +81,6 @@ export const BoardPanel: FC<BoardPanelProps> = ({
       <LayoutSettingsSection
         current={layoutSettings}
         onPreset={(s) => onPresetSelect(spacingToPresetName(s))}
-        onAutoDirection={onToggleAutoDirection}
-        onMidpoint={onMidpointModeChange}
         onAdvanced={onOpenAdvanced}
         onReset={() => {}}
         showReset={false}
@@ -102,6 +96,14 @@ export const BoardPanel: FC<BoardPanelProps> = ({
         current={containerTitlePosition}
         onChange={onContainerTitlePositionChange}
       />
+      <button
+        type="button"
+        data-role="shortcuts"
+        onClick={onOpenShortcuts}
+        className="settings-link"
+      >
+        Горячие клавиши ›
+      </button>
     </div>
   );
 };

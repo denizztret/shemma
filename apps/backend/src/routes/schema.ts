@@ -27,6 +27,7 @@ import type { MermaidDirection } from "../domain/schema/mermaid-parser";
 import { generateMermaid } from "../domain/schema/mermaid-generator";
 import { buildCanvasView } from "../domain/schema/view";
 import { runLayout } from "../domain/layout";
+import { applyImportPositions } from "../domain/schema-import-positions";
 import { pushOpLog, resolveRoomId } from "../rooms";
 import {
   applyStoreChanges,
@@ -222,14 +223,17 @@ export function mermaidDashToTldraw(
 
 function resolveSubgraphStyle(s: import("../domain/schema/mermaid-parser").MermaidNodeStyle): {
   color?: string;
-  fill?: "semi";
+  fill?: "solid";
   dash?: "draw" | "dashed" | "dotted" | "solid";
 } {
-  const out: { color?: string; fill?: "semi"; dash?: "draw" | "dashed" | "dotted" | "solid" } = {};
+  const out: { color?: string; fill?: "solid"; dash?: "draw" | "dashed" | "dotted" | "solid" } = {};
   // Priority: stroke first (mermaid stroke = border, tldraw color = border).
   if (s.stroke) out.color = hexToTldrawColor(s.stroke);
   else if (s.fill) out.color = hexToTldrawColor(s.fill);
-  if (s.fill) out.fill = "semi";
+  // DRW: container fill="solid" renders as pastel colored fill (inverted palette,
+  // see apps/frontend/src/shapes/schema-container/fill.ts). A styled subgraph should
+  // get the pastel fill, not the near-white "semi" page-contrast fill.
+  if (s.fill) out.fill = "solid";
   const dash = mermaidDashToTldraw(s.strokeDasharray);
   if (dash !== undefined) out.dash = dash;
   return out;
@@ -612,6 +616,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
         raw?: string;
         actions?: SchemaAction[];
         clientOpId?: string;
+        positionsOverride?: Record<string, import("@shemma/domain").NodePos>;
       } | null;
 
       if (!body) {
@@ -635,6 +640,9 @@ export function schemaRoutes(bus: StoreChangeBus) {
 
       let nodeStylesByNodeId: Map<NodeId, import("../domain/schema/mermaid-parser").MermaidNodeStyle> = new Map();
       let subgraphStyles: Map<string, import("../domain/schema/mermaid-parser").MermaidNodeStyle> = new Map();
+      let idMap: Map<string, NodeId> = new Map();
+
+      const positionsOverride = body.positionsOverride;
 
       if (body.raw !== undefined) {
         // Mode A: parse mermaid RAW.
@@ -673,6 +681,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
         direction = parseResult.direction;
         nodeStylesByNodeId = parseResult.nodeStylesByNodeId;
         subgraphStyles = parseResult.subgraphStyles;
+        idMap = parseResult.idMap;
       } else if (body.actions !== undefined) {
         // Mode B: caller-provided actions.
         if (!Array.isArray(body.actions)) {
@@ -829,46 +838,104 @@ export function schemaRoutes(bus: StoreChangeBus) {
       }
 
       // Run layout post-apply (spec §Write semantics step 9).
-      // DRW-160: используем direction из mermaid header (или Mode B fallback на LR).
-      // TB → layered-tb, LR → layered-lr, BT → layered-bt, RL → layered-rl.
-      // Раньше hardcoded layered-lr игнорировал `flowchart TB` и переворачивал графы.
-      try {
-        const affectedIds = new Set<string>(Object.keys(batch.added).filter((k) => {
-          const r = room.store.store[k];
-          return r?.typeName === "shape";
-        }));
-        const dirToMode = {
-          TB: "layered-tb",
-          LR: "layered-lr",
-          BT: "layered-bt",
-          RL: "layered-rl",
-        } as const;
-        const layoutMode = dirToMode[direction];
-        const lr = await runLayout(
-          room.store,
-          { mode: layoutMode, scope: "affected", affectedIds },
-          room.didrawIndex,
-          (room.meta?.layoutParams as Partial<LayoutParams> | undefined) ?? undefined,
-        );
-        if (!isEmptyBatch(lr.batch)) {
-          room.store = applyStoreChanges(room.store, lr.batch);
+      // Stage 1 (import productization): if the request carries mermaid-quality
+      // positions, inject them and SKIP ELK. Otherwise run ELK as before.
+      if (positionsOverride && body.raw !== undefined) {
+        // Build mermaid-id → shape.id resolution maps. idMap is mermaidId→NodeId;
+        // invert it once for an O(1) member→subgraph lookup. All resolution maps
+        // stay mermaidId-keyed to match the positionsOverride contract.
+        const nodeIdToMermaidId = new Map<NodeId, string>();
+        for (const [mId, nId] of idMap) nodeIdToMermaidId.set(nId, mId);
+
+        const leafShapeIdByMermaidId = new Map<string, string>();
+        for (const [nodeId, shapeIdV] of nodeIdToShapeId) {
+          const mId = nodeIdToMermaidId.get(nodeId);
+          if (mId) leafShapeIdByMermaidId.set(mId, shapeIdV);
+        }
+
+        const containerShapeIdByMermaidId = new Map<string, string>();
+        const subgraphMermaidIdByMemberMermaidId = new Map<string, string>();
+        for (const action of parsedActions) {
+          if (action.kind !== "schema-group" || !action.name) continue;
+          const containerShapeIdV = groupActionToShapeId.get(action.name);
+          const sgMermaidId = action.mermaidId;
+          if (containerShapeIdV && sgMermaidId) {
+            containerShapeIdByMermaidId.set(sgMermaidId, containerShapeIdV);
+            for (const memberNodeId of action.nodeIds) {
+              const memberMermaidId = nodeIdToMermaidId.get(memberNodeId);
+              if (memberMermaidId) subgraphMermaidIdByMemberMermaidId.set(memberMermaidId, sgMermaidId);
+            }
+          }
+        }
+
+        const posBatch = applyImportPositions({
+          store: room.store,
+          frameId,
+          positions: positionsOverride,
+          leafShapeIdByMermaidId,
+          containerShapeIdByMermaidId,
+          subgraphMermaidIdByMemberMermaidId,
+          framePad: 40,
+        });
+        if (posBatch.unmatched.length > 0) {
+          console.warn(`[schema/create] positionsOverride: ${posBatch.unmatched.length} unmatched mermaid ids: ${posBatch.unmatched.join(", ")}`);
+        }
+        if (!isEmptyBatch(posBatch)) {
+          room.store = applyStoreChanges(room.store, posBatch);
           room.didrawIndex = rebuildDidrawIndex(room.store);
           room.version += 1;
           pushOpLog(
             room,
-            { ops: lr.batch, source: "ai", version: room.version, at: Date.now() },
+            { ops: posBatch, source: "ai", version: room.version, at: Date.now() },
             config.opLogMaxSize,
           );
           room.dirty = true;
           scheduleSave(id, room);
           bus.publish(spaceId, id, {
-            changes: lr.batch,
+            changes: posBatch,
             source: "ai",
             version: room.version,
           });
         }
-      } catch {
-        // Layout failure is non-fatal; shapes remain at (0,0).
+      } else {
+        try {
+          const affectedIds = new Set<string>(Object.keys(batch.added).filter((k) => {
+            const r = room.store.store[k];
+            return r?.typeName === "shape";
+          }));
+          const dirToMode = {
+            TB: "layered-tb",
+            LR: "layered-lr",
+            BT: "layered-bt",
+            RL: "layered-rl",
+          } as const;
+          const layoutMode = dirToMode[direction];
+          const lr = await runLayout(
+            room.store,
+            { mode: layoutMode, scope: "affected", affectedIds },
+            room.didrawIndex,
+            (room.meta?.layoutParams as Partial<LayoutParams> | undefined) ?? undefined,
+          );
+          if (!isEmptyBatch(lr.batch)) {
+            room.store = applyStoreChanges(room.store, lr.batch);
+            room.didrawIndex = rebuildDidrawIndex(room.store);
+            room.version += 1;
+            pushOpLog(
+              room,
+              { ops: lr.batch, source: "ai", version: room.version, at: Date.now() },
+              config.opLogMaxSize,
+            );
+            room.dirty = true;
+            scheduleSave(id, room);
+            bus.publish(spaceId, id, {
+              changes: lr.batch,
+              source: "ai",
+              version: room.version,
+            });
+          }
+        } catch {
+          // Layout failure is non-fatal; shapes remain at (0,0).
+        }
       }
 
       // DRW-172: post-layout anchor distribution (no-op if idempotent).

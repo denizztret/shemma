@@ -1,11 +1,39 @@
 // apps/frontend/src/settings/sections/LayoutSettingsSection.tsx
+import type { LayoutAlgorithm } from "@shemma/domain";
 import type { FC } from "react";
 
 // Spec 7.3: null variants = mixed / indeterminate state for multi-selection.
 export type LayoutSettingsValue = {
   preset: "compact" | "normal" | "loose" | null;
-  autoDirection: boolean | null;
-  midpoint: "even" | "fixed-0.5" | null;
+  // Autolayout rebuild — placement engine (ELK algorithm) per frame/container.
+  // Optional: only the per-frame/container panel (SelectionPanel) drives it; the
+  // board-level panel omits it (runElkLayout reads engine from frame/container
+  // meta, not room-level board params).
+  engine?: LayoutAlgorithm | null;
+};
+
+// Engine selector (autolayout rebuild). Short labels; tooltips carry the detail.
+const ENGINE_ORDER: readonly LayoutAlgorithm[] = [
+  "layered",
+  "mrtree",
+  "stress",
+  "force",
+];
+export const ENGINE_LABELS: Record<LayoutAlgorithm, string> = {
+  layered: "Слои",
+  mrtree: "Дерево",
+  stress: "Стресс",
+  force: "Силы",
+};
+const ENGINE_HINTS: Record<LayoutAlgorithm, string> = {
+  layered:
+    "Слои (layered) — стандарт для ветвящихся и плотных графов; узлы выстраиваются по слоям вдоль направления потока.",
+  mrtree:
+    "Дерево (mrtree) — центрированная «ёлочка»: родитель по центру детей, братья на одном ярусе. Лучше всего для иерархий.",
+  stress:
+    "Стресс (stress) — органичная компактная раскладка с малым числом пересечений; без явного деления на слои.",
+  force:
+    "Силы (force) — силовая «пружинная» раскладка для сильно связных графов без выраженной иерархии.",
 };
 
 // UI labels (Compact / Normal / Roomy) intentionally differ from the @shemma/domain
@@ -22,46 +50,46 @@ export const PRESET_HINTS: Record<"compact" | "normal" | "loose", string> = {
   loose: "Просторно — легче читать диаграмму",
 };
 
-const MIDPOINT_LABELS: Record<"even" | "fixed-0.5", string> = {
-  even: "Равномерно",
-  "fixed-0.5": "По центру",
-};
-
-const MIDPOINT_HINTS: Record<"even" | "fixed-0.5", string> = {
-  even: "Стрелки на одной стороне распределяются равномерно (1/3, 2/3 и т.д.)",
-  "fixed-0.5": "Все стрелки на одной стороне сходятся в её середину",
-};
-
-const AUTO_DIRECTION_HINT =
-  "Подбирать направление подграфов автоматически по топологии связей (только для контейнеров без явного direction). На уже заданные вручную направления не влияет.";
-
 export type LayoutSettingsSectionProps = {
   current: LayoutSettingsValue;
   onPreset: (p: "compact" | "normal" | "loose") => void;
-  onAutoDirection: (v: boolean) => void;
-  onMidpoint: (m: "even" | "fixed-0.5") => void;
+  // Optional — only the per-frame/container panel renders the engine selector.
+  onEngine?: (e: LayoutAlgorithm) => void;
   onAdvanced: () => void;
   onReset: () => void;
   showReset: boolean;
   showAdvanced?: boolean; // default true (BoardPanel); SelectionPanel passes false until per-frame Advanced UX готов
 };
 
-function autoDirLabel(v: boolean | null): string {
-  if (v === null) return "Авто-направление: —";
-  return v ? "Авто-направление: вкл" : "Авто-направление: выкл";
-}
-
 export const LayoutSettingsSection: FC<LayoutSettingsSectionProps> = ({
   current,
   onPreset,
-  onAutoDirection,
-  onMidpoint,
+  onEngine,
   onAdvanced,
   onReset,
   showReset,
   showAdvanced = true,
 }) => (
   <div className="settings-section settings-section--layout-settings">
+    {onEngine && (
+      <>
+        <div className="settings-section__label">Движок раскладки</div>
+        <div className="settings-section__row settings-section__row--layout-engine">
+          {ENGINE_ORDER.map((e) => (
+            <button
+              key={e}
+              type="button"
+              data-engine={e}
+              title={ENGINE_HINTS[e]}
+              onClick={() => onEngine(e)}
+              className={`settings-btn${current.engine === e ? " settings-btn--on" : ""}`}
+            >
+              {ENGINE_LABELS[e]}
+            </button>
+          ))}
+        </div>
+      </>
+    )}
     <div className="settings-section__label">Компоновка</div>
     <div className="settings-section__row">
       {(["compact", "normal", "loose"] as const).map((p) => (
@@ -74,33 +102,6 @@ export const LayoutSettingsSection: FC<LayoutSettingsSectionProps> = ({
           className={`settings-btn${current.preset === p ? " settings-btn--on" : ""}`}
         >
           {PRESET_LABELS[p]}
-        </button>
-      ))}
-    </div>
-    <button
-      type="button"
-      data-role="auto-direction"
-      title={AUTO_DIRECTION_HINT}
-      onClick={() => onAutoDirection(!(current.autoDirection ?? false))}
-      className={
-        "settings-btn" +
-        (current.autoDirection === true ? " settings-btn--on" : "") +
-        (current.autoDirection === null ? " settings-btn--indeterminate" : "")
-      }
-    >
-      {autoDirLabel(current.autoDirection)}
-    </button>
-    <div className="settings-section__row">
-      {(["even", "fixed-0.5"] as const).map((m) => (
-        <button
-          key={m}
-          type="button"
-          data-midpoint={m}
-          title={MIDPOINT_HINTS[m]}
-          onClick={() => onMidpoint(m)}
-          className={`settings-btn${current.midpoint === m ? " settings-btn--on" : ""}`}
-        >
-          {MIDPOINT_LABELS[m]}
         </button>
       ))}
     </div>

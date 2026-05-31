@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import {
   mkdir,
   readFile,
@@ -7,7 +8,8 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { platformRevealCommand } from "@shemma/spaces";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { config } from "../config";
@@ -17,8 +19,10 @@ import {
   parseHeader,
   serializeExport,
 } from "../envelope";
+import { normalizeRoomTags } from "../room-tags";
 import { validateRoomId } from "../rooms";
 import { renderThumbnail } from "../thumbnail";
+import type { RoomTag } from "../types";
 import {
   bundleForRequest,
   resolveStorageDirForRequest,
@@ -34,6 +38,7 @@ type RoomItem = {
   projectDir?: string;
   projectName?: string;
   archived?: boolean;
+  tags?: RoomTag[];
 };
 
 // Writes data atomically: write to <path>.tmp then rename into place.
@@ -74,6 +79,23 @@ async function findRoomFile(
     /* not archived */
   }
   return null;
+}
+
+// Reveal (select) a FILE in the OS file manager — distinct from opening a
+// folder. macOS `open -R`, Windows `explorer /select,`; Linux has no reveal
+// verb so we fall back to opening the containing directory.
+function revealFileCommand(filePath: string): { cmd: string; args: string[] } {
+  const cmd = platformRevealCommand();
+  switch (process.platform) {
+    case "darwin":
+      return { cmd, args: ["-R", filePath] };
+    case "win32":
+      // explorer needs the comma joined to the path in ONE argument
+      // (`/select,<path>`); two separate argv silently fails to select.
+      return { cmd, args: [`/select,${filePath}`] };
+    default:
+      return { cmd, args: [dirname(filePath)] };
+  }
 }
 
 // Shared path-param validator. All `:id` routes MUST go through this —
@@ -126,7 +148,7 @@ export function roomsRoutes(fallbackStorageDir: string) {
             schemaVersion: hdr.schemaVersion,
           };
           if (archived) item.archived = true;
-          // Best-effort: parse full envelope to read linkedSession + projectDir.
+          // Best-effort: parse full envelope to read linkedSession + projectDir + tags.
           try {
             const full = parseFull(raw);
             if (full.linkedSession !== undefined)
@@ -135,6 +157,7 @@ export function roomsRoutes(fallbackStorageDir: string) {
               item.projectDir = full.projectDir;
               item.projectName = basename(full.projectDir);
             }
+            if (full.meta?.tags !== undefined) item.tags = full.meta.tags;
           } catch {
             // non-v3 or malformed — no extra fields
           }
@@ -248,6 +271,33 @@ export function roomsRoutes(fallbackStorageDir: string) {
       path: body.to,
       schemaVersion: ENVELOPE_SCHEMA_VERSION,
     });
+  });
+
+  // Reveal a room's backing JSON file in the OS file manager (Finder etc.).
+  app.post("/api/rooms/:id/reveal", async (c) => {
+    const storageDir = dirFor(c);
+    const { rooms } = bundleForRequest(c);
+    const idParam = roomParam(c);
+    if (!idParam.ok) return idParam.response;
+    const id = idParam.id;
+
+    // Flush BEFORE locating the file — a freshly-created dirty room may not be
+    // on disk yet (autosave debounce). Reveal must point at a real file.
+    await rooms.flushIfDirty(id);
+
+    const filePath = await findRoomFile(storageDir, id);
+    if (!filePath) {
+      return c.json({ ok: false, error: "room file not found" }, 404);
+    }
+
+    try {
+      const { cmd, args } = revealFileCommand(filePath);
+      spawn(cmd, args, { detached: true, stdio: "ignore" }).unref();
+      return c.json({ ok: true, path: filePath });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ ok: false, error: "reveal_failed", message }, 500);
+    }
   });
 
   app.post("/api/rooms/import", async (c) => {
@@ -397,6 +447,52 @@ export function roomsRoutes(fallbackStorageDir: string) {
     await rooms.evict(to); // force fresh load on next access
 
     return c.json({ ok: true, id: to });
+  });
+
+  app.put("/api/rooms/:id/tags", async (c) => {
+    const storageDir = dirFor(c);
+    const { rooms, scheduleSave } = bundleForRequest(c);
+    const idParam = roomParam(c);
+    if (!idParam.ok) return idParam.response;
+    const id = idParam.id;
+
+    const body = (await c.req.json().catch(() => null)) as {
+      tags?: unknown;
+    } | null;
+    if (!body || body.tags === undefined) {
+      return c.json({ ok: false, error: "expected {tags: RoomTag[]}" }, 400);
+    }
+
+    const normalized = normalizeRoomTags(body.tags);
+    if (!normalized.ok) {
+      return c.json({ ok: false, error: normalized.error }, 422);
+    }
+
+    // Daemon-safe discipline: flush BEFORE stat — a freshly-created dirty room
+    // may have no file on disk yet (autosave debounce not fired).
+    await rooms.flushIfDirty(id);
+
+    const srcPath = join(storageDir, `${id}.json`);
+    try {
+      await stat(srcPath);
+    } catch {
+      return c.json({ ok: false, error: "room not found" }, 404);
+    }
+
+    // Mutate room meta.tags then persist (debounced save + force flush now so a
+    // subsequent GET reads the new tags from disk).
+    const room = await rooms.get(id);
+    if (!room.meta) room.meta = {};
+    if (normalized.tags.length === 0) {
+      delete room.meta.tags;
+    } else {
+      room.meta.tags = normalized.tags;
+    }
+    room.dirty = true;
+    scheduleSave(id, room);
+    await rooms.flushIfDirty(id);
+
+    return c.json({ ok: true, tags: normalized.tags });
   });
 
   app.post("/api/rooms/:id/duplicate", async (c) => {

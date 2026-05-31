@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { type Editor, Tldraw } from "tldraw";
+import { type Editor, type TLShapeId, Tldraw } from "tldraw";
 import { triggerAutoSize } from "./canvas/auto-size";
 import {
   SchemaContainerShapeUtil,
@@ -11,37 +11,56 @@ import type { SchemaContainerDirection } from "./shapes/schema-container";
 import { SHEMMA_ASSET_URLS, buildUiOverrides } from "./ui-overrides";
 import "tldraw/tldraw.css";
 import "./settings/styles.css";
-import { loadCamera, saveCamera } from "./canvas/camera-persist";
-import { getDidrawName } from "./canvas/id-prefix";
-import { importMermaid, isBoundsContained, unionBoundsOf } from "./canvas/mermaid-import";
-import { backfillStoreRecords } from "./canvas/schema-placeholder";
-import { registerStyleDefaultsSync } from "./canvas/style-defaults-sync";
-import { registerPinAutoToggle } from "./canvas/pin-auto-toggle";
 import { registerArrowAnchorPin } from "./canvas/arrow-anchor-pin";
+import { loadCamera, saveCamera } from "./canvas/camera-persist";
 import { registerContainerTitlePositionInherit } from "./canvas/container-title-position-inherit";
-import { makeExportHotkeyHandler } from "./canvas/export-hotkey";
-import { makeForceReLayoutHotkeyHandler, makeTidyHotkeyHandler, tidyLayout } from "./canvas/tidy-layout";
-import { postLayoutSelection } from "./settings/api";
+import { registerDidrawIdDedup } from "./canvas/didraw-id-dedup";
 import {
+  buildObjectLink,
+  parseIdParam,
+  resolveUrlIds,
+} from "./canvas/deep-link";
+import { autoElkLayout, autoLayoutFrame } from "./canvas/elk-layout";
+import { makeExportHotkeyHandler } from "./canvas/export-hotkey";
+import { ExportMiroModal } from "./canvas/export-miro-modal";
+import { getDidrawName } from "./canvas/id-prefix";
+import {
+  importMermaid,
+  importMermaidWithEngine,
+  isBoundsContained,
+  unionBoundsOf,
+} from "./canvas/mermaid-import";
+import { registerPinAutoToggle } from "./canvas/pin-auto-toggle";
+import {
+  type SelectionInfo,
   classifySelection,
   makeRolePickerHandler,
-  type SelectionInfo,
 } from "./canvas/role-picker.ts";
 import { RolePicker } from "./canvas/role-picker.tsx";
 import { applyOverlaysToShapes } from "./canvas/schema-overlay-hydrate";
 import { installSchemaOverlaySync } from "./canvas/schema-overlay-sync";
+import { backfillStoreRecords } from "./canvas/schema-placeholder";
+import { registerStyleDefaultsSync } from "./canvas/style-defaults-sync";
+import {
+  makeForceReLayoutHotkeyHandler,
+  makeTidyHotkeyHandler,
+} from "./canvas/tidy-layout";
+import { getActiveBinding } from "./settings/shortcuts/config";
+import { matchShortcut } from "./settings/shortcuts/match";
 import { AiActivityBadge } from "./chrome/AiActivityBadge";
 import { AppChrome } from "./chrome/AppChrome";
 import { ErrorBanner } from "./chrome/ErrorBanner";
-import { buildTldrawComponents } from "./chrome/TldrawComponents";
+import {
+  type ToastSink,
+  buildTldrawComponents,
+} from "./chrome/TldrawComponents";
 import { UpdateBanner } from "./chrome/UpdateBanner";
-import { ExportMiroModal } from "./canvas/export-miro-modal";
 import { MermaidImportModal } from "./mermaid/MermaidImportModal";
 import { PromptDrawer } from "./prompts/PromptDrawer";
 import { PromptInput } from "./prompts/PromptInput";
 import { getState, seedSchema } from "./transport/api";
-import { viewportReporter } from "./transport/viewport";
 import { computeTruncatedBackoff } from "./transport/sync-recovery";
+import { viewportReporter } from "./transport/viewport";
 import { type AiActivity, startStoreSync } from "./transport/ws";
 
 /**
@@ -66,6 +85,29 @@ function maybeZoomToAffected(
   setTimeout(() => {
     inProgrammaticCameraOp.current = false;
   }, 300);
+}
+
+/**
+ * DL (deep-link на объект): выделить и сфокусировать камеру на shape-id'ах из
+ * `?id=`. Выделение = подсветка «показать пальцем». Зум капится на 1, чтобы
+ * мелкий объект не раздувался во весь экран, а крупный — вписывался целиком.
+ * Возвращает true, если найден хотя бы один shape.
+ */
+function focusDeepLinkShapes(editor: Editor, ids: TLShapeId[]): boolean {
+  if (ids.length === 0) return false;
+  editor.select(...ids);
+  const bounds = unionBoundsOf(editor, ids);
+  if (bounds && bounds.w > 0 && bounds.h > 0) {
+    const vp = editor.getViewportScreenBounds();
+    const inset = 80;
+    const fit = Math.min(
+      (vp.w - inset * 2) / bounds.w,
+      (vp.h - inset * 2) / bounds.h,
+    );
+    const targetZoom = Math.min(fit > 0 ? fit : 1, 1);
+    editor.zoomToBounds(bounds, { targetZoom, animation: { duration: 0 } });
+  }
+  return true;
 }
 
 export function App({
@@ -108,7 +150,9 @@ export function App({
   const onTidySelection = useRef<((ids: string[]) => void) | null>(null);
   const onExportSelection = useRef<((ids: string[]) => void) | null>(null);
   // DRW-150: schema-container direction callback — needs live editor ref, set in onMount.
-  const onSetContainerDirection = useRef<((direction: SchemaContainerDirection) => void) | null>(null);
+  const onSetContainerDirection = useRef<
+    ((direction: SchemaContainerDirection) => void) | null
+  >(null);
   // DRW-150: disposer for registerAutoFlipDirection — prevents listener accumulation on HMR/room-switch.
   const autoFlipDisposerRef = useRef<(() => void) | null>(null);
   // DRW-180 style-propagation Task 9: disposer for registerStyleDefaultsSync.
@@ -119,6 +163,13 @@ export function App({
   const arrowAnchorPinDisposerRef = useRef<(() => void) | null>(null);
   // DRW-186 frame-scope: disposer for registerContainerTitlePositionInherit.
   const titlePosInheritDisposerRef = useRef<(() => void) | null>(null);
+  // DRW-194: disposer for registerDidrawIdDedup (regen didrawId on duplicate).
+  const didrawDedupDisposerRef = useRef<(() => void) | null>(null);
+  // DL: deep-link toast sink — устанавливается ToastBridge внутри Tldraw
+  // UI-контекста, вызывается из мест вне контекста (hydrate-ретрай, ⌘⌥C).
+  const toastRef = useRef<ToastSink["current"]>(null);
+  // DL: copy-link callback — ставится в onMount (нужен live editor + space/room).
+  const onCopyObjectLink = useRef<((ids: string[]) => void) | null>(null);
   onExportSelection.current = (ids: string[]) => {
     if (ids.length === 0) return;
     setExportOpen(true);
@@ -128,7 +179,10 @@ export function App({
       buildTldrawComponents(space, room, {
         onTidySelection: (ids) => onTidySelection.current?.(ids),
         onExportSelection: (ids) => onExportSelection.current?.(ids),
-        onSetContainerDirection: (direction) => onSetContainerDirection.current?.(direction),
+        onSetContainerDirection: (direction) =>
+          onSetContainerDirection.current?.(direction),
+        onCopyObjectLink: (ids) => onCopyObjectLink.current?.(ids),
+        toastSink: toastRef,
       }),
     [space, room],
   );
@@ -152,19 +206,21 @@ export function App({
       pinAutoToggleDisposerRef.current = null;
       titlePosInheritDisposerRef.current?.();
       titlePosInheritDisposerRef.current = null;
+      didrawDedupDisposerRef.current?.();
+      didrawDedupDisposerRef.current = null;
     };
   }, []);
 
   // ⌘K / ⌘M / Esc keyboard handler.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "k") {
-        // DRW-136 #1: !shiftKey guard — без него ⌘+Shift+K (semantic picker)
-        // одновременно toggle'ил PromptInput, и два overlay'а конкурировали
-        // за внимание. Picker сам wired в отдельном useEffect ниже.
+      if (matchShortcut(getActiveBinding("prompt"), e)) {
+        // DRW-136 #1: the default !shiftKey guard (encoded in the prompt
+        // binding) keeps ⌘⇧K (semantic picker) from also toggling PromptInput.
+        // Picker сам wired в отдельном useEffect ниже.
         e.preventDefault();
         setPromptOpen((v) => !v);
-      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "m") {
+      } else if (matchShortcut(getActiveBinding("mermaid-import"), e)) {
         // ⌘M — open Mermaid import modal. preventDefault — на случай если
         // браузер/OS попытается забрать (на macOS Chrome native ⌘M = minimize
         // window, но user сообщил что освободил его в системе).
@@ -194,43 +250,85 @@ export function App({
     const handler = makeTidyHotkeyHandler(
       () => editor.getSelectedShapeIds() as unknown as string[],
       editor,
-      async (ids, scope) => {
-        const result = await tidyLayout(ids, space, room, scope);
+      async (ids) => {
+        // Core B: elkjs re-layout on the frontend (replaces legacy backend dagre).
+        // autoLayoutFrame: aspect-aware auto-direction for unpinned frames.
+        const result = await autoLayoutFrame(
+          editor,
+          ids as unknown as TLShapeId[],
+        );
         if (result.kind === "ok") {
           maybeZoomToAffected(editor, result.affected, inProgrammaticCameraOp);
+        } else if (result.kind === "error") {
+          console.warn("[elk-layout] failed", result.message);
         }
       },
     );
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [editor, space, room]);
+    // Capture phase: tldraw's input system also listens on keydown and can
+    // swallow ⌘⇧L before it bubbles to window. Intercept first (mirrors the
+    // force-relayout handler below).
+    window.addEventListener("keydown", handler, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", handler, { capture: true });
+  }, [editor]);
 
-  // ⌘⌥⇧L / Ctrl+Alt+Shift+L — force re-layout: backend ignores meta.pinned /
-  // meta.didrawSizePinned for this single layout pass without clearing flags.
-  // Capture phase + window: tldraw input system also listens on keydown, so we
-  // intercept before it (otherwise Alt-mod combos can be swallowed by the
-  // editor's own shortcut router).
+  // ⌘⌥⇧L / Ctrl+Alt+Shift+L — force re-layout: elk lays out everything for this
+  // single pass, ignoring meta.pinned / meta.didrawSizePinned without clearing
+  // the flags. Capture phase + window: tldraw input system also listens on
+  // keydown, so we intercept before it (otherwise Alt-mod combos can be
+  // swallowed by the editor's own shortcut router).
   useEffect(() => {
     if (!editor) return;
     const handler = makeForceReLayoutHotkeyHandler(
       () => editor.getSelectedShapeIds() as unknown as string[],
       editor,
-      async (ids, scope) => {
-        try {
-          await postLayoutSelection(space, room, { ids, scope, forceUnpin: true });
-        } catch (e) {
-          console.warn("[force-relayout] failed", e);
+      async (ids) => {
+        const result = await autoLayoutFrame(
+          editor,
+          ids as unknown as TLShapeId[],
+          {
+            forceUnpin: true,
+            // ⌘⌥⇧L also re-infers every container direction from topology,
+            // ignoring explicit per-container directions (clean-slate pass).
+            forceDirections: true,
+          },
+        );
+        if (result.kind === "ok") {
+          maybeZoomToAffected(editor, result.affected, inProgrammaticCameraOp);
+        } else if (result.kind === "error") {
+          console.warn("[elk-layout] force failed", result.message);
         }
       },
     );
     window.addEventListener("keydown", handler, { capture: true });
-    return () => window.removeEventListener("keydown", handler, { capture: true });
-  }, [editor, space, room]);
+    return () =>
+      window.removeEventListener("keydown", handler, { capture: true });
+  }, [editor]);
+
+  // DL: copy deep-link на выделенный объект(ы). Default ⇧⌘S (НЕ ⌘⌥C — то
+  // перехватывает Chrome/macOS как "Inspect Element" до страницы). Remappable.
+  // Capture phase: tldraw's input system слушает keydown первым; match по e.code.
+  useEffect(() => {
+    if (!editor) return;
+    const handler = (e: KeyboardEvent) => {
+      // Shortcut registry: read the active binding at event time.
+      if (!matchShortcut(getActiveBinding("copy-link"), e)) return;
+      const ids = editor.getSelectedShapeIds() as unknown as string[];
+      if (ids.length === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onCopyObjectLink.current?.(ids);
+    };
+    window.addEventListener("keydown", handler, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", handler, { capture: true });
+  }, [editor]);
 
   // ⌘⇧E / Ctrl+Shift+E — open Export to Miro modal for current selection.
   useEffect(() => {
     const handler = makeExportHotkeyHandler(
-      () => (editor ? (editor.getSelectedShapeIds() as unknown as string[]) : []),
+      () =>
+        editor ? (editor.getSelectedShapeIds() as unknown as string[]) : [],
       (ids) => {
         if (ids.length === 0) return;
         setExportOpen(true);
@@ -245,7 +343,13 @@ export function App({
   useEffect(() => {
     const handler = makeRolePickerHandler(
       () => {
-        if (!editor) return { hasSelection: false, mode: "none", shapeIds: [], arrowIds: [] };
+        if (!editor)
+          return {
+            hasSelection: false,
+            mode: "none",
+            shapeIds: [],
+            arrowIds: [],
+          };
         const ids = editor.getSelectedShapeIds() as unknown as string[];
         return classifySelection(ids, (id) => {
           // biome-ignore lint/suspicious/noExplicitAny: tldraw id typing
@@ -338,10 +442,14 @@ export function App({
     // DRW-137: truncated recovery timer — cancel on cleanup to prevent
     // post-unmount fetches on a room that's been switched away.
     let truncatedRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
+    // DL: deep-link focus retry timer — cancel on cleanup.
+    let deepLinkRetryTimer: ReturnType<typeof setTimeout> | undefined;
 
     // DRW-047 + DRW-018: upload our V2 schema (best-effort), then fetch /api/state
     // and apply via mergeRemoteChanges. Shared by initial hydrate and truncated-recovery.
-    const fetchAndLoadSnapshot = async (): Promise<{ version: number } | null> => {
+    const fetchAndLoadSnapshot = async (): Promise<{
+      version: number;
+    } | null> => {
       try {
         await seedSchema(space, room, editor.store.schema.serialize());
       } catch {
@@ -349,7 +457,10 @@ export function App({
       }
       const s = await getState(space, room);
       if (!active) return null;
-      const snapshot = { ...s.store, store: backfillStoreRecords(s.store?.store) };
+      const snapshot = {
+        ...s.store,
+        store: backfillStoreRecords(s.store?.store),
+      };
       editor.store.mergeRemoteChanges(() => {
         editor.loadSnapshot(snapshot);
         // DRW-135: backend store содержит RAW positions; user overlays лежат
@@ -365,9 +476,38 @@ export function App({
     // handler above, accessed via ref so TldrawComponents can invoke it without
     // importing editor state.
     onTidySelection.current = async (ids: string[]) => {
-      const result = await tidyLayout(ids, space, room);
+      // Core B: elkjs re-layout (replaces legacy backend dagre tidy).
+      const result = await autoLayoutFrame(editor, ids as unknown as TLShapeId[]);
       if (result.kind === "ok") {
         maybeZoomToAffected(editor, result.affected, inProgrammaticCameraOp);
+      } else if (result.kind === "error") {
+        console.warn("[elk-layout] failed", result.message);
+      }
+    };
+
+    // DL: copy deep-link на выделенный объект(ы) → clipboard + toast.
+    onCopyObjectLink.current = async (ids: string[]) => {
+      const shapes = (ids as unknown as TLShapeId[])
+        .map((id) => editor.getShape(id))
+        .filter((s): s is NonNullable<typeof s> => s !== undefined);
+      if (shapes.length === 0) return;
+      const url = buildObjectLink({
+        origin: location.origin,
+        pathname: location.pathname,
+        space,
+        room,
+        shapes,
+      });
+      try {
+        await navigator.clipboard.writeText(url);
+        toastRef.current?.(
+          shapes.length > 1
+            ? `Ссылка на объекты скопирована (${shapes.length})`
+            : "Ссылка на объект скопирована",
+          "success",
+        );
+      } catch {
+        toastRef.current?.("Не удалось скопировать ссылку", "error");
       }
     };
 
@@ -420,13 +560,18 @@ export function App({
 
       const didrawNames = result.shapeIds.map((id) => {
         const shape = editor.getShape(id);
-        const name = (shape?.meta as Record<string, unknown> | undefined)?.didrawName;
+        const name = (shape?.meta as Record<string, unknown> | undefined)
+          ?.didrawName;
         return typeof name === "string" ? name : "";
       });
 
       // DRW-086: animate viewport to new shapes (or fit-all), unless user
       // has manually panned (DRW-075 guard) or focus='none'.
-      if (focus !== "none" && !userHasManuallyPanned.current && result.shapeIds.length > 0) {
+      if (
+        focus !== "none" &&
+        !userHasManuallyPanned.current &&
+        result.shapeIds.length > 0
+      ) {
         inProgrammaticCameraOp.current = true;
         if (focus === "fit-all") {
           editor.zoomToFit({ animation: { duration: 200 } });
@@ -434,7 +579,10 @@ export function App({
           // focus === "new" (default)
           const bounds = unionBoundsOf(editor, result.shapeIds);
           if (bounds) {
-            editor.zoomToBounds(bounds, { animation: { duration: 200 }, inset: 64 });
+            editor.zoomToBounds(bounds, {
+              animation: { duration: 200 },
+              inset: 64,
+            });
           }
         }
         setTimeout(() => {
@@ -492,9 +640,39 @@ export function App({
       // Camera: restore from localStorage, otherwise zoomToFit if there's
       // content. If a saved camera exists the user has already navigated this
       // room — mark as manually panned so AI fit won't override it.
+      //
+      // DL: deep-link на объект (?id=…) перебивает saved-camera/zoomToFit —
+      // явный фокус важнее восстановленного вида. v2-дети могут ещё приезжать
+      // по WS → один отложенный ретрай, затем toast если так и не нашли.
+      const deepLinkTokens = parseIdParam(
+        new URLSearchParams(location.search).get("id"),
+      );
       const cam = loadCamera(room);
       inProgrammaticCameraOp.current = true;
-      if (cam) {
+      if (deepLinkTokens.length > 0) {
+        const focused = focusDeepLinkShapes(
+          editor,
+          resolveUrlIds(editor.getCurrentPageShapes(), deepLinkTokens),
+        );
+        // Явный фокус → камера «занята» пользователем, AI-fit её не трогает.
+        userHasManuallyPanned.current = true;
+        if (!focused) {
+          deepLinkRetryTimer = setTimeout(() => {
+            deepLinkRetryTimer = undefined;
+            if (!active) return;
+            const ok = focusDeepLinkShapes(
+              editor,
+              resolveUrlIds(editor.getCurrentPageShapes(), deepLinkTokens),
+            );
+            if (!ok) {
+              toastRef.current?.(
+                `Объект не найден: ${deepLinkTokens.join(", ")}`,
+                "warning",
+              );
+            }
+          }, 700);
+        }
+      } else if (cam) {
         editor.setCamera(cam, { immediate: true });
         userHasManuallyPanned.current = true;
       } else {
@@ -650,6 +828,10 @@ export function App({
         clearTimeout(truncatedRecoveryTimer);
         truncatedRecoveryTimer = undefined;
       }
+      if (deepLinkRetryTimer) {
+        clearTimeout(deepLinkRetryTimer);
+        deepLinkRetryTimer = undefined;
+      }
       if (aiZoomTimer !== null) {
         clearTimeout(aiZoomTimer);
         aiZoomTimer = null;
@@ -684,9 +866,9 @@ export function App({
             <MermaidImportModal
               visible={mermaidOpen}
               onClose={() => setMermaidOpen(false)}
-              onSubmit={async (source) => {
+              onSubmit={async (source, engine) => {
                 try {
-                  await importMermaid(editor, source);
+                  await importMermaidWithEngine(editor, source, engine);
                   return { ok: true };
                 } catch (e) {
                   return { ok: false, error: String(e) };
@@ -734,7 +916,11 @@ export function App({
           // DRW-180 style-propagation Task 9: bidirectional sync board defaults ↔
           // editor.stylesForNextShape + container resolution chain at create-time.
           styleSyncDisposerRef.current?.();
-          styleSyncDisposerRef.current = registerStyleDefaultsSync(ed, space, room);
+          styleSyncDisposerRef.current = registerStyleDefaultsSync(
+            ed,
+            space,
+            room,
+          );
           // DRW-185: auto-pin on drag/resize end.
           pinAutoToggleDisposerRef.current?.();
           pinAutoToggleDisposerRef.current = registerPinAutoToggle(ed);
@@ -743,7 +929,11 @@ export function App({
           arrowAnchorPinDisposerRef.current = registerArrowAnchorPin(ed);
           // DRW-186 frame-scope: inherit titlePosition из parent Frame.meta при создании SchemaContainer'а.
           titlePosInheritDisposerRef.current?.();
-          titlePosInheritDisposerRef.current = registerContainerTitlePositionInherit(ed);
+          titlePosInheritDisposerRef.current =
+            registerContainerTitlePositionInherit(ed);
+          // DRW-194: regenerate colliding didrawId on local duplicate/paste.
+          didrawDedupDisposerRef.current?.();
+          didrawDedupDisposerRef.current = registerDidrawIdDedup(ed);
           // DRW-150: wire direction callback for context-menu (requires live editor).
           // Task #6 (frame-container-direction-layout): explicit "custom" stays as
           // schema-container props write (auto-flip parity); cardinal directions
@@ -765,7 +955,11 @@ export function App({
               return;
             }
             const ids = ed.getSelectedShapeIds() as unknown as string[];
-            setContainerDirection(ed, ids, direction);
+            // Autolayout rebuild: write the direction meta locally (no backend
+            // layout POST) then re-flow with elk so the schema rebuilds *and*
+            // lays out in one action — no extra ⌘⇧L needed.
+            setContainerDirection(ed, ids, direction, { triggerLayout: false });
+            autoElkLayout(ed, ids as unknown as TLShapeId[]);
           };
           if (import.meta.env.DEV) {
             // biome-ignore lint/suspicious/noExplicitAny: dev-only debug hook

@@ -802,3 +802,16 @@ test("DRW-162: collects subgraph styles from style directives", () => {
   expect(r.subgraphStyles.get("TRANSPORT")).toEqual({ fill: "#C8E6C9", stroke: "#2e7d32" });
   expect(r.nodeStyles.get("SE")).toBeDefined();
 });
+
+describe("parseMermaidFlowchart — idMap exposure (Stage 1)", () => {
+  test("ParseResult exposes idMap mermaidId→NodeId", () => {
+    const res = parse("flowchart LR\n  api[API Gateway] --> db[DB]");
+    if (!res.ok) throw new Error("expected ok parse");
+    // idMap keyed by raw mermaid identifier
+    expect(res.idMap.get("api")).toBeDefined();
+    expect(res.idMap.get("db")).toBeDefined();
+    // value is the resolved NodeId (slug-<6char> form), distinct per node
+    expect(res.idMap.get("api")).toMatch(/-[a-z0-9]{6}$/);
+    expect(res.idMap.get("api")).not.toEqual(res.idMap.get("db"));
+  });
+});

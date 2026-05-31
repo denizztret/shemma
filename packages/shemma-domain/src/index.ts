@@ -14,6 +14,7 @@ export {
 } from "./label-metrics";
 export {
   type LayoutParams,
+  type LayoutAlgorithm,
   type Direction as LayoutDirection,
   type ContainerLayoutOverride,
   DEFAULT_LAYOUT_PARAMS,

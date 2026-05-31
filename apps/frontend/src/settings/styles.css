@@ -135,6 +135,20 @@
   min-width: 0;
   white-space: nowrap;
 }
+
+/* Layout-engine selector (Слои / Дерево / Стресс / Силы) — 4 кнопки в одну
+ * строку в узкой popover. Tight padding + no-wrap + равная доля ширины. */
+.settings-section__row--layout-engine {
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+.settings-section__row--layout-engine .settings-btn {
+  padding: 4px 6px;
+  font-size: 11px;
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+}
 .settings-btn {
   padding: 5px 10px;
   border: 1px solid #d6d6d6;
@@ -201,3 +215,71 @@
   overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
 }
 .settings-preset-cell { display: inline-flex; }
+
+/* Shortcuts remap panel (Горячие клавиши). */
+.settings-popover__panel--shortcuts { gap: 8px; }
+.settings-shortcuts__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.settings-shortcuts__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid #f0f0f0;
+}
+.settings-shortcuts__row:last-child { border-bottom: none; }
+.settings-shortcuts__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.settings-shortcuts__label { font-size: 12px; color: #333; }
+.settings-shortcuts__category {
+  font-size: 9px;
+  color: #aaa;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.settings-shortcuts__controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-shortcuts__binding {
+  min-width: 44px;
+  text-align: center;
+  padding: 2px 7px;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  background: #f7f7f7;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 12px;
+  color: #444;
+}
+.settings-shortcuts__capturing {
+  font-size: 11px;
+  color: #4a8af0;
+  font-style: italic;
+  min-width: 44px;
+}
+.settings-shortcuts__remap { padding: 3px 8px; font-size: 11px; }
+.settings-shortcuts__reset { white-space: nowrap; }
+.settings-shortcuts__conflict {
+  flex: 1 1 100%;
+  font-size: 10px;
+  line-height: 1.35;
+  color: #b35900;
+  background: #fff4e5;
+  border: 1px solid #ffd9a8;
+  border-radius: 4px;
+  padding: 4px 6px;
+}

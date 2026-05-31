@@ -73,9 +73,15 @@ export type SchemaActionError = {
   message: string;
 };
 
+/** Позиция узла/контейнера для Stage-1 import position-injection.
+ *  Координаты — layout-flat (как отдаёт mermaid blueprint); backend сам
+ *  конвертирует детей subgraph'а в parent-relative. w/h обязательны для
+ *  subgraph-ключей (для sizing контейнера), опциональны для leaf. */
+export type NodePos = { x: number; y: number; w?: number; h?: number };
+
 /** Request body для `POST /api/schema/create`. */
 export type SchemaCreateRequest =
-  | { label: string; raw: string }
+  | { label: string; raw: string; positionsOverride?: Record<string, NodePos> }
   | { label: string; actions: import("./schema-actions").SchemaAction[] };
 
 /** Response для `POST /api/schema/create`. */

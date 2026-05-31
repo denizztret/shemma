@@ -4,6 +4,8 @@
 // makeTidyHotkeyHandler — фабрика KeyboardEvent-хэндлера для ⌘⇧L / Ctrl+Shift+L.
 
 import type { Editor, TLShapeId } from "tldraw";
+import { getActiveBinding } from "../settings/shortcuts/config";
+import { matchShortcut } from "../settings/shortcuts/match";
 
 export type TidyLayoutResult =
   | { kind: "noop"; reason: string }
@@ -118,8 +120,9 @@ export function makeTidyHotkeyHandler(
   onTidy: (ids: string[], scope: LayoutScope) => void,
 ): (e: KeyboardEvent) => void {
   return (e: KeyboardEvent) => {
-    const isModifier = e.metaKey || e.ctrlKey;
-    if (!isModifier || !e.shiftKey || e.altKey || e.key.toLowerCase() !== "l") return;
+    // Shortcut registry: read the active binding at event time so user remaps
+    // take effect without re-registering the listener.
+    if (!matchShortcut(getActiveBinding("tidy-layout"), e)) return;
     e.preventDefault();
     const ids = getSelectedIds();
     const scope = scopeFor(ids, editor);
@@ -141,10 +144,8 @@ export function makeForceReLayoutHotkeyHandler(
   onForce: (ids: string[], scope: LayoutScope) => void,
 ): (e: KeyboardEvent) => void {
   return (e: KeyboardEvent) => {
-    const isModifier = e.metaKey || e.ctrlKey;
-    if (!isModifier || !e.shiftKey || !e.altKey) return;
-    const isL = e.code === "KeyL" || e.key.toLowerCase() === "l";
-    if (!isL) return;
+    // Shortcut registry: read the active binding at event time.
+    if (!matchShortcut(getActiveBinding("force-relayout"), e)) return;
     e.preventDefault();
     e.stopPropagation();
     const ids = getSelectedIds();

@@ -11,6 +11,7 @@ export const tokens = {
     text: "#1a1a1a",
     textMuted: "#666",
     border: "rgba(0,0,0,0.12)",
+    hoverOverlay: "rgba(0,0,0,0.06)",
     bgPage: "#f6f7f9",
     bg: "#fff",
     bgOverlay: "rgba(255,255,255,0.95)",
