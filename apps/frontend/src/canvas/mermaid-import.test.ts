@@ -21,6 +21,7 @@
 // surface (createShape/updateShapes mock + getCurrentPageShapes + meta on shapes).
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { samePositions } from "./mermaid-import";
 
 // Fake shape factory ----------------------------------------------------------
 type FakeShape = {
@@ -447,6 +448,22 @@ describe("unionBoundsOf (DRW-086)", () => {
   });
 });
 
+describe("samePositions (Stage 1 harvest stability)", () => {
+  test("true for identical maps", () => {
+    const a = { x: { x: 1, y: 2, w: 3, h: 4 }, y: { x: 5, y: 6, w: 7, h: 8 } };
+    const b = { x: { x: 1, y: 2, w: 3, h: 4 }, y: { x: 5, y: 6, w: 7, h: 8 } };
+    expect(samePositions(a, b)).toBe(true);
+  });
+  test("false when a coord differs", () => {
+    const a = { x: { x: 1, y: 2, w: 3, h: 4 } };
+    const b = { x: { x: 1, y: 2, w: 3, h: 5 } };
+    expect(samePositions(a, b)).toBe(false);
+  });
+  test("false when key sets differ", () => {
+    expect(samePositions({ x: { x: 0, y: 0, w: 0, h: 0 } }, {})).toBe(false);
+  });
+});
+
 // --- DRW-096: isBoundsContained helper ---------------------------------------
 
 describe("isBoundsContained (DRW-096)", () => {
@@ -869,5 +886,372 @@ describe("inferMermaidLabel (DRW-141)", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+describe("ensureElkLoader — idempotent ELK loader registration", () => {
+  test("registers exactly once across multiple calls; returns true", async () => {
+    let registerCalls = 0;
+    mock.module("mermaid", () => ({
+      default: {
+        registerLayoutLoaders: (_loaders: unknown) => {
+          registerCalls++;
+        },
+      },
+    }));
+    mock.module("@mermaid-js/layout-elk", () => ({ default: [{ name: "elk" }] }));
+
+    const { ensureElkLoader, __resetElkLoaderForTest } = await import(
+      "./mermaid-import"
+    );
+    __resetElkLoaderForTest();
+
+    const r1 = await ensureElkLoader();
+    const r2 = await ensureElkLoader();
+    const r3 = await ensureElkLoader();
+
+    expect(r1).toBe(true);
+    expect(r2).toBe(true);
+    expect(r3).toBe(true);
+    expect(registerCalls).toBe(1);
+  });
+
+  test("returns false (no throw) when registration fails", async () => {
+    mock.module("mermaid", () => ({
+      default: {
+        registerLayoutLoaders: () => {
+          throw new Error("loader incompatible");
+        },
+      },
+    }));
+    mock.module("@mermaid-js/layout-elk", () => ({ default: [] }));
+
+    const { ensureElkLoader, __resetElkLoaderForTest } = await import(
+      "./mermaid-import"
+    );
+    __resetElkLoaderForTest();
+
+    const r = await ensureElkLoader();
+    expect(r).toBe(false);
+  });
+});
+
+// Хелпер: мок createMermaidDiagram, запоминающий переданные options.
+function mockMermaidCapture(): { calls: Array<{ source: string; options: unknown }> } {
+  const calls: Array<{ source: string; options: unknown }> = [];
+  mock.module("@tldraw/mermaid", () => ({
+    createMermaidDiagram: async (
+      editor: any,
+      source: string,
+      options?: unknown,
+    ) => {
+      calls.push({ source, options });
+      // добавить минимальный root frame, чтобы importMermaidLegacy не бросил "no shapes"
+      editor._addShapes([makeShape("f1", "frame", editor.getCurrentPageId(), "F")]);
+    },
+  }));
+  return { calls };
+}
+
+describe("importMermaidLegacy — layout option passthrough", () => {
+  test("dagre (no opts): createMermaidDiagram called WITHOUT mermaidConfig.layout", async () => {
+    const cap = mockMermaidCapture();
+    const editor = makeFakeEditor("page:page");
+    const { importMermaidLegacy } = await import("./mermaid-import");
+    await importMermaidLegacy(editor as never, "graph LR\nA-->B");
+    expect(cap.calls).toHaveLength(1);
+    const opts = cap.calls[0]!.options as { mermaidConfig?: { layout?: string } } | undefined;
+    expect(opts?.mermaidConfig?.layout).toBeUndefined();
+  });
+
+  test("elk: createMermaidDiagram called WITH mermaidConfig.layout='elk'", async () => {
+    const cap = mockMermaidCapture();
+    const editor = makeFakeEditor("page:page");
+    const { importMermaidLegacy } = await import("./mermaid-import");
+    await importMermaidLegacy(editor as never, "graph LR\nA-->B", { layout: "elk" });
+    expect(cap.calls).toHaveLength(1);
+    const opts = cap.calls[0]!.options as { mermaidConfig?: { layout?: string } };
+    expect(opts.mermaidConfig?.layout).toBe("elk");
+  });
+});
+
+describe("computeImportOriginX", () => {
+  const vp = { x: 1000, y: 0, w: 800, h: 600, minX: 1000 } as any;
+
+  test("with page content: maxX + GAP", async () => {
+    const { computeImportOriginX, IMPORT_GAP } = await import("./mermaid-import");
+    const pageBounds = { x: 0, y: 0, w: 500, h: 300, maxX: 500 } as any;
+    expect(computeImportOriginX(pageBounds, vp)).toBe(500 + IMPORT_GAP);
+  });
+
+  test("empty page (pageBounds undefined): viewport minX", async () => {
+    const { computeImportOriginX } = await import("./mermaid-import");
+    expect(computeImportOriginX(undefined, vp)).toBe(1000);
+  });
+});
+
+describe("repositionToOriginX", () => {
+  test("shifts root shapes so union minX == originX", async () => {
+    const moved: Array<{ id: string; x: number }> = [];
+    const bounds: Record<string, { x: number; y: number; w: number; h: number }> = {
+      "shape:root": { x: 50, y: 0, w: 100, h: 80 },
+      "shape:child": { x: 60, y: 10, w: 40, h: 20 },
+    };
+    const shapesById: Record<string, { id: string; type: string; x: number }> = {
+      "shape:root": { id: "shape:root", type: "frame", x: 50 },
+      "shape:child": { id: "shape:child", type: "geo", x: 10 },
+    };
+    const editor = {
+      getShapePageBounds: (id: string) => bounds[id],
+      getShape: (id: string) => shapesById[id],
+      updateShapes: (ups: Array<{ id: string; x: number }>) => {
+        for (const u of ups) moved.push({ id: u.id, x: u.x });
+      },
+    };
+    const { repositionToOriginX } = await import("./mermaid-import");
+    repositionToOriginX(
+      editor as never,
+      ["shape:root"] as never,
+      ["shape:root", "shape:child"] as never,
+      1000,
+    );
+    // union minX = 50, originX = 1000 → dx = 950 → root.x 50→1000
+    expect(moved).toEqual([{ id: "shape:root", x: 1000 }]);
+  });
+
+  test("no-op when union bounds null (no shapes)", async () => {
+    const editor = {
+      getShapePageBounds: () => undefined,
+      getShape: () => undefined,
+      updateShapes: () => {
+        throw new Error("should not be called");
+      },
+    };
+    const { repositionToOriginX } = await import("./mermaid-import");
+    expect(() =>
+      repositionToOriginX(editor as never, [] as never, [] as never, 1000),
+    ).not.toThrow();
+  });
+});
+
+describe("repositionCustomFrameWhenReady", () => {
+  test("moves frame once it appears in store", async () => {
+    let polls = 0;
+    const moved: Array<{ id: string; x: number }> = [];
+    const editor = {
+      getShape: (_id: string) => {
+        polls++;
+        return polls >= 2 ? { id: "shape:f", type: "frame", x: 30 } : undefined;
+      },
+      getShapePageBounds: (_id: string) => ({ x: 30, y: 0, w: 100, h: 50 }),
+      updateShape: (u: { id: string; x: number }) => moved.push(u),
+    };
+    const { repositionCustomFrameWhenReady } = await import("./mermaid-import");
+    await repositionCustomFrameWhenReady(editor as never, "shape:f", 500, {
+      intervalMs: 1,
+      timeoutMs: 100,
+    });
+    // bounds.x=30, originX=500 → dx=470 → frame.x 30→500
+    expect(moved).toEqual([{ id: "shape:f", type: "frame", x: 500 }]);
+  });
+
+  test("gives up after timeout without throwing when frame never appears", async () => {
+    const editor = {
+      getShape: () => undefined,
+      getShapePageBounds: () => undefined,
+      updateShape: () => {
+        throw new Error("should not move");
+      },
+    };
+    const { repositionCustomFrameWhenReady } = await import("./mermaid-import");
+    await expect(
+      repositionCustomFrameWhenReady(editor as never, "shape:f", 500, {
+        intervalMs: 1,
+        timeoutMs: 10,
+      }),
+    ).resolves.toBeUndefined();
+  });
+});
+
+// --- Stage 1: harvestRecordFromBlueprintNode (pure mapper helper) ------------
+
+describe("harvestRecordFromBlueprintNode (Stage 1)", () => {
+  test("keeps mermaid id key + flat coords; returns undefined", async () => {
+    const { harvestRecordFromBlueprintNode } = await import("./mermaid-import");
+    const out: Record<string, { x: number; y: number; w: number; h: number }> = {};
+    // tldraw 5.0.0 mapper input is a WRAPPER: { nodeId, node, diagramKind, kind }
+    const input = { nodeId: "api", node: { id: "api", x: 10, y: 20, w: 120, h: 60, kind: "square" }, diagramKind: "flowchart", kind: "square" };
+    const ret = harvestRecordFromBlueprintNode(out, input as any);
+    expect(ret).toBeUndefined();
+    expect(out.api).toEqual({ x: 10, y: 20, w: 120, h: 60 });
+  });
+});
+
+describe("importMermaidWithEngine — routing", () => {
+  function fakeEditorWithBounds(pageId: string) {
+    const e = makeFakeEditor(pageId) as any;
+    e.getCurrentPageBounds = () => undefined; // пустая страница
+    e.getViewportPageBounds = () => ({ x: 0, y: 0, w: 800, h: 600, minX: 0 });
+    e.getShapePageBounds = (_id: string) => ({ x: 0, y: 0, w: 100, h: 50 });
+    // Stage 1: scratch-page support for harvestMermaidPositions
+    e.getPages = () => [{ id: pageId }];
+    e.createPage = (_opts: unknown) => { e._scratchPageCreated = true; };
+    e.setCurrentPage = (_id: string) => {};
+    e.deletePage = (_id: string) => {};
+    e.run = (fn: () => void, _opts?: unknown) => { fn(); };
+    // After createPage call getPages returns scratch too (simulated by mockMermaidCapture)
+    return e;
+  }
+
+  // Хелпер: мок createMermaidDiagram для harvest-path (scratch page).
+  // Для harvestMermaidPositions: editor.getPages() должен вернуть scratch после createPage.
+  function mockMermaidCaptureWithScratch(pageId: string): { calls: Array<{ source: string; options: unknown }> } {
+    const calls: Array<{ source: string; options: unknown }> = [];
+    mock.module("@tldraw/mermaid", () => ({
+      createMermaidDiagram: async (
+        editor: any,
+        source: string,
+        options?: unknown,
+      ) => {
+        calls.push({ source, options });
+        // Harvest path calls createMermaidDiagram on scratch page — no shapes needed for harvest
+        // (positions come from blueprintRender.mapNodeToRenderSpec callback).
+        // Call the mapper for a fake node so harvestMermaidPositions gets at least one entry.
+        const opts = options as any;
+        if (opts?.blueprintRender?.mapNodeToRenderSpec) {
+          opts.blueprintRender.mapNodeToRenderSpec({
+            nodeId: "a",
+            node: { id: "a", x: 0, y: 0, w: 100, h: 50, kind: "square" },
+          });
+        }
+      },
+    }));
+    return { calls };
+  }
+
+  test("dagre → harvest via createMermaidDiagram (no layout), then backend fetch, engineUsed='dagre'", async () => {
+    const editor = fakeEditorWithBounds("page:page");
+    // Track getPages calls to simulate scratch page discovery.
+    // Stability-loop may call harvestMermaidPositionsOnce multiple times;
+    // each call does 2 getPages invocations (before + after createPage).
+    // Odd calls = "before createPage", even calls = "after createPage" (with scratch).
+    let pageCallCount = 0;
+    editor.getPages = () => {
+      pageCallCount++;
+      if (pageCallCount % 2 === 1) return [{ id: "page:page" }]; // before createPage
+      return [{ id: "page:page" }, { id: "page:scratch" }]; // after createPage
+    };
+
+    const cap = mockMermaidCaptureWithScratch("page:page");
+    const fetchMock = mock(async () =>
+      new Response(JSON.stringify({ ok: true, frameId: "shape:f", nodeIds: [], version: 1 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    (globalThis as any).fetch = fetchMock;
+
+    const { importMermaidWithEngine } = await import("./mermaid-import");
+    const res = await importMermaidWithEngine(editor as never, "graph LR\nA-->B", "dagre", {
+      space: "s", room: "r",
+    });
+    // Harvest called createMermaidDiagram with blueprintRender hook (no mermaidConfig.layout).
+    // Stability-loop may call it 1-N times depending on warm state; first call sets the engine.
+    expect(cap.calls.length).toBeGreaterThanOrEqual(1);
+    expect((cap.calls[0]!.options as any)?.mermaidConfig?.layout).toBeUndefined();
+    // Then backend was called.
+    expect(fetchMock).toHaveBeenCalled();
+    expect(res.engineUsed).toBe("dagre");
+    expect(res.engineFallback).toBeFalsy();
+  });
+
+  test("elk (loader ok) → harvest with layout:elk, then backend fetch, engineUsed='elk'", async () => {
+    const editor = fakeEditorWithBounds("page:page");
+    // Odd getPages calls = "before createPage", even = "after createPage" (with scratch).
+    let pageCallCount = 0;
+    editor.getPages = () => {
+      pageCallCount++;
+      if (pageCallCount % 2 === 1) return [{ id: "page:page" }];
+      return [{ id: "page:page" }, { id: "page:scratch" }];
+    };
+
+    mock.module("mermaid", () => ({ default: { registerLayoutLoaders: () => {} } }));
+    mock.module("@mermaid-js/layout-elk", () => ({ default: [] }));
+    const cap = mockMermaidCaptureWithScratch("page:page");
+    const fetchMock = mock(async () =>
+      new Response(JSON.stringify({ ok: true, frameId: "shape:f", nodeIds: [], version: 1 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    (globalThis as any).fetch = fetchMock;
+
+    const { importMermaidWithEngine, __resetElkLoaderForTest } = await import("./mermaid-import");
+    __resetElkLoaderForTest();
+    const res = await importMermaidWithEngine(editor as never, "graph LR\nA-->B", "elk", {
+      space: "s", room: "r",
+    });
+    // All harvest calls must use mermaidConfig.layout='elk' (stability-loop reuses same opts).
+    expect(cap.calls.length).toBeGreaterThanOrEqual(1);
+    expect((cap.calls[0]!.options as any).mermaidConfig?.layout).toBe("elk");
+    expect(fetchMock).toHaveBeenCalled();
+    expect(res.engineUsed).toBe("elk");
+    expect(res.engineFallback).toBe(false);
+  });
+
+  test("elk (loader fails) → falls back to dagre harvest (no layout), engineFallback=true", async () => {
+    const editor = fakeEditorWithBounds("page:page");
+    // Odd getPages calls = "before createPage", even = "after createPage" (with scratch).
+    let pageCallCount = 0;
+    editor.getPages = () => {
+      pageCallCount++;
+      if (pageCallCount % 2 === 1) return [{ id: "page:page" }];
+      return [{ id: "page:page" }, { id: "page:scratch" }];
+    };
+
+    mock.module("mermaid", () => ({
+      default: { registerLayoutLoaders: () => { throw new Error("bad"); } },
+    }));
+    mock.module("@mermaid-js/layout-elk", () => ({ default: [] }));
+    const cap = mockMermaidCaptureWithScratch("page:page");
+    const fetchMock = mock(async () =>
+      new Response(JSON.stringify({ ok: true, frameId: "shape:f", nodeIds: [], version: 1 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    (globalThis as any).fetch = fetchMock;
+
+    const { importMermaidWithEngine, __resetElkLoaderForTest } = await import("./mermaid-import");
+    __resetElkLoaderForTest();
+    const res = await importMermaidWithEngine(editor as never, "graph LR\nA-->B", "elk", {
+      space: "s", room: "r",
+    });
+    // Dagre fallback: no layout in mermaidConfig.
+    expect(cap.calls.length).toBeGreaterThanOrEqual(1);
+    expect((cap.calls[0]!.options as any)?.mermaidConfig?.layout).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalled();
+    expect(res.engineUsed).toBe("dagre");
+    expect(res.engineFallback).toBe(true);
+  });
+
+  test("custom → backend path, createMermaidDiagram NOT called", async () => {
+    const cap = mockMermaidCapture();
+    const fetchMock = mock(async () =>
+      new Response(JSON.stringify({ ok: true, frameId: "shape:f", nodeIds: [], version: 1 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    (globalThis as any).fetch = fetchMock;
+    const editor = fakeEditorWithBounds("page:page");
+    const { importMermaidWithEngine } = await import("./mermaid-import");
+    const res = await importMermaidWithEngine(editor as never, "graph LR\nA-->B", "custom", {
+      space: "s", room: "r",
+    });
+    expect(cap.calls).toHaveLength(0);
+    expect(fetchMock).toHaveBeenCalled();
+    expect(res.engineUsed).toBe("custom");
+    expect(res.frameId).toBe("shape:f");
   });
 });

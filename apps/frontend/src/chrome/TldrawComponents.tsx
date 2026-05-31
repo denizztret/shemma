@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   DefaultContextMenu,
   DefaultContextMenuContent,
@@ -7,12 +7,85 @@ import {
   type TLComponents,
   TldrawUiMenuToolItem,
   useEditor,
+  useToasts,
   useValue,
 } from "tldraw";
+import { SettingsPopover } from "../settings/SettingsPopover";
+import { getActiveBinding } from "../settings/shortcuts/config";
+import { formatBinding } from "../settings/shortcuts/match";
 import type { SchemaContainerDirection } from "../shapes/schema-container/SchemaContainerShape";
 import { GalleryLink } from "./GalleryLink";
 import { RoomBadge } from "./RoomBadge";
-import { SettingsPopover } from "../settings/SettingsPopover";
+
+/**
+ * Renders a 🔒 badge at the top-right corner of every locked frame
+ * (`meta.didrawLocked`) so the lock state is visible on the canvas, not just in
+ * the panel. Screen-space overlay; recomputes on camera / shape changes.
+ */
+function LockBadges() {
+  const editor = useEditor();
+  const badges = useValue(
+    "lockBadges",
+    () => {
+      const out: Array<{ id: string; x: number; y: number }> = [];
+      for (const s of editor.getCurrentPageShapes()) {
+        if (s.type !== "frame" || s.meta?.didrawLocked !== true) continue;
+        const b = editor.getShapePageBounds(s.id);
+        if (!b) continue;
+        const tr = editor.pageToScreen({ x: b.x + b.w, y: b.y });
+        out.push({ id: s.id, x: tr.x, y: tr.y });
+      }
+      return out;
+    },
+    [editor],
+  );
+  return (
+    <>
+      {badges.map((b) => (
+        <div
+          key={b.id}
+          title="Фрейм заблокирован — авто-раскладка его не трогает"
+          style={{
+            position: "absolute",
+            left: b.x - 30,
+            top: b.y + 6,
+            pointerEvents: "none",
+            fontSize: 18,
+            lineHeight: 1,
+            userSelect: "none",
+          }}
+        >
+          🔒
+        </div>
+      ))}
+    </>
+  );
+}
+
+export type ToastSeverity = "info" | "success" | "warning" | "error";
+/** Shared sink for showing tldraw toasts from outside the UI context. */
+export type ToastSink = {
+  current: ((msg: string, severity?: ToastSeverity) => void) | null;
+};
+
+/**
+ * DL: мост к tldraw-тостам. Рендерится внутри Tldraw UI-контекста (где доступен
+ * `useToasts`), кладёт вызывалку в общий `sink`, чтобы места ВНЕ контекста
+ * (hydrate-ретрай deep-link, ⌘⌥C-обработчик в App) могли показать тост.
+ * Сам ничего не рисует.
+ */
+function ToastBridge({ sink }: { sink: ToastSink }) {
+  const { addToast } = useToasts();
+  useEffect(() => {
+    sink.current = (msg: string, severity: ToastSeverity = "info") => {
+      addToast({ title: msg, severity });
+    };
+    return () => {
+      sink.current = null;
+    };
+  }, [addToast, sink]);
+  return null;
+}
 
 /**
  * Build the `components` prop for `<Tldraw />`.
@@ -33,9 +106,17 @@ export function buildTldrawComponents(
     onTidySelection?: (ids: string[]) => void;
     onExportSelection?: (ids: string[]) => void;
     onSetContainerDirection?: (direction: SchemaContainerDirection) => void;
+    onCopyObjectLink?: (ids: string[]) => void;
+    toastSink?: ToastSink;
   } = {},
 ): TLComponents {
-  const { onTidySelection, onExportSelection, onSetContainerDirection } = opts;
+  const {
+    onTidySelection,
+    onExportSelection,
+    onSetContainerDirection,
+    onCopyObjectLink,
+    toastSink,
+  } = opts;
 
   // We wrap DefaultContextMenu and append items as children — DefaultContextMenu
   // overrides its inner content while keeping the Radix shell + canvas rendering.
@@ -50,15 +131,40 @@ export function buildTldrawComponents(
     const hasContainer = useValue(
       "hasContainer",
       () =>
-        editor
-          .getSelectedShapes()
-          .some((s) => s.type === "schema-container"),
+        editor.getSelectedShapes().some((s) => s.type === "schema-container"),
       [editor],
     );
 
     return (
       <DefaultContextMenu>
         <DefaultContextMenuContent />
+        {selectedCount >= 1 && onCopyObjectLink && (
+          <div className="tlui-menu__group">
+            <button
+              type="button"
+              className="tlui-button tlui-button__menu"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => {
+                const ids = editor.getSelectedShapeIds() as unknown as string[];
+                onCopyObjectLink(ids);
+                // Plain buttons don't auto-close the Radix context menu; Escape
+                // is consumed by Radix (closes the menu, selection preserved).
+                document.dispatchEvent(
+                  new KeyboardEvent("keydown", {
+                    key: "Escape",
+                    code: "Escape",
+                    bubbles: true,
+                  }),
+                );
+              }}
+            >
+              <span className="tlui-button__label">Copy link</span>
+              <kbd className="tlui-kbd">
+                {formatBinding(getActiveBinding("copy-link"))}
+              </kbd>
+            </button>
+          </div>
+        )}
         {selectedCount >= 2 && onTidySelection && (
           // Plain tlui CSS classes — avoids TldrawUiMenuGroup/TldrawUiMenuItem
           // which have bigint in return type union (ReactNode incompatibility in strict mode).
@@ -76,7 +182,9 @@ export function buildTldrawComponents(
               }}
             >
               <span className="tlui-button__label">Tidy selection</span>
-              <kbd className="tlui-kbd">⌘⇧L</kbd>
+              <kbd className="tlui-kbd">
+                {formatBinding(getActiveBinding("tidy-layout"))}
+              </kbd>
             </button>
           </div>
         )}
@@ -94,7 +202,9 @@ export function buildTldrawComponents(
               }}
             >
               <span className="tlui-button__label">Export to Miro</span>
-              <kbd className="tlui-kbd">⌘⇧E</kbd>
+              <kbd className="tlui-kbd">
+                {formatBinding(getActiveBinding("export-miro"))}
+              </kbd>
             </button>
           </div>
         )}
@@ -109,7 +219,9 @@ export function buildTldrawComponents(
               onClick={() => setDirectionSubmenuOpen((v) => !v)}
             >
               <span className="tlui-button__label">Direction</span>
-              <span style={{ marginLeft: "auto", opacity: 0.6, fontSize: "0.75em" }}>
+              <span
+                style={{ marginLeft: "auto", opacity: 0.6, fontSize: "0.75em" }}
+              >
                 {directionSubmenuOpen ? "▼" : "▶"}
               </span>
             </button>
@@ -162,7 +274,7 @@ export function buildTldrawComponents(
         }}
       >
         <GalleryLink space={space} />
-        <RoomBadge room={room} />
+        <RoomBadge room={room} space={space} />
       </div>
     ),
     Toolbar: () => (
@@ -177,7 +289,19 @@ export function buildTldrawComponents(
         <TldrawUiMenuToolItem toolId="mermaid-import" />
       </DefaultToolbar>
     ),
-    InFrontOfTheCanvas: () => <SettingsPopover space={space} room={room} />,
-    ContextMenu: (onTidySelection || onExportSelection || onSetContainerDirection) ? TidyContextMenu : undefined,
+    InFrontOfTheCanvas: () => (
+      <>
+        <LockBadges />
+        {toastSink && <ToastBridge sink={toastSink} />}
+        <SettingsPopover space={space} room={room} />
+      </>
+    ),
+    ContextMenu:
+      onTidySelection ||
+      onExportSelection ||
+      onSetContainerDirection ||
+      onCopyObjectLink
+        ? TidyContextMenu
+        : undefined,
   };
 }

@@ -6,6 +6,8 @@
  */
 
 import type { Role, ConnectionKind } from "@shemma/domain";
+import { getActiveBinding } from "../settings/shortcuts/config";
+import { matchShortcut } from "../settings/shortcuts/match";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -184,8 +186,8 @@ export function makeRolePickerHandler(
   onEmpty?: () => void,
 ): (e: KeyboardEvent) => void {
   return (e: KeyboardEvent) => {
-    const isModifier = e.metaKey || e.ctrlKey;
-    if (!isModifier || !e.shiftKey || e.key.toLowerCase() !== "k") return;
+    // Shortcut registry: read the active binding at event time.
+    if (!matchShortcut(getActiveBinding("role-picker"), e)) return;
     e.preventDefault();
     const info = getInfo();
     if (!info.hasSelection) {

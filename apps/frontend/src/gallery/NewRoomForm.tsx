@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { tokens } from "../design-tokens";
-import { LEGACY_SPACE_ID } from "../transport/api";
+import { roomHref } from "../transport/api";
 import { validateRoomId } from "./validate";
 
 export function NewRoomForm({ space }: { space: string }) {
@@ -27,14 +27,7 @@ export function NewRoomForm({ space }: { space: string }) {
       );
       return;
     }
-    // Legacy single-space mode keeps the bare `?room=` URL so tests and
-    // existing dev workflows stay green; multi-space mounts include the
-    // `?space=` prefix so the new column lands in the right bundle.
-    const target =
-      space === LEGACY_SPACE_ID
-        ? `/?room=${encodeURIComponent(trimmed)}`
-        : `/?space=${encodeURIComponent(space)}&room=${encodeURIComponent(trimmed)}`;
-    location.assign(target);
+    location.assign(roomHref(space, trimmed));
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {

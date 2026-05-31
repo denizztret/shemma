@@ -357,6 +357,37 @@ describe("POST /api/schema/create", () => {
     const body = (await res.json()) as { ok: boolean };
     expect(body.ok).toBe(false);
   });
+
+  test("positionsOverride writes injected coords (frame-relative), skips ELK, sizes frame to union", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(app, {
+      label: "T",
+      raw: "flowchart LR\n  api[API] --> db[DB]",
+      positionsOverride: {
+        api: { x: 0, y: 0, w: 120, h: 60 },
+        db: { x: 400, y: 0, w: 120, h: 60 },
+      },
+    }, "pos-override-room");
+    expect(res.status).toBe(200);
+
+    const room = await rooms.get("pos-override-room");
+    const shapes = Object.values(room.store.store).filter((s) => s?.typeName === "shape") as Array<{
+      type: string; x: number; y: number; meta?: Record<string, unknown>; props?: Record<string, unknown>;
+    }>;
+    const byLabel = (lbl: string) => shapes.find((s) => (s.meta?.didrawLabel as string | undefined) === lbl);
+
+    const apiShape = byLabel("API");
+    const dbShape = byLabel("DB");
+    expect(apiShape).toBeDefined();
+    expect(dbShape).toBeDefined();
+    // injected coords landed (frame-relative; no subgraph here → flat == frame-relative)
+    expect(apiShape!.x).toBe(0);
+    expect(dbShape!.x).toBe(400); // NOT ELK-computed → proves ELK was skipped
+    // frame sized to union (db right = 520) + pad 40
+    const frame = shapes.find((s) => s.type === "frame");
+    expect(frame).toBeDefined();
+    expect((frame!.props!.w as number)).toBeGreaterThanOrEqual(520);
+  });
 });
 
 // ---- POST /api/schema/:frameId/patch ----

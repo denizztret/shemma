@@ -61,6 +61,8 @@ export type ParseResult =
        * it will NOT be captured here (classified as leaf node style instead). MVP limitation.
        */
       subgraphStyles: Map<string, MermaidNodeStyle>;
+      /** mermaid raw identifier → resolved NodeId. For position-injection (Stage 1). */
+      idMap: Map<string, NodeId>;
     }
   | {
       ok: false;
@@ -358,7 +360,7 @@ export function parseMermaidFlowchart(
     }
   }
 
-  return { ok: true, actions, direction, nodeStyles, nodeStylesByNodeId, subgraphStyles };
+  return { ok: true, actions, direction, nodeStyles, nodeStylesByNodeId, subgraphStyles, idMap };
 }
 
 // ---- Style string parsing ----

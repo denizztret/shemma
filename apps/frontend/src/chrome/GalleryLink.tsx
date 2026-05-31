@@ -25,7 +25,16 @@ const linkStyle: React.CSSProperties = {
 export function GalleryLink({ space }: { space: string }) {
   const href = space === LEGACY_SPACE_ID ? "/?view=gallery" : spaceUrl(space);
   return (
-    <a href={href} style={linkStyle}>
+    <a
+      href={href}
+      style={linkStyle}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = tokens.color.hoverOverlay;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = tokens.color.bgOverlay;
+      }}
+    >
       ← Gallery
     </a>
   );

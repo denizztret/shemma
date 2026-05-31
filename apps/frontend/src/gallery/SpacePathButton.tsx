@@ -32,15 +32,22 @@ export function SpacePathButton({
       }}
       disabled={isLegacy}
       title={isLegacy ? path : `Reveal in Finder: ${path}`}
+      onMouseEnter={(e) => {
+        if (!isLegacy)
+          e.currentTarget.style.background = tokens.color.hoverOverlay;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = tokens.color.bgOverlay;
+      }}
       style={{
         fontFamily: tokens.font.mono,
         fontSize: tokens.font.sm,
         color: tokens.color.textMuted,
-        background: "rgba(0,0,0,0.05)",
+        background: tokens.color.bgOverlay,
+        border: `1px solid ${tokens.color.border}`,
         borderRadius: tokens.radius.sm,
-        padding: "2px 8px",
+        padding: "4px 8px",
         wordBreak: "break-all",
-        border: "none",
         cursor: isLegacy ? "default" : "pointer",
         textAlign: "left",
       }}

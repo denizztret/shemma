@@ -46,6 +46,21 @@ describe("EnvelopeV3 — meta plumbing (DRW-103)", () => {
     expect(env.meta?.miroExports?.["b1"]?.items?.["shape:e_api"]).toBe("abc");
   });
 
+  it("parseFull: round-trips meta.tags", () => {
+    const s: RoomState = makeRoomState();
+    s.meta = {
+      tags: [
+        { name: "infra", color: "blue" },
+        { name: "wip", color: "orange" },
+      ],
+    };
+    const env = parseFull(serialize("default", s));
+    expect(env.meta?.tags).toEqual([
+      { name: "infra", color: "blue" },
+      { name: "wip", color: "orange" },
+    ]);
+  });
+
   it("parseFull: legacy envelope без meta → parsed.meta === undefined", () => {
     const legacy = {
       schemaVersion: 3 as const,

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Editor } from "tldraw";
+import { getActiveBinding } from "./shortcuts/config";
+import { matchShortcut } from "./shortcuts/match";
 
 export type Anchor = { x: number; y: number; w?: number; h?: number };
 
@@ -47,7 +49,11 @@ export function resolveTarget(input: ResolveInput): Target | null {
   return { kind: "board", anchor: pointerScreen };
 }
 
-export type AmbientShape = { id: string; type: string; meta?: Record<string, unknown> };
+export type AmbientShape = {
+  id: string;
+  type: string;
+  meta?: Record<string, unknown>;
+};
 
 export type AmbientInput = {
   selectedShapes: ReadonlyArray<AmbientShape>;
@@ -67,7 +73,10 @@ export function resolveAmbientTarget(input: AmbientInput): Target {
   }
   if (selectedShapes.length === 1) {
     const s = selectedShapes[0]!;
-    if (s.type !== "schema-container" && (s.meta?.didrawId || s.meta?.didrawName)) {
+    if (
+      s.type !== "schema-container" &&
+      (s.meta?.didrawId || s.meta?.didrawName)
+    ) {
       const a = bbox([s.id]);
       return { kind: "node", subjectId: s.id, anchor: a ?? placeholderAnchor };
     }
@@ -111,12 +120,18 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & {
     if (!editor) return;
 
     let prevCamera = editor.getCamera();
-    let prevSelection = (editor.getSelectedShapeIds() as unknown as string[]).join(",");
+    let prevSelection = (
+      editor.getSelectedShapeIds() as unknown as string[]
+    ).join(",");
     let armed = false;
 
     function dismissExternalMenus() {
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      document.dispatchEvent(new KeyboardEvent("keyup", { key: "Escape", bubbles: true }));
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      document.dispatchEvent(
+        new KeyboardEvent("keyup", { key: "Escape", bubbles: true }),
+      );
     }
 
     function onPointerDown(e: PointerEvent) {
@@ -173,7 +188,13 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & {
       const selected = ed.getSelectedShapeIds() as unknown as string[];
 
       const result = resolveTarget({
-        hit: hit ? { id: hit.id, type: hit.type, meta: hit.meta as Record<string, unknown> } : null,
+        hit: hit
+          ? {
+              id: hit.id,
+              type: hit.type,
+              meta: hit.meta as Record<string, unknown>,
+            }
+          : null,
         selectedIds: selected,
         pointerScreen: screen,
         bbox: (ids) => {
@@ -193,7 +214,9 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & {
         },
       });
       prevCamera = ed.getCamera();
-      prevSelection = (ed.getSelectedShapeIds() as unknown as string[]).join(",");
+      prevSelection = (ed.getSelectedShapeIds() as unknown as string[]).join(
+        ",",
+      );
       setTarget(result);
     }
 
@@ -210,13 +233,46 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & {
       if (e.key === "Escape") setTarget(null);
     }
 
+    // ⌘⇧P / Ctrl+Shift+P — toggle the settings panel (open in default-pinned mode
+    // targeting the current selection, or close if already open). Capture phase +
+    // preventDefault so tldraw's shortcut router doesn't swallow it.
+    function onToggleKey(e: KeyboardEvent) {
+      // Shortcut registry: read the active binding at event time.
+      if (!matchShortcut(getActiveBinding("settings-popover"), e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const ed = editorRef.current;
+      if (!ed) return;
+      if (targetRef.current !== null) {
+        setPinnedState(false);
+        setTarget(null);
+        return;
+      }
+      setPinnedState(SETTINGS_POPOVER_DEFAULT_PINNED);
+      const selectedShapes = ed.getSelectedShapes().map((s) => ({
+        id: s.id as unknown as string,
+        type: s.type,
+        meta: s.meta as Record<string, unknown> | undefined,
+      }));
+      setTarget(resolveAmbientTarget({ selectedShapes, bbox: makeBbox(ed) }));
+    }
+
     window.addEventListener("pointerdown", onPointerDown, { capture: true });
     window.addEventListener("pointerup", onPointerUp, { capture: true });
-    window.addEventListener("mousedown", suppressIfArmed as EventListener, { capture: true });
-    window.addEventListener("mouseup", suppressIfArmed as EventListener, { capture: true });
-    window.addEventListener("auxclick", suppressIfArmed as EventListener, { capture: true });
-    window.addEventListener("contextmenu", suppressIfArmed as EventListener, { capture: true });
+    window.addEventListener("mousedown", suppressIfArmed as EventListener, {
+      capture: true,
+    });
+    window.addEventListener("mouseup", suppressIfArmed as EventListener, {
+      capture: true,
+    });
+    window.addEventListener("auxclick", suppressIfArmed as EventListener, {
+      capture: true,
+    });
+    window.addEventListener("contextmenu", suppressIfArmed as EventListener, {
+      capture: true,
+    });
     window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onToggleKey, { capture: true });
 
     function makeBbox(ed: Editor) {
       return (ids: string[]): Anchor | null => {
@@ -236,42 +292,66 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & {
       };
     }
 
-    const dispose = editor.store.listen(() => {
-      const ed = editorRef.current;
-      if (!ed) return;
-      const cam = ed.getCamera();
-      const sel = (ed.getSelectedShapeIds() as unknown as string[]).join(",");
-      const cameraChanged = cam.x !== prevCamera.x || cam.y !== prevCamera.y || cam.z !== prevCamera.z;
-      const selectionChanged = sel !== prevSelection;
-      prevCamera = cam;
-      prevSelection = sel;
-      if (!cameraChanged && !selectionChanged) return;
+    const dispose = editor.store.listen(
+      () => {
+        const ed = editorRef.current;
+        if (!ed) return;
+        const cam = ed.getCamera();
+        const sel = (ed.getSelectedShapeIds() as unknown as string[]).join(",");
+        const cameraChanged =
+          cam.x !== prevCamera.x ||
+          cam.y !== prevCamera.y ||
+          cam.z !== prevCamera.z;
+        const selectionChanged = sel !== prevSelection;
+        prevCamera = cam;
+        prevSelection = sel;
+        if (!cameraChanged && !selectionChanged) return;
 
-      if (pinnedRef.current) {
-        if (!selectionChanged) return;
-        // Гейт: не открываем popover автоматически. Только tracking
-        // существующего открытого popover'а при смене selection.
-        if (targetRef.current === null) return;
-        const selectedShapes = ed.getSelectedShapes().map((s) => ({
-          id: s.id as unknown as string,
-          type: s.type,
-          meta: s.meta as Record<string, unknown> | undefined,
-        }));
-        const next = resolveAmbientTarget({ selectedShapes, bbox: makeBbox(ed) });
-        setTarget(next);
-        return;
-      }
-      setTarget(null);
-    }, { scope: "session" });
+        if (pinnedRef.current) {
+          if (!selectionChanged) return;
+          // Гейт: не открываем popover автоматически. Только tracking
+          // существующего открытого popover'а при смене selection.
+          if (targetRef.current === null) return;
+          const selectedShapes = ed.getSelectedShapes().map((s) => ({
+            id: s.id as unknown as string,
+            type: s.type,
+            meta: s.meta as Record<string, unknown> | undefined,
+          }));
+          const next = resolveAmbientTarget({
+            selectedShapes,
+            bbox: makeBbox(ed),
+          });
+          setTarget(next);
+          return;
+        }
+        setTarget(null);
+      },
+      { scope: "session" },
+    );
 
     return () => {
-      window.removeEventListener("pointerdown", onPointerDown, { capture: true });
+      window.removeEventListener("pointerdown", onPointerDown, {
+        capture: true,
+      });
       window.removeEventListener("pointerup", onPointerUp, { capture: true });
-      window.removeEventListener("mousedown", suppressIfArmed as EventListener, { capture: true });
-      window.removeEventListener("mouseup", suppressIfArmed as EventListener, { capture: true });
-      window.removeEventListener("auxclick", suppressIfArmed as EventListener, { capture: true });
-      window.removeEventListener("contextmenu", suppressIfArmed as EventListener, { capture: true });
+      window.removeEventListener(
+        "mousedown",
+        suppressIfArmed as EventListener,
+        { capture: true },
+      );
+      window.removeEventListener("mouseup", suppressIfArmed as EventListener, {
+        capture: true,
+      });
+      window.removeEventListener("auxclick", suppressIfArmed as EventListener, {
+        capture: true,
+      });
+      window.removeEventListener(
+        "contextmenu",
+        suppressIfArmed as EventListener,
+        { capture: true },
+      );
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onToggleKey, { capture: true });
       dispose();
     };
   }, [editor]);

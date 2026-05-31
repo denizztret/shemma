@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from "react";
+import type { LayoutEngine } from "../canvas/mermaid-import";
 import { tokens } from "../design-tokens";
+
+export const DEFAULT_MERMAID_ENGINE: LayoutEngine = "custom";
+export const MERMAID_ENGINE_OPTIONS: { value: LayoutEngine; label: string }[] =
+  [
+    { value: "custom", label: "Custom (наш backend)" },
+    { value: "dagre", label: "Dagre (mermaid-native)" },
+    { value: "elk", label: "ELK (mermaid-native)" },
+  ];
 
 /**
  * Full-overlay modal for pasting Mermaid source and importing it as tldraw
@@ -22,11 +31,15 @@ export function MermaidImportModal({
   visible: boolean;
   onClose: () => void;
   /** Returns { ok, error } — на ошибке modal остаётся открытым. */
-  onSubmit: (source: string) => Promise<{ ok: boolean; error?: string }>;
+  onSubmit: (
+    source: string,
+    engine: LayoutEngine,
+  ) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [engine, setEngine] = useState<LayoutEngine>(DEFAULT_MERMAID_ENGINE);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto-focus textarea when modal opens; reset state when it closes.
@@ -60,7 +73,7 @@ export function MermaidImportModal({
     setError(null);
     setLoading(true);
     try {
-      const res = await onSubmit(source);
+      const res = await onSubmit(source, engine);
       if (res.ok) {
         onClose();
       } else {
@@ -113,6 +126,35 @@ export function MermaidImportModal({
         }}
       >
         <div style={{ fontWeight: 600 }}>Import Mermaid</div>
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: tokens.font.sm,
+          }}
+        >
+          Layout engine
+          <select
+            aria-label="Layout engine"
+            value={engine}
+            disabled={loading}
+            onChange={(e) => setEngine(e.target.value as LayoutEngine)}
+            style={{
+              padding: "4px 8px",
+              border: `1px solid ${tokens.color.border}`,
+              borderRadius: tokens.radius.sm,
+              fontFamily: tokens.font.sans,
+              fontSize: tokens.font.sm,
+            }}
+          >
+            {MERMAID_ENGINE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <textarea
           ref={textareaRef}
           value={text}

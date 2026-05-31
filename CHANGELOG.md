@@ -1,3 +1,24 @@
+## [Unreleased] — ветка `feature/autolayout-rebuild`
+
+> Ещё НЕ смержено в `main` и НЕ зарелизено. Ветка несёт крупный **autolayout-rebuild** (pluggable placement + arrow routing; детали в memory `next-session-autolayout-rebuild`) и **UX/bugfix-батч** ниже (10 задач + polish, приняты пользователем 2026-05-31). Версия следующего релиза будет назначена при merge.
+
+### UX/bugfix batch (10 задач + polish)
+
+- **Room tags.** Тэги комнат `{name, color}` (7 цветов), хранятся в `RoomMeta.tags` (envelope `meta.tags`). `PUT /api/rooms/:id/tags` — идемпотентная замена массива с валидацией (непустое имя ≤24, цвет из палитры, case-insensitive dedup, ≤12); `GET /api/rooms` отдаёт `tags`; client `setRoomTags`. UI: цветные чипы на карточках и строках списка + click-to-filter (AND-логика) + inline-popover редактор (имя + 7 свотчей). `apps/backend/src/{types,room-tags,routes/rooms}.ts`, `apps/frontend/src/gallery/{tag-colors,tag-filter,TagChip,TagEditor,RoomTagsRow}.tsx`.
+- **Gallery grid/list view.** Глобальный тумблер Grid↔List (localStorage `shemma:gallery-view-mode`), новый компонент `RoomListRow`; в списке клик по всей строке (кроме кнопок/тэгов/inline-input, гард `closest("button,a,input")`) открывает комнату. Общие per-room хендлеры вынесены в `use-room-actions.ts`.
+- **Configurable keyboard shortcuts.** Реестр 8 команд (`registry.ts`) + localStorage-оверрайды (`config.ts`) + чистый `matchShortcut`/`bindingFromEvent`/`formatBinding` (`match.ts`); `getActiveBinding` читается в момент события → remap применяется без ре-регистрации listener'ов. Панель «Горячие клавиши» (`ShortcutsPanel.tsx`) из board-панели: remap-capture, conflict-warn, reset/«Сбросить всё». Binding-модель: один флаг `mod` = Cmd-или-Ctrl (кроссплатформенно).
+- **Copy-link shortcut → `⇧⌘S`.** Дефолт `⌘⌥C` не срабатывал: на macOS Chrome это акселератор «Inspect Element», браузер съедает keydown до страницы (CDP-инъекция это обходит — поэтому автоматическая проверка не ловила баг). Перенесён на `⇧⌘S` (Share); переназначаем через панель. Контекст-меню-хинт «Copy link» теперь динамический (`formatBinding(getActiveBinding(...))`).
+- **Reveal room file in Finder.** Бейдж «room: …» на доске стал кликабельным → `POST /api/rooms/:id/reveal` (`flushIfDirty` → `findRoomFile` → reveal: macOS `open -R`, Windows `explorer /select,`, Linux — папка) показывает `.json`-файл комнаты в файловом менеджере. Client `revealRoom`.
+- **Gallery auto-refresh.** Список комнат перезапрашивается на window `focus` / `visibilitychange→visible` + poll 13s (coalesce 4s) → превью (server-rendered SVG с `?v=version`) больше не устаревают; раньше версия не обновлялась без ручного refresh.
+- **Container fill for styled subgraphs → `solid`.** `resolveSubgraphStyle` маппил явный Mermaid `style ... fill:` в `"semi"` → теперь `"solid"` (pastel). Дополняет DRW-189 (0.28.0): тот покрыл default-контейнеры и `makeSchemaContainerShape`, этот — путь стилизованных субграфов (`apps/backend/src/routes/schema.ts:~233`). Существующие комнаты не мигрируются.
+- **Layout-engine buttons в одну строку** (settings popover, `settings-section__row--layout-engine` + `flex-wrap:nowrap`).
+- **Убраны 3 рудиментарных тумблера** (Авто-направление / Равномерно / По центру) — мертвы после autolayout-rebuild (frontend сам выбирает направление и оптимизирует midpoints). Удалён только UI + wiring; домен-типы `LayoutParams` и дефолты (`autoDirectionEnabled:true`, `midpointDistribution:"even"`) и backend-консьюмеры сохранены.
+- **Storage hygiene (T4 аудит).** Подтверждено: мёртвый `meta.didrawIsGroup` уже удалён ранее (DRW-148); legacy `meta.role` ещё читается (миграция отложена → DRW-195). Действий в коде не потребовалось.
+- **UI polish.** Кнопка пути пространства в галерее приведена к единому бейдж-стилю (рамка + фон + hover); hover-подсветка у «← Gallery»; убраны подчёркивания имён комнат и бейджа; лейбл force-relayout сокращён до «Принудительно».
+
+**Tests:** 569 frontend + backend (room-tags / envelope / routes-rooms / schema) зелёные; frontend `tsc` чист.
+**Follow-ups (Backlog):** DRW-195 (role→didrawRole reader-миграция), DRW-196 (превью через WS-push вместо poll), DRW-197 (дочистка мёртвых `LayoutParams`-полей).
+
 ## 0.28.0 — 2026-05-28 — Settings popover + SchemaContainer UX + auto-pin cluster (DRW-171/172/174/178..191)
 
 ### Post-186 polish (DRW-187..191)

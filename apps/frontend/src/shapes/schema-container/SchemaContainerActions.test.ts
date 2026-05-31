@@ -90,8 +90,34 @@ describe("setContainerDirection — polymorphic writer", () => {
     expect(call?.id).toBe("shape:c1");
     expect(call?.type).toBe("schema-container");
     expect((call?.props as { direction?: string })?.direction).toBe("LR");
-    // meta path не используется для schema-container
+    // meta path не используется для schema-container (без inherited-маркера)
     expect(call?.meta).toBeUndefined();
+  });
+
+  test("schema-container: clears inherited marker on explicit direction", () => {
+    const { editor, updateCalls } = makeEditor({
+      "shape:c1": {
+        id: "shape:c1",
+        type: "schema-container",
+        props: { direction: "TB" },
+        meta: { didrawDirectionInherited: true },
+      },
+    });
+    globalThis.fetch = mock(async () =>
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    // Even when props.direction is already "TB", the marker makes this an
+    // explicit user choice → write fires and clears the marker.
+    setContainerDirection(editor, ["shape:c1"], "TB");
+
+    expect(updateCalls).toHaveLength(1);
+    const call = updateCalls[0];
+    expect((call?.props as { direction?: string })?.direction).toBe("TB");
+    expect(
+      (call?.meta as { didrawDirectionInherited?: boolean })
+        ?.didrawDirectionInherited,
+    ).toBe(false);
   });
 
   test("frame: writes meta.didrawDirection", () => {

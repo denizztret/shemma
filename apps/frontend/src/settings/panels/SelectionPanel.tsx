@@ -1,12 +1,30 @@
+import type {
+  LayoutAlgorithm,
+  StyleDash,
+  StyleFont,
+  StyleSize,
+} from "@shemma/domain";
 import type { FC } from "react";
-import { DirectionSection, type DirectionValue } from "../sections/DirectionSection";
-import { LayoutActionsSection, type LayoutAction } from "../sections/LayoutActionsSection";
-import { LayoutSettingsSection, type LayoutSettingsValue } from "../sections/LayoutSettingsSection";
-import { PinSection } from "../sections/PinSection";
-import { StylesSection, type StyleSectionValue } from "../sections/StylesSection";
-import { ContainerTitlePositionSection } from "../sections/ContainerTitlePositionSection";
-import type { StyleDash, StyleFont, StyleSize } from "@shemma/domain";
 import type { SchemaContainerTitlePosition } from "../../shapes/schema-container/title-position";
+import { ContainerTitlePositionSection } from "../sections/ContainerTitlePositionSection";
+import {
+  DirectionSection,
+  type DirectionValue,
+} from "../sections/DirectionSection";
+import {
+  type LayoutAction,
+  LayoutActionsSection,
+} from "../sections/LayoutActionsSection";
+import {
+  LayoutSettingsSection,
+  type LayoutSettingsValue,
+} from "../sections/LayoutSettingsSection";
+import { LockSection, LockedNotice } from "../sections/LockSection";
+import { PinSection, type PinTriState } from "../sections/PinSection";
+import {
+  type StyleSectionValue,
+  StylesSection,
+} from "../sections/StylesSection";
 
 export type SelectionCounts = { containers: number; nodes: number };
 
@@ -22,7 +40,12 @@ function plural(n: number, one: string, few: string, many: string): string {
 export function selectionFooterCounter(c: SelectionCounts): string {
   const total = c.containers + c.nodes;
   if (c.containers > 0 && c.nodes > 0) {
-    const containerWord = plural(c.containers, "контейнер", "контейнера", "контейнеров");
+    const containerWord = plural(
+      c.containers,
+      "контейнер",
+      "контейнера",
+      "контейнеров",
+    );
     const nodeWord = plural(c.nodes, "узел", "узла", "узлов");
     return `${c.containers} ${containerWord}, ${c.nodes} ${nodeWord}`;
   }
@@ -50,15 +73,27 @@ export type SelectionPanelProps = {
   /** Aggregate layout-params для текущего выделения (null = mixed/indeterminate per field). */
   layoutSettings: LayoutSettingsValue;
   onPreset: (p: "compact" | "normal" | "loose") => void;
-  onAutoDirection: (v: boolean) => void;
-  onMidpoint: (m: "even" | "fixed-0.5") => void;
+  onEngine: (e: LayoutAlgorithm) => void;
   onAdvanced: () => void;
   onReset: () => void;
   /** Показывать ли Reset link — true если хоть у одного из selected есть meta.didrawLayoutParams. */
   showReset: boolean;
-  onLayoutAction: (id: LayoutAction["id"]) => void;
-  pinValues: { size: boolean; position: boolean };
-  onPinToggle: (field: "size" | "position") => void;
+  onLayoutAction: (id: LayoutAction["id"], modifiers: { alt: boolean }) => void;
+  pinValues: { size: PinTriState; position: PinTriState };
+  onPinToggle: (
+    field: "size" | "position",
+    modifiers: { alt: boolean },
+  ) => void;
+  /** Pin section header (scope) — swapped live while Opt is held. */
+  pinLabel?: string;
+  /** Opt held — drives «Упорядочить»↔«Принудительно» + pin scope highlighting. */
+  altHeld?: boolean;
+  /** Lock toggle — defined only when a single frame is selected. */
+  frameLocked?: boolean;
+  onFrameLockToggle?: () => void;
+  /** Selection is (or sits inside) a locked frame → collapse to «Разблокировать». */
+  lockedFrame?: boolean;
+  onUnlockFrame?: () => void;
   pending: LayoutAction["id"] | null;
   /** Style section visibility — true когда в selection ≥1 frame/schema-container. */
   showStyles: boolean;
@@ -72,7 +107,9 @@ export type SelectionPanelProps = {
    * Render-time SSOT — `shape.props.titlePosition` (spec §Title position resolution).
    */
   singleContainerTitlePosition?: SchemaContainerTitlePosition;
-  onSingleContainerTitlePositionChange?: (next: SchemaContainerTitlePosition) => void;
+  onSingleContainerTitlePositionChange?: (
+    next: SchemaContainerTitlePosition,
+  ) => void;
   /**
    * Frame-scope bulk-apply (DRW-186 frame-scope extension). Defined только когда
    * выбран ровно один Frame. Изменение значения:
@@ -83,7 +120,9 @@ export type SelectionPanelProps = {
    * Сам Frame визуально НЕ меняется.
    */
   singleFrameContainerTitlePosition?: SchemaContainerTitlePosition;
-  onSingleFrameContainerTitlePositionChange?: (next: SchemaContainerTitlePosition) => void;
+  onSingleFrameContainerTitlePositionChange?: (
+    next: SchemaContainerTitlePosition,
+  ) => void;
 };
 
 export const SelectionPanel: FC<SelectionPanelProps> = ({
@@ -93,14 +132,19 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
   onDirectionChange,
   layoutSettings,
   onPreset,
-  onAutoDirection,
-  onMidpoint,
+  onEngine,
   onAdvanced,
   onReset,
   showReset,
   onLayoutAction,
   pinValues,
   onPinToggle,
+  pinLabel,
+  altHeld,
+  frameLocked,
+  onFrameLockToggle,
+  lockedFrame,
+  onUnlockFrame,
   pending,
   showStyles,
   styleState,
@@ -112,29 +156,43 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
   singleFrameContainerTitlePosition,
   onSingleFrameContainerTitlePositionChange,
 }) => {
-  const total = counts.containers + counts.nodes;
+  if (lockedFrame && onUnlockFrame) {
+    return (
+      <div
+        className="settings-popover__panel"
+        role="dialog"
+        aria-label="Заблокированный фрейм"
+      >
+        <LockedNotice onUnlock={onUnlockFrame} />
+      </div>
+    );
+  }
   return (
-    <div className="settings-popover__panel" role="dialog" aria-label="Настройки выделения">
+    <div
+      className="settings-popover__panel"
+      role="dialog"
+      aria-label="Настройки выделения"
+    >
       {showContainerSections && (
         <>
           <DirectionSection current={direction} onChange={onDirectionChange} />
           <LayoutSettingsSection
             current={layoutSettings}
             onPreset={onPreset}
-            onAutoDirection={onAutoDirection}
-            onMidpoint={onMidpoint}
+            onEngine={onEngine}
             onAdvanced={onAdvanced}
             onReset={onReset}
             showReset={showReset}
             showAdvanced={false}
           />
-          {singleContainerTitlePosition && onSingleContainerTitlePositionChange && (
-            <ContainerTitlePositionSection
-              current={singleContainerTitlePosition}
-              onChange={onSingleContainerTitlePositionChange}
-              title="Заголовок этого контейнера"
-            />
-          )}
+          {singleContainerTitlePosition &&
+            onSingleContainerTitlePositionChange && (
+              <ContainerTitlePositionSection
+                current={singleContainerTitlePosition}
+                onChange={onSingleContainerTitlePositionChange}
+                title="Заголовок этого контейнера"
+              />
+            )}
           {singleFrameContainerTitlePosition !== undefined &&
             onSingleFrameContainerTitlePositionChange && (
               <ContainerTitlePositionSection
@@ -145,8 +203,15 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
             )}
         </>
       )}
-      <LayoutActionsSection onAction={onLayoutAction} pending={pending} />
-      <PinSection values={pinValues} onToggle={onPinToggle} bulkLabel={total > 1} />
+      <LayoutActionsSection
+        onAction={onLayoutAction}
+        pending={pending}
+        altHeld={altHeld}
+      />
+      {onFrameLockToggle && (
+        <LockSection locked={!!frameLocked} onToggle={onFrameLockToggle} />
+      )}
+      <PinSection values={pinValues} onToggle={onPinToggle} label={pinLabel} />
       {showStyles && (
         <StylesSection
           current={styleState}
@@ -156,7 +221,9 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
           subtitle="Для выделения"
         />
       )}
-      <div className="settings-popover__footer">{selectionFooterCounter(counts)}</div>
+      <div className="settings-popover__footer">
+        {selectionFooterCounter(counts)}
+      </div>
     </div>
   );
 };

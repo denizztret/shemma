@@ -8,6 +8,17 @@ import type { Spacing } from "./layout-modes";
 
 export type Direction = "TB" | "BT" | "LR" | "RL";
 
+// Autolayout rebuild — pluggable placement engine (ELK algorithm) chosen per
+// frame/container. Persisted in `meta.didrawLayoutParams.layoutEngine`; read by
+// the frontend elk pass (apps/frontend/src/canvas/elk-layout.ts). Backend layout
+// ignores it (frontend-only re-layout).
+//   - layered  — слои/DAG (default; хорошо для ветвящихся и плотных графов);
+//   - mrtree   — дерево/иерархия (центрированная «ёлочка», братья на одном ярусе);
+//   - stress   — органичный, компактный (stress-majorization, мало пересечений);
+//   - force    — силовой «меш» (для сильно связных графов без явной иерархии).
+// `radial` намеренно НЕ включён: elkjs считает его синхронно и может зависнуть.
+export type LayoutAlgorithm = "layered" | "mrtree" | "stress" | "force";
+
 export type LayoutParams = {
   // Node sizing
   nodeMinWidth: number;
@@ -39,6 +50,11 @@ export type LayoutParams = {
   // вместо hint.spacing для subgraph anchor'а. Optional: на board-level
   // используется hint.spacing (см. apps/backend/src/domain/layout.ts).
   spacing?: Spacing;
+
+  // Per-frame/container ELK placement algorithm (autolayout rebuild). Optional —
+  // frontend defaults to "layered" when absent. Read only by the frontend elk
+  // pass; backend layout ignores it.
+  layoutEngine?: LayoutAlgorithm;
 };
 
 export const DEFAULT_LAYOUT_PARAMS: LayoutParams = {
@@ -77,6 +93,12 @@ const VALID_DIRECTIONS: ReadonlySet<Direction> = new Set(["TB", "BT", "LR", "RL"
 const VALID_ANCHOR_MODES = new Set(["distribute", "center"]);
 const VALID_MID_MODES = new Set(["even", "fixed-0.5"]);
 const VALID_SPACINGS = new Set<Spacing>(["compact", "normal", "loose"]);
+const VALID_ENGINES = new Set<LayoutAlgorithm>([
+  "layered",
+  "mrtree",
+  "stress",
+  "force",
+]);
 
 export function applyLayoutParamsDefaults(partial: Partial<LayoutParams>): LayoutParams {
   return { ...DEFAULT_LAYOUT_PARAMS, ...partial };
@@ -104,6 +126,9 @@ export function validateLayoutParams(p: Partial<LayoutParams>): void {
   }
   if (p.spacing !== undefined && !VALID_SPACINGS.has(p.spacing as Spacing)) {
     throw new Error(`LayoutParams.spacing must be compact|normal|loose; got ${String(p.spacing)}`);
+  }
+  if (p.layoutEngine !== undefined && !VALID_ENGINES.has(p.layoutEngine)) {
+    throw new Error(`LayoutParams.layoutEngine must be layered|mrtree|stress|force; got ${String(p.layoutEngine)}`);
   }
 }
 

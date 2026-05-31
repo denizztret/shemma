@@ -121,9 +121,8 @@ function renderBoardPanel() {
     effective: defaultEffective,
     onDirectionChange: () => {},
     onPresetSelect: () => {},
-    onToggleAutoDirection: () => {},
-    onMidpointModeChange: () => {},
     onOpenAdvanced: () => {},
+    onOpenShortcuts: () => {},
     styleEffective: DEFAULT_STYLE_DEFAULTS,
     onStyleDash: () => {},
     onStyleFont: () => {},
@@ -147,6 +146,37 @@ describe("BoardPanel", () => {
     const tree = renderBoardPanel();
     // h2 title carries title= attribute with defaults explanation
     expect(hasAttribute(tree, "data-tooltip", /Применяется к новому содержимому/)).toBe(true);
+  });
+
+  test("renders the «Горячие клавиши» drill-down link", () => {
+    const tree = renderBoardPanel();
+    expect(hasAttribute(tree, "data-role", "shortcuts")).toBe(true);
+    expect(hasText(tree, "Горячие клавиши")).toBe(true);
+  });
+
+  test("«Горячие клавиши» button invokes onOpenShortcuts", () => {
+    let opened = false;
+    const tree = BoardPanel({
+      effective: defaultEffective,
+      onDirectionChange: () => {},
+      onPresetSelect: () => {},
+      onOpenAdvanced: () => {},
+      onOpenShortcuts: () => {
+        opened = true;
+      },
+      styleEffective: DEFAULT_STYLE_DEFAULTS,
+      onStyleDash: () => {},
+      onStyleFont: () => {},
+      onStyleSize: () => {},
+      containerTitlePosition: "inside-center",
+      onContainerTitlePositionChange: () => {},
+    });
+    const btn = flatten(tree).find(
+      (el) => (el.props as Record<string, unknown>)["data-role"] === "shortcuts",
+    );
+    const onClick = btn?.props.onClick as (() => void) | undefined;
+    onClick?.();
+    expect(opened).toBe(true);
   });
 });
 
@@ -177,8 +207,6 @@ import type { LayoutSettingsValue } from "../sections/LayoutSettingsSection";
 
 const defaultLayoutSettings: LayoutSettingsValue = {
   preset: "normal",
-  autoDirection: true,
-  midpoint: "even",
 };
 
 function renderSelectionPanel(overrides: Partial<SelectionPanelProps> = {}): ReturnType<typeof SelectionPanel> {
@@ -189,8 +217,6 @@ function renderSelectionPanel(overrides: Partial<SelectionPanelProps> = {}): Ret
     onDirectionChange: () => {},
     layoutSettings: defaultLayoutSettings,
     onPreset: () => {},
-    onAutoDirection: () => {},
-    onMidpoint: () => {},
     onAdvanced: () => {},
     onReset: () => {},
     showReset: false,

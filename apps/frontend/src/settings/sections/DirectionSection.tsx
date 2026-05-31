@@ -19,7 +19,10 @@ const DEFAULT_HINTS: Record<DirectionValue, string> = {
   LR: "Left → Right",
   BT: "Bottom → Top",
   RL: "Right → Left",
-  custom: "Custom per container",
+  // "•" = no explicit direction → the engine picks it by topology (a lane across
+  // the frame's flow). NOT a manual arrangement — to keep hand-placed positions,
+  // pin them instead.
+  custom: "Авто — направление выбирает движок (своё расположение — закрепите пином)",
 };
 
 export type DirectionSectionProps = {

@@ -12,6 +12,7 @@
     },
     "apps/backend": {
       "name": "@shemma/backend",
+      "version": "0.28.0",
       "dependencies": {
         "@shemma/domain": "workspace:*",
         "@shemma/lockfile": "workspace:*",
@@ -26,10 +27,14 @@
     },
     "apps/frontend": {
       "name": "@shemma/frontend",
+      "version": "0.28.0",
       "dependencies": {
+        "@mermaid-js/layout-elk": "^0.2.0",
         "@shemma/domain": "workspace:*",
         "@shemma/spaces": "workspace:*",
         "@tldraw/mermaid": "^5.0.0",
+        "elkjs": "^0.11.1",
+        "mermaid": "11.12.2",
         "react": "^18.3.0",
         "react-dom": "^18.3.0",
         "tldraw": "^5.0.0",
@@ -46,7 +51,7 @@
     },
     "packages/shemma-cli": {
       "name": "shemma",
-      "version": "0.20.3",
+      "version": "0.28.0",
       "bin": {
         "shemma": "src/index.ts",
       },
@@ -60,17 +65,19 @@
     },
     "packages/shemma-client": {
       "name": "@shemma/client",
+      "version": "0.28.0",
     },
     "packages/shemma-domain": {
       "name": "@shemma/domain",
+      "version": "0.28.0",
     },
     "packages/shemma-lockfile": {
       "name": "@shemma/lockfile",
-      "version": "0.20.3",
+      "version": "0.28.0",
     },
     "packages/shemma-mcp": {
       "name": "@shemma/mcp",
-      "version": "0.20.3",
+      "version": "0.28.0",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.0.0",
         "@shemma/client": "workspace:*",
@@ -81,7 +88,7 @@
     },
     "packages/shemma-spaces": {
       "name": "@shemma/spaces",
-      "version": "0.20.3",
+      "version": "0.28.0",
       "dependencies": {
         "proper-lockfile": "^4.1.2",
       },
@@ -227,6 +234,8 @@
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
+
+    "@mermaid-js/layout-elk": ["@mermaid-js/layout-elk@0.2.1", "", { "dependencies": { "d3": "^7.9.0", "elkjs": "^0.9.3" }, "peerDependencies": { "mermaid": "^11.0.2" } }, "sha512-MX9jwhMyd5zDcFsYcl3duDUkKhjVRUCGEQrdCeNV5hCIR6+3FuDDbRbFmvVbAu15K1+juzsYGG+K8MDvCY1Amg=="],
 
     "@mermaid-js/parser": ["@mermaid-js/parser@0.6.3", "", { "dependencies": { "langium": "3.3.1" } }, "sha512-lnjOhe7zyHjc+If7yT4zoedx2vo4sHaTmtkl1+or8BRTnCtDmcTpAjpzDSfCZrshM5bCoz0GyidzadJAH1xobA=="],
 
@@ -1115,6 +1124,8 @@
     "@chevrotain/cst-dts-gen/lodash-es": ["lodash-es@4.17.21", "", {}, "sha512-mKnC+QJ9pWVzv+C4/U3rRsHapFfHvQFoFB92e52xeyGMcX6/OlIl78je1u8vePzYZSkkogMPJ2yjxxsb89cxyw=="],
 
     "@chevrotain/gast/lodash-es": ["lodash-es@4.17.21", "", {}, "sha512-mKnC+QJ9pWVzv+C4/U3rRsHapFfHvQFoFB92e52xeyGMcX6/OlIl78je1u8vePzYZSkkogMPJ2yjxxsb89cxyw=="],
+
+    "@shemma/frontend/elkjs": ["elkjs@0.11.1", "", {}, "sha512-zxxR9k+rx5ktMwT/FwyLdPCrq7xN6e4VGGHH8hA01vVYKjTFik7nHOxBnAYtrgYUB1RpAiLvA1/U2YraWxyKKg=="],
 
     "chalk/supports-color": ["supports-color@7.2.0", "", { "dependencies": { "has-flag": "^4.0.0" } }, "sha512-qpCAvRl9stuOHveKsn7HncJRvv501qIacKzQlO/+Lwxc9+0q2wLyv4Dfvt80/DPn2pqOBsJdDiogXGR9+OvwRw=="],
 
