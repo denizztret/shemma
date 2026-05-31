@@ -178,6 +178,125 @@ describe("applySchemaActions (DRW-134 Task 2.4)", () => {
     expect(Object.keys(result.batch.added).length).toBeGreaterThanOrEqual(3);
   });
 
+  test("schema-connect to a node nested inside a schema-container materializes the arrow", () => {
+    // Repro for the silent edge-drop bug: an endpoint that lives inside a
+    // subgraph (tldraw parent = schema-container, not the frame) must still
+    // resolve to its shape so the arrow + bindings get created.
+    const raw = [
+      "graph LR",
+      "  outer-bbbbbb[Outer]",
+      "  subgraph c1 [Container]",
+      "    inner-aaaaaa[Inner]",
+      "  end",
+    ].join("\n");
+    const frame = makeFrame("shape:frame1", raw);
+
+    // Container is a direct child of the frame.
+    const container = {
+      id: "shape:cont1",
+      typeName: "shape",
+      type: "schema-container",
+      x: 0,
+      y: 0,
+      parentId: "shape:frame1",
+      index: "a1",
+      isLocked: false,
+      opacity: 1,
+      rotation: 0,
+      props: { w: 300, h: 200 },
+      meta: {},
+    } as TLRecord;
+    // Inner node is parented to the CONTAINER, not the frame.
+    const inner = makeChildShape("shape:inner1", "inner-aaaaaa", "Inner", "shape:cont1");
+    // Outer node is a direct frame child.
+    const outer = makeChildShape("shape:outer1", "outer-bbbbbb", "Outer", "shape:frame1");
+
+    const room = makeRoom({
+      "shape:frame1": frame,
+      "shape:cont1": container,
+      "shape:inner1": inner,
+      "shape:outer1": outer,
+    });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-connect", from: "inner-aaaaaa", to: "outer-bbbbbb", connectionKind: "sync" },
+    ];
+
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    const added = Object.values(result.batch.added) as any[];
+    const arrowShapes = added.filter((r) => r.typeName === "shape" && r.type === "arrow");
+    const bindings = added.filter((r) => r.typeName === "binding" && r.type === "arrow");
+
+    expect(arrowShapes).toHaveLength(1);
+    expect(bindings).toHaveLength(2);
+    // Both endpoints must be bound — including the container-nested one.
+    expect(bindings.some((b) => b.toId === "shape:inner1")).toBe(true);
+    expect(bindings.some((b) => b.toId === "shape:outer1")).toBe(true);
+  });
+
+  // ---------- Smart-insert placement (DRW-178 wiring) ----------
+
+  test("schema-define places the new node in free space, not overlapping existing children", () => {
+    const raw = "graph LR\n  existing-aaaaaa[Existing]";
+    const frame = { ...makeFrame("shape:frame1", raw), props: { w: 600, h: 300, name: "T" } } as TLRecord;
+    const existing = {
+      ...makeChildShape("shape:ex1", "existing-aaaaaa", "Existing", "shape:frame1"),
+      x: 20,
+      y: 20,
+    } as TLRecord;
+    const room = makeRoom({ "shape:frame1": frame, "shape:ex1": existing });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-define", nodeId: "new-bbbbbb", role: "service", label: "New" },
+    ];
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    const newShape = Object.values(result.batch.added).find(
+      (r) => (r as any).typeName === "shape" && (r as any).meta?.didrawId === "new-bbbbbb",
+    ) as any;
+    expect(newShape).toBeDefined();
+    const nx = newShape.x as number;
+    const ny = newShape.y as number;
+    const nw = newShape.props.w as number;
+    const nh = newShape.props.h as number;
+    // Must NOT overlap the existing node at (20,20,220,80).
+    const overlaps = nx < 20 + 220 && 20 < nx + nw && ny < 20 + 80 && 20 < ny + nh;
+    expect(overlaps).toBe(false);
+  });
+
+  test("schema-define grows the frame when no free slot fits", () => {
+    const raw = "graph TB\n  existing-aaaaaa[Existing]";
+    const frame = { ...makeFrame("shape:frame1", raw), props: { w: 260, h: 120, name: "T" } } as TLRecord;
+    const existing = {
+      ...makeChildShape("shape:ex1", "existing-aaaaaa", "Existing", "shape:frame1"),
+      x: 20,
+      y: 20,
+    } as TLRecord;
+    const room = makeRoom({ "shape:frame1": frame, "shape:ex1": existing });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-define", nodeId: "new-bbbbbb", role: "service", label: "New" },
+    ];
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const frameUpd = result.batch.updated["shape:frame1"];
+    expect(frameUpd).toBeDefined();
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    const grown = frameUpd![1] as any;
+    const grewW = (grown.props.w as number) > 260;
+    const grewH = (grown.props.h as number) > 120;
+    expect(grewW || grewH).toBe(true);
+  });
+
   // ---------- Validation errors ----------
 
   test("schema-connect with unknown from node → errors: [{code: 'unknown-node'}]", () => {
