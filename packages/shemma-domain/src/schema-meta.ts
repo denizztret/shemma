@@ -102,6 +102,8 @@ export type SchemaActionError = {
   code:
     | "unknown-node"
     | "unknown-edge"
+    | "unknown-shape"
+    | "not-adoptable"
     | "duplicate-node"
     | "invalid-id"
     | "invalid-mermaid"

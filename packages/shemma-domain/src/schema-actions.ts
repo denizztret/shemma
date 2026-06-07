@@ -83,6 +83,27 @@ export type SchemaSetEdgeOverlayAction = {
   overlay: EdgeOverlayEntry;
 };
 
+/** Усыновить нарисованный руками шейп в схему (DRW-212): шейп получает
+ *  identity (didrawId)/role/label и появляется в raw как define — БЕЗ
+ *  пересоздания: позиция/размер/вид сохраняются. */
+export type SchemaAdoptShapeAction = {
+  kind: "schema-adopt-shape";
+  /** tldraw shape id (например "shape:abc123"). */
+  shapeId: string;
+  role: Role;
+  /** Display label; по умолчанию — текст шейпа, иначе nodeId. */
+  label?: string;
+  /** Явный NodeId; по умолчанию генерируется из label. */
+  nodeId?: NodeId;
+};
+
+/** Удалить НЕ-схемный шейп по tldraw shape-id (DRW-212), с каскадом
+ *  биндингов/висячих стрелок. Для didraw-узлов — schema-delete-node. */
+export type SchemaDeleteShapeAction = {
+  kind: "schema-delete-shape";
+  shapeId: string;
+};
+
 /** Discriminated union всех incremental schema-actions. */
 export type SchemaAction =
   | SchemaDefineAction
@@ -93,7 +114,9 @@ export type SchemaAction =
   | SchemaDisconnectAction
   | SchemaDeleteNodeAction
   | SchemaSetOverlayAction
-  | SchemaSetEdgeOverlayAction;
+  | SchemaSetEdgeOverlayAction
+  | SchemaAdoptShapeAction
+  | SchemaDeleteShapeAction;
 
 /** String-литерал kind для всех SchemaAction типов. */
 export type SchemaActionKind = SchemaAction["kind"];
@@ -109,4 +132,6 @@ export const ALL_SCHEMA_ACTION_KINDS: readonly SchemaActionKind[] = [
   "schema-delete-node",
   "schema-set-overlay",
   "schema-set-edge-overlay",
+  "schema-adopt-shape",
+  "schema-delete-shape",
 ];

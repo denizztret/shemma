@@ -43,6 +43,7 @@ import { parseMermaidFlowchart } from "./mermaid-parser";
 import type { ParseResult, MermaidDirection } from "./mermaid-parser";
 import { generateMermaid } from "./mermaid-generator";
 import { computeExpansion, findEmptySlot, type Rect } from "../empty-space";
+import { cascadeDeleteShape } from "../../store-ops";
 import { diffSchemas } from "./diff";
 import { generateNodeIdServer } from "./identity";
 import { assignBatchIndices } from "./index-key";
@@ -229,6 +230,22 @@ export function estimateEffectiveHeight(label: string, w: number, baseH: number)
   }
   if (lines <= 1) return baseH;
   return Math.max(baseH, LABEL_V_INSET + lines * LABEL_LINE_H);
+}
+
+// ---- Shape text extraction (DRW-212 adopt default label) ----
+
+/** Достаёт plain-текст из props.richText (ProseMirror doc) шейпа. */
+function extractShapeText(rec: TLRecord): string {
+  const doc = (rec as { props?: Record<string, unknown> }).props?.richText;
+  const parts: string[] = [];
+  const walk = (node: unknown): void => {
+    if (!node || typeof node !== "object") return;
+    const n = node as { text?: unknown; content?: unknown[] };
+    if (typeof n.text === "string") parts.push(n.text);
+    if (Array.isArray(n.content)) for (const c of n.content) walk(c);
+  };
+  walk(doc);
+  return parts.join(" ").trim();
 }
 
 // ---- Edge overlay style applier (DRW-211) ----
@@ -628,6 +645,9 @@ type ValidationContext = {
   pendingAdds: Set<NodeId>;
   /** Edges being added in this batch (edgeKey) — DRW-211. */
   pendingEdges: Set<string>;
+  /** Store + frame для shape-id адресации (DRW-212 adopt/delete-shape). */
+  store?: Record<string, TLRecord | undefined>;
+  frame?: TLRecord;
 };
 
 
@@ -796,6 +816,89 @@ function validateAction(
       return null;
     }
 
+    case "schema-adopt-shape": {
+      // DRW-212: шейп существует, внутри фрейма, без didraw-identity.
+      const rec = ctx.store?.[action.shapeId];
+      if (!rec || rec.typeName !== "shape") {
+        return {
+          actionIndex: idx,
+          code: "unknown-shape",
+          message: `Unknown shape "${action.shapeId}" in schema-adopt-shape`,
+        };
+      }
+      const t = (rec as { type?: string }).type;
+      if (t === "arrow" || t === "frame") {
+        return {
+          actionIndex: idx,
+          code: "not-adoptable",
+          message: `Shape type "${t}" cannot be adopted as a schema node`,
+        };
+      }
+      const meta = (rec.meta ?? {}) as Record<string, unknown>;
+      if (typeof meta.didrawId === "string" && meta.didrawId !== "") {
+        return {
+          actionIndex: idx,
+          code: "not-adoptable",
+          message: `Shape "${action.shapeId}" is already a schema node ("${meta.didrawId}")`,
+        };
+      }
+      if (ctx.store && ctx.frame && !isWithinFrameSubtree(rec, ctx.frame.id, ctx.store)) {
+        return {
+          actionIndex: idx,
+          code: "not-adoptable",
+          message: `Shape "${action.shapeId}" is outside the schema frame`,
+        };
+      }
+      if (!isValidRole(action.role)) {
+        return {
+          actionIndex: idx,
+          code: "invalid-role",
+          message: `Invalid role: "${action.role}"`,
+        };
+      }
+      // nodeId назначен пре-процессингом; коллизии — как у define.
+      const nodeId = action.nodeId;
+      if (nodeId !== undefined) {
+        if (ctx.currentNodes.has(nodeId) || ctx.pendingAdds.has(nodeId)) {
+          return {
+            actionIndex: idx,
+            code: "duplicate-node",
+            message: `Node "${nodeId}" already exists in schema`,
+          };
+        }
+        ctx.pendingAdds.add(nodeId);
+      }
+      return null;
+    }
+
+    case "schema-delete-shape": {
+      // DRW-212: только НЕ-схемные шейпы; didraw-узлы — через schema-delete-node.
+      const rec = ctx.store?.[action.shapeId];
+      if (!rec || rec.typeName !== "shape") {
+        return {
+          actionIndex: idx,
+          code: "unknown-shape",
+          message: `Unknown shape "${action.shapeId}" in schema-delete-shape`,
+        };
+      }
+      const meta = (rec.meta ?? {}) as Record<string, unknown>;
+      if (typeof meta.didrawId === "string" && meta.didrawId !== "") {
+        return {
+          actionIndex: idx,
+          code: "not-adoptable",
+          message: `Shape "${action.shapeId}" is a schema node — use schema-delete-node`,
+        };
+      }
+      if (ctx.store && ctx.frame && !isWithinFrameSubtree(rec, ctx.frame.id, ctx.store)) {
+        return {
+          actionIndex: idx,
+          code: "unknown-shape",
+          message: `Shape "${action.shapeId}" is outside the schema frame`,
+        };
+      }
+      return null;
+    }
+
     default:
       return null;
   }
@@ -905,6 +1008,20 @@ function applyActionsToState(
       }
       case "schema-set-edge-overlay": {
         // Edge-overlay живёт в frame.meta.didrawEdgeOverlays — no-op для RAW.
+        break;
+      }
+      case "schema-adopt-shape": {
+        // DRW-212: adopt = define для RAW (nodeId/label назначены пре-процессингом).
+        const nodeId = a.nodeId;
+        if (nodeId) {
+          const label = a.label !== undefined && a.label !== "" ? a.label : nodeId;
+          nodes.set(nodeId, { nodeId, role: a.role, label });
+          existingIds.add(nodeId);
+        }
+        break;
+      }
+      case "schema-delete-shape": {
+        // Не-схемный шейп — RAW не трогаем.
         break;
       }
     }
@@ -1099,7 +1216,7 @@ export function applySchemaActions(opts: {
   actions: SchemaAction[];
   suffixLen: number;
 }): ApplyResult {
-  const { room, frame, actions, suffixLen } = opts;
+  const { room, frame, actions: rawActions, suffixLen } = opts;
 
   const store = room.store.store as Record<string, TLRecord | undefined>;
 
@@ -1178,6 +1295,27 @@ export function applySchemaActions(opts: {
   // Build current node set from parsed old actions.
   const { nodes: currentNodes, edges: currentEdges } = extractState(oldActions);
 
+  // DRW-212: пре-процессинг adopt-действий — nodeId/label резолвятся ДО
+  // валидации, чтобы state-машина и последующие действия батча (connect)
+  // видели конкретный узел. adoptByNodeId направляет diff.added на UPDATE
+  // существующего шейпа вместо создания нового.
+  const adoptByNodeId = new Map<NodeId, string>();
+  const adoptIds = new Set<NodeId>(currentNodes.keys());
+  const actions: SchemaAction[] = rawActions.map((a) => {
+    if (a.kind !== "schema-adopt-shape") return a;
+    const rec = store[a.shapeId];
+    const extracted = rec ? extractShapeText(rec) : "";
+    const label = a.label ?? (extracted !== "" ? extracted : undefined);
+    let nodeId = a.nodeId;
+    if (!nodeId) {
+      const slug = label ? slugify(label) : "";
+      nodeId = generateNodeIdServer({ slug, suffixLen, existingIds: adoptIds });
+    }
+    adoptIds.add(nodeId);
+    adoptByNodeId.set(nodeId, a.shapeId);
+    return { ...a, nodeId, label } as SchemaAction;
+  });
+
   // Step 2: Validate ALL actions before any mutation.
   const errors: SchemaActionError[] = [];
   const validationCtx: ValidationContext = {
@@ -1185,6 +1323,8 @@ export function applySchemaActions(opts: {
     currentEdges,
     pendingAdds: new Set(),
     pendingEdges: new Set(),
+    store,
+    frame,
   };
 
   for (let i = 0; i < actions.length; i++) {
@@ -1252,6 +1392,31 @@ export function applySchemaActions(opts: {
 
   // Added nodes → create geo shapes.
   for (const addedNode of diff.added) {
+    // DRW-212: adopted узел — identity на СУЩЕСТВУЮЩЕМ шейпе, без пересоздания.
+    const adoptSid = adoptByNodeId.get(addedNode.nodeId);
+    if (adoptSid) {
+      const orig = store[adoptSid];
+      if (orig) {
+        const origProps = (orig.props ?? {}) as Record<string, unknown>;
+        const next: TLRecord = {
+          ...orig,
+          // Label = текст узла; обновляем только текстонесущие шейпы.
+          ...("richText" in origProps
+            ? { props: { ...origProps, richText: richText(addedNode.label) } }
+            : {}),
+          meta: {
+            ...((orig.meta ?? {}) as Record<string, unknown>),
+            didrawId: addedNode.nodeId,
+            didrawName: addedNode.nodeId,
+            didrawLabel: addedNode.label,
+            didrawRole: addedNode.role,
+            didrawSchemaParent: frame.id,
+          },
+        } as TLRecord;
+        batch.updated[adoptSid] = [orig, next];
+      }
+      continue;
+    }
     const overlayEntry = oldOverlays[addedNode.nodeId];
     const shape = makeGeoShape({
       nodeId: addedNode.nodeId,
@@ -1325,6 +1490,9 @@ export function applySchemaActions(opts: {
   // We need tldraw shape ids for both endpoints.
   // For newly added nodes (in batch.added), we need to find them.
   function resolveShapeId(nodeId: NodeId): string | undefined {
+    // DRW-212: adopted узлы живут на существующих шейпах.
+    const adopted = adoptByNodeId.get(nodeId);
+    if (adopted) return adopted;
     // First check if it's a newly added shape in this batch.
     for (const [sid, shape] of Object.entries(batch.added)) {
       const meta = (shape.meta ?? {}) as Record<string, unknown>;
@@ -1361,6 +1529,18 @@ export function applySchemaActions(opts: {
     batch.added[aid] = arrow;
     batch.added[start.id] = start;
     batch.added[end.id] = end;
+  }
+
+  // DRW-212: удаление не-схемных шейпов с каскадом биндингов/висячих стрелок.
+  for (const a of actions) {
+    if (a.kind !== "schema-delete-shape") continue;
+    const cascade = cascadeDeleteShape(room.store, a.shapeId);
+    for (const [rid, rec] of Object.entries(cascade.removed)) {
+      batch.removed[rid] = rec;
+    }
+    for (const [rid, pair] of Object.entries(cascade.updated)) {
+      if (!batch.updated[rid]) batch.updated[rid] = pair;
+    }
   }
 
   // DRW-211: restyle СУЩЕСТВУЮЩИХ стрелок по schema-set-edge-overlay.
@@ -1614,6 +1794,17 @@ export function applySchemaActions(opts: {
   // узла на reload-hydrate).
   for (const [nid, pos] of groupRepositioned) {
     newOverlays[nid] = { ...(newOverlays[nid] ?? {}), position: pos };
+  }
+
+  // DRW-212: adopted узлы фиксируют текущую позицию шейпа в overlays.
+  for (const [nid, sid] of adoptByNodeId) {
+    const rec = batch.updated[sid]?.[1] ?? store[sid];
+    if (!rec) continue;
+    const r = rec as { x?: number; y?: number };
+    newOverlays[nid] = {
+      ...(newOverlays[nid] ?? {}),
+      position: { x: r.x ?? 0, y: r.y ?? 0 },
+    };
   }
 
   for (const removedNodeId of diff.removed) {
