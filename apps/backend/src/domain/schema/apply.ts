@@ -49,6 +49,7 @@ import { cascadeDeleteShape } from "../../store-ops";
 import { diffSchemas } from "./diff";
 import { generateNodeIdServer } from "./identity";
 import { assignBatchIndices } from "./index-key";
+import { gcOverlays } from "./overlay-gc";
 
 // ---- Rich text helper (mirrors compile.ts) ----
 
@@ -1233,6 +1234,10 @@ export type ApplyResult =
       addedNodeIds: NodeId[];
       removedNodeIds: NodeId[];
       orphanedOverlays: number;
+      /** DRW-216: сколько orphan-overlay'ев собрано GC в этом проходе. */
+      collectedOverlays: number;
+      /** DRW-216: новое поколение фрейма → frame.meta.didrawOverlayGen. */
+      overlayGen: number;
       destructiveScore: number;
     }
   | { ok: false; errors: SchemaActionError[] };
@@ -1993,6 +1998,19 @@ export function applySchemaActions(opts: {
     }
   }
 
+  // DRW-216: GC orphan-overlay'ев. Бежит ПОСЛЕ всех правок newOverlays
+  // (group-reposition, adopt, set-overlay): liveIds — узлы нового состояния,
+  // orphan'ы вне их помечаются возрастом и собираются при превышении порога
+  // (keep-dead для недавних сохранён). gen → frame.meta.didrawOverlayGen.
+  const prevGen =
+    typeof frameMeta.didrawOverlayGen === "number"
+      ? frameMeta.didrawOverlayGen
+      : 0;
+  const gc = gcOverlays(newOverlays, new Set(newNodes.keys()), prevGen);
+  const gcOverlaysOut = gc.overlays;
+  const overlayGen = gc.gen;
+  const collectedOverlays = gc.collected;
+
   // Step 10: Compute destructiveScore.
   const oldNodeCount = currentNodes.size;
   const removedCount = diff.removed.length;
@@ -2010,12 +2028,14 @@ export function applySchemaActions(opts: {
   return {
     ok: true,
     newRaw,
-    newOverlays,
+    newOverlays: gcOverlaysOut,
     newEdgeOverlays,
     batch,
     addedNodeIds,
     removedNodeIds,
     orphanedOverlays,
+    collectedOverlays,
+    overlayGen,
     destructiveScore,
   };
 }
