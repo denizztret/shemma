@@ -1,7 +1,7 @@
 import type { ConnectionKind } from "./connections";
 import type { NodeId } from "./identity";
 import type { Role } from "./roles";
-import type { OverlayEntry } from "./schema-meta";
+import type { EdgeOverlayEntry, OverlayEntry } from "./schema-meta";
 
 /** Добавить или upsert узел в RAW schema-frame.
  *  `nodeId` опционален: если не передан — backend генерирует. */
@@ -73,6 +73,16 @@ export type SchemaSetOverlayAction = {
   overlay: OverlayEntry;
 };
 
+/** Записать style-правку для конкретного РЕБРА (DRW-211): ребро адресуется
+ *  направленной парой from→to; стиль применяется к живой стрелке сразу и
+ *  персистится в frame.meta.didrawEdgeOverlays. */
+export type SchemaSetEdgeOverlayAction = {
+  kind: "schema-set-edge-overlay";
+  from: NodeId;
+  to: NodeId;
+  overlay: EdgeOverlayEntry;
+};
+
 /** Discriminated union всех incremental schema-actions. */
 export type SchemaAction =
   | SchemaDefineAction
@@ -82,7 +92,8 @@ export type SchemaAction =
   | SchemaGroupAction
   | SchemaDisconnectAction
   | SchemaDeleteNodeAction
-  | SchemaSetOverlayAction;
+  | SchemaSetOverlayAction
+  | SchemaSetEdgeOverlayAction;
 
 /** String-литерал kind для всех SchemaAction типов. */
 export type SchemaActionKind = SchemaAction["kind"];
@@ -97,4 +108,5 @@ export const ALL_SCHEMA_ACTION_KINDS: readonly SchemaActionKind[] = [
   "schema-disconnect",
   "schema-delete-node",
   "schema-set-overlay",
+  "schema-set-edge-overlay",
 ];

@@ -300,7 +300,11 @@ export function registerSchemaWriteTools(
         "If frameId is omitted and the room has exactly 1 schema-frame, it is auto-picked. " +
         "If ≥2 schema-frames exist, frameId is required (ambiguous-schema-frame error otherwise). " +
         "Supported action kinds: schema-define, schema-connect, schema-rename, schema-set-role, " +
-        "schema-group, schema-disconnect, schema-delete-node, schema-set-overlay. " +
+        "schema-group, schema-disconnect, schema-delete-node, schema-set-overlay, " +
+        "schema-set-edge-overlay (restyle an existing edge addressed by from→to: " +
+        "color/labelColor/dash/size/kind(arc|elbow)/arrowheadStart/arrowheadEnd/label; " +
+        "applies to the live arrow immediately and persists; NB: the model keeps ONE edge " +
+        "per from→to pair — parallel duplicate arrows are restyled together). " +
         "Batch is all-or-nothing: if any action fails validation, none are applied. " +
         "Returns: { frameId, addedNodeIds, removedNodeIds, orphanedOverlays, destructiveScore }. " +
         "Errors: no-schema-frame (room has no schema-frames), " +

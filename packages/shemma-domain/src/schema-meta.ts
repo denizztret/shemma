@@ -1,6 +1,9 @@
 import type { NodeId } from "./identity";
 import type { Role } from "./roles";
 import type {
+  ArrowKind,
+  Arrowhead,
+  EdgeDash,
   StyleDash,
   StyleFill,
   StyleFont,
@@ -26,6 +29,28 @@ export type OverlayEntry = {
   styleOwnedBy?: "user";
 };
 
+/** Overlay-запись для конкретного РЕБРА schema-frame (DRW-211).
+ *  Хранится в `frame.meta.didrawEdgeOverlays[edgeOverlayKey(from,to)]`.
+ *  Полный style-блок стрелки: цвет/штрих/толщина/тип/наконечники/лейбл.
+ *  NB: домен держит ОДНО ребро на пару from→to — restyle затрагивает все
+ *  стрелки этой пары на доске (параллельные дубли неразличимы). */
+export type EdgeOverlayEntry = {
+  color?: string;
+  labelColor?: string;
+  dash?: EdgeDash;
+  size?: StyleSize;
+  font?: StyleFont;
+  kind?: ArrowKind;
+  arrowheadStart?: Arrowhead;
+  arrowheadEnd?: Arrowhead;
+  label?: string;
+};
+
+/** Ключ edge-overlay записи: направленная пара NodeId. */
+export function edgeOverlayKey(from: NodeId, to: NodeId): string {
+  return `${from}→${to}`;
+}
+
 /** Meta-поля tldraw frame shape, помеченного как schema-frame.
  *  Discriminator: `meta.didrawSchemaFrame === true`.
  *  Spec §Schema-frame as unit (DRW-134). */
@@ -35,6 +60,8 @@ export type SchemaFrameMeta = {
   schemaProtocolVersion: string; // "1.0" для 0.23.0
   mermaidSource: string;
   didrawOverlays: Record<NodeId, OverlayEntry>;
+  /** Edge-overlays (DRW-211): ключ — edgeOverlayKey(from, to). */
+  didrawEdgeOverlays?: Record<string, EdgeOverlayEntry>;
   didrawDestructiveCount?: number;
 };
 
@@ -74,6 +101,7 @@ export type SchemaActionError = {
   actionIndex: number;
   code:
     | "unknown-node"
+    | "unknown-edge"
     | "duplicate-node"
     | "invalid-id"
     | "invalid-mermaid"

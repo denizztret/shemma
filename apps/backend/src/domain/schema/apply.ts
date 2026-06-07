@@ -24,6 +24,7 @@ import {
   connectionPreset,
   slugify,
 } from "@shemma/domain";
+import { edgeOverlayKey } from "@shemma/domain";
 import type {
   SchemaAction,
   SchemaDefineAction,
@@ -31,6 +32,7 @@ import type {
   SchemaGroupAction,
   NodeId,
   OverlayEntry,
+  EdgeOverlayEntry,
   SchemaActionError,
   Role,
   ConnectionKind,
@@ -227,6 +229,26 @@ export function estimateEffectiveHeight(label: string, w: number, baseH: number)
   }
   if (lines <= 1) return baseH;
   return Math.max(baseH, LABEL_V_INSET + lines * LABEL_LINE_H);
+}
+
+// ---- Edge overlay style applier (DRW-211) ----
+
+/** Накатить edge-overlay style-блок на props стрелки (мутации нет — копия). */
+function applyEdgeOverlayToProps(
+  props: Record<string, unknown>,
+  entry: EdgeOverlayEntry,
+): Record<string, unknown> {
+  const next = { ...props };
+  if (entry.color) next.color = entry.color;
+  if (entry.labelColor) next.labelColor = entry.labelColor;
+  if (entry.dash) next.dash = entry.dash;
+  if (entry.size) next.size = entry.size;
+  if (entry.font) next.font = entry.font;
+  if (entry.kind) next.kind = entry.kind;
+  if (entry.arrowheadStart) next.arrowheadStart = entry.arrowheadStart;
+  if (entry.arrowheadEnd) next.arrowheadEnd = entry.arrowheadEnd;
+  if (entry.label !== undefined) next.richText = richText(entry.label);
+  return next;
 }
 
 // ---- Schema-container constructor + group reconciliation (DRW-210) ----
@@ -604,6 +626,8 @@ type ValidationContext = {
   currentEdges: Map<string, EdgeInfo>;
   /** Nodes being added in this batch (for duplicate detection) */
   pendingAdds: Set<NodeId>;
+  /** Edges being added in this batch (edgeKey) — DRW-211. */
+  pendingEdges: Set<string>;
 };
 
 
@@ -672,6 +696,8 @@ function validateAction(
           message: `Invalid connectionKind: "${action.connectionKind}"`,
         };
       }
+      // Register as pending edge (DRW-211: set-edge-overlay в том же батче).
+      ctx.pendingEdges.add(edgeKey(action.from, action.to));
       return null;
     }
 
@@ -754,6 +780,19 @@ function validateAction(
 
     case "schema-set-overlay": {
       // Overlay write is always valid (nodeId may reference orphaned nodes per spec §Overlay model).
+      return null;
+    }
+
+    case "schema-set-edge-overlay": {
+      // DRW-211: ребро должно существовать (или добавляться этим же батчем).
+      const k = edgeKey(action.from, action.to);
+      if (!ctx.currentEdges.has(k) && !ctx.pendingEdges.has(k)) {
+        return {
+          actionIndex: idx,
+          code: "unknown-edge",
+          message: `Unknown edge "${action.from}" → "${action.to}" in schema-set-edge-overlay`,
+        };
+      }
       return null;
     }
 
@@ -862,6 +901,10 @@ function applyActionsToState(
       case "schema-set-overlay": {
         // Overlay is not stored in the action list (it's in frame.meta.didrawOverlays).
         // No-op here.
+        break;
+      }
+      case "schema-set-edge-overlay": {
+        // Edge-overlay живёт в frame.meta.didrawEdgeOverlays — no-op для RAW.
         break;
       }
     }
@@ -1021,6 +1064,7 @@ export type ApplyResult =
       ok: true;
       newRaw: string;
       newOverlays: Record<NodeId, OverlayEntry>;
+      newEdgeOverlays: Record<string, EdgeOverlayEntry>;
       batch: StoreChangeBatch;
       addedNodeIds: NodeId[];
       removedNodeIds: NodeId[];
@@ -1140,6 +1184,7 @@ export function applySchemaActions(opts: {
     currentNodes,
     currentEdges,
     pendingAdds: new Set(),
+    pendingEdges: new Set(),
   };
 
   for (let i = 0; i < actions.length; i++) {
@@ -1191,6 +1236,17 @@ export function applySchemaActions(opts: {
     updated: {},
     removed: {},
   };
+
+  // DRW-211: edge-overlays — merge действий батча поверх сохранённых.
+  // Считается ДО создания стрелок: re-add ребра должен получить stored style.
+  const oldEdgeOverlays =
+    (frameMeta.didrawEdgeOverlays as Record<string, EdgeOverlayEntry> | undefined) ?? {};
+  const newEdgeOverlays: Record<string, EdgeOverlayEntry> = { ...oldEdgeOverlays };
+  for (const a of actions) {
+    if (a.kind !== "schema-set-edge-overlay") continue;
+    const k = edgeOverlayKey(a.from, a.to);
+    newEdgeOverlays[k] = { ...newEdgeOverlays[k], ...a.overlay };
+  }
 
   const { nodes: newNodes } = extractState(newActions);
 
@@ -1293,10 +1349,45 @@ export function applySchemaActions(opts: {
       meta: { connectionKind: ck },
       parentId: frame.id,
     });
+    // DRW-211: re-add ребра получает сохранённый edge-style сразу.
+    const storedEntry = newEdgeOverlays[edgeOverlayKey(edgeAdded.from, edgeAdded.to)];
+    if (storedEntry) {
+      (arrow as { props?: Record<string, unknown> }).props = applyEdgeOverlayToProps(
+        ((arrow as { props?: Record<string, unknown> }).props ?? {}) as Record<string, unknown>,
+        storedEntry,
+      );
+    }
     const { start, end } = makeArrowBindings(aid, fromShapeId, toShapeId);
     batch.added[aid] = arrow;
     batch.added[start.id] = start;
     batch.added[end.id] = end;
+  }
+
+  // DRW-211: restyle СУЩЕСТВУЮЩИХ стрелок по schema-set-edge-overlay.
+  // Новые стрелки батча стилизуются при создании (storedEntry выше).
+  for (const a of actions) {
+    if (a.kind !== "schema-set-edge-overlay") continue;
+    const fromSid = resolveShapeId(a.from);
+    const toSid = resolveShapeId(a.to);
+    if (!fromSid || !toSid) continue;
+    const entry = newEdgeOverlays[edgeOverlayKey(a.from, a.to)];
+    if (!entry) continue;
+    for (const aid of findArrowsBetween(fromSid, toSid, store)) {
+      const base = batch.updated[aid]?.[1] ?? store[aid];
+      if (!base || batch.removed[aid]) continue;
+      const next: TLRecord = {
+        ...base,
+        props: applyEdgeOverlayToProps(
+          ((base as { props?: Record<string, unknown> }).props ?? {}) as Record<
+            string,
+            unknown
+          >,
+          entry,
+        ),
+      } as TLRecord;
+      const orig = batch.updated[aid]?.[0] ?? store[aid];
+      if (orig) batch.updated[aid] = [orig, next];
+    }
   }
 
   // Removed edges → delete arrow shapes + their bindings.
@@ -1591,6 +1682,7 @@ export function applySchemaActions(opts: {
     ok: true,
     newRaw,
     newOverlays,
+    newEdgeOverlays,
     batch,
     addedNodeIds,
     removedNodeIds,

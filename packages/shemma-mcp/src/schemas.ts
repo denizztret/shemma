@@ -136,6 +136,24 @@ export const OverlayEntrySchema = z.object({
   styleOwnedBy: z.literal("user").optional(),
 });
 
+/** Edge-overlay entry schema — DRW-211 (schema-set-edge-overlay).
+ *  Полный style-блок стрелки; label заменяет подпись ребра. */
+export const EdgeOverlayEntrySchema = z.object({
+  color: z.string().optional(),
+  labelColor: z.string().optional(),
+  dash: z.enum(["draw", "dashed", "dotted", "solid"]).optional(),
+  size: z.enum(["s", "m", "l", "xl"]).optional(),
+  font: z.enum(["draw", "sans", "mono"]).optional(),
+  kind: z.enum(["arc", "elbow"]).optional(),
+  arrowheadStart: z
+    .enum(["none", "arrow", "triangle", "square", "dot", "diamond", "inverted", "bar"])
+    .optional(),
+  arrowheadEnd: z
+    .enum(["none", "arrow", "triangle", "square", "dot", "diamond", "inverted", "bar"])
+    .optional(),
+  label: z.string().optional(),
+});
+
 /** SchemaAction discriminated union — zod schema matching @shemma/domain SchemaAction. */
 export const SchemaActionSchema: z.ZodType<Record<string, unknown>> = z.discriminatedUnion("kind", [
   z.object({
@@ -182,6 +200,12 @@ export const SchemaActionSchema: z.ZodType<Record<string, unknown>> = z.discrimi
     kind: z.literal("schema-set-overlay"),
     nodeId: z.string(),
     overlay: OverlayEntrySchema,
+  }),
+  z.object({
+    kind: z.literal("schema-set-edge-overlay"),
+    from: z.string(),
+    to: z.string(),
+    overlay: EdgeOverlayEntrySchema,
   }),
 ]);
 
