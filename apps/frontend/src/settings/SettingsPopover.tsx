@@ -19,6 +19,7 @@ import {
   type UnifiedStyleState,
   deriveUnifiedStyleState,
 } from "../shapes/derive-unified-style-state";
+import { SettingsTriggerButton } from "./SettingsTriggerButton";
 import { setContainerDirection } from "../shapes/schema-container/SchemaContainerActions";
 import type { SchemaContainerShape } from "../shapes/schema-container/SchemaContainerShape";
 import {
@@ -116,7 +117,8 @@ function lockedAncestorFrame(
 
 export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
   const editor = useEditor();
-  const { target, close, pinned, setPinned } = useSettingsTrigger(editor);
+  const { target, close, pinned, setPinned, toggle } =
+    useSettingsTrigger(editor);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const [advanced, setAdvanced] = useState(false);
   // Shortcuts drill-down (global keyboard-shortcut remapping) on the board panel.
@@ -232,7 +234,8 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
     return () => el.removeEventListener("keydown", onKey);
   }, [target]);
 
-  if (!target) return null;
+  // DRW-206: кнопка ⚙ видна всегда — дискавериваемый вход в панель настроек.
+  if (!target) return <SettingsTriggerButton open={false} onToggle={toggle} />;
 
   async function handleBoardStyle<K extends keyof StyleDefaults>(
     key: K,
@@ -334,7 +337,9 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
   }
 
   return (
-    <div
+    <>
+      <SettingsTriggerButton open onToggle={toggle} />
+      <div
       ref={popoverRef}
       className="settings-popover"
       style={{
@@ -475,7 +480,8 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
       {target.kind === "board" && shortcuts && (
         <ShortcutsPanel onBack={() => setShortcuts(false)} />
       )}
-    </div>
+      </div>
+    </>
   );
 };
 

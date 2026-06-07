@@ -48,8 +48,9 @@ export function PromptDrawer({
         // DRW-191: переехали с bottom-left (`left:8; top:30%`) на top
         // сразу после chrome menu zone (Menu/Page/Undo/Redo/Delete/Copy/More).
         // zIndex > 300 (SharePanel zone), иначе перекрывается Gallery.
+        // DRW-206: left 320 → 356 — кнопка настроек ⚙ встала перед 💬.
         top: 4,
-        left: 320,
+        left: 356,
         zIndex: 301,
         pointerEvents: "auto",
         fontFamily: tokens.font.sans,
