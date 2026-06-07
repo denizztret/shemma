@@ -11,6 +11,20 @@ export type StyleFont = "draw" | "sans" | "mono";
 export type StyleSize = "s" | "m" | "l" | "xl";
 export type StyleFill = "none" | "semi" | "solid" | "pattern";
 
+// ---- Edge (arrow) style atoms — DRW-211 ----
+// Полный tldraw-набор dash для стрелок (узлы ограничены draw|solid выше).
+export type EdgeDash = "draw" | "dashed" | "dotted" | "solid";
+export type ArrowKind = "arc" | "elbow";
+export type Arrowhead =
+  | "none"
+  | "arrow"
+  | "triangle"
+  | "square"
+  | "dot"
+  | "diamond"
+  | "inverted"
+  | "bar";
+
 export type StyleDefaults = {
   dash?: StyleDash;
   font?: StyleFont;

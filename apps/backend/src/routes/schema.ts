@@ -1026,6 +1026,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
       const {
         newRaw,
         newOverlays,
+        newEdgeOverlays,
         batch,
         addedNodeIds,
         removedNodeIds,
@@ -1044,6 +1045,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
           ...(grownFrame.meta ?? {}),
           mermaidSource: newRaw,
           didrawOverlays: newOverlays,
+          didrawEdgeOverlays: newEdgeOverlays,
         },
       };
       const frameBatch: StoreChangeBatch = {
