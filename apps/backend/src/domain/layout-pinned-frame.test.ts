@@ -123,6 +123,26 @@ function frameStore(children: Pin[]): TLStoreSnapshot {
   } as unknown as TLStoreSnapshot;
 }
 
+type Box = { x: number; y: number; w: number; h: number };
+
+/** Final frame-relative box of shape:nI after layout (updated or original). */
+function finalBox(
+  res: Awaited<ReturnType<typeof runLayout>>,
+  snap: TLStoreSnapshot,
+  i: number,
+): Box {
+  const upd = res.batch.updated[`shape:n${i}`];
+  // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+  const rec = (upd ? upd[1] : snap.store[`shape:n${i}`]) as any;
+  return { x: rec.x, y: rec.y, w: 220, h: 80 };
+}
+
+function overlaps(a: Box, b: Box): boolean {
+  return (
+    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+  );
+}
+
 describe("agent layout vs pinned children (DRW-205)", () => {
   test("scope=all: frame covers restored pinned children, pins don't move", async () => {
     // 3 of 4 children pinned far apart (user arranged them); 1 unpinned.
@@ -171,6 +191,105 @@ describe("agent layout vs pinned children (DRW-205)", () => {
       expect(rec.y).toBeGreaterThanOrEqual(0);
       expect(rec.x + 220).toBeLessThanOrEqual(fw + 1);
       expect(rec.y + 80).toBeLessThanOrEqual(fh + 1);
+    }
+  });
+
+  // DRW-208: pins blanket the board → the old displacement fallback shoved
+  // EVERY colliding node into one vertical column right of the pins (live
+  // repro 2026-06-07: 21 of 23 nodes at x=2956). Displaced nodes must land
+  // in the nearest free spot to their ELK position instead.
+  test("scope=all: displaced nodes spread to nearest free slots, not a column", async () => {
+    // 8 unpinned chain nodes FIRST (their ELK row lands at x≈0..2400, y≈40),
+    // 6 pins blanket exactly that zone — several ELK positions are guaranteed
+    // to collide with a pin and go through displacement.
+    const original: Pin[] = [
+      { x: 10, y: 10 },
+      { x: 20, y: 20 },
+      { x: 30, y: 30 },
+      { x: 40, y: 40 },
+      { x: 60, y: 60 },
+      { x: 70, y: 70 },
+      { x: 80, y: 80 },
+      { x: 90, y: 90 },
+      { x: 50, y: 50, pinned: true },
+      { x: 450, y: 50, pinned: true },
+      { x: 850, y: 50, pinned: true },
+      { x: 50, y: 350, pinned: true },
+      { x: 450, y: 350, pinned: true },
+      { x: 850, y: 350, pinned: true },
+    ];
+    const res = await runLayout(
+      frameStore(original),
+      { mode: "layered-lr", scope: "all" },
+      new Map(),
+    );
+    const snap = frameStore(original);
+
+    // Pins must not move.
+    original.slice(8).forEach((o, i) => {
+      const b = finalBox(res, snap, i + 8);
+      expect({ i: i + 8, x: b.x, y: b.y }).toEqual({
+        i: i + 8,
+        x: o.x,
+        y: o.y,
+      });
+    });
+
+    const freeBoxes = Array.from({ length: 8 }, (_, i) =>
+      finalBox(res, snap, i),
+    );
+    const pinBoxes = Array.from({ length: 6 }, (_, i) =>
+      finalBox(res, snap, i + 8),
+    );
+
+    // (a) Column signature: no 4+ unpinned nodes stacked at the same x.
+    const byX = new Map<number, number>();
+    for (const b of freeBoxes) byX.set(b.x, (byX.get(b.x) ?? 0) + 1);
+    const maxSameX = Math.max(...byX.values());
+    expect(maxSameX).toBeLessThan(4);
+
+    // (b) No pairwise overlaps: node×node and node×pin.
+    for (let i = 0; i < freeBoxes.length; i++) {
+      const a = freeBoxes[i];
+      if (!a) continue;
+      for (let j = i + 1; j < freeBoxes.length; j++) {
+        const b = freeBoxes[j];
+        if (!b) continue;
+        expect({ pair: `n${i}×n${j}`, overlap: overlaps(a, b) }).toEqual({
+          pair: `n${i}×n${j}`,
+          overlap: false,
+        });
+      }
+      pinBoxes.forEach((p, j) => {
+        expect({ pair: `n${i}×pin${j + 8}`, overlap: overlaps(a, p) }).toEqual({
+          pair: `n${i}×pin${j + 8}`,
+          overlap: false,
+        });
+      });
+    }
+
+    // (c) Everything inside the (possibly grown) frame, no negative coords.
+    const frameUpd = res.batch.updated["shape:frame"];
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    const fr = (frameUpd ? frameUpd[1] : snap.store["shape:frame"]) as any;
+    for (const b of [...pinBoxes, ...freeBoxes]) {
+      expect(b.x).toBeGreaterThanOrEqual(0);
+      expect(b.y).toBeGreaterThanOrEqual(0);
+      expect(b.x + b.w).toBeLessThanOrEqual((fr.props.w as number) + 1);
+      expect(b.y + b.h).toBeLessThanOrEqual((fr.props.h as number) + 1);
+    }
+
+    // (d) Determinism: the same input yields the same final positions.
+    const res2 = await runLayout(
+      frameStore(original),
+      { mode: "layered-lr", scope: "all" },
+      new Map(),
+    );
+    for (let i = 0; i < original.length; i++) {
+      expect({ i, ...finalBox(res2, snap, i) }).toEqual({
+        i,
+        ...finalBox(res, snap, i),
+      });
     }
   });
 });
