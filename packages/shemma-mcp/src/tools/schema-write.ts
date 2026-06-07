@@ -158,6 +158,7 @@ export function registerSchemaWriteTools(
         frameId?: string;
         nodeIds?: string[];
         version?: number;
+        upgradedToV2?: boolean;
         errors?: Array<{ code?: string; message?: string }>;
       };
 
@@ -171,6 +172,16 @@ export function registerSchemaWriteTools(
             frameId: resp.frameId,
             nodeIds: resp.nodeIds ?? [],
             version: resp.version,
+            upgradedToV2: resp.upgradedToV2 ?? false,
+            // DRW-226: surface the irreversible v1→v2 transition so the agent
+            // knows the protocol switched (storage Mermaid parser, delete via
+            // shemma_delete_schema) and cannot be undone.
+            ...(resp.upgradedToV2
+              ? {
+                  notice:
+                    "Room upgraded v1→v2 (irreversible). Subsequent storage imports use the reduced Mermaid parser; delete frames via shemma_delete_schema and nodes via shemma_patch_schema(schema-delete-node). For full Mermaid use shemma_import_mermaid mode:\"browser\" with an open browser tab.",
+                }
+              : {}),
           },
         });
       }

@@ -343,7 +343,12 @@ export function parseMermaidFlowchart(
       return {
         ok: false,
         code: "invalid-mermaid",
-        message: `Cannot parse line ${i + 1}: "${line}"`,
+        // DRW-225: guide the agent. The storage parser handles flowchart/graph
+        // headers, subgraphs, node declarations, edges (incl. |labels|), and
+        // style/classDef directives (skipped) — but NOT every Mermaid construct
+        // (e.g. inline `:::class` shorthand). For full Mermaid, import via
+        // mode:"browser" with a live browser tab (WS client).
+        message: `Cannot parse line ${i + 1}: "${line}". The storage Mermaid parser supports flowchart/graph headers, subgraphs, node declarations, and edges (including |labels|); style/classDef lines are skipped. Constructs like inline ":::class" shorthand are not supported here — for full Mermaid use import mode:"browser" with an open browser tab (WS client).`,
       };
     }
   }

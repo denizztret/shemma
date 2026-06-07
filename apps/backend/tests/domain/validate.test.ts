@@ -218,3 +218,48 @@ describe("validateBatch", () => {
     }
   });
 });
+
+// DRW-224: guide agents from the v1 delete path to the right v2 tool. A delete
+// target that is a v2 schema-frame id (shape:f_…) or a schema-managed shape must
+// surface a hint pointing to shemma_delete_schema / schema-delete-node, not a
+// bare "not found".
+describe("DRW-224 — delete error guides toward v2 tools", () => {
+  test("delete of a v2 schema-frame id hints shemma_delete_schema", () => {
+    const { store, index } = seedStore();
+    const r = validateBatch(
+      [{ kind: "delete", ids: ["shape:f_abc123"] }] as DomainAction[],
+      store,
+      index,
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.errors[0]?.code).toBe("unknown-ref");
+      expect(r.errors[0]?.message).toContain("shemma_delete_schema");
+    }
+  });
+
+  test("delete of a schema-managed shape hints schema-delete-node", () => {
+    const { store, index } = seedStore();
+    store.store["shape:node1"] = {
+      id: "shape:node1",
+      typeName: "shape",
+      type: "geo",
+      x: 0,
+      y: 0,
+      parentId: "page:page",
+      index: "a1",
+      isLocked: false,
+      opacity: 1,
+      rotation: 0,
+      props: { w: 100, h: 60 },
+      meta: { didrawSchemaParent: "shape:f_abc123" },
+    } as never;
+    const r = validateBatch(
+      [{ kind: "delete", ids: ["shape:node1"] }] as DomainAction[],
+      store,
+      index,
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors[0]?.message).toContain("schema-delete-node");
+  });
+});

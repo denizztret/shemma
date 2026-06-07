@@ -71,3 +71,29 @@ style INNER stroke-dasharray:1,4`;
     expect(containers[0]!.props.dash).toBe("dotted");
   });
 });
+
+// DRW-226: the first create on a v1 room irreversibly upgrades it to v2 — that
+// transition must be surfaced to the agent (upgradedToV2 flag), and must NOT
+// re-fire on a room that is already v2.
+describe("POST /api/schema/create — surfaces v1→v2 upgrade (DRW-226)", () => {
+  it("first create on a v1 room → upgradedToV2:true; second create → upgradedToV2:false", async () => {
+    const { app } = makeApp({ inMemory: true });
+    const res1 = await postSchemaCreate(
+      app,
+      { label: "S1", raw: "graph LR\n  a[A] --> b[B]" },
+      "sc-upg",
+    );
+    expect(res1.status).toBe(200);
+    const b1 = (await res1.json()) as { ok: boolean; upgradedToV2?: boolean };
+    expect(b1.ok).toBe(true);
+    expect(b1.upgradedToV2).toBe(true);
+
+    const res2 = await postSchemaCreate(
+      app,
+      { label: "S2", raw: "graph LR\n  c[C] --> d[D]" },
+      "sc-upg",
+    );
+    const b2 = (await res2.json()) as { upgradedToV2?: boolean };
+    expect(b2.upgradedToV2).toBe(false);
+  });
+});

@@ -815,3 +815,18 @@ describe("parseMermaidFlowchart — idMap exposure (Stage 1)", () => {
     expect(res.idMap.get("api")).not.toEqual(res.idMap.get("db"));
   });
 });
+
+// DRW-225: an unparseable line (e.g. the inline `:::class` shorthand, which the
+// storage parser does not support — classDef/style/edge-labels DO work) must
+// produce a guiding error that points the agent at browser mode for full
+// Mermaid, not a bare "Cannot parse line".
+describe("parseMermaidFlowchart — unsupported-line error guides the agent (DRW-225)", () => {
+  test("inline :::class shorthand → error names browser mode as the full-Mermaid path", () => {
+    const r = parse("graph LR\n  a[Alpha]:::hot --> b[Beta]");
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.code).toBe("invalid-mermaid");
+      expect(r.message).toContain("browser");
+    }
+  });
+});

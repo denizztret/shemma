@@ -232,7 +232,12 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
   server.registerTool(
     "shemma_delete",
     {
-      description: "Delete elements by id. Use cascade:true to remove dependent edges.",
+      description:
+        "Delete elements by id. Use cascade:true to remove dependent edges. " +
+        "This is the v1 domain path (resolves by element name). It does NOT delete " +
+        "v2 schema-frames or shapes managed by them: to delete a whole schema-frame " +
+        "use shemma_delete_schema(frameId); to delete a node inside a schema-frame use " +
+        "shemma_patch_schema with a schema-delete-node action.",
       inputSchema: DeleteArgs,
       annotations: { destructiveHint: true },
     },
@@ -367,6 +372,7 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
       frameId?: string;
       nodeIds?: string[];
       version?: number;
+      upgradedToV2?: boolean;
       errors?: Array<{ code?: string; message?: string }>;
     };
 
@@ -385,6 +391,14 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
         root_ids: resp.frameId ? [resp.frameId] : [],
         frameId: resp.frameId,
         nodeIds: resp.nodeIds ?? [],
+        upgradedToV2: resp.upgradedToV2 ?? false,
+        // DRW-226: surface the irreversible v1→v2 transition on first storage import.
+        ...(resp.upgradedToV2
+          ? {
+              notice:
+                "Room upgraded v1→v2 (irreversible). Storage imports now use the reduced Mermaid parser; for full Mermaid use mode:\"browser\" with an open browser tab. Delete frames via shemma_delete_schema, nodes via shemma_patch_schema(schema-delete-node).",
+            }
+          : {}),
       });
     }
 
@@ -507,7 +521,7 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
         "Imports a Mermaid diagram into the canvas room. APPEND-only — never replaces or deletes existing shapes; preserves user's manual layout edits.\n\n" +
         "**mode param (DRW-127):**\n" +
         "- `\"browser\"` (default) — WS-based flow via /api/agent/import-mermaid. Requires an open browser tab with an active WebSocket subscriber. Backward-compatible default.\n" +
-        "- `\"storage\"` — direct storage write via POST /api/schema/create (no WS required). Room auto-upgrades to v2 on first call. Returns `frameId` + `nodeIds` in addition to standard envelope. Fails with `import-failed` for unsupported diagram types (use browser mode as fallback).\n" +
+        "- `\"storage\"` — direct storage write via POST /api/schema/create (no WS required). Room auto-upgrades to v2 on first call (irreversible — response carries `upgradedToV2`). Returns `frameId` + `nodeIds` in addition to standard envelope. Uses a REDUCED Mermaid parser: flowchart/graph headers, subgraphs, node declarations, edges (incl. `|labels|`), and style/classDef lines (skipped) — but NOT every construct (e.g. inline `:::class` shorthand). For full Mermaid use `\"browser\"`. Fails with `import-failed` for unsupported diagram types (use browser mode as fallback).\n" +
         "- `\"auto\"` — tries storage first; on storage error falls back to browser. Best-effort: use when WS availability is unknown.\n\n" +
         "Before calling: invoke `shemma_context` first to inspect existing element didraw_names — Mermaid node ids that collide with existing names will be auto-deduplicated (e.g. \"api-2\"), so avoid emitting Mermaid labels that already exist as nodes.\n\n" +
         "Returns: shape_ids, didraw_names, root_ids — usable for follow-up shemma_connect / shemma_group. Storage mode also returns frameId, nodeIds.\n\n" +
