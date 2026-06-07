@@ -89,4 +89,48 @@ describe("POST /api/board/style-defaults", () => {
     );
     expect(res.status).toBe(400);
   });
+
+  // ---- DRW-207: arrowKind в board defaults ----
+
+  it("arrowKind round-trips and shows up in effective", async () => {
+    const app = await setup();
+    const res = await app.fetch(
+      new Request(`http://x/api/board/style-defaults?space=${SPACE}&room=${ROOM}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ defaults: { arrowKind: "elbow" } }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.effective.arrowKind).toBe("elbow");
+
+    const getRes = await app.fetch(
+      new Request(`http://x/api/board/style-defaults?space=${SPACE}&room=${ROOM}`),
+    );
+    const getBody = await getRes.json();
+    expect(getBody.raw).toEqual({ arrowKind: "elbow" });
+    expect(getBody.effective.arrowKind).toBe("elbow");
+  });
+
+  it("effective has NO arrowKind when unset (status-quo semantics)", async () => {
+    const app = await setup();
+    const res = await app.fetch(
+      new Request(`http://x/api/board/style-defaults?space=${SPACE}&room=${ROOM}`),
+    );
+    const body = await res.json();
+    expect(body.effective.arrowKind).toBeUndefined();
+  });
+
+  it("400 on invalid arrowKind", async () => {
+    const app = await setup();
+    const res = await app.fetch(
+      new Request(`http://x/api/board/style-defaults?space=${SPACE}&room=${ROOM}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ defaults: { arrowKind: "curvy" } }),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
 });

@@ -14,6 +14,7 @@
 // а sideEffects.registerBeforeCreateHandler не вызывается для mergeRemoteChanges.
 
 import {
+  ArrowShapeKindStyle,
   DefaultDashStyle,
   DefaultFontStyle,
   DefaultSizeStyle,
@@ -22,6 +23,7 @@ import {
   type TLShapeId,
 } from "tldraw";
 import {
+  type ArrowKind,
   type StyleDash,
   type StyleDefaults,
   type StyleFont,
@@ -122,6 +124,9 @@ function isStyleFont(v: unknown): v is StyleFont {
 function isStyleSize(v: unknown): v is StyleSize {
   return v === "s" || v === "m" || v === "l" || v === "xl";
 }
+function isArrowKind(v: unknown): v is ArrowKind {
+  return v === "arc" || v === "elbow";
+}
 
 /**
  * Register board-level style defaults sync для editor / room.
@@ -162,6 +167,11 @@ export function registerStyleDefaultsSync(
     if (defaults.size !== undefined) {
       setEcho("size", defaults.size);
       editor.setStyleForNextShapes(DefaultSizeStyle, defaults.size);
+    }
+    // DRW-207: unset → НЕ трогаем (статус-кво: нативный arc у ручных стрелок).
+    if (defaults.arrowKind !== undefined) {
+      setEcho("arrowKind", defaults.arrowKind);
+      editor.setStyleForNextShapes(ArrowShapeKindStyle, defaults.arrowKind);
     }
   }
 
@@ -212,6 +222,18 @@ export function registerStyleDefaultsSync(
         if (isStyleSize(sizeRaw)) {
           if (!checkEcho("size", sizeRaw) && roomDefaults?.size !== sizeRaw) {
             patch.size = sizeRaw;
+            changed = true;
+          }
+        }
+        // DRW-207: выбор kind в нативной style-панели стрелок → board default
+        // (паритет с dash/font/size — bidirectional sync).
+        const kindRaw = styles[ArrowShapeKindStyle.id];
+        if (isArrowKind(kindRaw)) {
+          if (
+            !checkEcho("arrowKind", kindRaw) &&
+            roomDefaults?.arrowKind !== kindRaw
+          ) {
+            patch.arrowKind = kindRaw;
             changed = true;
           }
         }

@@ -156,4 +156,91 @@ describe("POST /api/agent/style-apply", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  // ---- DRW-207: arrowKind switches props.kind on arrows only ----
+
+  function makeArrow(
+    id: string,
+    opts: { kind?: string; parentId?: string } = {},
+  ): TLRecord {
+    return {
+      id,
+      typeName: "shape",
+      type: "arrow",
+      x: 0,
+      y: 0,
+      parentId: opts.parentId ?? "page:page",
+      props: {
+        kind: opts.kind ?? "arc",
+        color: "black",
+        dash: "draw",
+        size: "m",
+        font: "draw",
+        start: { x: 0, y: 0 },
+        end: { x: 100, y: 100 },
+        bend: 0,
+        elbowMidPoint: 0.5,
+        richText: {
+          type: "doc",
+          content: [{ type: "paragraph", content: [{ type: "text", text: "edge" }] }],
+        },
+      },
+      meta: {},
+    } as TLRecord;
+  }
+
+  it("arrowKind switches kind on selected arrow, leaves geo untouched", async () => {
+    const { app, legacyBundle } = makeApp({ inMemory: true });
+    const r = await legacyBundle.rooms.get(ROOM);
+    const snap = emptySnapshot();
+    snap.store["shape:a1"] = makeArrow("shape:a1", { kind: "arc" });
+    snap.store["shape:g5"] = makeGeo("shape:g5");
+    r.store = snap;
+
+    await postStyleApply(app, {
+      selectedIds: ["shape:a1", "shape:g5"],
+      styles: { arrowKind: "elbow" },
+      respectUserOwned: false,
+    });
+
+    const room = await legacyBundle.rooms.get(ROOM);
+    const arrow = room.store.store["shape:a1"] as any;
+    const geo = room.store.store["shape:g5"] as any;
+    expect(arrow.props.kind).toBe("elbow");
+    // label и прочие props стрелки не тронуты
+    expect(arrow.props.richText.content[0].content[0].text).toBe("edge");
+    expect(arrow.props.dash).toBe("draw");
+    // geo не имеет kind и не должен его получить
+    expect(geo.props.kind).toBeUndefined();
+  });
+
+  it("arrowKind sweeps arrows inside selected frame (descendants)", async () => {
+    const { app, legacyBundle } = makeApp({ inMemory: true });
+    const r = await legacyBundle.rooms.get(ROOM);
+    const snap = emptySnapshot();
+    snap.store["shape:f2"] = makeFrame("shape:f2");
+    snap.store["shape:a2"] = makeArrow("shape:a2", { kind: "elbow", parentId: "shape:f2" });
+    r.store = snap;
+
+    await postStyleApply(app, {
+      selectedIds: ["shape:f2"],
+      styles: { arrowKind: "arc" },
+      respectUserOwned: false,
+    });
+
+    const room = await legacyBundle.rooms.get(ROOM);
+    expect((room.store.store["shape:a2"] as any).props.kind).toBe("arc");
+    // sticky meta на frame НЕ пишется для arrowKind (board-level only)
+    const frameMeta = (room.store.store["shape:f2"] as any).meta;
+    expect(frameMeta.didrawStyleDefaults?.arrowKind).toBeUndefined();
+  });
+
+  it("400 on invalid arrowKind", async () => {
+    const { app } = makeApp({ inMemory: true });
+    const res = await postStyleApply(app, {
+      selectedIds: ["shape:x"],
+      styles: { arrowKind: "curvy" },
+    });
+    expect(res.status).toBe(400);
+  });
 });

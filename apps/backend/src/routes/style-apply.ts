@@ -29,18 +29,19 @@ type ShapeType = "geo" | "note" | "text" | "arrow" | "schema-container";
 
 type ApplyMatrix = Record<
   ShapeType,
-  { dash: boolean; font: boolean; size: boolean }
+  { dash: boolean; font: boolean; size: boolean; kind: boolean }
 >;
 
 // Applicability matrix — определяет какие props меняются по типу shape.
 // frame здесь отсутствует намеренно: applyApplicable вернёт null для неизвестных типов;
 // sticky meta на frame пишется через applyStickyMeta (Pass 1).
+// kind (DRW-207, styles.arrowKind → props.kind) применим только к стрелкам.
 const APPLY_MATRIX: ApplyMatrix = {
-  geo: { dash: true, font: true, size: true },
-  note: { dash: false, font: true, size: true },
-  text: { dash: false, font: true, size: true },
-  arrow: { dash: true, font: true, size: true },
-  "schema-container": { dash: true, font: false, size: false },
+  geo: { dash: true, font: true, size: true, kind: false },
+  note: { dash: false, font: true, size: true, kind: false },
+  text: { dash: false, font: true, size: true, kind: false },
+  arrow: { dash: true, font: true, size: true, kind: true },
+  "schema-container": { dash: true, font: false, size: false, kind: false },
 };
 
 // Shapes с этими значениями dash НЕ получают изменения dash (preservation).
@@ -86,6 +87,14 @@ function applyApplicable(
   }
   if (styles.size !== undefined && allowance.size && nextProps.size !== styles.size) {
     nextProps.size = styles.size;
+    changed = true;
+  }
+  if (
+    styles.arrowKind !== undefined &&
+    allowance.kind &&
+    nextProps.kind !== styles.arrowKind
+  ) {
+    nextProps.kind = styles.arrowKind;
     changed = true;
   }
 

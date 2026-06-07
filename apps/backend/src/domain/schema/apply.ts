@@ -26,6 +26,7 @@ import {
 } from "@shemma/domain";
 import { edgeOverlayKey } from "@shemma/domain";
 import type {
+  ArrowKind,
   SchemaAction,
   SchemaDefineAction,
   SchemaConnectAction,
@@ -39,6 +40,7 @@ import type {
 } from "@shemma/domain";
 import type { TLRecord, StoreChangeBatch } from "../../store-types";
 import type { RoomState } from "../../types";
+import { roomArrowKind } from "../arrow-kind";
 import { parseMermaidFlowchart } from "./mermaid-parser";
 import type { ParseResult, MermaidDirection } from "./mermaid-parser";
 import { generateMermaid } from "./mermaid-generator";
@@ -83,6 +85,7 @@ function makeArrowShape(opts: {
   label: string;
   meta: Record<string, unknown>;
   parentId: string;
+  kind: ArrowKind;
 }): TLRecord {
   return {
     id: opts.id,
@@ -96,7 +99,7 @@ function makeArrowShape(opts: {
     opacity: 1,
     rotation: 0,
     props: {
-      kind: "elbow",
+      kind: opts.kind,
       color: "black",
       labelColor: "black",
       fill: "none",
@@ -1263,6 +1266,8 @@ export function applySchemaActions(opts: {
   const { room, frame, actions: rawActions, suffixLen } = opts;
 
   const store = room.store.store as Record<string, TLRecord | undefined>;
+  // DRW-207: тип новых стрелок — board default, фолбэк elbow.
+  const arrowKind: ArrowKind = roomArrowKind(room.meta);
 
   // Step 1: Parse current RAW → oldActions.
   const frameMeta = (frame.meta ?? {}) as Record<string, unknown>;
@@ -1584,6 +1589,7 @@ export function applySchemaActions(opts: {
       label: edgeAdded.label ?? preset.defaultLabel ?? "",
       meta: { connectionKind: ck },
       parentId: frame.id,
+      kind: arrowKind,
     });
     // DRW-211: re-add ребра получает сохранённый edge-style сразу.
     const storedEntry = newEdgeOverlays[edgeOverlayKey(edgeAdded.from, edgeAdded.to)];

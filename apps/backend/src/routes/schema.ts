@@ -14,10 +14,11 @@
 
 import { randomBytes } from "node:crypto";
 import { connectionPreset } from "@shemma/domain";
-import type { LayoutParams, OverlayEntry, SchemaAction } from "@shemma/domain";
+import type { ArrowKind, LayoutParams, OverlayEntry, SchemaAction } from "@shemma/domain";
 import type { NodeId } from "@shemma/domain";
 import { Hono } from "hono";
 import { config } from "../config";
+import { roomArrowKind } from "../domain/arrow-kind";
 import { applySchemaActions } from "../domain/schema/apply";
 import { isV2Room, roomSuffixLength } from "../domain/schema/detect";
 import { generateNodeIdServer, nodeIdFromLabel } from "../domain/schema/identity";
@@ -109,6 +110,7 @@ function makeArrowShapeLocal(opts: {
   label: string;
   meta: Record<string, unknown>;
   parentId: string;
+  kind: ArrowKind;
 }): TLRecord {
   const richTextVal = opts.label
     ? {
@@ -128,7 +130,7 @@ function makeArrowShapeLocal(opts: {
     opacity: 1,
     rotation: 0,
     props: {
-      kind: "elbow",
+      kind: opts.kind,
       color: "black",
       labelColor: "black",
       fill: "none",
@@ -800,6 +802,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
           label: action.label ?? preset.defaultLabel ?? "",
           meta: { connectionKind: ck },
           parentId: frameId,
+          kind: roomArrowKind(room.meta),
         });
         const { start, end } = makeArrowBindingsLocal(aid, fromShapeId, toShapeId);
         batch.added[aid] = arrow;

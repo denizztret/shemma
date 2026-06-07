@@ -5,7 +5,12 @@
 // action, чтобы action N мог ссылаться на shapes/groups, созданные в action N-1.
 // `layout` — no-op на этом уровне (ELK orchestrate'ится routes/domain.ts).
 
-import { connectionPreset, rolePreset, type Role } from "@shemma/domain";
+import {
+  connectionPreset,
+  rolePreset,
+  type ArrowKind,
+  type Role,
+} from "@shemma/domain";
 import { applyStoreChanges, cascadeDeleteShape, rebuildDidrawIndex } from "../store-ops";
 import type { StoreChangeBatch, TLRecord, TLStoreSnapshot } from "../store-types";
 import type { DomainAction, ElementId } from "./types";
@@ -42,6 +47,7 @@ function makeArrowShape(opts: {
   dash: "draw" | "dashed";
   label: string;
   meta: Record<string, unknown>;
+  kind: ArrowKind;
 }): TLRecord {
   return {
     id: opts.id,
@@ -55,7 +61,7 @@ function makeArrowShape(opts: {
     opacity: 1,
     rotation: 0,
     props: {
-      kind: "elbow",
+      kind: opts.kind,
       color: "black",
       labelColor: "black",
       fill: "none",
@@ -104,7 +110,10 @@ export function compile(
   actions: DomainAction[],
   store: TLStoreSnapshot,
   index: Map<string, string>,
+  // DRW-207: тип новых стрелок — board default (caller читает room.meta), фолбэк elbow.
+  opts?: { arrowKind?: ArrowKind },
 ): { batch: StoreChangeBatch; elementIds: (ElementId | undefined)[] } {
+  const arrowKind: ArrowKind = opts?.arrowKind ?? "elbow";
   let stagingStore: TLStoreSnapshot = store;
   let stagingIndex: Map<string, string> = new Map(index);
   let batch: StoreChangeBatch = { added: {}, updated: {}, removed: {} };
@@ -202,6 +211,7 @@ export function compile(
           dash: preset.dashed ? "dashed" : "draw",
           label: a.label ?? preset.defaultLabel ?? "",
           meta: { connectionKind: ck, ...(a.meta ?? {}) },
+          kind: arrowKind,
         });
         const { start, end } = makeArrowBindings(aid, fromId, toId);
         stage({
@@ -278,6 +288,7 @@ export function compile(
               dash: "dashed",
               label: "",
               meta: { connectionKind: "dep", noteBinding: true },
+              kind: arrowKind,
             });
             const { start, end } = makeArrowBindings(aid, id, targetId);
             sub.added[aid] = arrow;
