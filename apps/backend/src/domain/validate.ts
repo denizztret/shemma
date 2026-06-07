@@ -22,6 +22,25 @@ function isDeleteWithIds(
 
 type KnownElement = { role: Role; isContainer: boolean };
 
+/**
+ * DRW-224: when a v1 `delete` target is not found, guide the agent toward the
+ * correct v2 tool instead of a bare "not found". v2 schema-frame ids carry the
+ * `shape:f_` prefix; shapes managed by a schema-frame carry
+ * `meta.didrawSchemaParent`. Both are unreachable from the v1 didrawName-based
+ * delete path — the agent reached for the wrong tool.
+ */
+function deleteTargetHint(id: ElementId, store: TLStoreSnapshot): string {
+  if (id.startsWith("shape:f_")) {
+    return ` — "${id}" looks like a v2 schema-frame; delete it with shemma_delete_schema(frameId)`;
+  }
+  const parent = (store.store[id]?.meta as { didrawSchemaParent?: unknown } | undefined)
+    ?.didrawSchemaParent;
+  if (typeof parent === "string" && parent !== "") {
+    return ` — "${id}" is a node inside a v2 schema-frame; delete it via shemma_patch_schema with a schema-delete-node action`;
+  }
+  return "";
+}
+
 function seedKnown(
   store: TLStoreSnapshot,
   index: Map<string, string>,
@@ -146,7 +165,7 @@ export function validateBatch(
         const ids = isDeleteWithIds(a) ? a.ids : [a.id];
         for (const id of ids) {
           if (!known.has(id)) {
-            errors.push({ actionIndex: i, field: "id", code: "unknown-ref", message: `delete target "${id}" not found` });
+            errors.push({ actionIndex: i, field: "id", code: "unknown-ref", message: `delete target "${id}" not found${deleteTargetHint(id, store)}` });
           }
           known.delete(id);
         }

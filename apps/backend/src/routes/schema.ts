@@ -568,6 +568,12 @@ type SchemaCreateResponse = {
   frameId: string;
   nodeIds: NodeId[];
   version: number;
+  /**
+   * DRW-226: true when THIS call irreversibly upgraded the room from v1 to v2.
+   * Surfaced so the agent knows the protocol switched (different model, storage
+   * Mermaid parser, delete via shemma_delete_schema) and that it cannot be undone.
+   */
+  upgradedToV2: boolean;
 };
 
 type SchemaErrorEntry = { code: string; message: string; actionIndex?: number };
@@ -812,7 +818,10 @@ export function schemaRoutes(bus: StoreChangeBus) {
 
       // Auto-upgrade: set room.meta.didrawProtocol = "v2" if not already v2.
       // This is the key side-effect that makes v2 auto-upgrade work per plan.
-      if (!isV2Room(room)) {
+      // DRW-226: capture whether THIS call performed the (irreversible) upgrade
+      // so the response can surface it to the agent.
+      const upgradedToV2 = !isV2Room(room);
+      if (upgradedToV2) {
         room.meta = { ...(room.meta ?? {}), didrawProtocol: "v2" };
       }
 
@@ -949,6 +958,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
         frameId,
         nodeIds,
         version: room.version,
+        upgradedToV2,
       } satisfies SchemaCreateResponse);
     })
 
