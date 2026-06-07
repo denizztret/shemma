@@ -1,3 +1,91 @@
+/* DRW-217: CSS-переменные темы. SSOT палитры обеих тем.
+ * Привязка — data-shemma-theme на <html> (theme-store.ts, init до рендера).
+ * design-tokens.ts ссылается на эти переменные (var(--shemma-*)) — все
+ * inline-стили компонентов темизируются автоматически. */
+:root,
+html[data-shemma-theme="light"] {
+  /* text */
+  --shemma-text: #1a1a1a;
+  --shemma-text-strong: #333;
+  --shemma-text-mid: #444;
+  --shemma-text-muted: #666;
+  --shemma-text-soft: #888;
+  --shemma-text-dim: #999;
+  --shemma-text-ghost: #c8c8c8;
+  /* borders */
+  --shemma-border: rgba(0, 0, 0, 0.12);
+  --shemma-border-strong: #d6d6d6;
+  --shemma-border-soft: #f0f0f0;
+  --shemma-border-hover: #bdbdbd;
+  /* backgrounds */
+  --shemma-bg: #fff;
+  --shemma-bg-page: #f6f7f9;
+  --shemma-bg-overlay: rgba(255, 255, 255, 0.95);
+  --shemma-bg-subtle: #fafafa;
+  --shemma-bg-hover: #ececec;
+  --shemma-bg-stripe: #f5f5f5;
+  --shemma-hover-overlay: rgba(0, 0, 0, 0.06);
+  --shemma-backdrop: rgba(0, 0, 0, 0.4);
+  /* accents */
+  --shemma-accent: #0a7;
+  --shemma-accent-primary: #4a8af0;
+  --shemma-accent-primary-hover: #3a78d8;
+  /* states */
+  --shemma-danger: #c44;
+  --shemma-danger-soft-bg: #fde9e9;
+  --shemma-danger-bg: #fef2f2;
+  --shemma-danger-border: #fecaca;
+  --shemma-danger-text: #b91c1c;
+  --shemma-warn-bg: #fef3c7;
+  --shemma-warn-border: #f59e0b;
+  --shemma-warn-text: #78350f;
+  /* badges */
+  --shemma-badge-bg: #e5e7eb;
+  --shemma-badge-border: #d1d5db;
+  --shemma-badge-text: #374151;
+}
+
+html[data-shemma-theme="dark"] {
+  --shemma-text: #e6e6e6;
+  --shemma-text-strong: #d8dadd;
+  --shemma-text-mid: #c2c6cb;
+  --shemma-text-muted: #9aa0a6;
+  --shemma-text-soft: #8b8f96;
+  --shemma-text-dim: #7c8086;
+  --shemma-text-ghost: #5a5e64;
+
+  --shemma-border: rgba(255, 255, 255, 0.16);
+  --shemma-border-strong: #44474d;
+  --shemma-border-soft: #33363b;
+  --shemma-border-hover: #5a5e64;
+
+  --shemma-bg: #232529;
+  --shemma-bg-page: #17181a;
+  --shemma-bg-overlay: rgba(35, 37, 41, 0.95);
+  --shemma-bg-subtle: #2c2e33;
+  --shemma-bg-hover: #383b41;
+  --shemma-bg-stripe: #2f3136;
+  --shemma-hover-overlay: rgba(255, 255, 255, 0.08);
+  --shemma-backdrop: rgba(0, 0, 0, 0.6);
+
+  --shemma-accent: #10b981;
+  --shemma-accent-primary: #4a8af0;
+  --shemma-accent-primary-hover: #5c95ec;
+
+  --shemma-danger: #ff7a7a;
+  --shemma-danger-soft-bg: #3a2225;
+  --shemma-danger-bg: #3a1d1f;
+  --shemma-danger-border: #7f3a3f;
+  --shemma-danger-text: #ff8a8a;
+  --shemma-warn-bg: #3a2f12;
+  --shemma-warn-border: #8a6d0b;
+  --shemma-warn-text: #fbd38d;
+
+  --shemma-badge-bg: #3a3d42;
+  --shemma-badge-border: #4a4d52;
+  --shemma-badge-text: #c8ccd2;
+}
+
 html,
 body,
 #root {
@@ -7,4 +95,6 @@ body,
 }
 body {
   font-family: system-ui, sans-serif;
+  background: var(--shemma-bg-page);
+  color: var(--shemma-text);
 }

@@ -4,6 +4,10 @@ import { App } from "./App";
 import { Gallery } from "./gallery/Gallery";
 import { SpacesPage } from "./spaces/SpacesPage";
 import { parseShemmaUrl } from "./spaces/url-parser";
+import { initTheme } from "./theme/theme-store";
+
+// DRW-217: тема до рендера — data-shemma-theme на <html> без flash светлой.
+initTheme();
 
 // DRW-120: legacy URLs (?room=foo / ?view=gallery) without ?space= are leftovers
 // from pre-multi-space bookmarks. The synthetic LEGACY_SPACE_ID fallback no
