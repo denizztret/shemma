@@ -163,8 +163,28 @@ export function domainRoutes(bus: StoreChangeBus) {
       }
     }
 
-    // Validate.
-    const v = validateBatch(body.actions, room.store, room.didrawIndex);
+    // Validate. Wrapped in try/catch (DRW-220 backstop): a thrown validator must
+    // surface as structured JSON, never an unhandled Hono 500 with a plain-text
+    // body — the client blindly r.json()'s the response, and a non-JSON body gets
+    // mislabeled as "daemon-unavailable: Failed to parse JSON" by the MCP layer.
+    let v: ReturnType<typeof validateBatch>;
+    try {
+      v = validateBatch(body.actions, room.store, room.didrawIndex);
+    } catch (e) {
+      return c.json(
+        {
+          ok: false,
+          errors: [
+            {
+              actionIndex: 0,
+              code: "validate-error" as const,
+              message: (e as Error).message,
+            },
+          ],
+        } satisfies DomainResponse,
+        500,
+      );
+    }
     if (!v.ok) {
       return c.json(
         { ok: false, errors: v.errors } satisfies DomainResponse,

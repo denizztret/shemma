@@ -282,6 +282,38 @@ describe("compile.group", () => {
     expect(r.batch.updated["shape:a"]![1].parentId).toBe(frameId);
     expect(r.batch.updated["shape:b"]![1].parentId).toBe(frameId);
   });
+
+  // DRW-220: members sent as `children` (MCP canonical) must compile identically
+  // to `ids` (legacy alias).
+  it("accepts `children` as an alias for `ids`", () => {
+    const s = emptyStore();
+    s.store["shape:a"] = {
+      id: "shape:a",
+      typeName: "shape",
+      type: "geo",
+      meta: { didrawName: "a" },
+    } as TLRecord;
+    s.store["shape:b"] = {
+      id: "shape:b",
+      typeName: "shape",
+      type: "geo",
+      meta: { didrawName: "b" },
+    } as TLRecord;
+    const idx = rebuildDidrawIndex(s);
+    const r = compile(
+      [{ kind: "group", name: "core", as: "boundary", children: ["a", "b"] }],
+      s,
+      idx,
+    );
+    const frames = Object.values(r.batch.added).filter(
+      (x) => x.typeName === "shape" && x.type === "frame",
+    );
+    expect(frames.length).toBe(1);
+    const frameId = frames[0]?.id;
+    expect(frameId).toBeDefined();
+    expect(r.batch.updated["shape:a"]?.[1]?.parentId).toBe(frameId);
+    expect(r.batch.updated["shape:b"]?.[1]?.parentId).toBe(frameId);
+  });
 });
 
 describe("compile.note", () => {
