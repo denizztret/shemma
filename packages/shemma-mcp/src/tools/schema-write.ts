@@ -304,7 +304,12 @@ export function registerSchemaWriteTools(
         "schema-set-edge-overlay (restyle an existing edge addressed by from→to: " +
         "color/labelColor/dash/size/kind(arc|elbow)/arrowheadStart/arrowheadEnd/label; " +
         "applies to the live arrow immediately and persists; NB: the model keeps ONE edge " +
-        "per from→to pair — parallel duplicate arrows are restyled together). " +
+        "per from→to pair — parallel duplicate arrows are restyled together), " +
+        "schema-adopt-shape (turn a hand-drawn shape into a schema node IN PLACE: " +
+        "{shapeId, role, label?, nodeId?} — position/size/look preserved, the node appears " +
+        "in raw and becomes addressable by connect/rename/set-overlay/delete-node), " +
+        "schema-delete-shape (delete a NON-schema shape by tldraw shapeId with binding/" +
+        "dangling-arrow cascade; for schema nodes use schema-delete-node). " +
         "Batch is all-or-nothing: if any action fails validation, none are applied. " +
         "Returns: { frameId, addedNodeIds, removedNodeIds, orphanedOverlays, destructiveScore }. " +
         "Errors: no-schema-frame (room has no schema-frames), " +

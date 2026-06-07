@@ -207,6 +207,17 @@ export const SchemaActionSchema: z.ZodType<Record<string, unknown>> = z.discrimi
     to: z.string(),
     overlay: EdgeOverlayEntrySchema,
   }),
+  z.object({
+    kind: z.literal("schema-adopt-shape"),
+    shapeId: z.string(),
+    role: RoleEnum,
+    label: z.string().optional(),
+    nodeId: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("schema-delete-shape"),
+    shapeId: z.string(),
+  }),
 ]);
 
 export const CanvasViewArgs = {
