@@ -31,6 +31,7 @@ import { applyLayoutParamsDefaults, measureLabelHeuristic, modeToElkOptions, typ
 import elkWorkerPath from "../../node_modules/elkjs/lib/elk-worker.min.js" with { type: "file" };
 import type { StoreChangeBatch, TLRecord, TLStoreSnapshot } from "../store-types";
 import type { ElementId, LayoutHint } from "./types";
+import { findEmptySlot } from "./empty-space";
 import { effectiveShapeBounds } from "./shape-size";
 import { inferContainerDirection, type Direction, type ExternalEdge } from "./directions";
 
@@ -429,7 +430,16 @@ function collectPositions(
   return positions;
 }
 
-/** DRW-003: смещение non-pinned shapes, пересекающих pinned bbox. */
+/**
+ * DRW-003 + DRW-208: смещение non-pinned LEAF shapes, пересекающих pinned bbox.
+ *
+ * DRW-208: вместо общей вертикальной колонны справа от пинов (на доске с
+ * пинами по всей площади она собирала ВСЮ схему в нечитаемую «кучу») каждый
+ * конфликтующий лист едет в ближайшее к его ELK-позиции свободное место
+ * (findEmptySlot, окна поиска прогрессивно расширяются вокруг ELK-намерения).
+ * Контейнеры не displace'ятся вовсе — их кроет coverage-пасс после (DRW-205);
+ * колонна осталась только фолбэком на случай «слота нет нигде».
+ */
 function applyDisplacement(
   positions: Positions,
   shapes: ShapeRec[],
@@ -470,13 +480,16 @@ function applyDisplacement(
     }
     return false;
   };
+  // Containment в обе стороны (предок/потомок) — не коллизия.
+  const related = (aId: string, bId: string): boolean =>
+    isInside(aId, bId) || isInside(bId, aId);
 
   const pinnedRight = Math.max(...pinnedBoxes.map((p) => p.box.x + p.box.w));
   const pinnedTop = Math.min(...pinnedBoxes.map((p) => p.box.y));
   const overlapsAnyPinned = (b: Bounds, selfId: string) =>
     pinnedBoxes.some(
       (pb) =>
-        !isInside(pb.id, selfId) &&
+        !related(pb.id, selfId) &&
         !(
           b.x + b.w + COLLISION_SLACK <= pb.box.x ||
           pb.box.x + pb.box.w + COLLISION_SLACK <= b.x ||
@@ -485,23 +498,111 @@ function applyDisplacement(
         ),
     );
 
-  // Affected ids: все non-pinned shapes с position'ом, отсортированы по id для детерминизма.
-  const affectedIds = shapes
-    .filter((s) => !pinnedSet.has(s.id) && positions[s.id] !== undefined)
-    .map((s) => s.id)
-    .sort();
+  // Movers: non-pinned ЛИСТЬЯ с position'ом, пересекающие пин; сортировка по
+  // id для детерминизма. Контейнеры пропускаем — coverage-пасс (DRW-205)
+  // накроет детей на их финальных местах.
+  const movers: string[] = [];
+  for (const s of shapes) {
+    if (pinnedSet.has(s.id) || isContainerShape(s)) continue;
+    const box = boxOf(s.id);
+    if (box && overlapsAnyPinned(box, s.id)) movers.push(s.id);
+  }
+  movers.sort();
+  if (movers.length === 0) return;
+  const moverSet = new Set(movers);
 
+  // Регион поиска: bbox всех position'ов; вправо/вниз — запас под пару узлов,
+  // влево/вверх НЕ расширяем (не плодим отрицательные координаты).
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  let maxMoverW = DEFAULT_W;
+  let maxMoverH = DEFAULT_H;
+  for (const id in positions) {
+    const b = boxOf(id);
+    if (!b) continue;
+    minX = Math.min(minX, b.x);
+    minY = Math.min(minY, b.y);
+    maxX = Math.max(maxX, b.x + b.w);
+    maxY = Math.max(maxY, b.y + b.h);
+    if (moverSet.has(id)) {
+      maxMoverW = Math.max(maxMoverW, b.w);
+      maxMoverH = Math.max(maxMoverH, b.h);
+    }
+  }
+  maxX += 2 * (maxMoverW + NODE_SPACING_X);
+  maxY += 2 * (maxMoverH + NODE_SPACING_Y);
+
+  // Occupants для mover'а: все position'ы кроме него самого, его
+  // предков/потомков и ещё не размещённых movers (их ELK-боксы всё равно
+  // уедут). Пины и чужие контейнеры остаются — слот не приземлится ни на
+  // пин, ни внутрь чужого контейнера.
+  const placed = new Set<string>();
+  const occupantsFor = (selfId: string): Bounds[] => {
+    const out: Bounds[] = [];
+    for (const id in positions) {
+      if (id === selfId) continue;
+      if (moverSet.has(id) && !placed.has(id)) continue;
+      if (related(id, selfId)) continue;
+      const b = boxOf(id);
+      if (b) out.push(b);
+    }
+    return out;
+  };
+
+  // Ближайший свободный слот к ELK-намерению: окна 3×/6×/12× размера узла
+  // вокруг его центра, затем весь регион. Первый найденный — ближайший к
+  // anchor по построению findEmptySlot.
+  const place = (id: string): boolean => {
+    const box = boxOf(id);
+    if (!box) return false;
+    const occ = occupantsFor(id);
+    const cx = box.x + box.w / 2;
+    const cy = box.y + box.h / 2;
+    const windows = [3, 6, 12].map((k) => ({
+      x: Math.max(minX, cx - (k * box.w) / 2),
+      y: Math.max(minY, cy - (k * box.h) / 2),
+      x2: Math.min(maxX, cx + (k * box.w) / 2),
+      y2: Math.min(maxY, cy + (k * box.h) / 2),
+    }));
+    windows.push({ x: minX, y: minY, x2: maxX, y2: maxY });
+    for (const w of windows) {
+      const parentW = w.x2 - w.x;
+      const parentH = w.y2 - w.y;
+      if (parentW <= 0 || parentH <= 0) continue;
+      const slot = findEmptySlot(
+        { w: parentW, h: parentH },
+        occ.map((o) => ({ x: o.x - w.x, y: o.y - w.y, w: o.w, h: o.h })),
+        { w: box.w, h: box.h },
+        COLLISION_SLACK,
+        { x: cx - w.x, y: cy - w.y },
+      );
+      if (slot) {
+        positions[id] = { ...positions[id], x: w.x + slot.x, y: w.y + slot.y };
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Фолбэк (слот не нашёлся нигде в регионе): прежняя DRW-003 колонна —
+  // гарантирует терминацию и отсутствие нахлёста с пинами.
   let nextY = pinnedTop;
-  for (const aid of affectedIds) {
-    const box = boxOf(aid);
+  for (const id of movers) {
+    if (place(id)) {
+      placed.add(id);
+      continue;
+    }
+    const box = boxOf(id);
     if (!box) continue;
-    if (!overlapsAnyPinned(box, aid)) continue;
-    positions[aid] = {
-      ...positions[aid],
+    positions[id] = {
+      ...positions[id],
       x: pinnedRight + NODE_SPACING_X,
       y: nextY,
     };
     nextY += box.h + NODE_SPACING_Y;
+    placed.add(id);
   }
 }
 
