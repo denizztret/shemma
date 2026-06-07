@@ -190,6 +190,8 @@ function makeGeoShape(opts: {
       didrawLabel: opts.label,
       didrawRole: opts.role,
       didrawSchemaParent: opts.parentId,
+      // DRW-213: pinned в том же батче — узел закреплён с рождения.
+      ...(opts.overlayEntry?.pinned ? { pinned: true } : {}),
     },
   } as TLRecord;
 }
@@ -1390,6 +1392,24 @@ export function applySchemaActions(opts: {
 
   const { nodes: newNodes } = extractState(newActions);
 
+  // DRW-213: set-overlay этого же батча виден созданию узлов батча —
+  // define + set-overlay{position/pinned/style} одним патчем ставит узел
+  // ровно в указанную точку (иначе smart-insert перебивал явную позицию).
+  const batchOverlays = new Map<NodeId, OverlayEntry>();
+  for (const a of actions) {
+    if (a.kind !== "schema-set-overlay") continue;
+    batchOverlays.set(a.nodeId, {
+      ...batchOverlays.get(a.nodeId),
+      ...a.overlay,
+    });
+  }
+  const effectiveOverlay = (nodeId: NodeId): OverlayEntry | undefined => {
+    const old = oldOverlays[nodeId];
+    const inBatch = batchOverlays.get(nodeId);
+    if (!old && !inBatch) return undefined;
+    return { ...old, ...inBatch };
+  };
+
   // Added nodes → create geo shapes.
   for (const addedNode of diff.added) {
     // DRW-212: adopted узел — identity на СУЩЕСТВУЮЩЕМ шейпе, без пересоздания.
@@ -1417,7 +1437,7 @@ export function applySchemaActions(opts: {
       }
       continue;
     }
-    const overlayEntry = oldOverlays[addedNode.nodeId];
+    const overlayEntry = effectiveOverlay(addedNode.nodeId);
     const shape = makeGeoShape({
       nodeId: addedNode.nodeId,
       label: addedNode.label,
@@ -1656,7 +1676,8 @@ export function applySchemaActions(opts: {
       const positioned = new Set<string>();
       for (const addedNode of diff.added) {
         // A user-pinned overlay position always wins — never relocate it.
-        if (oldOverlays[addedNode.nodeId]?.position) continue;
+        // DRW-213: in-batch set-overlay{position} — тоже явная позиция.
+        if (effectiveOverlay(addedNode.nodeId)?.position) continue;
         const sid = resolveShapeId(addedNode.nodeId);
         if (!sid) continue;
         const shape = batch.added[sid];
