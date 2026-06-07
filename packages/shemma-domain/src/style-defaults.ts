@@ -9,6 +9,7 @@
 export type StyleDash = "draw" | "solid";
 export type StyleFont = "draw" | "sans" | "mono";
 export type StyleSize = "s" | "m" | "l" | "xl";
+export type StyleFill = "none" | "semi" | "solid" | "pattern";
 
 export type StyleDefaults = {
   dash?: StyleDash;

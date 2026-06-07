@@ -16,7 +16,7 @@ Most boards you'll touch are **schema-frames** (managed diagram content). The **
 - **Mermaid is a seed, not the edit substrate.** `shemma_import_mermaid` / `shemma_create_schema` are for the *initial* fill (a user or you can also keep the source externally). After that, **do not hand-edit raw Mermaid** and do not treat it as the live model — a human may make quick changes on the board that never land back in the Mermaid text. The stored Mermaid is an auxiliary, possibly-stale view.
 - **Read the current frame objectively first:** `shemma_canvas_view` → gives `frames[]` with `id` (the `frameId`) and the current node/edge/group structure. Reference **existing node ids** from this read; never invent ids.
 - **Edit object-wise, incrementally:** `shemma_patch_schema { frameId, actions: [ {kind:"schema-define",…}, {kind:"schema-connect", from, to, connectionKind}, {kind:"schema-group",…}, … ] }`. Add only what's new; connect by existing node ids. Endpoints **inside containers (subgraphs) are valid** — connect resolves them.
-- **After structural edits (added nodes/edges), call `shemma_layout`** so the frame re-packs and re-fits its bounds. Skipping this can leave the frame mis-sized.
+- **Do NOT call `shemma_layout` after edits.** Smart-insert already places new nodes into free space and grows the frame; the user's arrangement must survive agent edits. Re-layout only when the USER explicitly asks for it.
 - **Answering questions / augmenting** the schema = read with `shemma_canvas_view`, reason over the returned objects, then patch incrementally. Stay in the context of what's already there.
 
 ## Room resolution

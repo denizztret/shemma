@@ -25,6 +25,7 @@ export {
   type StyleDefaults,
   type ResolvedStyleDefaults,
   type StyleDash,
+  type StyleFill,
   type StyleFont,
   type StyleSize,
   DEFAULT_STYLE_DEFAULTS,

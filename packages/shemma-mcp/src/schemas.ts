@@ -125,6 +125,11 @@ export const ImportMermaidArgs = {
 export const OverlayEntrySchema = z.object({
   position: z.object({ x: z.number(), y: z.number() }).optional(),
   color: z.string().optional(),
+  labelColor: z.string().optional(),
+  fill: z.enum(["none", "semi", "solid", "pattern"]).optional(),
+  dash: z.enum(["draw", "solid"]).optional(),
+  size: z.enum(["s", "m", "l", "xl"]).optional(),
+  font: z.enum(["draw", "sans", "mono"]).optional(),
   label: z.string().optional(),
   role: RoleEnum.optional(),
   pinned: z.boolean().optional(),

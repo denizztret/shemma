@@ -294,7 +294,9 @@ export function registerSchemaWriteTools(
         "**Always call shemma_canvas_view first** to get frameId and current nodeIds — " +
         "referencing unknown nodeIds returns `unknown-node` errors. " +
         "schema-connect endpoints may live inside containers (subgraphs); they resolve fine. " +
-        "After structural changes (added nodes/edges) run shemma_layout so the frame re-fits. " +
+        "Smart-insert places new nodes into free space and grows the frame automatically — " +
+        "do NOT call shemma_layout after edits unless the USER explicitly asks for a re-layout: " +
+        "the board arrangement belongs to the user and must survive agent edits. " +
         "If frameId is omitted and the room has exactly 1 schema-frame, it is auto-picked. " +
         "If ≥2 schema-frames exist, frameId is required (ambiguous-schema-frame error otherwise). " +
         "Supported action kinds: schema-define, schema-connect, schema-rename, schema-set-role, " +
