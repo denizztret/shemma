@@ -11,6 +11,37 @@
 - `shemma_delete { ids, cascade? }` — destructive. Containers with children require `cascade: true`.
 - `shemma_apply { actions: [...] }` — atomic batch of any of the above.
 
+## Action format for `shemma_apply`
+
+`shemma_apply` takes `actions: [ { kind, …fields }, … ]`. The schema is intentionally open (`additionalProperties`), so the per-`kind` shape is documented here rather than enforced by the JSON schema. `kind` is the discriminator; one of `define | connect | group | note | layout | delete`.
+
+| kind | fields (`?` = optional) | notes |
+|---|---|---|
+| `define` | `role, name, label?, in?` | upsert an element. `role` ∈ `actor\|service\|datastore\|queue\|external\|note`. `in` = container name to nest into. |
+| `connect` | `from, to, connectionKind?, label?` | directed edge between element **names**. `connectionKind` ∈ `sync\|async\|data\|dep`. |
+| `group` | `children:[name,…], as, name, label?` | container around members. **Members go in `children`, not `ids`.** `as` ∈ `network\|boundary`. |
+| `note` | `text, about?, name?` | sticky note; `about` = element name it annotates. |
+| `layout` | `mode?, scope?, spacing?` | explicit re-layout. `mode` ∈ `layered-lr\|layered-tb\|tree\|pack\|force`. |
+| `delete` | `ids:[name,…], cascade?` (or `id`) | destructive; `cascade:true` also drops dependent edges. |
+
+Forward references resolve within one batch — define a name, then `connect`/`group` by it in a later entry.
+
+```json
+{ "actions": [
+  { "kind": "define", "role": "service", "name": "api", "label": "API" },
+  { "kind": "define", "role": "datastore", "name": "db" },
+  { "kind": "connect", "from": "api", "to": "db", "connectionKind": "data" },
+  { "kind": "group", "children": ["api", "db"], "as": "boundary", "name": "backend" }
+] }
+```
+
+> ⚠️ The single most common mistake is sending group members as `ids` in a `shemma_apply` group action (copied from a different tool). Use `children`. (The backend now also accepts `ids` as a legacy alias, but `children` is canonical — see DRW-220.)
+
+### Label semantics (verified, DRW-222)
+
+- **Multi-line labels are supported.** A `\n` inside `label` (define/connect) or `text` (note) renders as a **hard line break** — the canvas uses `white-space: pre-wrap`, so newlines are honored, not collapsed.
+- **Emoji are safe.** Variation-selector sequences (e.g. ⚙️) and supplementary-plane codepoints (e.g. 🚀) pass through and render intact.
+
 ## Element identity
 
 Use the `name` arg as a stable, human-meaningful id ("api-gateway", "user-db"). Re-using a name in `define` is idempotent (no duplicate created).
@@ -116,7 +147,7 @@ For ELK-style output after import, run `shemma_layout` or `shemma_layout_selecti
 
 - **Add nodes**: `shemma_define { name: "new_service", role: "service", label: "..." }` — appended; subsequent `shemma_layout` repositions everything including imported shapes.
 - **Add edges**: `shemma_connect { from: "<imported_name>", to: "new_service", connectionKind: "sync" }` — finds imported node by slug.
-- **Group existing**: `shemma_group { name: "boundary1", as: "boundary", ids: ["<imported_name>", ...] }` — wraps imported nodes in a frame container.
+- **Group existing**: `shemma_group { name: "boundary1", as: "boundary", children: ["<imported_name>", ...] }` — wraps imported nodes in a frame container.
 - **Ungroup**: `editor.ungroupShapes([rootId])` in browser console; imported shapes flatten to page root, edges and labels are preserved (bindings reference shape ids, not group).
 - **Layout**: `shemma_layout` works on mixed mermaid+manual schemas — ELK reads all top-level shapes uniformly.
 

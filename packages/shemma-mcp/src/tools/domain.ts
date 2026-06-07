@@ -253,7 +253,26 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
   server.registerTool(
     "shemma_apply",
     {
-      description: "Apply an arbitrary batch of domain actions in a single atomic operation.",
+      description:
+        "Apply a batch of domain actions atomically. Each entry is `{ kind, …fields }`; " +
+        "`kind` ∈ define | connect | group | note | layout | delete.\n\n" +
+        "Fields per kind (required unless marked ?):\n" +
+        "- define  { role, name, label?, in? } — create/upsert an element. role ∈ actor|service|datastore|queue|external|note. `in` = container name to nest into.\n" +
+        "- connect { from, to, connectionKind?, label? } — directed edge between element names. connectionKind ∈ sync|async|data|dep.\n" +
+        "- group   { children:[name,…], as, name, label? } — container around members. MEMBERS GO IN `children` (NOT `ids` — that mismatch is a common error). as ∈ network|boundary.\n" +
+        "- note    { text, about?, name? } — sticky note; `about` = element name it annotates.\n" +
+        "- layout  { mode?, scope?, spacing? } — explicit re-layout. mode ∈ layered-lr|layered-tb|tree|pack|force.\n" +
+        "- delete  { ids:[name,…], cascade? }  (or { id }) — destructive; cascade:true also drops dependent edges.\n\n" +
+        "Names are stable human ids ('api-gateway'); `define` is idempotent on name. Forward refs are OK within one batch (define a name, then connect/group by it in a later entry).\n\n" +
+        "Example:\n" +
+        '{ "actions": [\n' +
+        '  { "kind": "define", "role": "service", "name": "api", "label": "API" },\n' +
+        '  { "kind": "define", "role": "datastore", "name": "db" },\n' +
+        '  { "kind": "connect", "from": "api", "to": "db", "connectionKind": "data" },\n' +
+        '  { "kind": "group", "children": ["api", "db"], "as": "boundary", "name": "backend" }\n' +
+        "] }\n\n" +
+        "Label semantics (verified): multi-line labels are supported — a `\\n` in `label`/`text` renders as a hard line break (white-space: pre-wrap). Emoji, including variation-selector (️) and supplementary-plane (🚀) codepoints, are safe and pass through intact.\n\n" +
+        "Full reference: `shemma://workflow/draw-architecture` (or `shemma_get_instructions { topic: \"draw-architecture\" }`). For v2 schema-frames edit object-wise via `shemma_patch_schema` instead.",
       inputSchema: ApplyArgs,
     },
     async (args) => applyCall(args as ApplyInput),
