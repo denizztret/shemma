@@ -116,7 +116,7 @@ const defaultEffective: LayoutParams = {
   edgeLabelFontSize: 11,
 };
 
-function renderBoardPanel() {
+function renderBoardPanel(overrides: Partial<Parameters<typeof BoardPanel>[0]> = {}) {
   return BoardPanel({
     effective: defaultEffective,
     onDirectionChange: () => {},
@@ -127,8 +127,11 @@ function renderBoardPanel() {
     onStyleDash: () => {},
     onStyleFont: () => {},
     onStyleSize: () => {},
+    styleArrowKind: null,
+    onStyleArrowKind: () => {},
     containerTitlePosition: "inside-center",
     onContainerTitlePositionChange: () => {},
+    ...overrides,
   });
 }
 
@@ -156,20 +159,10 @@ describe("BoardPanel", () => {
 
   test("«Горячие клавиши» button invokes onOpenShortcuts", () => {
     let opened = false;
-    const tree = BoardPanel({
-      effective: defaultEffective,
-      onDirectionChange: () => {},
-      onPresetSelect: () => {},
-      onOpenAdvanced: () => {},
+    const tree = renderBoardPanel({
       onOpenShortcuts: () => {
         opened = true;
       },
-      styleEffective: DEFAULT_STYLE_DEFAULTS,
-      onStyleDash: () => {},
-      onStyleFont: () => {},
-      onStyleSize: () => {},
-      containerTitlePosition: "inside-center",
-      onContainerTitlePositionChange: () => {},
     });
     const btn = flatten(tree).find(
       (el) => (el.props as Record<string, unknown>)["data-role"] === "shortcuts",
@@ -177,6 +170,75 @@ describe("BoardPanel", () => {
     const onClick = btn?.props.onClick as (() => void) | undefined;
     onClick?.();
     expect(opened).toBe(true);
+  });
+
+  // ---- DRW-207: тип стрелок (board default) ----
+
+  test("renders ArrowKindSection with current=styleArrowKind", () => {
+    const tree = renderBoardPanel({ styleArrowKind: "elbow" });
+    const section = findComponent(tree, "ArrowKindSection");
+    expect(section).not.toBeNull();
+    expect(section!.props.current).toBe("elbow");
+  });
+
+  test("ArrowKindSection receives onStyleArrowKind as onChange", () => {
+    let picked: string | null = null;
+    const tree = renderBoardPanel({
+      onStyleArrowKind: (v: "arc" | "elbow") => {
+        picked = v;
+      },
+    });
+    const section = findComponent(tree, "ArrowKindSection");
+    const onChange = section?.props.onChange as ((v: string) => void) | undefined;
+    onChange?.("elbow");
+    expect(picked).toBe("elbow" as never);
+  });
+});
+
+// ---- DRW-207: ArrowKindSection (direct render) ----
+
+import { ArrowKindSection } from "../sections/ArrowKindSection";
+
+describe("ArrowKindSection", () => {
+  test("renders arc and elbow buttons", () => {
+    const tree = ArrowKindSection({ current: null, onChange: () => {} });
+    expect(hasAttribute(tree, "data-arrow-kind", "arc")).toBe(true);
+    expect(hasAttribute(tree, "data-arrow-kind", "elbow")).toBe(true);
+  });
+
+  test("current=null → no button highlighted (unset tri-state)", () => {
+    const tree = ArrowKindSection({ current: null, onChange: () => {} });
+    const buttons = flatten(tree).filter(
+      (el) => typeof (el.props as Record<string, unknown>)["data-arrow-kind"] === "string",
+    );
+    expect(buttons.length).toBe(2);
+    for (const b of buttons) {
+      expect(String(b.props.className)).not.toContain("settings-btn--on");
+    }
+  });
+
+  test("current=elbow → elbow button highlighted", () => {
+    const tree = ArrowKindSection({ current: "elbow", onChange: () => {} });
+    const btn = flatten(tree).find(
+      (el) => (el.props as Record<string, unknown>)["data-arrow-kind"] === "elbow",
+    );
+    expect(String(btn?.props.className)).toContain("settings-btn--on");
+  });
+
+  test("button click invokes onChange with kind value", () => {
+    let picked: string | null = null;
+    const tree = ArrowKindSection({
+      current: null,
+      onChange: (v) => {
+        picked = v;
+      },
+    });
+    const btn = flatten(tree).find(
+      (el) => (el.props as Record<string, unknown>)["data-arrow-kind"] === "arc",
+    );
+    const onClick = btn?.props.onClick as (() => void) | undefined;
+    onClick?.();
+    expect(picked).toBe("arc" as never);
   });
 });
 
@@ -360,5 +422,44 @@ describe("SelectionPanel", () => {
       onSingleFrameContainerTitlePositionChange: () => {},
     });
     expect(hasComponent(tree, "ContainerTitlePositionSection")).toBe(false);
+  });
+
+  // ---- DRW-207: тип стрелок для выделения ----
+
+  test("showArrowKind=true → ArrowKindSection rendered (даже без контейнера в выделении)", () => {
+    const tree = renderSelectionPanel({
+      counts: { containers: 0, nodes: 2 },
+      showContainerSections: false,
+      showStyles: false,
+      showArrowKind: true,
+      arrowKindState: "arc",
+      onStyleArrowKind: () => {},
+    });
+    expect(hasComponent(tree, "ArrowKindSection")).toBe(true);
+  });
+
+  test("showArrowKind=false → ArrowKindSection hidden", () => {
+    const tree = renderSelectionPanel({
+      showArrowKind: false,
+      onStyleArrowKind: () => {},
+    });
+    expect(hasComponent(tree, "ArrowKindSection")).toBe(false);
+  });
+
+  test("ArrowKindSection receives arrowKindState and onStyleArrowKind", () => {
+    let picked: string | null = null;
+    const tree = renderSelectionPanel({
+      showArrowKind: true,
+      arrowKindState: "elbow",
+      onStyleArrowKind: (v: "arc" | "elbow") => {
+        picked = v;
+      },
+    });
+    const section = findComponent(tree, "ArrowKindSection");
+    expect(section).not.toBeNull();
+    expect(section!.props.current).toBe("elbow");
+    const onChange = section?.props.onChange as ((v: string) => void) | undefined;
+    onChange?.("arc");
+    expect(picked).toBe("arc" as never);
   });
 });

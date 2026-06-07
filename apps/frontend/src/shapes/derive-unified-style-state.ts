@@ -7,7 +7,7 @@
 //   - size applies to geo/note/text/arrow; skip frame/schema-container.
 // Dashed/dotted shapes excluded from dash unification (sweep preserves them).
 
-import type { StyleDash, StyleFont, StyleSize } from "@shemma/domain";
+import type { ArrowKind, StyleDash, StyleFont, StyleSize } from "@shemma/domain";
 
 export type StyleStateInput = {
   type: string;
@@ -18,6 +18,8 @@ export type UnifiedStyleState = {
   dash: StyleDash | null;
   font: StyleFont | null;
   size: StyleSize | null;
+  /** DRW-207: props.kind стрелок; null = mixed или нет стрелок в выделении. */
+  arrowKind: ArrowKind | null;
 };
 
 const DASH_TYPES = new Set(["geo", "arrow", "schema-container"]);
@@ -27,6 +29,7 @@ const SIZE_TYPES = new Set(["geo", "note", "text", "arrow"]);
 const DASH_VALUES = new Set<StyleDash>(["draw", "solid"]);
 const FONT_VALUES = new Set<StyleFont>(["draw", "sans", "mono"]);
 const SIZE_VALUES = new Set<StyleSize>(["s", "m", "l", "xl"]);
+const ARROW_KIND_VALUES = new Set<ArrowKind>(["arc", "elbow"]);
 
 // Accumulator: tracks unified value across shapes. `mixed=true` is a sticky
 // terminal state once two different values have been observed.
@@ -54,12 +57,19 @@ export function deriveUnifiedStyleState(
   const dash: Accumulator<StyleDash> = { value: null, mixed: false };
   const font: Accumulator<StyleFont> = { value: null, mixed: false };
   const size: Accumulator<StyleSize> = { value: null, mixed: false };
+  const arrowKind: Accumulator<ArrowKind> = { value: null, mixed: false };
 
   for (const s of shapes) {
     if (DASH_TYPES.has(s.type)) observe(dash, s.props.dash, DASH_VALUES);
     if (FONT_TYPES.has(s.type)) observe(font, s.props.font, FONT_VALUES);
     if (SIZE_TYPES.has(s.type)) observe(size, s.props.size, SIZE_VALUES);
+    if (s.type === "arrow") observe(arrowKind, s.props.kind, ARROW_KIND_VALUES);
   }
 
-  return { dash: dash.value, font: font.value, size: size.value };
+  return {
+    dash: dash.value,
+    font: font.value,
+    size: size.value,
+    arrowKind: arrowKind.value,
+  };
 }

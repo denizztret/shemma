@@ -12,6 +12,8 @@ import { postStyleApply } from "../settings/api";
 const APPLY_DASH = new Set(["geo", "arrow", "schema-container"]);
 const APPLY_FONT = new Set(["geo", "note", "text", "arrow"]);
 const APPLY_SIZE = new Set(["geo", "note", "text", "arrow"]);
+// DRW-207: styles.arrowKind → props.kind, только стрелки.
+const APPLY_KIND = new Set(["arrow"]);
 const STICKY_PARENT = new Set(["frame", "schema-container"]);
 const PRESERVED_DASH = new Set(["dashed", "dotted"]);
 
@@ -41,6 +43,14 @@ function applyPropsToShape(
   }
   if (styles.size !== undefined && APPLY_SIZE.has(shape.type) && nextProps.size !== styles.size) {
     nextProps.size = styles.size;
+    changed = true;
+  }
+  if (
+    styles.arrowKind !== undefined &&
+    APPLY_KIND.has(shape.type) &&
+    nextProps.kind !== styles.arrowKind
+  ) {
+    nextProps.kind = styles.arrowKind;
     changed = true;
   }
   if (!changed) return false;

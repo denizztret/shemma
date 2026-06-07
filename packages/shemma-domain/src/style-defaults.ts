@@ -47,9 +47,16 @@ export type StyleDefaults = {
   dash?: StyleDash;
   font?: StyleFont;
   size?: StyleSize;
+  // DRW-207: тип НОВЫХ стрелок (ручных и AI). Unset = статус-кво
+  // (ручные arc — нативный tldraw, AI elbow) — поэтому БЕЗ нативного
+  // фолбэка: в resolved остаётся optional.
+  arrowKind?: ArrowKind;
 };
 
-export type ResolvedStyleDefaults = Required<StyleDefaults>;
+export type ResolvedStyleDefaults = Required<
+  Pick<StyleDefaults, "dash" | "font" | "size">
+> &
+  Pick<StyleDefaults, "arrowKind">;
 
 export const DEFAULT_STYLE_DEFAULTS: ResolvedStyleDefaults = {
   dash: "draw",
@@ -60,6 +67,7 @@ export const DEFAULT_STYLE_DEFAULTS: ResolvedStyleDefaults = {
 const VALID_DASH: ReadonlySet<StyleDash> = new Set(["draw", "solid"]);
 const VALID_FONT: ReadonlySet<StyleFont> = new Set(["draw", "sans", "mono"]);
 const VALID_SIZE: ReadonlySet<StyleSize> = new Set(["s", "m", "l", "xl"]);
+const VALID_ARROW_KIND: ReadonlySet<ArrowKind> = new Set(["arc", "elbow"]);
 
 export function validateStyleDefaults(p: StyleDefaults): void {
   if (p.dash !== undefined && !VALID_DASH.has(p.dash)) {
@@ -77,6 +85,11 @@ export function validateStyleDefaults(p: StyleDefaults): void {
       `StyleDefaults.size must be s|m|l|xl; got ${String(p.size)}`,
     );
   }
+  if (p.arrowKind !== undefined && !VALID_ARROW_KIND.has(p.arrowKind)) {
+    throw new Error(
+      `StyleDefaults.arrowKind must be arc|elbow; got ${String(p.arrowKind)}`,
+    );
+  }
 }
 
 /**
@@ -91,6 +104,7 @@ export function applyStyleDefaultsResolution(
   let dashSet = false;
   let fontSet = false;
   let sizeSet = false;
+  let arrowKindSet = false;
   for (const layer of chain) {
     if (!dashSet && layer.dash !== undefined) {
       out.dash = layer.dash;
@@ -104,7 +118,11 @@ export function applyStyleDefaultsResolution(
       out.size = layer.size;
       sizeSet = true;
     }
-    if (dashSet && fontSet && sizeSet) break;
+    if (!arrowKindSet && layer.arrowKind !== undefined) {
+      out.arrowKind = layer.arrowKind;
+      arrowKindSet = true;
+    }
+    if (dashSet && fontSet && sizeSet && arrowKindSet) break;
   }
   return out;
 }

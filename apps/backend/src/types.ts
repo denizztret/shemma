@@ -1,4 +1,5 @@
 // apps/backend/src/types.ts
+import type { StyleDefaults } from "@shemma/domain";
 import type {
   StoreChangeBatch,
   StoreOpLogEntry,
@@ -59,6 +60,8 @@ export interface RoomMeta {
   didrawIdSuffixLength?: number;
   /** Room-list tags. Each tag = { name, color }. Set wholesale via PUT /api/rooms/:id/tags. */
   tags?: RoomTag[];
+  /** DRW-180 board-level style defaults; DRW-207 добавил arrowKind (тип новых стрелок). */
+  styleDefaults?: StyleDefaults;
 }
 
 export type MiroExportsMap = Record<

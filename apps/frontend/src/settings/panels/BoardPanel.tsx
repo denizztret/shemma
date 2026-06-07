@@ -5,10 +5,11 @@ import {
   type LayoutSettingsValue,
 } from "../sections/LayoutSettingsSection";
 import { StylesSection, type StyleSectionValue } from "../sections/StylesSection";
+import { ArrowKindSection } from "../sections/ArrowKindSection";
 import { ContainerTitlePositionSection } from "../sections/ContainerTitlePositionSection";
 import type { PresetName } from "../presets";
 import type {
-  LayoutParams, Spacing,
+  ArrowKind, LayoutParams, Spacing,
   ResolvedStyleDefaults, StyleDash, StyleFont, StyleSize,
 } from "@shemma/domain";
 import type { SchemaContainerTitlePosition } from "../../shapes/schema-container/title-position";
@@ -38,6 +39,10 @@ export type BoardPanelProps = {
   onStyleDash: (v: StyleDash) => void;
   onStyleFont: (v: StyleFont) => void;
   onStyleSize: (v: StyleSize) => void;
+  /** DRW-207: board default типа стрелок; null = unset (статус-кво). */
+  styleArrowKind: ArrowKind | null;
+  /** Tri-state toggle: caller снимает default при клике по активной кнопке. */
+  onStyleArrowKind: (v: ArrowKind) => void;
   containerTitlePosition: SchemaContainerTitlePosition;
   onContainerTitlePositionChange: (next: SchemaContainerTitlePosition) => void;
 };
@@ -52,6 +57,8 @@ export const BoardPanel: FC<BoardPanelProps> = ({
   onStyleDash,
   onStyleFont,
   onStyleSize,
+  styleArrowKind,
+  onStyleArrowKind,
   containerTitlePosition,
   onContainerTitlePositionChange,
 }) => {
@@ -92,6 +99,7 @@ export const BoardPanel: FC<BoardPanelProps> = ({
         onFont={onStyleFont}
         onSize={onStyleSize}
       />
+      <ArrowKindSection current={styleArrowKind} onChange={onStyleArrowKind} />
       <ContainerTitlePositionSection
         current={containerTitlePosition}
         onChange={onContainerTitlePositionChange}

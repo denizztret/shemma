@@ -10,6 +10,7 @@ describe("deriveUnifiedStyleState", () => {
       dash: null,
       font: null,
       size: null,
+      arrowKind: null,
     });
   });
 
@@ -22,6 +23,7 @@ describe("deriveUnifiedStyleState", () => {
       dash: "solid",
       font: "sans",
       size: "m",
+      arrowKind: null,
     });
   });
 
@@ -54,5 +56,40 @@ describe("deriveUnifiedStyleState", () => {
     const out = deriveUnifiedStyleState(input);
     expect(out.dash).toBe("solid");
     expect(out.font).toBeNull();
+  });
+});
+
+// ---- DRW-207: arrowKind unification across arrows ----
+
+describe("deriveUnifiedStyleState — arrowKind", () => {
+  it("unifies kind across arrows", () => {
+    const input: StyleStateInput[] = [
+      { type: "arrow", props: { kind: "elbow" } },
+      { type: "arrow", props: { kind: "elbow" } },
+    ];
+    expect(deriveUnifiedStyleState(input).arrowKind).toBe("elbow");
+  });
+
+  it("mixed arrow kinds → null", () => {
+    const input: StyleStateInput[] = [
+      { type: "arrow", props: { kind: "arc" } },
+      { type: "arrow", props: { kind: "elbow" } },
+    ];
+    expect(deriveUnifiedStyleState(input).arrowKind).toBeNull();
+  });
+
+  it("non-arrow shapes do not contribute to arrowKind", () => {
+    const input: StyleStateInput[] = [
+      { type: "geo", props: { kind: "elbow" } },
+      { type: "arrow", props: { kind: "arc" } },
+    ];
+    expect(deriveUnifiedStyleState(input).arrowKind).toBe("arc");
+  });
+
+  it("no arrows in selection → arrowKind null", () => {
+    const input: StyleStateInput[] = [
+      { type: "geo", props: { dash: "draw" } },
+    ];
+    expect(deriveUnifiedStyleState(input).arrowKind).toBeNull();
   });
 });

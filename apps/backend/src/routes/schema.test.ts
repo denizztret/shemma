@@ -939,6 +939,27 @@ describe("POST /api/schema/create — DRW-178 arrow kind defaults to elbow", () 
     const props = arrow.props as Record<string, unknown>;
     expect(props.kind).toBe("elbow");
   });
+
+  test("mermaid-imported arrows honor board default arrowKind=arc (DRW-207)", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const pre = await rooms.get("arrow-kind-arc-room");
+    pre.meta = { styleDefaults: { arrowKind: "arc" } };
+
+    const res = await postCreate(
+      app,
+      { label: "Arrow kind arc test", raw: "graph LR\n  a[A] --> b[B]" },
+      "arrow-kind-arc-room",
+    );
+    expect(res.status).toBe(200);
+
+    const room = await rooms.get("arrow-kind-arc-room");
+    const arrows = Object.values(room.store.store).filter(
+      (r) => r?.typeName === "shape" && r?.type === "arrow",
+    );
+    expect(arrows.length).toBe(1);
+    const props = arrows[0]!.props as Record<string, unknown>;
+    expect(props.kind).toBe("arc");
+  });
 });
 
 // ---- DRW-172: post-layout anchor distribution ----

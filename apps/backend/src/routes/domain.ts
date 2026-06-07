@@ -1,6 +1,7 @@
 import type { LayoutMode, LayoutParams, Spacing } from "@shemma/domain";
 import { Hono } from "hono";
 import { config } from "../config";
+import { roomArrowKind } from "../domain/arrow-kind";
 import { compile } from "../domain/compile";
 import { runLayout } from "../domain/layout";
 import type {
@@ -174,7 +175,9 @@ export function domainRoutes(bus: StoreChangeBus) {
     // Compile.
     let compiled: ReturnType<typeof compile>;
     try {
-      compiled = compile(body.actions, room.store, room.didrawIndex);
+      compiled = compile(body.actions, room.store, room.didrawIndex, {
+        arrowKind: roomArrowKind(room.meta),
+      });
     } catch (e) {
       return c.json(
         {

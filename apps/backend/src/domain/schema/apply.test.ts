@@ -261,6 +261,28 @@ describe("applySchemaActions (DRW-134 Task 2.4)", () => {
     expect(arrowShapes[0].props.kind).toBe("elbow");
   });
 
+  test("schema-connect honors board default arrowKind=arc (DRW-207)", () => {
+    const frame = makeFrame("shape:frame1", "");
+    const room = makeRoom({ "shape:frame1": frame });
+    room.meta = { styleDefaults: { arrowKind: "arc" } };
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-define", nodeId: "api-aaaaaa", role: "service", label: "API" },
+      { kind: "schema-define", nodeId: "db-bbbbbb", role: "datastore", label: "Database" },
+      { kind: "schema-connect", from: "api-aaaaaa", to: "db-bbbbbb", connectionKind: "sync" },
+    ];
+
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    const added = Object.values(result.batch.added) as any[];
+    const arrowShapes = added.filter((r) => r.typeName === "shape" && r.type === "arrow");
+    expect(arrowShapes).toHaveLength(1);
+    expect(arrowShapes[0].props.kind).toBe("arc");
+  });
+
   // ---------- Container-aware resolver edge-cases (DRW-205, этап 5) ----------
 
   test("schema-connect resolves a node nested TWO container levels deep", () => {

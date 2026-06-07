@@ -1,4 +1,5 @@
 import type {
+  ArrowKind,
   LayoutAlgorithm,
   StyleDash,
   StyleFont,
@@ -6,6 +7,7 @@ import type {
 } from "@shemma/domain";
 import type { FC } from "react";
 import type { SchemaContainerTitlePosition } from "../../shapes/schema-container/title-position";
+import { ArrowKindSection } from "../sections/ArrowKindSection";
 import { ContainerTitlePositionSection } from "../sections/ContainerTitlePositionSection";
 import {
   DirectionSection,
@@ -102,6 +104,14 @@ export type SelectionPanelProps = {
   onStyleFont: (v: StyleFont) => void;
   onStyleSize: (v: StyleSize) => void;
   /**
+   * DRW-207: переключатель типа стрелок. Виден когда выделение (включая
+   * потомков контейнеров/фреймов) содержит ≥1 стрелку — независимо от showStyles.
+   */
+  showArrowKind?: boolean;
+  /** Унифицированный props.kind выделенных стрелок; null = mixed. */
+  arrowKindState?: ArrowKind | null;
+  onStyleArrowKind?: (v: ArrowKind) => void;
+  /**
    * Per-container titlePosition override. Defined только когда выбран ровно
    * один SchemaContainer; иначе оба поля undefined и секция скрывается.
    * Render-time SSOT — `shape.props.titlePosition` (spec §Title position resolution).
@@ -151,6 +161,9 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
   onStyleDash,
   onStyleFont,
   onStyleSize,
+  showArrowKind,
+  arrowKindState,
+  onStyleArrowKind,
   singleContainerTitlePosition,
   onSingleContainerTitlePositionChange,
   singleFrameContainerTitlePosition,
@@ -218,6 +231,13 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
           onDash={onStyleDash}
           onFont={onStyleFont}
           onSize={onStyleSize}
+          subtitle="Для выделения"
+        />
+      )}
+      {showArrowKind && onStyleArrowKind && (
+        <ArrowKindSection
+          current={arrowKindState ?? null}
+          onChange={onStyleArrowKind}
           subtitle="Для выделения"
         />
       )}

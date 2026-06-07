@@ -1,4 +1,5 @@
 import type {
+  ArrowKind,
   LayoutAlgorithm,
   LayoutParams,
   ResolvedStyleDefaults,
@@ -15,6 +16,7 @@ import { autoElkLayout, autoLayoutFrame } from "../canvas/elk-layout";
 import { setContainerLayoutParams } from "../shapes/container-layout-params";
 import {
   type StyleStateInput,
+  type UnifiedStyleState,
   deriveUnifiedStyleState,
 } from "../shapes/derive-unified-style-state";
 import { setContainerDirection } from "../shapes/schema-container/SchemaContainerActions";
@@ -46,7 +48,6 @@ import { computePopoverPosition } from "./position";
 import { type PresetName, applyPreset } from "./presets";
 import type { LayoutSettingsValue } from "./sections/LayoutSettingsSection";
 import { type PinTriState, aggregatePinState } from "./sections/PinSection";
-import type { StyleSectionValue } from "./sections/StylesSection";
 import { useAltHeld } from "./useAltHeld";
 import { useSettingsTrigger } from "./useSettingsTrigger";
 
@@ -252,6 +253,34 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
     }
   }
 
+  // DRW-207: tri-state — клик по активной кнопке снимает board default
+  // (возврат к статус-кво: ручные arc, AI elbow).
+  async function handleBoardArrowKind(value: ArrowKind) {
+    const prev = styleDefaults;
+    const prevRaw = prev?.raw ?? {};
+    const nextRaw: StyleDefaults = { ...prevRaw };
+    if (prevRaw.arrowKind === value) {
+      delete nextRaw.arrowKind;
+    } else {
+      nextRaw.arrowKind = value;
+    }
+    const nextEffective: ResolvedStyleDefaults = {
+      ...(prev?.effective ?? DEFAULT_STYLE_DEFAULTS),
+    };
+    if (nextRaw.arrowKind === undefined) {
+      delete nextEffective.arrowKind;
+    } else {
+      nextEffective.arrowKind = nextRaw.arrowKind;
+    }
+    setStyleDefaults({ raw: nextRaw, effective: nextEffective });
+    try {
+      const r = await postStyleDefaults(space, room, nextRaw);
+      setStyleDefaults({ raw: nextRaw, effective: r.effective });
+    } catch {
+      setStyleDefaults(prev);
+    }
+  }
+
   const size =
     target.kind === "board" && shortcuts
       ? SHORTCUTS_SIZE
@@ -410,6 +439,8 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
           onStyleDash={(v) => handleBoardStyle("dash", v)}
           onStyleFont={(v) => handleBoardStyle("font", v)}
           onStyleSize={(v) => handleBoardStyle("size", v)}
+          styleArrowKind={styleDefaults?.raw?.arrowKind ?? null}
+          onStyleArrowKind={(v) => handleBoardArrowKind(v)}
           containerTitlePosition={containerTitlePosition}
           onContainerTitlePositionChange={onContainerTitlePositionChange}
         />
@@ -629,6 +660,23 @@ const SelectionPanelContainer: FC<{
     [editor],
   );
 
+  // DRW-207: переключатель типа стрелок — виден когда выделение (включая
+  // потомков контейнеров/фреймов) содержит ≥1 стрелку.
+  const showArrowKind = useValue(
+    "showArrowKind",
+    () => {
+      const selectedIds = editor.getSelectedShapeIds() as unknown as string[];
+      if (selectedIds.length === 0) return false;
+      const visited = collectDescendantIds(editor, selectedIds);
+      for (const id of visited) {
+        const s = editor.getShape(id as never) as { type?: string } | undefined;
+        if (s?.type === "arrow") return true;
+      }
+      return false;
+    },
+    [editor],
+  );
+
   // Per-container titlePosition override (Task 9): visible only when ровно один
   // SchemaContainer выбран. Writeback идёт напрямую в `shape.props.titlePosition`
   // (render-time SSOT по спецификации §Title position resolution).
@@ -731,12 +779,12 @@ const SelectionPanelContainer: FC<{
   };
 
   // Derive unified style state from selected + descendants.
-  const styleState = useValue<StyleSectionValue>(
+  const styleState = useValue<UnifiedStyleState>(
     "styleState",
     () => {
       const selectedIds = editor.getSelectedShapeIds() as unknown as string[];
       if (selectedIds.length === 0)
-        return { dash: null, font: null, size: null };
+        return { dash: null, font: null, size: null, arrowKind: null };
 
       const visited = collectDescendantIds(editor, selectedIds);
       const inputs: StyleStateInput[] = [];
@@ -945,6 +993,12 @@ const SelectionPanelContainer: FC<{
       onStyleSize={(v) => {
         const ids = editor.getSelectedShapeIds() as unknown as string[];
         void applyStyleToSelection(editor, ids, { size: v });
+      }}
+      showArrowKind={showArrowKind}
+      arrowKindState={styleState.arrowKind}
+      onStyleArrowKind={(v) => {
+        const ids = editor.getSelectedShapeIds() as unknown as string[];
+        void applyStyleToSelection(editor, ids, { arrowKind: v });
       }}
       singleContainerTitlePosition={singleContainer?.props.titlePosition}
       onSingleContainerTitlePositionChange={
