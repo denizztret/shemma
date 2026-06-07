@@ -1,7 +1,27 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Editor } from "tldraw";
 import { getActiveBinding } from "./shortcuts/config";
 import { matchShortcut } from "./shortcuts/match";
+
+// Screen-space bbox селекции (anchor для popover). Используется toggle()
+// (⌘⇧P / кнопка ⚙) и selection-tracking'ом открытого popover'а.
+function makeBbox(ed: Editor) {
+  return (ids: string[]): Anchor | null => {
+    if (ids.length === 0) return null;
+    if (ids.length === 1) {
+      const b = ed.getShapePageBounds(ids[0] as never);
+      if (!b) return null;
+      const tl = ed.pageToScreen({ x: b.x, y: b.y });
+      const br = ed.pageToScreen({ x: b.x + b.w, y: b.y + b.h });
+      return { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y };
+    }
+    const b = ed.getSelectionPageBounds();
+    if (!b) return null;
+    const tl = ed.pageToScreen({ x: b.x, y: b.y });
+    const br = ed.pageToScreen({ x: b.x + b.w, y: b.y + b.h });
+    return { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y };
+  };
+}
 
 export type Anchor = { x: number; y: number; w?: number; h?: number };
 
@@ -100,6 +120,8 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & {
   close: () => void;
   pinned: boolean;
   setPinned: (next: boolean) => void;
+  /** DRW-206: toggle для кнопки ⚙ — общий путь с ⌘⇧P (ambient target). */
+  toggle: () => void;
 } {
   const [target, setTarget] = useState<Target | null>(null);
   const [pinned, setPinnedState] = useState(SETTINGS_POPOVER_DEFAULT_PINNED);
@@ -115,6 +137,26 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & {
   targetRef.current = target;
 
   const setPinned = (next: boolean) => setPinnedState(next);
+
+  // Open in default-pinned mode targeting the current selection, or close if
+  // already open. Общий путь для ⌘⇧P (onToggleKey) и кнопки ⚙ (DRW-206).
+  // Стабильна (только refs) — безопасно передавать в кнопку без re-render шторма.
+  const toggle = useCallback(() => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    if (targetRef.current !== null) {
+      setPinnedState(false);
+      setTarget(null);
+      return;
+    }
+    setPinnedState(SETTINGS_POPOVER_DEFAULT_PINNED);
+    const selectedShapes = ed.getSelectedShapes().map((s) => ({
+      id: s.id as unknown as string,
+      type: s.type,
+      meta: s.meta as Record<string, unknown> | undefined,
+    }));
+    setTarget(resolveAmbientTarget({ selectedShapes, bbox: makeBbox(ed) }));
+  }, []);
 
   useEffect(() => {
     if (!editor) return;
@@ -241,20 +283,7 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & {
       if (!matchShortcut(getActiveBinding("settings-popover"), e)) return;
       e.preventDefault();
       e.stopPropagation();
-      const ed = editorRef.current;
-      if (!ed) return;
-      if (targetRef.current !== null) {
-        setPinnedState(false);
-        setTarget(null);
-        return;
-      }
-      setPinnedState(SETTINGS_POPOVER_DEFAULT_PINNED);
-      const selectedShapes = ed.getSelectedShapes().map((s) => ({
-        id: s.id as unknown as string,
-        type: s.type,
-        meta: s.meta as Record<string, unknown> | undefined,
-      }));
-      setTarget(resolveAmbientTarget({ selectedShapes, bbox: makeBbox(ed) }));
+      toggle();
     }
 
     window.addEventListener("pointerdown", onPointerDown, { capture: true });
@@ -273,24 +302,6 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & {
     });
     window.addEventListener("keydown", onKey);
     window.addEventListener("keydown", onToggleKey, { capture: true });
-
-    function makeBbox(ed: Editor) {
-      return (ids: string[]): Anchor | null => {
-        if (ids.length === 0) return null;
-        if (ids.length === 1) {
-          const b = ed.getShapePageBounds(ids[0] as never);
-          if (!b) return null;
-          const tl = ed.pageToScreen({ x: b.x, y: b.y });
-          const br = ed.pageToScreen({ x: b.x + b.w, y: b.y + b.h });
-          return { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y };
-        }
-        const b = ed.getSelectionPageBounds();
-        if (!b) return null;
-        const tl = ed.pageToScreen({ x: b.x, y: b.y });
-        const br = ed.pageToScreen({ x: b.x + b.w, y: b.y + b.h });
-        return { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y };
-      };
-    }
 
     const dispose = editor.store.listen(
       () => {
@@ -354,7 +365,7 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & {
       window.removeEventListener("keydown", onToggleKey, { capture: true });
       dispose();
     };
-  }, [editor]);
+  }, [editor, toggle]);
 
   return {
     target,
@@ -364,5 +375,6 @@ export function useSettingsTrigger(editor: Editor | null): TriggerState & {
     },
     pinned,
     setPinned,
+    toggle,
   };
 }
