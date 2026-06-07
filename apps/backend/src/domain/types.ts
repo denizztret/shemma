@@ -43,11 +43,29 @@ export type ConnectAction = {
 
 export type GroupAction = {
   kind: "group";
-  ids: ElementId[];
+  /**
+   * Canonical member list — matches the MCP `GroupArgs.children` field and the
+   * container-model invariant (`Group.children: ElementId[]`).
+   */
+  children?: ElementId[];
+  /** @deprecated DRW-220 legacy alias for `children` (CLI + back-compat). */
+  ids?: ElementId[];
   as: "network" | "boundary";
   name: ElementId;
   label?: string;
 };
+
+/**
+ * DRW-220: resolve a group action's member list. Members may arrive as
+ * `children` (canonical, sent by MCP/shemma_group) or `ids` (legacy CLI alias).
+ * Returns the member array, or `null` when neither is a valid array — callers
+ * emit a structured validation error instead of crashing on `undefined`.
+ */
+export function groupMembers(a: GroupAction): ElementId[] | null {
+  if (Array.isArray(a.children)) return a.children;
+  if (Array.isArray(a.ids)) return a.ids;
+  return null;
+}
 
 export type NoteAction = {
   kind: "note";
@@ -93,6 +111,7 @@ export type ActionError = {
     | "cascade-confirm-required"
     | "invalid-shape"
     | "compile-error"
+    | "validate-error"
     | "unknown-action";
   message: string;
   affected?: ElementId[];

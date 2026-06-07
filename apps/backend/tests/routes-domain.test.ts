@@ -219,3 +219,67 @@ describe("POST /api/domain", () => {
     expect(aShape?.x !== bShape?.x || aShape?.y !== bShape?.y).toBe(true);
   });
 });
+
+// DRW-220: the MCP layer (shemma_group / GroupArgs) sends group members as
+// `children`, while the domain action historically read `ids`. The mismatch
+// crashed the validator (`for (const id of a.ids)` on undefined) → unhandled
+// 500 text/plain → client r.json() "Failed to parse JSON" → mislabeled
+// daemon-unavailable. The backend must accept `children` as the canonical
+// member field (alias of `ids`) and never crash on a malformed group action.
+describe("POST /api/domain — group members via `children` (DRW-220)", () => {
+  test("group via `children` creates a frame and reparents members (was 500)", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postDomain(app, {
+      actions: [
+        { kind: "define", role: "service", name: "auth" },
+        { kind: "define", role: "datastore", name: "users-db" },
+        { kind: "group", children: ["auth", "users-db"], as: "boundary", name: "vpc" },
+      ],
+      layoutHint: { mode: "layered-lr" },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      results: Array<{ elementId?: string }>;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.results[2]?.elementId).toBe("vpc");
+
+    const r = await rooms.get("d1");
+    const frames = shapesByType(r, "frame");
+    expect(frames.length).toBe(1);
+    const frameId = (frames[0] as { id: string }).id;
+    // Both members must be reparented into the frame.
+    const authId = r.didrawIndex.get("auth");
+    const dbId = r.didrawIndex.get("users-db");
+    expect(authId && r.store.store[authId]?.parentId).toBe(frameId);
+    expect(dbId && r.store.store[dbId]?.parentId).toBe(frameId);
+  });
+
+  test("`children` and `ids` are interchangeable — `ids` still works", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postDomain(app, {
+      actions: [
+        { kind: "define", role: "service", name: "a" },
+        { kind: "group", ids: ["a"], as: "network", name: "net" },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const r = await rooms.get("d1");
+    expect(shapesByType(r, "frame").length).toBe(1);
+  });
+
+  test("group with neither `children` nor `ids` → 422 structured error, no crash", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postDomain(app, {
+      actions: [{ kind: "group", as: "boundary", name: "empty" }],
+    });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { ok: boolean; errors: Array<{ field?: string }> };
+    expect(body.ok).toBe(false);
+    expect(body.errors.length).toBeGreaterThan(0);
+    // State untouched — no frame created.
+    const r = await rooms.get("d1");
+    expect(shapesByType(r, "frame").length).toBe(0);
+  });
+});

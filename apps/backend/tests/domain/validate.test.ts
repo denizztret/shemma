@@ -120,6 +120,34 @@ describe("validateBatch", () => {
     if (!r.ok) expect(r.errors[0]?.code).toBe("unknown-ref");
   });
 
+  // DRW-220: `children` is the canonical member field (MCP/shemma_group); it must
+  // validate identically to the legacy `ids`.
+  test("group accepts `children` as member alias for `ids`", () => {
+    const e = empty();
+    const r = validateBatch(
+      [
+        { kind: "define", role: "service", name: "auth" },
+        { kind: "group", children: ["auth"], as: "boundary", name: "vpc" },
+      ],
+      e.store,
+      e.index,
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  // DRW-220: a group action with neither `children` nor `ids` must yield a
+  // structured validation error — never throw `for…of undefined`.
+  test("group with neither children nor ids → invalid-shape, no throw", () => {
+    const e = empty();
+    const r = validateBatch(
+      [{ kind: "group", as: "boundary", name: "x" } as never],
+      e.store,
+      e.index,
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors[0]?.code).toBe("invalid-shape");
+  });
+
   test("group as=actor → invalid-shape (only network/boundary allowed)", () => {
     const e = empty();
     const r = validateBatch(

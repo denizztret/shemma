@@ -11,6 +11,7 @@ import {
   type Role,
 } from "@shemma/domain";
 import type { TLStoreSnapshot } from "../store-types";
+import { groupMembers } from "./types";
 import type { ActionError, DeleteAction, DomainAction, ElementId } from "./types";
 
 function isDeleteWithIds(
@@ -111,9 +112,17 @@ export function validateBatch(
           errors.push({ actionIndex: i, field: "name", code: "invalid-shape", message: `invalid name "${a.name}"` });
           break;
         }
-        for (const id of a.ids) {
+        // DRW-220: members may be `children` (canonical) or `ids` (legacy alias).
+        // Guard against neither being present — a missing member list must yield a
+        // structured error, never an unhandled `for…of undefined` crash.
+        const members = groupMembers(a);
+        if (!members) {
+          errors.push({ actionIndex: i, field: "children", code: "invalid-shape", message: `group requires "children" (or legacy "ids")` });
+          break;
+        }
+        for (const id of members) {
           if (!known.has(id)) {
-            errors.push({ actionIndex: i, field: "ids", code: "unknown-ref", message: `child "${id}" not found` });
+            errors.push({ actionIndex: i, field: "children", code: "unknown-ref", message: `child "${id}" not found` });
           }
         }
         known.set(a.name, { role: a.as, isContainer: true });

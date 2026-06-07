@@ -13,6 +13,7 @@ import {
 } from "@shemma/domain";
 import { applyStoreChanges, cascadeDeleteShape, rebuildDidrawIndex } from "../store-ops";
 import type { StoreChangeBatch, TLRecord, TLStoreSnapshot } from "../store-types";
+import { groupMembers } from "./types";
 import type { DomainAction, ElementId } from "./types";
 
 function rand(): string {
@@ -239,7 +240,9 @@ export function compile(
           meta: { didrawName: a.name, role: a.as },
         } as TLRecord;
         const sub: StoreChangeBatch = { added: { [fid]: frame }, updated: {}, removed: {} };
-        for (const memberName of a.ids) {
+        // DRW-220: members may be `children` (canonical) or `ids` (legacy alias);
+        // validate already rejected the no-members case, so `?? []` is a no-op guard.
+        for (const memberName of groupMembers(a) ?? []) {
           const mid = stagingIndex.get(memberName);
           if (!mid) continue;
           const old = stagingStore.store[mid];
