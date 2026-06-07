@@ -27,7 +27,7 @@
 // Edges для ELK реконструируются по binding'ам (typeName === 'binding').
 // Если у arrow != 2 bindings (висячая) — стрелка пропускается.
 
-import { applyLayoutParamsDefaults, measureLabelHeuristic, modeToElkOptions, type LayoutMode, type LayoutParams, type Spacing } from "@shemma/domain";
+import { applyLayoutParamsDefaults, measureLabelHeuristic, modeToElkOptions, type LayoutMode, type LayoutParams, type OverlayEntry, type Spacing } from "@shemma/domain";
 import elkWorkerPath from "../../node_modules/elkjs/lib/elk-worker.min.js" with { type: "file" };
 import type { StoreChangeBatch, TLRecord, TLStoreSnapshot } from "../store-types";
 import type { ElementId, LayoutHint } from "./types";
@@ -1822,6 +1822,38 @@ export async function runLayout(
     }
     // If already in updated (position changed), the new record already carries
     // the inferred meta because shapesForLayout was built from storeForLayout.
+  }
+
+  // DRW-209: writeback позиций в didrawOverlays. Финальные x/y всех
+  // didraw-узлов каждого schema-фрейма зеркалятся в frame.meta.didrawOverlays
+  // (merge, тем же батчем) — иначе фронтовый hydrate (overlay.position →
+  // shape.x/y) на reload показывает доску ДО layout: стор и оверлеи
+  // расходятся. Пишем stored parent-relative координаты — то же пространство,
+  // в котором hydrate применяет position. Без изменений — фрейм не трогаем
+  // (сохраняем no-changes-фикспоинт повторного layout).
+  for (const frame of shapesForLayout) {
+    if (frame.meta?.didrawSchemaFrame !== true) continue;
+    const base = (updated[frame.id]?.[1] ?? frame) as ShapeRec;
+    const baseMeta = (base.meta ?? {}) as Record<string, unknown>;
+    const current = (baseMeta.didrawOverlays ?? {}) as Record<string, OverlayEntry>;
+    const merged: Record<string, OverlayEntry> = { ...current };
+    let changed = false;
+    for (const s of shapesForLayout) {
+      if (s.meta?.didrawSchemaParent !== frame.id) continue;
+      const nodeId = s.meta?.didrawId;
+      if (typeof nodeId !== "string" || !nodeId) continue;
+      const finalRec = (updated[s.id]?.[1] ?? s) as ShapeRec;
+      const x = finalRec.x ?? 0;
+      const y = finalRec.y ?? 0;
+      const prev = merged[nodeId]?.position;
+      if (prev && Math.abs(prev.x - x) <= EPS && Math.abs(prev.y - y) <= EPS) continue;
+      merged[nodeId] = { ...merged[nodeId], position: { x, y } };
+      changed = true;
+    }
+    if (!changed) continue;
+    const newRec = { ...base, meta: { ...baseMeta, didrawOverlays: merged } } as TLRecord;
+    updated[frame.id] = [updated[frame.id]?.[0] ?? (frame as TLRecord), newRec];
+    if (!affected.includes(frame.id)) affected.push(frame.id);
   }
 
   const batch: StoreChangeBatch = { added: {}, updated, removed: {} };
