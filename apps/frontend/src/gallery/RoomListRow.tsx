@@ -94,7 +94,7 @@ export function RoomListRow({
         openRoom();
       }}
       onMouseEnter={(e) => {
-        (e.currentTarget as HTMLDivElement).style.background = "rgba(0,0,0,0.03)";
+        (e.currentTarget as HTMLDivElement).style.background = tokens.color.hoverOverlay;
       }}
       onMouseLeave={(e) => {
         (e.currentTarget as HTMLDivElement).style.background = "transparent";

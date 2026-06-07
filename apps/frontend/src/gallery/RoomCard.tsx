@@ -165,7 +165,7 @@ export function RoomCard({
             }}
             onMouseEnter={(e) => {
               const el = e.currentTarget as HTMLButtonElement;
-              el.style.background = "rgba(0,0,0,0.06)";
+              el.style.background = tokens.color.hoverOverlay;
               el.style.color = tokens.color.accent;
             }}
             onMouseLeave={(e) => {
@@ -338,7 +338,7 @@ function ThumbnailArea({
   const fallback = (
     <div
       style={{
-        background: "rgba(0,0,0,0.04)",
+        background: tokens.color.hoverOverlay,
         borderRadius: tokens.radius.sm,
         padding: "12px 8px",
         textAlign: "center",
@@ -374,7 +374,7 @@ function ThumbnailArea({
         width: "100%",
         height: 160,
         objectFit: "contain",
-        background: "#f5f5f5",
+        background: tokens.color.bgSubtle,
         borderRadius: tokens.radius.sm,
         display: "block",
         cursor: onClick ? "pointer" : "default",

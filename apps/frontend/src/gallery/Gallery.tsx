@@ -277,7 +277,7 @@ export function Gallery({ space }: { space: string }) {
     <div
       style={{
         minHeight: "100vh",
-        background: "#f6f7f9",
+        background: tokens.color.bgPage,
         fontFamily: tokens.font.sans,
       }}
     >

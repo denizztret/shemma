@@ -58,6 +58,10 @@ import { UpdateBanner } from "./chrome/UpdateBanner";
 import { MermaidImportModal } from "./mermaid/MermaidImportModal";
 import { PromptDrawer } from "./prompts/PromptDrawer";
 import { PromptInput } from "./prompts/PromptInput";
+import { ThemeToggleButton } from "./theme/ThemeToggleButton";
+import { cycleThemeMode } from "./theme/theme-mode";
+import { setThemeMode } from "./theme/theme-store";
+import { useThemeMode } from "./theme/useThemeMode";
 import { getState, seedSchema } from "./transport/api";
 import { computeTruncatedBackoff } from "./transport/sync-recovery";
 import { viewportReporter } from "./transport/viewport";
@@ -118,6 +122,9 @@ export function App({
   room: string;
 }) {
   const [editor, setEditor] = useState<Editor | null>(null);
+  // DRW-217: режим темы (light/dark/system) из shemma:theme; runtime-смена
+  // прокидывается в tldraw через updateUserPreferences (effect ниже).
+  const { mode: themeMode } = useThemeMode();
   const [selection, setSelection] = useState<string[]>([]);
   const [promptsTick, setPromptsTick] = useState(0);
   const [cameraTick, setCameraTick] = useState(0);
@@ -210,6 +217,12 @@ export function App({
       didrawDedupDisposerRef.current = null;
     };
   }, []);
+
+  // DRW-217: runtime-смена темы → tldraw user prefs (canvas/UI перекрашиваются
+  // без reload; AC#3). Наши поверхности перекрашивает data-shemma-theme.
+  useEffect(() => {
+    editor?.user.updateUserPreferences({ colorScheme: themeMode });
+  }, [editor, themeMode]);
 
   // ⌘K / ⌘M / Esc keyboard handler.
   useEffect(() => {
@@ -894,6 +907,10 @@ export function App({
               onClose={() => setPickerOpen(false)}
             />
           )}
+          <ThemeToggleButton
+            mode={themeMode}
+            onCycle={() => setThemeMode(cycleThemeMode(themeMode))}
+          />
           <PromptDrawer space={space} room={room} tick={promptsTick} />
           <AiActivityBadge activity={aiActivity} />
           <ErrorBanner />
@@ -908,8 +925,15 @@ export function App({
         tools={[SchemaContainerTool]}
         overrides={tldrawUiOverrides}
         assetUrls={SHEMMA_ASSET_URLS}
+        // DRW-217: initial цветовая схема из shemma:theme (SSOT). Runtime-смена —
+        // updateUserPreferences в theme-sync ниже.
+        colorScheme={themeMode}
         onMount={(ed) => {
           setEditor(ed);
+          // DRW-217: принудительный sync tldraw-prefs с нашим SSOT — tldraw
+          // хранит собственный colorScheme в localStorage prefs, который может
+          // перекрыть проп; выравниваем при mount.
+          ed.user.updateUserPreferences({ colorScheme: themeMode });
           // DRW-150: store disposer to prevent listener accumulation on HMR/room-switch
           autoFlipDisposerRef.current?.();
           autoFlipDisposerRef.current = registerAutoFlipDirection(ed);

@@ -77,7 +77,7 @@ export function NewRoomForm({ space }: { space: string }) {
             padding: "6px 10px",
             border: `1px solid ${error ? tokens.color.warnBorder : tokens.color.border}`,
             borderRadius: tokens.radius.sm,
-            background: "#fff",
+            background: tokens.color.bg,
             color: tokens.color.text,
             width: 220,
             outline: "none",
