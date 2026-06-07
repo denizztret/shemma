@@ -5,7 +5,7 @@
  * A minimal mock object is constructed to simulate `editor.store.listen`.
  *
  * Covers:
- *   - Position change → postOverlay called with {position, styleOwnedBy:"user"}
+ *   - Position change → postOverlay called with {position} (БЕЗ styleOwnedBy, DRW-214)
  *   - Color change vs preset → postOverlay called with {color, styleOwnedBy:"user"}
  *   - Label (richText) change → postOverlay called with {label, styleOwnedBy:"user"}
  *   - Shape without didrawSchemaParent → no call
@@ -202,12 +202,24 @@ describe("computeOverlayDelta", () => {
     expect(computeOverlayDelta(shape, shape, childMeta)).toBeNull();
   });
 
-  it("returns position delta on x/y change", () => {
+  it("returns position delta on x/y change WITHOUT styleOwnedBy (DRW-214)", () => {
+    // «Двигал» ≠ «красил»: position-only drag не взводит флаг владения стилем,
+    // иначе style propagation перестаёт применять board-дефолты к любому
+    // когда-либо двинутому узлу.
     const prev = makeSchemaChild({ x: 100, y: 200 });
     const next = makeSchemaChild({ x: 150, y: 250 });
     const delta = computeOverlayDelta(prev, next, childMeta);
     expect(delta).not.toBeNull();
     expect(delta?.position).toEqual({ x: 150, y: 250 });
+    expect(delta?.styleOwnedBy).toBeUndefined();
+  });
+
+  it("position + color change stamps styleOwnedBy (DRW-214)", () => {
+    const prev = makeSchemaChild({ x: 100, y: 200, props: { color: "blue" } });
+    const next = makeSchemaChild({ x: 150, y: 250, props: { color: "red" } });
+    const delta = computeOverlayDelta(prev, next, childMeta);
+    expect(delta?.position).toEqual({ x: 150, y: 250 });
+    expect(delta?.color).toBe("red");
     expect(delta?.styleOwnedBy).toBe("user");
   });
 
@@ -302,7 +314,10 @@ describe("installSchemaOverlaySync", () => {
     expect(calls[0]!.frameId).toBe("shape:frame1");
     expect(calls[0]!.nodeId).toBe("api-abc123");
     expect((calls[0]!.overlay as { position?: unknown }).position).toEqual({ x: 150, y: 250 });
-    expect((calls[0]!.overlay as { styleOwnedBy?: string }).styleOwnedBy).toBe("user");
+    // DRW-214: position-only — без флага владения стилем.
+    expect(
+      (calls[0]!.overlay as { styleOwnedBy?: string }).styleOwnedBy,
+    ).toBeUndefined();
 
     dispose();
   });

@@ -124,7 +124,13 @@ export function computeOverlayDelta(
   const hasChanges = delta.position !== undefined || delta.color !== undefined || delta.label !== undefined;
   if (!hasChanges) return null;
 
-  delta.styleOwnedBy = "user";
+  // DRW-214: «двигал» ≠ «красил» — флаг владения СТИЛЕМ ставится только при
+  // style-полях в дельте. Position-only drag его не взводит, иначе style
+  // propagation (respectUserOwned) молча перестаёт применять board-дефолты
+  // к любому когда-либо двинутому узлу.
+  if (delta.color !== undefined || delta.label !== undefined) {
+    delta.styleOwnedBy = "user";
+  }
   return delta;
 }
 
