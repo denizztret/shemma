@@ -32,6 +32,11 @@ export type OverlayEntry = {
   role?: Role;
   pinned?: boolean;
   styleOwnedBy?: "user";
+  /** GC-метка (DRW-216): поколение, в котором запись стала orphan (узел
+   *  удалён). Снимается при воскрешении узла. Orphan, переживший
+   *  GC_KEEP_GENERATIONS поколений, собирается сборщиком при превышении
+   *  порога. Не задано у живых узлов. */
+  deadGen?: number;
 };
 
 /** Стиль schema-container (DRW-215): адресат — группа (didrawSubgraphId). */
@@ -86,6 +91,9 @@ export type SchemaFrameMeta = {
   /** Edge-overlays (DRW-211): ключ — edgeOverlayKey(from, to). */
   didrawEdgeOverlays?: Record<string, EdgeOverlayEntry>;
   didrawDestructiveCount?: number;
+  /** Монотонный счётчик apply-проходов фрейма (DRW-216): возраст orphan-
+   *  overlay'ев для GC. Инкрементируется каждым apply. */
+  didrawOverlayGen?: number;
 };
 
 /** Meta-поля shape'а — прямого ребёнка schema-frame.

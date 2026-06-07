@@ -1034,6 +1034,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
         addedNodeIds,
         removedNodeIds,
         orphanedOverlays,
+        overlayGen,
         destructiveScore,
       } = result;
 
@@ -1049,6 +1050,8 @@ export function schemaRoutes(bus: StoreChangeBus) {
           mermaidSource: newRaw,
           didrawOverlays: newOverlays,
           didrawEdgeOverlays: newEdgeOverlays,
+          // DRW-216: возраст orphan-overlay'ев для GC.
+          didrawOverlayGen: overlayGen,
         },
       };
       const frameBatch: StoreChangeBatch = {
