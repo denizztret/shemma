@@ -309,7 +309,12 @@ export function registerSchemaWriteTools(
         "{shapeId, role, label?, nodeId?} — position/size/look preserved, the node appears " +
         "in raw and becomes addressable by connect/rename/set-overlay/delete-node), " +
         "schema-delete-shape (delete a NON-schema shape by tldraw shapeId with binding/" +
-        "dangling-arrow cascade; for schema nodes use schema-delete-node). " +
+        "dangling-arrow cascade; for schema nodes use schema-delete-node), " +
+        "schema-set-container-style ({name, style:{color/fill/dash/titlePosition}} — " +
+        "restyle a group's container addressed by its group name), " +
+        "schema-set-frame-style ({style:{color/label}} — frame border color and display " +
+        "label). Node overlays also support geo (shape form: ellipse/diamond/cloud/...) " +
+        "and opacity (0..1). " +
         "Batch is all-or-nothing: if any action fails validation, none are applied. " +
         "Returns: { frameId, addedNodeIds, removedNodeIds, orphanedOverlays, destructiveScore }. " +
         "Errors: no-schema-frame (room has no schema-frames), " +

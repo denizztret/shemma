@@ -169,6 +169,27 @@ describe("computeShapeUpdateFromOverlay", () => {
     });
   });
 
+  it("returns props.geo + opacity update при overlay diff (DRW-215)", () => {
+    const shape = makeShape({ props: { geo: "rectangle" }, opacity: 1 });
+    const update = computeShapeUpdateFromOverlay(shape, {
+      geo: "ellipse",
+      opacity: 0.5,
+    });
+    expect(update).toEqual({
+      id: shape.id,
+      type: shape.type,
+      opacity: 0.5,
+      props: { geo: "ellipse" },
+    });
+  });
+
+  it("returns null если geo/opacity совпадают (DRW-215)", () => {
+    const shape = makeShape({ props: { geo: "ellipse" }, opacity: 0.5 });
+    expect(
+      computeShapeUpdateFromOverlay(shape, { geo: "ellipse", opacity: 0.5 }),
+    ).toBeNull();
+  });
+
   it("returns props.color update при overlay.color diff", () => {
     const shape = makeShape({ props: { color: "blue" } });
     const update = computeShapeUpdateFromOverlay(shape, { color: "red" });

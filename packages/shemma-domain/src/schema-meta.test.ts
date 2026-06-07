@@ -6,8 +6,8 @@ describe("schema meta constants (DRW-134 Task 1.3)", () => {
     expect(SCHEMA_PROTOCOL_VERSION).toBe("1.0");
   });
 
-  test("ALL_SCHEMA_ACTION_KINDS contains все 11 kinds", () => {
-    expect(ALL_SCHEMA_ACTION_KINDS).toHaveLength(11);
+  test("ALL_SCHEMA_ACTION_KINDS contains все 13 kinds", () => {
+    expect(ALL_SCHEMA_ACTION_KINDS).toHaveLength(13);
     expect(ALL_SCHEMA_ACTION_KINDS).toContain("schema-define");
     expect(ALL_SCHEMA_ACTION_KINDS).toContain("schema-connect");
     expect(ALL_SCHEMA_ACTION_KINDS).toContain("schema-rename");
@@ -19,5 +19,7 @@ describe("schema meta constants (DRW-134 Task 1.3)", () => {
     expect(ALL_SCHEMA_ACTION_KINDS).toContain("schema-set-edge-overlay");
     expect(ALL_SCHEMA_ACTION_KINDS).toContain("schema-adopt-shape");
     expect(ALL_SCHEMA_ACTION_KINDS).toContain("schema-delete-shape");
+    expect(ALL_SCHEMA_ACTION_KINDS).toContain("schema-set-container-style");
+    expect(ALL_SCHEMA_ACTION_KINDS).toContain("schema-set-frame-style");
   });
 });
