@@ -17,6 +17,7 @@ Most boards you'll touch are **schema-frames** (managed diagram content). The **
 - **Read the current frame objectively first:** `shemma_canvas_view` → gives `frames[]` with `id` (the `frameId`) and the current node/edge/group structure. Reference **existing node ids** from this read; never invent ids.
 - **Edit object-wise, incrementally:** `shemma_patch_schema { frameId, actions: [ {kind:"schema-define",…}, {kind:"schema-connect", from, to, connectionKind}, {kind:"schema-group",…}, … ] }`. Add only what's new; connect by existing node ids. Endpoints **inside containers (subgraphs) are valid** — connect resolves them.
 - **Do NOT call `shemma_layout` after edits.** Smart-insert already places new nodes into free space and grows the frame; the user's arrangement must survive agent edits. Re-layout only when the USER explicitly asks for it.
+- **ONE FRAME = ONE CONNECTED SCHEMA.** Never add a parallel, disconnected diagram into an existing schema-frame — create a NEW frame via `shemma_create_schema` instead. A second disconnected component degrades the frame's layout and flips its auto-direction decisions. Patch an existing frame only with nodes/edges that connect to its existing graph.
 - **Answering questions / augmenting** the schema = read with `shemma_canvas_view`, reason over the returned objects, then patch incrementally. Stay in the context of what's already there.
 
 ## Room resolution

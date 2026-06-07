@@ -196,6 +196,9 @@ export function registerSchemaWriteTools(
       description:
         "Create a new schema-frame in the room from a Mermaid diagram or SchemaAction list. " +
         "Automatically upgrades the room to v2 protocol on first call. " +
+        "ONE FRAME = ONE CONNECTED SCHEMA: this is the right tool whenever the user asks for a " +
+        "NEW diagram that is not connected to an existing frame's graph — do not patch a " +
+        "disconnected diagram into an existing frame. " +
         "Mode A (preferred): pass `raw` — a flowchart/graph mermaid string (e.g. 'graph LR\\n  api[API] --> db[(DB)]'). " +
         "Mode B: pass `actions` — array of SchemaAction objects (schema-define, schema-connect, ...). " +
         "Exactly one of `raw` or `actions` must be provided. " +
@@ -297,6 +300,9 @@ export function registerSchemaWriteTools(
         "Smart-insert places new nodes into free space and grows the frame automatically — " +
         "do NOT call shemma_layout after edits unless the USER explicitly asks for a re-layout: " +
         "the board arrangement belongs to the user and must survive agent edits. " +
+        "ONE FRAME = ONE CONNECTED SCHEMA: never patch a parallel DISCONNECTED diagram into an " +
+        "existing frame — a second component degrades the frame's layout and auto-direction; " +
+        "create a separate frame via shemma_create_schema instead. " +
         "If frameId is omitted and the room has exactly 1 schema-frame, it is auto-picked. " +
         "If ≥2 schema-frames exist, frameId is required (ambiguous-schema-frame error otherwise). " +
         "Supported action kinds: schema-define, schema-connect, schema-rename, schema-set-role, " +
