@@ -26,6 +26,7 @@ import {
   type SchemaContainerTitlePosition,
   normalizeTitlePosition,
 } from "../shapes/schema-container/title-position";
+import { applyTextFitToSelection } from "../canvas/apply-text-fit";
 import {
   applyStyleToSelection,
   collectDescendantIds,
@@ -683,6 +684,23 @@ const SelectionPanelContainer: FC<{
     [editor],
   );
 
+  // DRW-219: «Обтянуть текст» — видна, когда выделение (включая потомков)
+  // содержит текстовый объект (geo/note/text).
+  const showTextFit = useValue(
+    "showTextFit",
+    () => {
+      const selectedIds = editor.getSelectedShapeIds() as unknown as string[];
+      if (selectedIds.length === 0) return false;
+      const visited = collectDescendantIds(editor, selectedIds);
+      for (const id of visited) {
+        const s = editor.getShape(id as never) as { type?: string } | undefined;
+        if (s?.type === "geo" || s?.type === "note") return true;
+      }
+      return false;
+    },
+    [editor],
+  );
+
   // Per-container titlePosition override (Task 9): visible only when ровно один
   // SchemaContainer выбран. Writeback идёт напрямую в `shape.props.titlePosition`
   // (render-time SSOT по спецификации §Title position resolution).
@@ -1005,6 +1023,11 @@ const SelectionPanelContainer: FC<{
       onStyleArrowKind={(v) => {
         const ids = editor.getSelectedShapeIds() as unknown as string[];
         void applyStyleToSelection(editor, ids, { arrowKind: v });
+      }}
+      showTextFit={showTextFit}
+      onTextFit={() => {
+        const ids = editor.getSelectedShapeIds() as unknown as string[];
+        applyTextFitToSelection(editor, ids);
       }}
       singleContainerTitlePosition={singleContainer?.props.titlePosition}
       onSingleContainerTitlePositionChange={

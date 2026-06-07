@@ -57,6 +57,11 @@ const HISTORICAL: Record<
       key: "l",
     }),
   },
+  // DRW-219: ⌘⇧F / Ctrl+Shift+F.
+  "fit-text": {
+    meta: ev({ metaKey: true, shiftKey: true, code: "KeyF", key: "f" }),
+    ctrl: ev({ ctrlKey: true, shiftKey: true, code: "KeyF", key: "f" }),
+  },
   // copy-link default is ⇧⌘S (moved off ⌘⌥C — that's Chrome's Inspect-Element
   // DevTools accelerator on macOS and never reaches the page handler).
   "copy-link": {

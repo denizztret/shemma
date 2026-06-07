@@ -58,6 +58,7 @@ import { UpdateBanner } from "./chrome/UpdateBanner";
 import { MermaidImportModal } from "./mermaid/MermaidImportModal";
 import { PromptDrawer } from "./prompts/PromptDrawer";
 import { PromptInput } from "./prompts/PromptInput";
+import { applyTextFitToSelection } from "./canvas/apply-text-fit";
 import { ThemeToggleButton } from "./theme/ThemeToggleButton";
 import { cycleThemeMode } from "./theme/theme-mode";
 import { setThemeMode } from "./theme/theme-store";
@@ -337,6 +338,23 @@ export function App({
       e.preventDefault();
       e.stopPropagation();
       onCopyObjectLink.current?.(ids);
+    };
+    window.addEventListener("keydown", handler, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", handler, { capture: true });
+  }, [editor]);
+
+  // DRW-219: ⌘⇧F / Ctrl+Shift+F — обтянуть текст выделенных объектов.
+  // Capture phase + ⌘⇧F свободен от браузерных акселераторов (⌘F = find).
+  useEffect(() => {
+    if (!editor) return;
+    const handler = (e: KeyboardEvent) => {
+      if (!matchShortcut(getActiveBinding("fit-text"), e)) return;
+      const ids = editor.getSelectedShapeIds() as unknown as string[];
+      if (ids.length === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      applyTextFitToSelection(editor, ids);
     };
     window.addEventListener("keydown", handler, { capture: true });
     return () =>

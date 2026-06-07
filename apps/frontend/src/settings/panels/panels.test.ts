@@ -462,4 +462,33 @@ describe("SelectionPanel", () => {
     onChange?.("arc");
     expect(picked).toBe("arc" as never);
   });
+
+  // ---- DRW-219: обтяжка текста ----
+
+  test("showTextFit=true → TextFitSection rendered", () => {
+    const tree = renderSelectionPanel({
+      showTextFit: true,
+      onTextFit: () => {},
+    });
+    expect(hasComponent(tree, "TextFitSection")).toBe(true);
+  });
+
+  test("showTextFit=false → TextFitSection hidden", () => {
+    const tree = renderSelectionPanel({ showTextFit: false });
+    expect(hasComponent(tree, "TextFitSection")).toBe(false);
+  });
+
+  test("TextFitSection button invokes onTextFit", () => {
+    let fired = 0;
+    const tree = renderSelectionPanel({
+      showTextFit: true,
+      onTextFit: () => {
+        fired += 1;
+      },
+    });
+    const section = findComponent(tree, "TextFitSection");
+    const onFit = section?.props.onFit as (() => void) | undefined;
+    onFit?.();
+    expect(fired).toBe(1);
+  });
 });
