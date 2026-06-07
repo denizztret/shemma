@@ -12,8 +12,9 @@ const SCAN_STEP = 10;
 
 /**
  * Find an empty rectangle of `size` inside `parent` that doesn't overlap any
- * `occupants` (each padded by `padding`). Returns the slot closest to the
- * parent center, or null if no such slot fits.
+ * `occupants` (each padded by `padding`). Returns the slot closest to
+ * `anchor` (e.g. the centroid of linked neighbors, DRW-205) or, without an
+ * anchor, closest to the parent center. Null if no such slot fits.
  *
  * O(parent.w * parent.h / step^2 * N) — adequate for typical schema sizes.
  */
@@ -22,6 +23,7 @@ export function findEmptySlot(
   occupants: Rect[],
   size: Size,
   padding: number,
+  anchor?: Slot,
 ): Slot | null {
   if (size.w + 2 * padding > parent.w) return null;
   if (size.h + 2 * padding > parent.h) return null;
@@ -40,8 +42,8 @@ export function findEmptySlot(
     }
   }
   if (candidates.length === 0) return null;
-  const cx = parent.w / 2;
-  const cy = parent.h / 2;
+  const cx = anchor ? anchor.x : parent.w / 2;
+  const cy = anchor ? anchor.y : parent.h / 2;
   candidates.sort(
     (a, b) =>
       Math.hypot(a.x + size.w / 2 - cx, a.y + size.h / 2 - cy) -

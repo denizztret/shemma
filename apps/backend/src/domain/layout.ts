@@ -450,23 +450,38 @@ function applyDisplacement(
     };
   };
 
-  const pinnedBoxes: Bounds[] = [];
+  const pinnedBoxes: Array<{ id: string; box: Bounds }> = [];
   for (const pid of pinnedSet) {
     const b = boxOf(pid);
-    if (b) pinnedBoxes.push(b);
+    if (b) pinnedBoxes.push({ id: pid, box: b });
   }
   if (pinnedBoxes.length === 0) return;
 
-  const pinnedRight = Math.max(...pinnedBoxes.map((b) => b.x + b.w));
-  const pinnedTop = Math.min(...pinnedBoxes.map((b) => b.y));
-  const overlapsAnyPinned = (b: Bounds) =>
+  // DRW-205: a container ALWAYS overlaps its own pinned descendants — that is
+  // containment, not collision. Displacing a frame away from its own pinned
+  // children shoved it to garbage coords and the whole schema fell apart.
+  const isInside = (childId: string, ancestorId: string): boolean => {
+    let cur = shapeById.get(childId)?.parentId;
+    let hops = 0;
+    while (typeof cur === "string" && hops < 64) {
+      if (cur === ancestorId) return true;
+      cur = shapeById.get(cur)?.parentId;
+      hops++;
+    }
+    return false;
+  };
+
+  const pinnedRight = Math.max(...pinnedBoxes.map((p) => p.box.x + p.box.w));
+  const pinnedTop = Math.min(...pinnedBoxes.map((p) => p.box.y));
+  const overlapsAnyPinned = (b: Bounds, selfId: string) =>
     pinnedBoxes.some(
       (pb) =>
+        !isInside(pb.id, selfId) &&
         !(
-          b.x + b.w + COLLISION_SLACK <= pb.x ||
-          pb.x + pb.w + COLLISION_SLACK <= b.x ||
-          b.y + b.h + COLLISION_SLACK <= pb.y ||
-          pb.y + pb.h + COLLISION_SLACK <= b.y
+          b.x + b.w + COLLISION_SLACK <= pb.box.x ||
+          pb.box.x + pb.box.w + COLLISION_SLACK <= b.x ||
+          b.y + b.h + COLLISION_SLACK <= pb.box.y ||
+          pb.box.y + pb.box.h + COLLISION_SLACK <= b.y
         ),
     );
 
@@ -480,7 +495,7 @@ function applyDisplacement(
   for (const aid of affectedIds) {
     const box = boxOf(aid);
     if (!box) continue;
-    if (!overlapsAnyPinned(box)) continue;
+    if (!overlapsAnyPinned(box, aid)) continue;
     positions[aid] = {
       ...positions[aid],
       x: pinnedRight + NODE_SPACING_X,
@@ -1498,10 +1513,26 @@ export async function runLayout(
   }
 
   // Restore pinned coords (ELK layered ignores fixed-position hints in elkjs 0.9.3 —
-  // override after layout).
+  // override after layout). Pin semantics: the shape's PARENT-RELATIVE coords
+  // are frozen. positions[] is parent-relative in subgraph mode but ABSOLUTE in
+  // scope='all' — convert via the post-layout parent position. DRW-205: the raw
+  // restore wrote relative coords into the absolute map, so pinned children of
+  // a frame jumped to garbage (often negative) coords after the batch builder
+  // subtracted the frame position back out.
   for (const s of shapesForLayout) {
     if (pinnedSet.has(s.id) && positions[s.id] !== undefined) {
-      positions[s.id] = { ...positions[s.id], x: s.x ?? 0, y: s.y ?? 0 };
+      const sx = s.x ?? 0;
+      const sy = s.y ?? 0;
+      const parentId = typeof s.parentId === "string" ? s.parentId : undefined;
+      if (!isSubgraphMode && parentId && containerIds.has(parentId)) {
+        const parentPos = positions[parentId];
+        const parentShape = shapeById.get(parentId);
+        const px = parentPos ? parentPos.x : (parentShape?.x ?? 0);
+        const py = parentPos ? parentPos.y : (parentShape?.y ?? 0);
+        positions[s.id] = { ...positions[s.id], x: px + sx, y: py + sy };
+      } else {
+        positions[s.id] = { ...positions[s.id], x: sx, y: sy };
+      }
     }
   }
 
@@ -1569,6 +1600,39 @@ export async function runLayout(
 
   // DRW-003 displacement.
   applyDisplacement(positions, shapesForLayout, pinnedSet);
+
+  // DRW-205: containers must COVER their children's FINAL positions — pinned
+  // children (restored to frozen coords above), nodes displaced away from
+  // pins (applyDisplacement), and untouched user shapes can all land outside
+  // the ELK-computed container bounds, where tldraw clips them. Grow-only;
+  // children never move. Runs AFTER displacement so it sees final coords.
+  for (const s of shapesForLayout) {
+    if (s.type === "arrow") continue;
+    const parentId = typeof s.parentId === "string" ? s.parentId : undefined;
+    if (!parentId || !containerIds.has(parentId)) continue;
+    const parentPos = positions[parentId];
+    if (!parentPos || typeof parentPos.w !== "number") continue;
+    const b = effectiveShapeBounds(s, shapeBounds(s, fullHint.forceUnpin));
+    const p = positions[s.id];
+    let relX: number;
+    let relY: number;
+    if (p) {
+      // subgraph mode: child positions are already parent-relative;
+      // scope='all': positions are absolute → convert via parent position.
+      relX = isSubgraphMode ? p.x : p.x - parentPos.x;
+      relY = isSubgraphMode ? p.y : p.y - parentPos.y;
+    } else {
+      // No layout position (e.g. non-schema user shape) — keeps stored
+      // parent-relative coords.
+      relX = s.x ?? 0;
+      relY = s.y ?? 0;
+    }
+    const needW = relX + (p?.w ?? b.w) + CONTAINER_PAD_LR;
+    const needH = relY + (p?.h ?? b.h) + CONTAINER_PAD_BOT;
+    if (needW > parentPos.w) parentPos.w = needW;
+    const ph = typeof parentPos.h === "number" ? parentPos.h : 0;
+    if (needH > ph) parentPos.h = needH;
+  }
 
   // Build updated batch — only записи, у которых реально поменялись x/y/w/h.
   const updated: Record<string, [TLRecord, TLRecord]> = {};

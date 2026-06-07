@@ -54,6 +54,35 @@ describe("findEmptySlot", () => {
     expect(slot).toBeNull();
   });
 
+  test("anchor pulls the slot towards it instead of the parent center (DRW-205)", () => {
+    // Wide empty parent: with no anchor the pick is central; with an anchor
+    // at the right edge the slot must land near the anchor.
+    const parent = { w: 1000, h: 300 };
+    const size = { w: 100, h: 50 };
+    const anchored = findEmptySlot(parent, [], size, 10, { x: 900, y: 150 });
+    const centered = findEmptySlot(parent, [], size, 10);
+    if (!anchored || !centered) throw new Error("expected slots in empty parent");
+    // Slot center must be pulled to the right half, close to the anchor.
+    expect(anchored.x + size.w / 2).toBeGreaterThan(600);
+    expect(centered.x + size.w / 2).toBeLessThan(600);
+  });
+
+  test("anchor bias still respects occupants", () => {
+    // Anchor sits inside an occupied region — slot must clear the occupant.
+    const occ = { x: 800, y: 0, w: 200, h: 300 };
+    const slot = findEmptySlot({ w: 1000, h: 300 }, [occ], { w: 100, h: 50 }, 10, {
+      x: 900,
+      y: 150,
+    });
+    if (!slot) throw new Error("expected a slot clear of the occupant");
+    const overlap =
+      slot.x + 100 + 10 > occ.x &&
+      occ.x + occ.w + 10 > slot.x &&
+      slot.y + 50 + 10 > occ.y &&
+      occ.y + occ.h + 10 > slot.y;
+    expect(overlap).toBe(false);
+  });
+
   test("multiple occupants, finds gap", () => {
     // Parent 400x300; two occupants on left and right; gap in middle
     const slot = findEmptySlot(

@@ -4,7 +4,7 @@
  */
 
 import { describe, test, expect } from "bun:test";
-import { applySchemaActions } from "./apply";
+import { applySchemaActions, estimateEffectiveHeight } from "./apply";
 import type { ApplyResult } from "./apply";
 import type { RoomState } from "../../types";
 import type { TLRecord } from "../../store-types";
@@ -238,6 +238,175 @@ describe("applySchemaActions (DRW-134 Task 2.4)", () => {
     expect(bindings.some((b) => b.toId === "shape:outer1")).toBe(true);
   });
 
+  test("schema-connect creates elbow arrows (parity with imported schema arrows)", () => {
+    // DRW-205 AC#6: incremental arrows must match the imported ones
+    // (compile.ts emits kind:"elbow"); arc arrows look alien on a schema.
+    const frame = makeFrame("shape:frame1", "");
+    const room = makeRoom({ "shape:frame1": frame });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-define", nodeId: "api-aaaaaa", role: "service", label: "API" },
+      { kind: "schema-define", nodeId: "db-bbbbbb", role: "datastore", label: "Database" },
+      { kind: "schema-connect", from: "api-aaaaaa", to: "db-bbbbbb", connectionKind: "sync" },
+    ];
+
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    const added = Object.values(result.batch.added) as any[];
+    const arrowShapes = added.filter((r) => r.typeName === "shape" && r.type === "arrow");
+    expect(arrowShapes).toHaveLength(1);
+    expect(arrowShapes[0].props.kind).toBe("elbow");
+  });
+
+  // ---------- Container-aware resolver edge-cases (DRW-205, этап 5) ----------
+
+  test("schema-connect resolves a node nested TWO container levels deep", () => {
+    const raw = [
+      "graph LR",
+      "  outer-bbbbbb[Outer]",
+      "  deep-aaaaaa[Deep]",
+    ].join("\n");
+    const frame = makeFrame("shape:frame1", raw);
+
+    const mkContainer = (id: string, parentId: string): TLRecord =>
+      ({
+        id,
+        typeName: "shape",
+        type: "schema-container",
+        x: 0,
+        y: 0,
+        parentId,
+        index: "a1",
+        isLocked: false,
+        opacity: 1,
+        rotation: 0,
+        props: { w: 300, h: 200 },
+        meta: {},
+      }) as TLRecord;
+    const c1 = mkContainer("shape:c1", "shape:frame1");
+    const c2 = mkContainer("shape:c2", "shape:c1");
+    const deep = makeChildShape("shape:deep1", "deep-aaaaaa", "Deep", "shape:c2");
+    const outer = makeChildShape("shape:outer1", "outer-bbbbbb", "Outer", "shape:frame1");
+
+    const room = makeRoom({
+      "shape:frame1": frame,
+      "shape:c1": c1,
+      "shape:c2": c2,
+      "shape:deep1": deep,
+      "shape:outer1": outer,
+    });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-connect", from: "deep-aaaaaa", to: "outer-bbbbbb", connectionKind: "sync" },
+    ];
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    const added = Object.values(result.batch.added) as any[];
+    const bindings = added.filter((r) => r.typeName === "binding" && r.type === "arrow");
+    expect(bindings).toHaveLength(2);
+    expect(bindings.some((b) => b.toId === "shape:deep1")).toBe(true);
+    expect(bindings.some((b) => b.toId === "shape:outer1")).toBe(true);
+  });
+
+  test("schema-connect to a node from ANOTHER frame is rejected, not silently dropped", () => {
+    const frame1 = makeFrame("shape:frame1", "graph LR\n  here-aaaaaa[Here]");
+    const frame2 = makeFrame("shape:frame2", "graph LR\n  there-bbbbbb[There]");
+    const here = makeChildShape("shape:here1", "here-aaaaaa", "Here", "shape:frame1");
+    const there = makeChildShape("shape:there1", "there-bbbbbb", "There", "shape:frame2");
+    const room = makeRoom({
+      "shape:frame1": frame1,
+      "shape:frame2": frame2,
+      "shape:here1": here,
+      "shape:there1": there,
+    });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-connect", from: "here-aaaaaa", to: "there-bbbbbb", connectionKind: "sync" },
+    ];
+    const result = applySchemaActions({ room, frame: frame1, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((e) => e.code === "unknown-node")).toBe(true);
+  });
+
+  test("schema-disconnect removes the arrow + bindings of a container-nested endpoint", () => {
+    const raw = [
+      "graph LR",
+      "  outer-bbbbbb[Outer]",
+      "  subgraph c1 [Container]",
+      "    inner-aaaaaa[Inner]",
+      "  end",
+      "  inner-aaaaaa --> outer-bbbbbb",
+    ].join("\n");
+    const frame = makeFrame("shape:frame1", raw);
+    const container = {
+      id: "shape:cont1",
+      typeName: "shape",
+      type: "schema-container",
+      x: 0,
+      y: 0,
+      parentId: "shape:frame1",
+      index: "a1",
+      isLocked: false,
+      opacity: 1,
+      rotation: 0,
+      props: { w: 300, h: 200 },
+      meta: {},
+    } as TLRecord;
+    const inner = makeChildShape("shape:inner1", "inner-aaaaaa", "Inner", "shape:cont1");
+    const outer = makeChildShape("shape:outer1", "outer-bbbbbb", "Outer", "shape:frame1");
+    const arrow = {
+      id: "shape:arrow1",
+      typeName: "shape",
+      type: "arrow",
+      x: 0,
+      y: 0,
+      parentId: "shape:frame1",
+      index: "a1",
+      isLocked: false,
+      opacity: 1,
+      rotation: 0,
+      props: {},
+      meta: {},
+    } as TLRecord;
+    const mkBinding = (id: string, terminal: "start" | "end", toId: string): TLRecord =>
+      ({
+        id,
+        typeName: "binding",
+        type: "arrow",
+        fromId: "shape:arrow1",
+        toId,
+        props: { terminal },
+        meta: {},
+      }) as TLRecord;
+    const room = makeRoom({
+      "shape:frame1": frame,
+      "shape:cont1": container,
+      "shape:inner1": inner,
+      "shape:outer1": outer,
+      "shape:arrow1": arrow,
+      "binding:b1": mkBinding("binding:b1", "start", "shape:inner1"),
+      "binding:b2": mkBinding("binding:b2", "end", "shape:outer1"),
+    });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-disconnect", from: "inner-aaaaaa", to: "outer-bbbbbb" },
+    ];
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.batch.removed["shape:arrow1"]).toBeDefined();
+    expect(result.batch.removed["binding:b1"]).toBeDefined();
+    expect(result.batch.removed["binding:b2"]).toBeDefined();
+  });
+
   // ---------- Smart-insert placement (DRW-178 wiring) ----------
 
   test("schema-define places the new node in free space, not overlapping existing children", () => {
@@ -295,6 +464,310 @@ describe("applySchemaActions (DRW-134 Task 2.4)", () => {
     const grewW = (grown.props.w as number) > 260;
     const grewH = (grown.props.h as number) > 120;
     expect(grewW || grewH).toBe(true);
+  });
+
+  // ---------- Smart-insert: text-growth aware sizing (DRW-205) ----------
+
+  test("estimateEffectiveHeight: wrapping labels get extra height, short labels keep base", () => {
+    // Calibrated against live tldraw renders (S2/S3 verification rooms):
+    // "Alert Queue" in a 140-wide queue box rendered 91.4px tall (h50+growY41.4).
+    expect(estimateEffectiveHeight("Alert Queue", 140, 50)).toBeGreaterThanOrEqual(92);
+    // 4-line label rendered 150.8px tall in a 220-wide box.
+    expect(
+      estimateEffectiveHeight("Observability & Distributed Tracing Platform", 220, 80),
+    ).toBeGreaterThanOrEqual(151);
+    // 3-line label in a queue box rendered ~133px tall (S6-BT live repro).
+    expect(estimateEffectiveHeight("Dead Letter Queue", 140, 50)).toBeGreaterThanOrEqual(133);
+    // Single-line labels must not inflate — placement density stays unchanged.
+    expect(estimateEffectiveHeight("Ingress", 220, 80)).toBe(80);
+    expect(estimateEffectiveHeight("Metrics", 220, 80)).toBe(80);
+  });
+
+  test("smart-insert avoids occupants grown by text (growY) — S2 overlap repro", () => {
+    // Existing child declares h=80 but tldraw grew it by growY=300 to fit text.
+    // The band below its NOMINAL bottom is free, but its EFFECTIVE bottom
+    // reaches y=404 — placing there overlaps the rendered shape.
+    const raw = "graph TB\n  existing-aaaaaa[Existing]";
+    const frame = { ...makeFrame("shape:frame1", raw), props: { w: 640, h: 480, name: "T" } } as TLRecord;
+    const existing = {
+      ...makeChildShape("shape:ex1", "existing-aaaaaa", "Existing", "shape:frame1"),
+      x: 24,
+      y: 24,
+    } as TLRecord;
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test setup
+    (existing as any).props = { ...(existing as any).props, w: 572, growY: 300 };
+    const room = makeRoom({ "shape:frame1": frame, "shape:ex1": existing });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-define", nodeId: "new-bbbbbb", role: "service", label: "New" },
+    ];
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    const added = Object.values(result.batch.added) as any[];
+    const newShape = added.find((r) => r.typeName === "shape" && r.meta?.didrawId === "new-bbbbbb");
+    expect(newShape).toBeDefined();
+    const nx = newShape.x as number;
+    const ny = newShape.y as number;
+    const nw = newShape.props.w as number;
+    const nh = newShape.props.h as number;
+    // Effective occupant rect: (24,24,572,80+300).
+    const ix = Math.min(nx + nw, 24 + 572) - Math.max(nx, 24);
+    const iy = Math.min(ny + nh, 24 + 380) - Math.max(ny, 24);
+    expect(ix <= 0 || iy <= 0).toBe(true);
+  });
+
+  test("smart-insert reserves wrap height for the new node's own label — grows frame instead of squeezing", () => {
+    // Empty frame 640x146: a nominal queue box (140x50) fits (24+50+24=98),
+    // but "Alert Queue" wraps to 2 lines and renders ~91px tall — the
+    // estimated box must NOT fit, forcing frame expansion.
+    const frame = { ...makeFrame("shape:frame1", ""), props: { w: 640, h: 146, name: "T" } } as TLRecord;
+    const room = makeRoom({ "shape:frame1": frame });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-define", nodeId: "alerts-bbbbbb", role: "queue", label: "Alert Queue" },
+    ];
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const frameUpd = result.batch.updated["shape:frame1"];
+    expect(frameUpd).toBeDefined();
+    if (!frameUpd) return;
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    const grown = frameUpd[1] as any;
+    expect((grown.props.h as number) > 146 || (grown.props.w as number) > 640).toBe(true);
+  });
+
+  test("smart-insert places a connected node near its linked neighbor, not at frame center", () => {
+    // Wide frame, single existing node at the far RIGHT. A new node connected
+    // to it must land near that neighbor — not in the geometric center.
+    const raw = "graph LR\n  right-aaaaaa[Right]";
+    const frame = { ...makeFrame("shape:frame1", raw), props: { w: 1600, h: 400, name: "T" } } as TLRecord;
+    const right = {
+      ...makeChildShape("shape:r1", "right-aaaaaa", "Right", "shape:frame1"),
+      x: 1340,
+      y: 160,
+    } as TLRecord;
+    const room = makeRoom({ "shape:frame1": frame, "shape:r1": right });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-define", nodeId: "new-bbbbbb", role: "service", label: "New" },
+      { kind: "schema-connect", from: "right-aaaaaa", to: "new-bbbbbb", connectionKind: "sync" },
+    ];
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    const added = Object.values(result.batch.added) as any[];
+    const newShape = added.find((r) => r.typeName === "shape" && r.meta?.didrawId === "new-bbbbbb");
+    expect(newShape).toBeDefined();
+    // Slot center must be pulled towards the neighbor at x≈1450 — the
+    // unbiased center pick lands at x≈804 (measured).
+    expect((newShape.x as number) + (newShape.props.w as number) / 2).toBeGreaterThan(1000);
+  });
+
+  // ---------- set-overlay repaints existing shapes (DRW-205 acceptance gap) ----------
+
+  test("schema-set-overlay color repaints the existing shape", () => {
+    const raw = "graph LR\n  node-aaaaaa[Node]";
+    const frame = makeFrame("shape:frame1", raw);
+    const node = makeChildShape("shape:n1", "node-aaaaaa", "Node", "shape:frame1");
+    const room = makeRoom({ "shape:frame1": frame, "shape:n1": node });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-set-overlay", nodeId: "node-aaaaaa", overlay: { color: "orange" } },
+    ];
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const upd = result.batch.updated["shape:n1"];
+    expect(upd).toBeDefined();
+    if (!upd) return;
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    expect((upd[1] as any).props.color).toBe("orange");
+    // Overlay map records the color too.
+    expect(result.newOverlays["node-aaaaaa"]?.color).toBe("orange");
+  });
+
+  test("explicit schema-set-overlay color overrides user-owned style (targeted intent)", () => {
+    // Ownership protects against INCIDENTAL overwrites (presets, re-imports).
+    // An explicit set-overlay targeting this node IS the user's intent
+    // expressed through the agent — it must repaint. NB: the frontend stamps
+    // styleOwnedBy:"user" even on position-only drags, so blocking here would
+    // make recolor impossible for any node the user has ever moved.
+    const raw = "graph LR\n  node-aaaaaa[Node]";
+    const frame = makeFrame("shape:frame1", raw);
+    const node = makeChildShape("shape:n1", "node-aaaaaa", "Node", "shape:frame1");
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test setup
+    (node as any).meta = { ...(node as any).meta, styleOwnedBy: "user" };
+    const room = makeRoom({ "shape:frame1": frame, "shape:n1": node });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-set-overlay", nodeId: "node-aaaaaa", overlay: { color: "orange" } },
+    ];
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const upd = result.batch.updated["shape:n1"];
+    expect(upd).toBeDefined();
+    if (!upd) return;
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    expect((upd[1] as any).props.color).toBe("orange");
+  });
+
+  test("schema-set-overlay fill restyles the existing shape", () => {
+    const raw = "graph LR\n  node-aaaaaa[Node]";
+    const frame = makeFrame("shape:frame1", raw);
+    const node = makeChildShape("shape:n1", "node-aaaaaa", "Node", "shape:frame1");
+    const room = makeRoom({ "shape:frame1": frame, "shape:n1": node });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-set-overlay", nodeId: "node-aaaaaa", overlay: { fill: "solid" } },
+    ];
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const upd = result.batch.updated["shape:n1"];
+    expect(upd).toBeDefined();
+    if (!upd) return;
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    expect((upd[1] as any).props.fill).toBe("solid");
+    expect(result.newOverlays["node-aaaaaa"]?.fill).toBe("solid");
+  });
+
+  test("schema-set-overlay applies the full style block (dash/size/font/labelColor)", () => {
+    const raw = "graph LR\n  node-aaaaaa[Node]";
+    const frame = makeFrame("shape:frame1", raw);
+    const node = makeChildShape("shape:n1", "node-aaaaaa", "Node", "shape:frame1");
+    const room = makeRoom({ "shape:frame1": frame, "shape:n1": node });
+
+    const actions: SchemaAction[] = [
+      {
+        kind: "schema-set-overlay",
+        nodeId: "node-aaaaaa",
+        overlay: { dash: "solid", size: "l", font: "mono", labelColor: "red" },
+      },
+    ];
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const upd = result.batch.updated["shape:n1"];
+    expect(upd).toBeDefined();
+    if (!upd) return;
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    const props = (upd[1] as any).props;
+    expect(props.dash).toBe("solid");
+    expect(props.size).toBe("l");
+    expect(props.font).toBe("mono");
+    expect(props.labelColor).toBe("red");
+    // Untouched style fields keep their values.
+    expect(props.color).toBe("blue");
+  });
+
+  test("schema-define + schema-set-overlay in one batch colors the new shape", () => {
+    const frame = makeFrame("shape:frame1", "");
+    const room = makeRoom({ "shape:frame1": frame });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-define", nodeId: "new-bbbbbb", role: "service", label: "New" },
+      { kind: "schema-set-overlay", nodeId: "new-bbbbbb", overlay: { color: "violet" } },
+    ];
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    const added = Object.values(result.batch.added) as any[];
+    const newShape = added.find((r) => r.typeName === "shape" && r.meta?.didrawId === "new-bbbbbb");
+    expect(newShape).toBeDefined();
+    expect(newShape.props.color).toBe("violet");
+  });
+
+  // ---------- Frame-fit to grown content (DRW-205 AC#3, S8 repro) ----------
+
+  test("schema-rename to a long wrapping label grows the frame instead of clipping the node", () => {
+    // Node near the bottom edge: rename makes it wrap to many lines — the
+    // rendered shape would escape the frame and get clipped. The frame must
+    // grow (down/right only); the node itself must NOT move.
+    const raw = "graph TB\n  top-aaaaaa[Top Service]\n  bottom-bbbbbb[Bottom]";
+    const frame = { ...makeFrame("shape:frame1", raw), props: { w: 260, h: 372, name: "T" } } as TLRecord;
+    const top = {
+      ...makeChildShape("shape:t1", "top-aaaaaa", "Top Service", "shape:frame1"),
+      x: 20,
+      y: 72,
+    } as TLRecord;
+    const bottom = {
+      ...makeChildShape("shape:b1", "bottom-bbbbbb", "Bottom", "shape:frame1"),
+      x: 20,
+      y: 272,
+    } as TLRecord;
+    const room = makeRoom({ "shape:frame1": frame, "shape:t1": top, "shape:b1": bottom });
+
+    const actions: SchemaAction[] = [
+      {
+        kind: "schema-rename",
+        nodeId: "bottom-bbbbbb",
+        label: "Bottom Aggregation Service With A Very Long Descriptive Multi Word Name",
+      },
+    ];
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // Frame must grow to cover the estimated rendered height of the renamed node.
+    const frameUpd = result.batch.updated["shape:frame1"];
+    expect(frameUpd).toBeDefined();
+    if (!frameUpd) return;
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    const grown = frameUpd[1] as any;
+    expect(grown.props.h as number).toBeGreaterThan(372);
+    // The renamed node must not be repositioned.
+    const bottomUpd = result.batch.updated["shape:b1"];
+    expect(bottomUpd).toBeDefined();
+    if (!bottomUpd) return;
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    const renamedShape = bottomUpd[1] as any;
+    expect(renamedShape.x).toBe(20);
+    expect(renamedShape.y).toBe(272);
+  });
+
+  test("frame-fit covers persisted growY of existing children", () => {
+    // A child already grown by tldraw (growY persisted) sticks out of the
+    // frame; ANY schema patch should fit the frame around it — grow-only.
+    const raw = "graph TB\n  big-aaaaaa[Big]";
+    const frame = { ...makeFrame("shape:frame1", raw), props: { w: 600, h: 200, name: "T" } } as TLRecord;
+    const big = {
+      ...makeChildShape("shape:big1", "big-aaaaaa", "Big", "shape:frame1"),
+      x: 20,
+      y: 100,
+    } as TLRecord;
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test setup
+    (big as any).props = { ...(big as any).props, growY: 120 }; // bottom = 100+80+120 = 300 > 200
+    const room = makeRoom({ "shape:frame1": frame, "shape:big1": big });
+
+    const actions: SchemaAction[] = [
+      { kind: "schema-define", nodeId: "new-cccccc", role: "service", label: "New" },
+    ];
+    const result = applySchemaActions({ room, frame, actions, suffixLen: SUFFIX_LEN });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const frameUpd = result.batch.updated["shape:frame1"];
+    expect(frameUpd).toBeDefined();
+    if (!frameUpd) return;
+    // biome-ignore lint/suspicious/noExplicitAny: TLRecord union — test introspection
+    const grown = frameUpd[1] as any;
+    expect(grown.props.h as number).toBeGreaterThanOrEqual(300 + 24);
+    // Existing child not moved.
+    expect(result.batch.updated["shape:big1"]).toBeUndefined();
   });
 
   // ---------- Validation errors ----------

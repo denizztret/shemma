@@ -93,7 +93,7 @@ function makeArrowShape(opts: {
     opacity: 1,
     rotation: 0,
     props: {
-      kind: "arc",
+      kind: "elbow",
       color: "black",
       labelColor: "black",
       fill: "none",
@@ -169,11 +169,11 @@ function makeGeoShape(opts: {
       h: preset.defaultH ?? 80,
       geo: "rectangle",
       color,
-      labelColor: "black",
-      fill: preset.style.fill ?? "none",
-      dash: "draw",
-      size: "m",
-      font: "draw",
+      labelColor: opts.overlayEntry?.labelColor ?? "black",
+      fill: opts.overlayEntry?.fill ?? preset.style.fill ?? "none",
+      dash: opts.overlayEntry?.dash ?? "draw",
+      size: opts.overlayEntry?.size ?? "m",
+      font: opts.overlayEntry?.font ?? "draw",
       align: "middle",
       verticalAlign: "middle",
       growY: 0,
@@ -189,6 +189,44 @@ function makeGeoShape(opts: {
       didrawSchemaParent: opts.parentId,
     },
   } as TLRecord;
+}
+
+// Conservative label metrics for our geo shapes (size "m", font "draw",
+// scale 1 — fixed by makeGeoShape). Calibrated as UPPER bounds against live
+// tldraw renders: 2 lines rendered 91.4px, 4 lines 150.8px.
+const LABEL_CHAR_W = 13;
+const LABEL_H_INSET = 32;
+const LABEL_LINE_H = 42;
+const LABEL_V_INSET = 16;
+
+/**
+ * Conservative estimate of a node's rendered height: tldraw grows geo shapes
+ * vertically (growY) when the label wraps. Backend can't measure fonts, so we
+ * overestimate — a sparser placement is safe, an overlapping one is not.
+ */
+export function estimateEffectiveHeight(label: string, w: number, baseH: number): number {
+  const words = label.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return baseH;
+
+  const charsPerLine = Math.max(1, Math.floor((w - LABEL_H_INSET) / LABEL_CHAR_W));
+  let lines = 0;
+  let lineLen = 0;
+  for (const word of words) {
+    if (word.length > charsPerLine) {
+      // Overlong word hard-wraps across multiple lines.
+      lines += Math.ceil(word.length / charsPerLine);
+      lineLen = word.length % charsPerLine || charsPerLine;
+      continue;
+    }
+    if (lineLen === 0 || lineLen + 1 + word.length > charsPerLine) {
+      lines += 1;
+      lineLen = word.length;
+    } else {
+      lineLen += 1 + word.length;
+    }
+  }
+  if (lines <= 1) return baseH;
+  return Math.max(baseH, LABEL_V_INSET + lines * LABEL_LINE_H);
 }
 
 // ---- State model for in-memory apply ----
@@ -980,9 +1018,12 @@ export function applySchemaActions(opts: {
         if (!s || s.typeName !== "shape") continue;
         if (s.parentId !== frame.id) continue;
         if (s.type === "arrow") continue;
-        const p = (s.props ?? {}) as { w?: number; h?: number };
+        const p = (s.props ?? {}) as { w?: number; h?: number; growY?: number };
         const w = typeof p.w === "number" ? p.w : 0;
-        const h = typeof p.h === "number" ? p.h : 0;
+        // Effective footprint: tldraw grows text-bearing shapes via growY —
+        // the declared h underestimates what's actually rendered (DRW-205).
+        const h =
+          (typeof p.h === "number" ? p.h : 0) + (typeof p.growY === "number" ? p.growY : 0);
         if (w <= 0 || h <= 0) continue;
         occupants.push({
           x: typeof s.x === "number" ? s.x : 0,
@@ -992,7 +1033,32 @@ export function applySchemaActions(opts: {
         });
       }
 
+      // Frame-space center of a shape: child coords are parent-relative, so a
+      // container-nested neighbor needs its ancestors' offsets accumulated.
+      const frameSpaceCenter = (sid: string): Slot | null => {
+        let s = batch.added[sid] ?? store[sid];
+        if (!s || s.typeName !== "shape") return null;
+        const p = (s.props ?? {}) as { w?: number; h?: number; growY?: number };
+        const w = typeof p.w === "number" ? p.w : 0;
+        const h =
+          (typeof p.h === "number" ? p.h : 0) + (typeof p.growY === "number" ? p.growY : 0);
+        let x = typeof s.x === "number" ? s.x : 0;
+        let y = typeof s.y === "number" ? s.y : 0;
+        let hops = 0;
+        while (s.parentId !== frame.id && hops < MAX_FRAME_ANCESTRY_HOPS) {
+          const parent = batch.added[s.parentId] ?? store[s.parentId];
+          if (!parent || parent.typeName !== "shape") return null;
+          x += typeof parent.x === "number" ? parent.x : 0;
+          y += typeof parent.y === "number" ? parent.y : 0;
+          s = parent;
+          hops++;
+        }
+        if (s.parentId !== frame.id) return null;
+        return { x: x + w / 2, y: y + h / 2 };
+      };
+
       let frameGrew = false;
+      const positioned = new Set<string>();
       for (const addedNode of diff.added) {
         // A user-pinned overlay position always wins — never relocate it.
         if (oldOverlays[addedNode.nodeId]?.position) continue;
@@ -1001,12 +1067,43 @@ export function applySchemaActions(opts: {
         const shape = batch.added[sid];
         if (!shape || shape.parentId !== frame.id) continue;
         const sp = (shape.props ?? {}) as { w?: number; h?: number };
+        const nominalW = typeof sp.w === "number" ? sp.w : 220;
+        const nominalH = typeof sp.h === "number" ? sp.h : 80;
+        // Reserve room for the rendered label: tldraw will grow the shape
+        // (growY) when the label wraps, so the slot must fit the ESTIMATED
+        // height, not the nominal one (DRW-205 S2 overlap repro).
+        const displayLabel = oldOverlays[addedNode.nodeId]?.label ?? addedNode.label;
         const size = {
-          w: typeof sp.w === "number" ? sp.w : 220,
-          h: typeof sp.h === "number" ? sp.h : 80,
+          w: nominalW,
+          h: estimateEffectiveHeight(displayLabel, nominalW, nominalH),
         };
 
-        const slot = findEmptySlot({ w: frameW, h: frameH }, occupants, size, PADDING);
+        // Anchor: centroid of linked neighbors that already have a concrete
+        // position (existing shapes, or new ones placed earlier in this
+        // batch) — pulls the node towards its connections (DRW-205).
+        const neighborCenters: Slot[] = [];
+        for (const e of diff.edgesAdded) {
+          let otherId: NodeId | null = null;
+          if (e.from === addedNode.nodeId) otherId = e.to;
+          else if (e.to === addedNode.nodeId) otherId = e.from;
+          if (!otherId) continue;
+          const osid = resolveShapeId(otherId);
+          if (!osid) continue;
+          // Skip batch-new neighbors not yet positioned — their (0,0)
+          // default would skew the centroid to the frame corner.
+          if (batch.added[osid] && !positioned.has(osid)) continue;
+          const center = frameSpaceCenter(osid);
+          if (center) neighborCenters.push(center);
+        }
+        const anchor =
+          neighborCenters.length > 0
+            ? {
+                x: neighborCenters.reduce((a, c) => a + c.x, 0) / neighborCenters.length,
+                y: neighborCenters.reduce((a, c) => a + c.y, 0) / neighborCenters.length,
+              }
+            : undefined;
+
+        const slot = findEmptySlot({ w: frameW, h: frameH }, occupants, size, PADDING, anchor);
         let pos: { x: number; y: number };
         if (slot) {
           pos = slot;
@@ -1022,6 +1119,50 @@ export function applySchemaActions(opts: {
         }
         batch.added[sid] = { ...shape, x: pos.x, y: pos.y };
         occupants.push({ x: pos.x, y: pos.y, w: size.w, h: size.h });
+        positioned.add(sid);
+      }
+
+      // Frame-fit (grow-only, DRW-205 AC#3): every child's EFFECTIVE
+      // footprint must stay inside the frame, else tldraw clips it at the
+      // border. Text growth lands client-side AFTER apply (renames, new
+      // nodes) — reserve the estimate for those; for untouched children the
+      // persisted h+growY is ground truth. Children never move; the frame
+      // only extends down/right.
+      const renamedIds = new Set(diff.renamed.map((r) => r.nodeId));
+      const childRecords: TLRecord[] = [];
+      for (const sid in store) {
+        const s = store[sid];
+        if (!s || s.typeName !== "shape" || batch.removed[sid]) continue;
+        childRecords.push(batch.updated[sid]?.[1] ?? s);
+      }
+      for (const sid in batch.added) {
+        const s = batch.added[sid];
+        if (s && s.typeName === "shape") childRecords.push(s);
+      }
+      let requiredW = frameW;
+      let requiredH = frameH;
+      for (const child of childRecords) {
+        if (child.parentId !== frame.id || child.type === "arrow") continue;
+        const p = (child.props ?? {}) as { w?: number; h?: number; growY?: number };
+        const w = typeof p.w === "number" ? p.w : 0;
+        const baseH = typeof p.h === "number" ? p.h : 0;
+        if (w <= 0 || baseH <= 0) continue;
+        let effH = baseH + (typeof p.growY === "number" ? p.growY : 0);
+        const meta = (child.meta ?? {}) as Record<string, unknown>;
+        const did = typeof meta.didrawId === "string" ? meta.didrawId : "";
+        const label = typeof meta.didrawLabel === "string" ? meta.didrawLabel : "";
+        if (renamedIds.has(did) || batch.added[child.id]) {
+          effH = Math.max(effH, estimateEffectiveHeight(label, w, baseH));
+        }
+        const x = typeof child.x === "number" ? child.x : 0;
+        const y = typeof child.y === "number" ? child.y : 0;
+        requiredW = Math.max(requiredW, x + w + PADDING);
+        requiredH = Math.max(requiredH, y + effH + PADDING);
+      }
+      if (requiredW > frameW || requiredH > frameH) {
+        frameW = requiredW;
+        frameH = requiredH;
+        frameGrew = true;
       }
 
       if (frameGrew) {
@@ -1053,6 +1194,38 @@ export function applySchemaActions(opts: {
       const existingOverlay = newOverlays[a.nodeId] ?? {};
       // Deep merge (not replace) per spec §User overlay write flow step 5.
       newOverlays[a.nodeId] = { ...existingOverlay, ...a.overlay };
+
+      // Restyle the live shape (DRW-205): historically overlay style landed
+      // only in didrawOverlays and was consumed at shape CREATION — set-overlay
+      // on an existing node silently changed nothing on the board. An explicit
+      // set-overlay style is targeted user intent (expressed through the
+      // agent) and always applies; styleOwnedBy protects only against
+      // INCIDENTAL overwrites (role presets, re-imports). NB: the frontend
+      // stamps styleOwnedBy:"user" even on position-only drags, so gating on
+      // it here would block restyle of any node the user has ever moved.
+      const stylePatch: Record<string, unknown> = {};
+      if (a.overlay.color) stylePatch.color = a.overlay.color;
+      if (a.overlay.labelColor) stylePatch.labelColor = a.overlay.labelColor;
+      if (a.overlay.fill) stylePatch.fill = a.overlay.fill;
+      if (a.overlay.dash) stylePatch.dash = a.overlay.dash;
+      if (a.overlay.size) stylePatch.size = a.overlay.size;
+      if (a.overlay.font) stylePatch.font = a.overlay.font;
+      if (Object.keys(stylePatch).length > 0) {
+        const sid = resolveShapeId(a.nodeId);
+        const baseRec = sid ? (batch.added[sid] ?? batch.updated[sid]?.[1] ?? store[sid]) : undefined;
+        if (sid && baseRec) {
+          const next = {
+            ...baseRec,
+            props: { ...(baseRec.props ?? {}), ...stylePatch },
+          } as TLRecord;
+          if (batch.added[sid]) {
+            batch.added[sid] = next;
+          } else {
+            const orig = batch.updated[sid]?.[0] ?? store[sid];
+            if (orig) batch.updated[sid] = [orig, next];
+          }
+        }
+      }
     }
   }
 

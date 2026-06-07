@@ -1,12 +1,25 @@
 import type { NodeId } from "./identity";
 import type { Role } from "./roles";
+import type {
+  StyleDash,
+  StyleFill,
+  StyleFont,
+  StyleSize,
+} from "./style-defaults";
 
 /** Overlay-запись для конкретного узла schema-frame.
  *  Хранится в `frame.meta.didrawOverlays[nodeId]`.
- *  Содержит user-правки поверх render'а из RAW (позиция, цвет, label-override). */
+ *  Содержит user-правки поверх render'а из RAW: позицию, label-override и
+ *  полный style-блок (color/labelColor/fill/dash/size/font) — DRW-205:
+ *  явный set-overlay со style-полями перекрашивает существующий шейп. */
 export type OverlayEntry = {
   position?: { x: number; y: number };
   color?: string;
+  labelColor?: string;
+  fill?: StyleFill;
+  dash?: StyleDash;
+  size?: StyleSize;
+  font?: StyleFont;
   label?: string;
   role?: Role;
   pinned?: boolean;
