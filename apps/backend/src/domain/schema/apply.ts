@@ -229,6 +229,329 @@ export function estimateEffectiveHeight(label: string, w: number, baseH: number)
   return Math.max(baseH, LABEL_V_INSET + lines * LABEL_LINE_H);
 }
 
+// ---- Schema-container constructor + group reconciliation (DRW-210) ----
+
+// Паддинги контейнера вокруг членов — согласованы с layout.ts
+// (CONTAINER_PAD_TOP/LR/BOT): верх крупнее под label контейнера.
+const GROUP_PAD_TOP = 72;
+const GROUP_PAD_LR = 20;
+const GROUP_PAD_BOT = 20;
+
+function makeContainerShape(opts: {
+  groupName: string;
+  label: string;
+  parentId: string;
+  direction?: "TB" | "LR" | "BT" | "RL";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}): TLRecord {
+  return {
+    id: shapeId(),
+    typeName: "shape",
+    type: "schema-container",
+    x: opts.x,
+    y: opts.y,
+    parentId: opts.parentId,
+    index: "a1",
+    isLocked: false,
+    opacity: 1,
+    rotation: 0,
+    props: {
+      w: opts.w,
+      h: opts.h,
+      name: opts.label,
+      // Frontend schema требует cardinal direction; inherited-маркер говорит
+      // инференсу, что "TB" — структурный дефолт, не выбор пользователя
+      // (зеркало routes/schema.ts makeSchemaContainerShape).
+      direction: opts.direction ?? "TB",
+      titlePosition: "inside-center",
+      color: "grey",
+      fill: "solid",
+      dash: "dashed",
+    },
+    meta: {
+      didrawSubgraph: true,
+      didrawSubgraphId: opts.groupName,
+      didrawSubgraphName: opts.label,
+      didrawSchemaParent: opts.parentId,
+      ...(opts.direction === undefined ? { didrawDirectionInherited: true } : {}),
+    },
+  } as TLRecord;
+}
+
+type GroupReconcileOpts = {
+  store: Record<string, TLRecord | undefined>;
+  frame: TLRecord;
+  oldActions: SchemaAction[];
+  newActions: SchemaAction[];
+  batch: StoreChangeBatch;
+  resolveShapeId: (nodeId: NodeId) => string | undefined;
+};
+
+/**
+ * DRW-210: материализация schema-group на доске. Реконсиляция по ВСЕМ группам
+ * нового состояния (а не только по диффу) — лечит legacy-комнаты, где группы
+ * уже есть в raw, а контейнеров на доске нет. Контейнеры исчезнувших групп
+ * удаляются (дети возвращаются во фрейм). Узлы визуально НЕ двигаются:
+ * меняются только parentId + относительные координаты.
+ *
+ * Возвращает новые parent-relative позиции репарентнутых didraw-узлов — их
+ * нужно отразить в didrawOverlays, иначе reload-hydrate вернёт узел на stale
+ * координаты в чужом координатном пространстве.
+ */
+function reconcileGroups(
+  opts: GroupReconcileOpts,
+): Map<NodeId, { x: number; y: number }> {
+  const { store, frame, oldActions, newActions, batch, resolveShapeId } = opts;
+  const repositioned = new Map<NodeId, { x: number; y: number }>();
+
+  const oldGroups = new Map<string, SchemaGroupAction>();
+  for (const a of oldActions) {
+    if (a.kind === "schema-group" && a.name) oldGroups.set(a.name, a);
+  }
+  const newGroups = new Map<string, SchemaGroupAction>();
+  for (const a of newActions) {
+    if (a.kind === "schema-group" && a.name) newGroups.set(a.name, a);
+  }
+  if (oldGroups.size === 0 && newGroups.size === 0) return repositioned;
+
+  // Текущая (с учётом батча) версия записи.
+  const cur = (sid: string): TLRecord | undefined =>
+    batch.added[sid] ?? batch.updated[sid]?.[1] ?? store[sid];
+
+  // Точечный патч: added-запись правится на месте, store-запись — через updated.
+  const setShape = (
+    sid: string,
+    patch: Partial<TLRecord> & { props?: Record<string, unknown> },
+  ): void => {
+    const rec = cur(sid);
+    if (!rec) return;
+    const next = { ...rec, ...patch } as TLRecord;
+    if (batch.added[sid]) {
+      batch.added[sid] = next;
+    } else {
+      const orig = batch.updated[sid]?.[0] ?? store[sid];
+      if (!orig) return;
+      batch.updated[sid] = [orig, next];
+    }
+  };
+
+  // Frame-space top-left записи (walk по parent-цепочке с учётом батча).
+  const framePos = (sid: string): { x: number; y: number } | null => {
+    let rec = cur(sid);
+    if (!rec || rec.typeName !== "shape") return null;
+    let x = typeof rec.x === "number" ? rec.x : 0;
+    let y = typeof rec.y === "number" ? rec.y : 0;
+    let hops = 0;
+    while (rec.parentId !== frame.id && hops < MAX_FRAME_ANCESTRY_HOPS) {
+      const parent = cur(rec.parentId as string);
+      if (!parent || parent.typeName !== "shape") return null;
+      x += typeof parent.x === "number" ? parent.x : 0;
+      y += typeof parent.y === "number" ? parent.y : 0;
+      rec = parent;
+      hops++;
+    }
+    return rec.parentId === frame.id ? { x, y } : null;
+  };
+
+  const isSubgraphContainer = (rec: TLRecord | undefined): boolean =>
+    !!rec &&
+    (rec.meta as Record<string, unknown> | undefined)?.didrawSubgraph === true;
+
+  // Контейнер группы: didrawSubgraphId (стабильный) или legacy-имя/label.
+  const findContainerSid = (g: SchemaGroupAction): string | undefined => {
+    const label = g.label ?? g.name ?? "";
+    const match = (rec: TLRecord | undefined): boolean => {
+      if (!isSubgraphContainer(rec)) return false;
+      const m = (rec as TLRecord).meta as Record<string, unknown>;
+      return (
+        m.didrawSubgraphId === g.name ||
+        m.didrawSubgraphName === g.name ||
+        m.didrawSubgraphName === label
+      );
+    };
+    for (const sid in batch.added) {
+      if (match(batch.added[sid])) return sid;
+    }
+    for (const sid in store) {
+      const rec = store[sid];
+      if (!rec || rec.typeName !== "shape" || batch.removed[sid]) continue;
+      if (!isWithinFrameSubtree(rec, frame.id, store)) continue;
+      if (match(rec)) return sid;
+    }
+    return undefined;
+  };
+
+  const childrenOf = (contSid: string): string[] => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const sid in batch.added) {
+      if (cur(sid)?.parentId === contSid) {
+        out.push(sid);
+        seen.add(sid);
+      }
+    }
+    for (const sid in store) {
+      if (seen.has(sid) || batch.removed[sid]) continue;
+      const rec = cur(sid);
+      if (rec?.typeName === "shape" && rec.parentId === contSid) out.push(sid);
+    }
+    return out;
+  };
+
+  const nodeIdOf = (sid: string): NodeId | undefined => {
+    const m = cur(sid)?.meta as Record<string, unknown> | undefined;
+    return typeof m?.didrawId === "string" ? (m.didrawId as NodeId) : undefined;
+  };
+
+  // ---- Создание/membership по всем группам нового состояния ----
+  const memberOfNewGroup = new Set<NodeId>();
+  for (const g of newGroups.values()) {
+    for (const nid of g.nodeIds) memberOfNewGroup.add(nid);
+  }
+
+  for (const g of newGroups.values()) {
+    // Члены с реальными шейпами и frame-space габаритами.
+    const members: Array<{
+      sid: string;
+      nid: NodeId;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+    }> = [];
+    for (const nid of g.nodeIds) {
+      const sid = resolveShapeId(nid);
+      if (!sid || batch.removed[sid]) continue;
+      const rec = cur(sid);
+      if (!rec) continue;
+      const pos = framePos(sid);
+      if (!pos) continue;
+      const p = (rec.props ?? {}) as { w?: number; h?: number; growY?: number };
+      const w = typeof p.w === "number" ? p.w : 220;
+      const h =
+        (typeof p.h === "number" ? p.h : 80) +
+        (typeof p.growY === "number" ? p.growY : 0);
+      members.push({ sid, nid, x: pos.x, y: pos.y, w, h });
+    }
+    if (members.length === 0) continue;
+
+    // Clamp у нуля: контейнер не должен вылезать за верх/лево фрейма — tldraw
+    // клипует детей фрейма, и label контейнера срезался бы (live-находка rc9).
+    const minX = Math.max(0, Math.min(...members.map((m) => m.x)) - GROUP_PAD_LR);
+    const minY = Math.max(0, Math.min(...members.map((m) => m.y)) - GROUP_PAD_TOP);
+    const maxX = Math.max(...members.map((m) => m.x + m.w)) + GROUP_PAD_LR;
+    const maxY = Math.max(...members.map((m) => m.y + m.h)) + GROUP_PAD_BOT;
+
+    let contSid = findContainerSid(g);
+    let contX: number;
+    let contY: number;
+    if (!contSid) {
+      const rec = makeContainerShape({
+        groupName: g.name as string,
+        label: g.label ?? (g.name as string),
+        parentId: frame.id,
+        direction: g.direction,
+        x: minX,
+        y: minY,
+        w: maxX - minX,
+        h: maxY - minY,
+      });
+      batch.added[rec.id] = rec;
+      contSid = rec.id;
+      contX = minX;
+      contY = minY;
+    } else {
+      // Grow-only покрытие членов; рост влево/вверх сдвигает origin и
+      // компенсирует относительные координаты СУЩЕСТВУЮЩИХ детей.
+      const contRec = cur(contSid);
+      if (!contRec) continue;
+      const cpos = framePos(contSid);
+      if (!cpos) continue;
+      const p = (contRec.props ?? {}) as { w?: number; h?: number };
+      const curW = typeof p.w === "number" ? p.w : 300;
+      const curH = typeof p.h === "number" ? p.h : 200;
+      const newX = Math.min(cpos.x, minX);
+      const newY = Math.min(cpos.y, minY);
+      const newW = Math.max(cpos.x + curW, maxX) - newX;
+      const newH = Math.max(cpos.y + curH, maxY) - newY;
+      const dx = newX - cpos.x; // ≤ 0
+      const dy = newY - cpos.y;
+      if (dx !== 0 || dy !== 0 || newW !== curW || newH !== curH) {
+        if (dx !== 0 || dy !== 0) {
+          for (const childSid of childrenOf(contSid)) {
+            const childRec = cur(childSid);
+            if (!childRec) continue;
+            const nx = (typeof childRec.x === "number" ? childRec.x : 0) - dx;
+            const ny = (typeof childRec.y === "number" ? childRec.y : 0) - dy;
+            setShape(childSid, { x: nx, y: ny });
+            const cnid = nodeIdOf(childSid);
+            if (cnid) repositioned.set(cnid, { x: nx, y: ny });
+          }
+        }
+        // Контейнер группы — прямой ребёнок фрейма: его x/y уже в frame-space.
+        setShape(contSid, {
+          x: (typeof contRec.x === "number" ? contRec.x : 0) + dx,
+          y: (typeof contRec.y === "number" ? contRec.y : 0) + dy,
+          props: { ...(contRec.props ?? {}), w: newW, h: newH },
+        });
+      }
+      contX = newX;
+      contY = newY;
+    }
+
+    // Репарент членов: меняем только parentId + относительные координаты —
+    // абсолютная позиция на доске сохраняется.
+    for (const m of members) {
+      const rec = cur(m.sid);
+      if (!rec || rec.parentId === contSid) continue; // уже внутри
+      const relX = m.x - contX;
+      const relY = m.y - contY;
+      setShape(m.sid, { parentId: contSid, x: relX, y: relY });
+      repositioned.set(m.nid, { x: relX, y: relY });
+    }
+  }
+
+  // ---- Узлы, покинувшие группы: возврат во фрейм ----
+  for (const g of oldGroups.values()) {
+    for (const nid of g.nodeIds) {
+      if (memberOfNewGroup.has(nid)) continue; // переехал в другую группу — выше
+      const sid = resolveShapeId(nid);
+      if (!sid || batch.removed[sid]) continue;
+      const rec = cur(sid);
+      if (!rec || rec.parentId === frame.id) continue;
+      // Не трогаем ручные вложения — возвращаем только из subgraph-контейнеров.
+      if (!isSubgraphContainer(cur(rec.parentId as string))) continue;
+      const pos = framePos(sid);
+      if (!pos) continue;
+      setShape(sid, { parentId: frame.id, x: pos.x, y: pos.y });
+      repositioned.set(nid, { x: pos.x, y: pos.y });
+    }
+  }
+
+  // ---- Контейнеры исчезнувших групп: удалить, детей вернуть во фрейм ----
+  for (const [name, g] of oldGroups) {
+    if (newGroups.has(name)) continue;
+    const contSid = findContainerSid(g);
+    if (!contSid || batch.added[contSid]) continue;
+    const contRec = store[contSid];
+    if (!contRec) continue;
+    for (const childSid of childrenOf(contSid)) {
+      const pos = framePos(childSid);
+      if (!pos) continue;
+      setShape(childSid, { parentId: frame.id, x: pos.x, y: pos.y });
+      const cnid = nodeIdOf(childSid);
+      if (cnid) repositioned.set(cnid, { x: pos.x, y: pos.y });
+    }
+    batch.removed[contSid] = contRec;
+    delete batch.updated[contSid];
+  }
+
+  return repositioned;
+}
+
 // ---- State model for in-memory apply ----
 
 type NodeInfo = {
@@ -1004,6 +1327,7 @@ export function applySchemaActions(opts: {
   // grow the frame and place the node at the new (positive) edge. New-node-only,
   // so the user's arrangement is preserved — incremental inserts never trigger a
   // full re-layout.
+  let groupRepositioned = new Map<NodeId, { x: number; y: number }>();
   {
     const PADDING = 24;
     const fProps = (frame.props ?? {}) as { w?: number; h?: number };
@@ -1122,6 +1446,19 @@ export function applySchemaActions(opts: {
         positioned.add(sid);
       }
 
+      // DRW-210: материализация schema-group — контейнеры на доске, репарент
+      // членов (raw-сторона уже согласована генератором). Бежит ПОСЛЕ
+      // placement (новые члены уже расставлены в frame-space) и ДО frame-fit
+      // (фрейм должен покрыть новые/выросшие контейнеры).
+      groupRepositioned = reconcileGroups({
+        store,
+        frame,
+        oldActions,
+        newActions,
+        batch,
+        resolveShapeId,
+      });
+
       // Frame-fit (grow-only, DRW-205 AC#3): every child's EFFECTIVE
       // footprint must stay inside the frame, else tldraw clips it at the
       // border. Text growth lands client-side AFTER apply (renames, new
@@ -1180,6 +1517,13 @@ export function applySchemaActions(opts: {
   // Step 9: Count orphaned overlays (overlays for removed NodeIds).
   let orphanedOverlays = 0;
   const newOverlays: Record<NodeId, OverlayEntry> = { ...oldOverlays };
+
+  // DRW-210: позиции репарентнутых членов групп — в overlays (новое
+  // parent-relative пространство; stale frame-координаты дали бы прыжок
+  // узла на reload-hydrate).
+  for (const [nid, pos] of groupRepositioned) {
+    newOverlays[nid] = { ...(newOverlays[nid] ?? {}), position: pos };
+  }
 
   for (const removedNodeId of diff.removed) {
     if (oldOverlays[removedNodeId] !== undefined) {
