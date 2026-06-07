@@ -1,6 +1,8 @@
 // DRW-217: кнопка темы 🌓 в шапке доски (цикл light → dark → system).
+// Делегирует в ChromeButton — проверяем переданные props.
 import { describe, expect, test } from "bun:test";
 import { isValidElement, type ReactElement } from "react";
+import { ChromeButton } from "../chrome/ChromeButton";
 import { ThemeToggleButton } from "./ThemeToggleButton";
 
 type AnyElement = ReactElement<{
@@ -19,22 +21,22 @@ function flatten(node: unknown): AnyElement[] {
   return [];
 }
 
-function findButton(root: unknown): AnyElement | null {
-  return flatten(root).find((el) => el.type === "button") ?? null;
+function findChromeButton(root: unknown): AnyElement | null {
+  return flatten(root).find((el) => el.type === ChromeButton) ?? null;
 }
 
 describe("ThemeToggleButton", () => {
-  test("renders a button with aria-label including current mode", () => {
-    const btn = findButton(
+  test("renders a ChromeButton with aria-label including current mode", () => {
+    const cb = findChromeButton(
       ThemeToggleButton({ mode: "dark", onCycle: () => {} }),
     );
-    expect(btn).not.toBeNull();
-    expect(String(btn!.props["aria-label"])).toContain("Тема");
+    expect(cb).not.toBeNull();
+    expect(String(cb!.props.ariaLabel)).toContain("Тема");
   });
 
   test("click invokes onCycle", () => {
     let cycled = 0;
-    const btn = findButton(
+    const cb = findChromeButton(
       ThemeToggleButton({
         mode: "light",
         onCycle: () => {
@@ -42,33 +44,23 @@ describe("ThemeToggleButton", () => {
         },
       }),
     );
-    (btn?.props.onClick as () => void)?.();
+    (cb?.props.onClick as (() => void) | undefined)?.();
     expect(cycled).toBe(1);
   });
 
-  test("icon reflects mode: light ☀ / dark 🌙 / system 🌓", () => {
-    const icon = (mode: "light" | "dark" | "system") => {
-      const btn = findButton(ThemeToggleButton({ mode, onCycle: () => {} }));
-      return flatten(btn)
-        .map((el) =>
-          typeof el.props.children === "string" ? el.props.children : "",
-        )
-        .join("")
-        .concat(
-          typeof btn?.props.children === "string"
-            ? (btn.props.children as string)
-            : "",
-        );
-    };
-    expect(icon("light")).toContain("☀");
-    expect(icon("dark")).toContain("🌙");
-    expect(icon("system")).toContain("🌓");
+  test("icon reflects mode: light ☀️ / dark 🌙 / system 🌓", () => {
+    const icon = (mode: "light" | "dark" | "system") =>
+      findChromeButton(ThemeToggleButton({ mode, onCycle: () => {} }))?.props
+        .children;
+    expect(icon("light")).toBe("☀️");
+    expect(icon("dark")).toBe("🌙");
+    expect(icon("system")).toBe("🌓");
   });
 
-  test("marked with data-role for live identification", () => {
-    const btn = findButton(
+  test("marked with dataRole for live identification", () => {
+    const cb = findChromeButton(
       ThemeToggleButton({ mode: "system", onCycle: () => {} }),
     );
-    expect(btn!.props["data-role"]).toBe("theme-toggle");
+    expect(cb!.props.dataRole).toBe("theme-toggle");
   });
 });

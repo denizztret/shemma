@@ -1,12 +1,12 @@
 // apps/frontend/src/settings/SettingsTriggerButton.tsx
 //
-// DRW-206: постоянная видимая кнопка панели настроек (⚙) в верхней зоне доски,
-// перед кнопкой Prompts (💬). Открытие/закрытие — общий toggle() из
-// useSettingsTrigger (паритет с ⌘⇧P и Option+RightClick: board-панель без
-// выделения, selection/node-панель при выделении).
+// DRW-206: постоянная видимая кнопка панели настроек (⚙️) в верхней зоне доски,
+// перед кнопкой темы 🌓 и Prompts 💬. Открытие/закрытие — общий toggle() из
+// useSettingsTrigger (паритет с ⌘⇧P и Option+RightClick).
+// Единый chrome-стиль через ChromeButton (приёмка: один вид/размер с соседями).
 
 import type { FC } from "react";
-import { tokens } from "../design-tokens";
+import { ChromeButton } from "../chrome/ChromeButton";
 
 export type SettingsTriggerButtonProps = {
   /** Popover сейчас открыт — кнопка подсвечивается. */
@@ -18,40 +18,17 @@ export const SettingsTriggerButton: FC<SettingsTriggerButtonProps> = ({
   open,
   onToggle,
 }) => (
-  <div
-    style={{
-      // Та же chrome-зона, что и кнопка Prompts (DRW-191): сразу после
-      // tldraw menu zone. Prompts сдвинут на left:356 — ⚙ стоит перед 💬.
-      position: "absolute",
-      top: 4,
-      left: 320,
-      zIndex: 301,
-      pointerEvents: "auto",
-      fontFamily: tokens.font.sans,
-      fontSize: tokens.font.sm,
-    }}
-    // Unpinned-режим: window-pointerdown закрывает popover по клику вне него.
-    // Без stopPropagation клик по ⚙ закрыл бы (window) и тут же переоткрыл
-    // (onClick toggle) — кнопка «закрыть» не работала бы во floating-режиме.
-    onPointerDown={(e) => e.stopPropagation()}
+  <ChromeButton
+    left={320}
+    ariaLabel="Настройки"
+    title="Настройки доски (⌘⇧P)"
+    dataRole="settings-trigger"
+    active={open}
+    pressed={open}
+    onClick={onToggle}
+    // stopPropagation: во floating-режиме outside-click-close иначе переоткрыл бы.
+    stopPointerDown
   >
-    <button
-      type="button"
-      aria-label="Настройки"
-      aria-pressed={open}
-      data-role="settings-trigger"
-      title="Настройки доски (⌘⇧P)"
-      onClick={onToggle}
-      style={{
-        background: open ? tokens.color.hoverOverlay : tokens.color.bgOverlay,
-        border: `1px solid ${tokens.color.border}`,
-        borderRadius: tokens.radius.sm,
-        padding: "4px 8px",
-        cursor: "pointer",
-        fontSize: tokens.font.sm,
-      }}
-    >
-      ⚙
-    </button>
-  </div>
+    ⚙️
+  </ChromeButton>
 );

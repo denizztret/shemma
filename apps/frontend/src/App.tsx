@@ -125,6 +125,12 @@ export function App({
   // DRW-217: режим темы (light/dark/system) из shemma:theme; runtime-смена
   // прокидывается в tldraw через updateUserPreferences (effect ниже).
   const { mode: themeMode } = useThemeMode();
+  // colorScheme передаётся в <Tldraw> ТОЛЬКО как initial (фиксируется один раз):
+  // меняющийся prop пересоздаёт editor → InFrontOfTheCanvas-компоненты
+  // (SettingsPopover) перемонтируются, и панель схлопывалась при каждом
+  // переключении темы (находка приёмки). Runtime-смена — через
+  // updateUserPreferences (canvas перекрашивается без reload).
+  const [initialColorScheme] = useState(themeMode);
   const [selection, setSelection] = useState<string[]>([]);
   const [promptsTick, setPromptsTick] = useState(0);
   const [cameraTick, setCameraTick] = useState(0);
@@ -925,9 +931,10 @@ export function App({
         tools={[SchemaContainerTool]}
         overrides={tldrawUiOverrides}
         assetUrls={SHEMMA_ASSET_URLS}
-        // DRW-217: initial цветовая схема из shemma:theme (SSOT). Runtime-смена —
-        // updateUserPreferences в theme-sync ниже.
-        colorScheme={themeMode}
+        // DRW-217: initial цветовая схема из shemma:theme (SSOT) — стабильный
+        // prop (не меняется на лету, иначе editor пересоздаётся). Runtime-смена —
+        // updateUserPreferences в theme-sync effect ниже.
+        colorScheme={initialColorScheme}
         onMount={(ed) => {
           setEditor(ed);
           // DRW-217: принудительный sync tldraw-prefs с нашим SSOT — tldraw

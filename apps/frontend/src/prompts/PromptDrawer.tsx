@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { chromeButtonStyle } from "../chrome/ChromeButton";
 import { tokens } from "../design-tokens";
 import { deletePrompt, fetchPrompts, purgePrompts } from "../transport/prompts";
 
@@ -61,15 +62,9 @@ export function PromptDrawer({
       {!open && (
         <button
           type="button"
+          aria-label="Prompts"
           onClick={() => setOpen(true)}
-          style={{
-            background: tokens.color.bgOverlay,
-            border: `1px solid ${tokens.color.border}`,
-            borderRadius: tokens.radius.sm,
-            padding: "4px 8px",
-            cursor: "pointer",
-            fontSize: tokens.font.sm,
-          }}
+          style={chromeButtonStyle()}
         >
           💬 {pending}
         </button>
