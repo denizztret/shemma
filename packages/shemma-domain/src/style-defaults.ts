@@ -11,6 +11,24 @@ export type StyleFont = "draw" | "sans" | "mono";
 export type StyleSize = "s" | "m" | "l" | "xl";
 export type StyleFill = "none" | "semi" | "solid" | "pattern";
 
+// ---- Node geo form — DRW-215 (tldraw geo enum, основной поднабор) ----
+export type GeoForm =
+  | "rectangle"
+  | "ellipse"
+  | "oval"
+  | "diamond"
+  | "triangle"
+  | "cloud"
+  | "hexagon"
+  | "pentagon"
+  | "octagon"
+  | "star"
+  | "rhombus"
+  | "trapezoid"
+  | "x-box"
+  | "check-box"
+  | "heart";
+
 // ---- Edge (arrow) style atoms — DRW-211 ----
 // Полный tldraw-набор dash для стрелок (узлы ограничены draw|solid выше).
 export type EdgeDash = "draw" | "dashed" | "dotted" | "solid";

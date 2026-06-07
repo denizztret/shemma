@@ -130,6 +130,26 @@ export const OverlayEntrySchema = z.object({
   dash: z.enum(["draw", "solid"]).optional(),
   size: z.enum(["s", "m", "l", "xl"]).optional(),
   font: z.enum(["draw", "sans", "mono"]).optional(),
+  geo: z
+    .enum([
+      "rectangle",
+      "ellipse",
+      "oval",
+      "diamond",
+      "triangle",
+      "cloud",
+      "hexagon",
+      "pentagon",
+      "octagon",
+      "star",
+      "rhombus",
+      "trapezoid",
+      "x-box",
+      "check-box",
+      "heart",
+    ])
+    .optional(),
+  opacity: z.number().min(0).max(1).optional(),
   label: z.string().optional(),
   role: RoleEnum.optional(),
   pinned: z.boolean().optional(),
@@ -217,6 +237,25 @@ export const SchemaActionSchema: z.ZodType<Record<string, unknown>> = z.discrimi
   z.object({
     kind: z.literal("schema-delete-shape"),
     shapeId: z.string(),
+  }),
+  z.object({
+    kind: z.literal("schema-set-container-style"),
+    name: z.string(),
+    style: z.object({
+      color: z.string().optional(),
+      fill: z.enum(["none", "semi", "solid", "pattern"]).optional(),
+      dash: z.enum(["draw", "solid"]).optional(),
+      titlePosition: z
+        .enum(["outside-frame", "outside-banner", "inside-center", "inside-left"])
+        .optional(),
+    }),
+  }),
+  z.object({
+    kind: z.literal("schema-set-frame-style"),
+    style: z.object({
+      color: z.string().optional(),
+      label: z.string().optional(),
+    }),
   }),
 ]);
 

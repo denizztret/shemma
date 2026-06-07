@@ -650,6 +650,9 @@ type ValidationContext = {
   /** Store + frame для shape-id адресации (DRW-212 adopt/delete-shape). */
   store?: Record<string, TLRecord | undefined>;
   frame?: TLRecord;
+  /** Группы текущего raw + добавляемые этим батчем (DRW-215 container-style). */
+  currentGroups: Set<string>;
+  pendingGroups: Set<string>;
 };
 
 
@@ -768,6 +771,8 @@ function validateAction(
           };
         }
       }
+      // DRW-215: группа этого батча адресуема container-style действием.
+      if (action.name) ctx.pendingGroups.add(action.name);
       return null;
     }
 
@@ -870,6 +875,38 @@ function validateAction(
         }
         ctx.pendingAdds.add(nodeId);
       }
+      return null;
+    }
+
+    case "schema-set-container-style": {
+      // DRW-215: группа должна существовать (raw / этот батч / живой контейнер).
+      if (ctx.currentGroups.has(action.name) || ctx.pendingGroups.has(action.name)) {
+        return null;
+      }
+      if (ctx.store && ctx.frame) {
+        for (const sid in ctx.store) {
+          const rec = ctx.store[sid];
+          if (!rec || rec.typeName !== "shape") continue;
+          const m = (rec.meta ?? {}) as Record<string, unknown>;
+          if (
+            m.didrawSubgraph === true &&
+            (m.didrawSubgraphId === action.name ||
+              m.didrawSubgraphName === action.name) &&
+            isWithinFrameSubtree(rec, ctx.frame.id, ctx.store)
+          ) {
+            return null;
+          }
+        }
+      }
+      return {
+        actionIndex: idx,
+        code: "unknown-shape",
+        message: `Unknown group "${action.name}" in schema-set-container-style`,
+      };
+    }
+
+    case "schema-set-frame-style": {
+      // Фрейм — адресат самого apply; всегда валидно.
       return null;
     }
 
@@ -1024,6 +1061,11 @@ function applyActionsToState(
       }
       case "schema-delete-shape": {
         // Не-схемный шейп — RAW не трогаем.
+        break;
+      }
+      case "schema-set-container-style":
+      case "schema-set-frame-style": {
+        // Стили живут на шейпах (store) — RAW не трогаем.
         break;
       }
     }
@@ -1327,6 +1369,12 @@ export function applySchemaActions(opts: {
     pendingEdges: new Set(),
     store,
     frame,
+    currentGroups: new Set(
+      oldActions
+        .filter((a) => a.kind === "schema-group" && a.name)
+        .map((a) => (a as SchemaGroupAction).name as string),
+    ),
+    pendingGroups: new Set(),
   };
 
   for (let i = 0; i < actions.length; i++) {
@@ -1857,12 +1905,19 @@ export function applySchemaActions(opts: {
       if (a.overlay.dash) stylePatch.dash = a.overlay.dash;
       if (a.overlay.size) stylePatch.size = a.overlay.size;
       if (a.overlay.font) stylePatch.font = a.overlay.font;
-      if (Object.keys(stylePatch).length > 0) {
+      if (a.overlay.geo) stylePatch.geo = a.overlay.geo; // DRW-215
+      // DRW-215: opacity — record-level поле tldraw, не props.
+      const opacityPatch =
+        typeof a.overlay.opacity === "number"
+          ? Math.max(0, Math.min(1, a.overlay.opacity))
+          : undefined;
+      if (Object.keys(stylePatch).length > 0 || opacityPatch !== undefined) {
         const sid = resolveShapeId(a.nodeId);
         const baseRec = sid ? (batch.added[sid] ?? batch.updated[sid]?.[1] ?? store[sid]) : undefined;
         if (sid && baseRec) {
           const next = {
             ...baseRec,
+            ...(opacityPatch !== undefined ? { opacity: opacityPatch } : {}),
             props: { ...(baseRec.props ?? {}), ...stylePatch },
           } as TLRecord;
           if (batch.added[sid]) {
@@ -1873,6 +1928,62 @@ export function applySchemaActions(opts: {
           }
         }
       }
+    }
+  }
+
+  // DRW-215: стили контейнеров и фрейма. Бежит ПОСЛЕ frame-fit (его база —
+  // оригинальный frame, иначе он затёр бы style-патч) и после reconcileGroups
+  // (контейнер мог материализоваться этим же батчем — он в batch.added).
+  for (const a of actions) {
+    if (a.kind === "schema-set-container-style") {
+      const matchCont = (rec: TLRecord | undefined): boolean => {
+        if (!rec) return false;
+        const m = (rec.meta ?? {}) as Record<string, unknown>;
+        return (
+          m.didrawSubgraph === true &&
+          (m.didrawSubgraphId === a.name || m.didrawSubgraphName === a.name)
+        );
+      };
+      let contSid: string | undefined;
+      for (const sid in batch.added) {
+        if (matchCont(batch.added[sid])) {
+          contSid = sid;
+          break;
+        }
+      }
+      if (!contSid) {
+        for (const sid in store) {
+          const rec = store[sid];
+          if (!rec || rec.typeName !== "shape" || batch.removed[sid]) continue;
+          if (!isWithinFrameSubtree(rec, frame.id, store)) continue;
+          if (matchCont(batch.updated[sid]?.[1] ?? rec)) {
+            contSid = sid;
+            break;
+          }
+        }
+      }
+      if (!contSid) continue; // unknown отсеян валидацией
+      const base = batch.added[contSid] ?? batch.updated[contSid]?.[1] ?? store[contSid];
+      if (!base) continue;
+      const props = { ...((base.props ?? {}) as Record<string, unknown>) };
+      if (a.style.color) props.color = a.style.color;
+      if (a.style.fill) props.fill = a.style.fill;
+      if (a.style.dash) props.dash = a.style.dash;
+      if (a.style.titlePosition) props.titlePosition = a.style.titlePosition;
+      const next = { ...base, props } as TLRecord;
+      if (batch.added[contSid]) {
+        batch.added[contSid] = next;
+      } else {
+        const orig = batch.updated[contSid]?.[0] ?? store[contSid];
+        if (orig) batch.updated[contSid] = [orig, next];
+      }
+    }
+    if (a.kind === "schema-set-frame-style") {
+      const base = batch.updated[frame.id]?.[1] ?? frame;
+      const props = { ...((base.props ?? {}) as Record<string, unknown>) };
+      if (a.style.color) props.color = a.style.color;
+      if (a.style.label !== undefined) props.name = a.style.label;
+      batch.updated[frame.id] = [frame, { ...base, props } as TLRecord];
     }
   }
 

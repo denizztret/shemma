@@ -1,7 +1,12 @@
 import type { ConnectionKind } from "./connections";
 import type { NodeId } from "./identity";
 import type { Role } from "./roles";
-import type { EdgeOverlayEntry, OverlayEntry } from "./schema-meta";
+import type {
+  ContainerStyle,
+  EdgeOverlayEntry,
+  FrameStyle,
+  OverlayEntry,
+} from "./schema-meta";
 
 /** Добавить или upsert узел в RAW schema-frame.
  *  `nodeId` опционален: если не передан — backend генерирует. */
@@ -104,6 +109,20 @@ export type SchemaDeleteShapeAction = {
   shapeId: string;
 };
 
+/** Стилизовать schema-container группы (DRW-215): адресация по name группы
+ *  (didrawSubgraphId). Только стиль; label группы меняется schema-group. */
+export type SchemaSetContainerStyleAction = {
+  kind: "schema-set-container-style";
+  name: NodeId;
+  style: ContainerStyle;
+};
+
+/** Стилизовать сам schema-frame (DRW-215): цвет рамки + display-label. */
+export type SchemaSetFrameStyleAction = {
+  kind: "schema-set-frame-style";
+  style: FrameStyle;
+};
+
 /** Discriminated union всех incremental schema-actions. */
 export type SchemaAction =
   | SchemaDefineAction
@@ -116,7 +135,9 @@ export type SchemaAction =
   | SchemaSetOverlayAction
   | SchemaSetEdgeOverlayAction
   | SchemaAdoptShapeAction
-  | SchemaDeleteShapeAction;
+  | SchemaDeleteShapeAction
+  | SchemaSetContainerStyleAction
+  | SchemaSetFrameStyleAction;
 
 /** String-литерал kind для всех SchemaAction типов. */
 export type SchemaActionKind = SchemaAction["kind"];
@@ -134,4 +155,6 @@ export const ALL_SCHEMA_ACTION_KINDS: readonly SchemaActionKind[] = [
   "schema-set-edge-overlay",
   "schema-adopt-shape",
   "schema-delete-shape",
+  "schema-set-container-style",
+  "schema-set-frame-style",
 ];

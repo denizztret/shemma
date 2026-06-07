@@ -31,6 +31,7 @@ export {
   type EdgeDash,
   type ArrowKind,
   type Arrowhead,
+  type GeoForm,
   DEFAULT_STYLE_DEFAULTS,
   validateStyleDefaults,
   applyStyleDefaultsResolution,

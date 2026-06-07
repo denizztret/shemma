@@ -4,6 +4,7 @@ import type {
   ArrowKind,
   Arrowhead,
   EdgeDash,
+  GeoForm,
   StyleDash,
   StyleFill,
   StyleFont,
@@ -23,10 +24,32 @@ export type OverlayEntry = {
   dash?: StyleDash;
   size?: StyleSize;
   font?: StyleFont;
+  /** Форма узла (DRW-215): tldraw geo. */
+  geo?: GeoForm;
+  /** Прозрачность шейпа 0..1 (DRW-215, record-level tldraw opacity). */
+  opacity?: number;
   label?: string;
   role?: Role;
   pinned?: boolean;
   styleOwnedBy?: "user";
+};
+
+/** Стиль schema-container (DRW-215): адресат — группа (didrawSubgraphId). */
+export type ContainerStyle = {
+  color?: string;
+  fill?: StyleFill;
+  dash?: StyleDash;
+  titlePosition?:
+    | "outside-frame"
+    | "outside-banner"
+    | "inside-center"
+    | "inside-left";
+};
+
+/** Стиль schema-frame (DRW-215): цвет рамки + display-label фрейма. */
+export type FrameStyle = {
+  color?: string;
+  label?: string;
 };
 
 /** Overlay-запись для конкретного РЕБРА schema-frame (DRW-211).

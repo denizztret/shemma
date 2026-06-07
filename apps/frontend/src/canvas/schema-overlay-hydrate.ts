@@ -91,6 +91,8 @@ export type OverlayShapeUpdate = {
   type: string;
   x?: number;
   y?: number;
+  /** DRW-215: record-level opacity. */
+  opacity?: number;
   props?: Record<string, unknown>;
   meta?: Record<string, unknown>;
 };
@@ -133,7 +135,23 @@ export function computeShapeUpdateFromOverlay(
   if (overlay.color !== undefined) {
     const props = getProps(shape);
     if (props?.color !== overlay.color) {
-      update.props = { color: overlay.color };
+      update.props = { ...(update.props ?? {}), color: overlay.color };
+      changed = true;
+    }
+  }
+
+  // DRW-215: форма узла + прозрачность переживают hydrate.
+  if (overlay.geo !== undefined) {
+    const props = getProps(shape);
+    if ((props as { geo?: unknown } | undefined)?.geo !== overlay.geo) {
+      update.props = { ...(update.props ?? {}), geo: overlay.geo };
+      changed = true;
+    }
+  }
+  if (overlay.opacity !== undefined) {
+    const cur = (shape as unknown as { opacity?: number }).opacity;
+    if (cur !== overlay.opacity) {
+      update.opacity = overlay.opacity;
       changed = true;
     }
   }
