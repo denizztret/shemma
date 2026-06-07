@@ -62,6 +62,14 @@ export const SHORTCUT_REGISTRY: ReadonlyArray<ShortcutCommand> = [
     description: "Раскладка с игнором пинов и направлений (один проход)",
   },
   {
+    id: "fit-text",
+    label: "Обтянуть текст",
+    category: "layout",
+    // ⌘⇧F / Ctrl+Shift+F — shift, key "f". DRW-219.
+    defaultBinding: { mod: true, shift: true, code: "KeyF" },
+    description: "Подогнать размер выделенных объектов под текст (оптимальная ширина, минимальная высота)",
+  },
+  {
     id: "copy-link",
     label: "Копировать ссылку",
     category: "export",

@@ -27,6 +27,7 @@ import {
   type StyleSectionValue,
   StylesSection,
 } from "../sections/StylesSection";
+import { TextFitSection } from "../sections/TextFitSection";
 
 export type SelectionCounts = { containers: number; nodes: number };
 
@@ -112,6 +113,12 @@ export type SelectionPanelProps = {
   arrowKindState?: ArrowKind | null;
   onStyleArrowKind?: (v: ArrowKind) => void;
   /**
+   * DRW-219: кнопка «Обтянуть текст». Видна, когда выделение содержит объект
+   * с текстом (geo/note/text).
+   */
+  showTextFit?: boolean;
+  onTextFit?: () => void;
+  /**
    * Per-container titlePosition override. Defined только когда выбран ровно
    * один SchemaContainer; иначе оба поля undefined и секция скрывается.
    * Render-time SSOT — `shape.props.titlePosition` (spec §Title position resolution).
@@ -164,6 +171,8 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
   showArrowKind,
   arrowKindState,
   onStyleArrowKind,
+  showTextFit,
+  onTextFit,
   singleContainerTitlePosition,
   onSingleContainerTitlePositionChange,
   singleFrameContainerTitlePosition,
@@ -241,6 +250,7 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
           subtitle="Для выделения"
         />
       )}
+      {showTextFit && onTextFit && <TextFitSection onFit={onTextFit} />}
       <div className="settings-popover__footer">
         {selectionFooterCounter(counts)}
       </div>
