@@ -215,3 +215,12 @@ app.use("/api/*", async (c, next) => {
 - **AC#4** (дифф claimed-vs-actual) — §5.
 - **AC#5** (разбираемый, append-friendly формат per session/room, задокументирован) — §6 (JSONL per room).
 - **AC#6** (намечены follow-up'ы; аналитика/автозадачи вынесены) — §11.
+
+## 13. Формат файла + ридер (DRW-227.03, реализовано)
+
+**Файл:** `~/.shemma/feedback/<space>__<room>.jsonl` (override через `SHEMMA_FEEDBACK_DIR` — его уважают и writer демона, и ридер CLI). Append-only JSONL, одна запись на строку, два `kind`:
+
+- `request` — `{ ts, kind:"request", route, method, space, room, clientOpId, durationMs, httpStatus, ok, errorCode, payload, result }` (§3.3). Пишется костяком на каждую агентскую мутацию + `/api/agent/context`.
+- `annotation` — `{ ts, kind:"annotation", space, room, clientOpId, phase, text, agent, sessionId }` (§4.2). Пишется по вызову `shemma_feedback`.
+
+**Ридер:** `shemma feedback --diff <room> [--space <id>]` — read-only. Для каждой аннотации находит её `request` (точно по `clientOpId`, иначе ближайший предыдущий по `ts`) и печатает пару «claim (текст/phase аннотации) → actual (route/ok/errorCode запроса)». Помечает `⚠ possible misdiagnosis`, когда аннотация-`blocker` ссылается на запрос, который на самом деле `ok:true` (агент решил, что упало, а сервер ответил успехом). `--json` отдаёт структурированные `entries`. Без `--space` — скан `*__<room>.jsonl` (уникальный → берётся; несколько → просит `--space`). **Строго ридер: никакой аналитики/агрегаций/дашбордов/автозадач.**

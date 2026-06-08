@@ -8,6 +8,7 @@ import {
 import { ensure, start, status, stop, stopAll } from "./daemon";
 import { cmdClear, cmdPatch, cmdState } from "./data";
 import { cmdDoctor } from "./doctor";
+import { cmdFeedback } from "./feedback";
 import {
   applyStdin,
   connectCmd,
@@ -203,6 +204,7 @@ async function main() {
     return layoutCmd({ mode, scope, spacing, profile, room, space });
   }
   if (cmd === "prompts") return cmdPrompts(argv.slice(1), space);
+  if (cmd === "feedback") return cmdFeedback(argv.slice(1), space);
   if (cmd === "ai") {
     if (sub === "start") return cmdAiStart(argv.slice(2), space);
     if (sub === "stop") return cmdAiStop(argv.slice(2), space);
