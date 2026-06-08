@@ -149,6 +149,27 @@
   min-width: 0;
   white-space: nowrap;
 }
+
+/* DRW-239 — density slider (раздвинуть / сблизить выделенное). Иконки −/+ по
+ * краям, ползунок тянется на всю ширину строки. */
+.settings-section__row--density {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+}
+.settings-density__icon {
+  color: var(--shemma-text-dim);
+  font-size: 14px;
+  line-height: 1;
+  user-select: none;
+}
+.settings-density__slider {
+  flex: 1 1 0;
+  min-width: 0;
+  cursor: ew-resize;
+  /* match the blue used by the active toggle buttons (NOT the system accent). */
+  accent-color: var(--shemma-accent-primary, #3b82f6);
+}
 .settings-btn {
   padding: 5px 10px;
   border: 1px solid var(--shemma-border-strong);

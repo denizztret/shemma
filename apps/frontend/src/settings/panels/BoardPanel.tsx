@@ -1,15 +1,10 @@
 import type { FC } from "react";
 import { DirectionSection, type DirectionValue } from "../sections/DirectionSection";
-import {
-  LayoutSettingsSection,
-  type LayoutSettingsValue,
-} from "../sections/LayoutSettingsSection";
 import { StylesSection, type StyleSectionValue } from "../sections/StylesSection";
 import { ArrowKindSection } from "../sections/ArrowKindSection";
 import { ContainerTitlePositionSection } from "../sections/ContainerTitlePositionSection";
-import type { PresetName } from "../presets";
 import type {
-  ArrowKind, LayoutParams, Spacing,
+  ArrowKind, LayoutParams,
   ResolvedStyleDefaults, StyleDash, StyleFont, StyleSize,
 } from "@shemma/domain";
 import type { SchemaContainerTitlePosition } from "../../shapes/schema-container/title-position";
@@ -22,17 +17,9 @@ const DIRECTION_HINTS: Record<DirectionValue, string> = {
   custom: "Пользовательское направление контейнеров",
 };
 
-// Mapping helpers — UI PresetName vs domain Spacing enum.
-function spacingToPresetName(spacing: Spacing | undefined): PresetName {
-  if (spacing === "compact") return "Compact";
-  if (spacing === "loose") return "Roomy";
-  return "Normal";
-}
-
 export type BoardPanelProps = {
   effective: LayoutParams;
   onDirectionChange: (d: DirectionValue) => void;
-  onPresetSelect: (preset: PresetName) => void;
   onOpenAdvanced: () => void;
   onOpenShortcuts: () => void;
   styleEffective: ResolvedStyleDefaults;
@@ -50,7 +37,6 @@ export type BoardPanelProps = {
 export const BoardPanel: FC<BoardPanelProps> = ({
   effective,
   onDirectionChange,
-  onPresetSelect,
   onOpenAdvanced,
   onOpenShortcuts,
   styleEffective,
@@ -62,10 +48,6 @@ export const BoardPanel: FC<BoardPanelProps> = ({
   containerTitlePosition,
   onContainerTitlePositionChange,
 }) => {
-  const layoutSettings: LayoutSettingsValue = {
-    preset: effective.spacing ?? null,
-  };
-
   const styleValue: StyleSectionValue = {
     dash: styleEffective.dash,
     font: styleEffective.font,
@@ -85,14 +67,14 @@ export const BoardPanel: FC<BoardPanelProps> = ({
         onChange={onDirectionChange}
         hints={DIRECTION_HINTS}
       />
-      <LayoutSettingsSection
-        current={layoutSettings}
-        onPreset={(s) => onPresetSelect(spacingToPresetName(s))}
-        onAdvanced={onOpenAdvanced}
-        onReset={() => {}}
-        showReset={false}
-        showAdvanced={true}
-      />
+      <button
+        type="button"
+        data-role="advanced"
+        onClick={onOpenAdvanced}
+        className="settings-link"
+      >
+        Дополнительно ›
+      </button>
       <StylesSection
         current={styleValue}
         onDash={onStyleDash}
