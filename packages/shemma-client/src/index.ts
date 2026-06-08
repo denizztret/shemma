@@ -467,6 +467,21 @@ export class CanvasClient {
   }
 
   /**
+   * DRW-228: fit text shapes to their content (optimal width / minimal height).
+   * Text metrics are browser-only, so — like importMermaid — this requires an
+   * open tab with an active WS subscriber. `targets` (shape ids or didrawNames)
+   * limits scope; omitted → all fittable geo/note shapes not size-pinned.
+   */
+  async fitText(body: { targets?: string[]; clientOpId?: string }) {
+    const r = await fetch(`${this.base}/api/agent/fit-text?${this.q()}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return r.json();
+  }
+
+  /**
    * DRW-088: Tidy layout for a subset of selected shapes.
    * Calls POST /api/agent/layout-selection — runs ELK only on the given ids,
    * leaving all other shapes untouched.

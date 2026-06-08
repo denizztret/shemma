@@ -15,6 +15,7 @@ import {
   DeleteArgs,
   ApplyArgs,
   ImportMermaidArgs,
+  FitTextArgs,
 } from "../schemas";
 
 export type DomainDeps = {
@@ -35,6 +36,7 @@ type LayoutSelectionInput = z.infer<z.ZodObject<typeof LayoutSelectionArgs>>;
 type DeleteInput = z.infer<z.ZodObject<typeof DeleteArgs>>;
 type ApplyInput = z.infer<z.ZodObject<typeof ApplyArgs>>;
 type ImportMermaidInput = z.infer<z.ZodObject<typeof ImportMermaidArgs>>;
+type FitTextInput = z.infer<z.ZodObject<typeof FitTextArgs>>;
 
 export type DomainHandles = {
   define: { call: (input: DefineInput) => Promise<ToolResult> };
@@ -46,6 +48,7 @@ export type DomainHandles = {
   delete: { call: (input: DeleteInput) => Promise<ToolResult> };
   apply: { call: (input: ApplyInput) => Promise<ToolResult> };
   importMermaid: { call: (input: ImportMermaidInput) => Promise<ToolResult> };
+  fitText: { call: (input: FitTextInput) => Promise<ToolResult> };
 };
 
 type CommonArgs = {
@@ -551,6 +554,85 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
     async (args) => importMermaidCall(args as ImportMermaidInput),
   );
 
+  // ── shemma_fit_text (DRW-228) ───────────────────────────────────────────────
+  async function fitTextCall(input: FitTextInput): Promise<ToolResult> {
+    const { room: argRoom, space: argSpace, clientOpId, targets } = input;
+
+    const spaceRes = resolveSpaceOrError(deps, argSpace);
+    if ("error" in spaceRes) return spaceRes.error;
+
+    const resolved = await deps.resolver.resolve({ argRoom });
+    if (!resolved.ok) {
+      return toolResult({
+        ok: false,
+        code: "ambiguous-room",
+        message: resolved.message,
+        details: { candidates: resolved.candidates },
+      });
+    }
+
+    const c = new CanvasClient({
+      baseUrl: deps.client.baseUrl,
+      room: resolved.room,
+      space: spaceRes.spaceId,
+    });
+
+    try {
+      const resp = (await c.fitText({ targets, clientOpId })) as {
+        ok?: boolean;
+        count?: number;
+        shape_ids?: string[];
+        error?: string;
+        room_url?: string;
+      };
+
+      if (resp.ok) {
+        deps.resolver.recordTouch(resolved.room);
+        return toolResult({
+          ok: true,
+          room: resolved.room,
+          roomSource: resolved.source,
+          count: resp.count ?? 0,
+          shape_ids: resp.shape_ids ?? [],
+        });
+      }
+
+      // 503 "no client connected": backend ships room_url so AI can open the
+      // tab and retry (text metrics are browser-only).
+      if (resp.room_url) {
+        return toolResult({
+          ok: false,
+          code: "no-client-connected",
+          message: `${resp.error ?? "no client connected"}. Open ${resp.room_url} in a browser, then retry.`,
+          details: { room: resolved.room, room_url: resp.room_url },
+        });
+      }
+
+      return toolResult({
+        ok: false,
+        code: "unexpected-error",
+        message: resp.error ?? "fit-text failed",
+        details: { room: resolved.room },
+      });
+    } catch (e) {
+      return toolResult({ ...mapFetchError(e) });
+    }
+  }
+
+  server.registerTool(
+    "shemma_fit_text",
+    {
+      description:
+        "Fits text shapes (geo/note) to their content — optimal width, minimal height — so a box hugs its label instead of using a default size. Use after drawing/importing nodes whose text may overflow or leave the box oversized, BEFORE a layout pass so the layout sees correct dimensions.\n\n" +
+        "Requires an open browser tab with an active WS subscriber (text metrics are browser-only, like `shemma_import_mermaid` mode:\"browser\"). On `no-client-connected` (503) open the returned `room_url` and retry.\n\n" +
+        "`targets` — shape ids or didrawNames to fit; omit to fit ALL fittable geo/note shapes. Size-pinned shapes (a user's manual resize, or already-fitted boxes) are skipped — fitting never overwrites a user-owned size, so `count` reflects only the shapes actually changed.\n\n" +
+        "Note: when a tab is open, added/edited text is auto-fitted on the frontend already (incl. the state the tab loads on open); this tool is an explicit pass to force/confirm fitting — e.g. right before a layout, or to cover any shape the live auto-fitter didn't catch.\n\n" +
+        "Returns: count (shapes fitted), shape_ids.",
+      inputSchema: FitTextArgs,
+    },
+    async (args) => fitTextCall(args as FitTextInput),
+  );
+
   return {
     define: { call: defineCall },
     connect: { call: connectCall },
@@ -561,5 +643,6 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
     delete: { call: deleteCall },
     apply: { call: applyCall },
     importMermaid: { call: importMermaidCall },
+    fitText: { call: fitTextCall },
   };
 }

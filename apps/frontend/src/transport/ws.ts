@@ -79,7 +79,8 @@ type StoreSyncMessage =
   | { kind: "prompt-resolved"; id: string; response?: string }
   | { kind: "prompt-removed"; ids: string[] }
   | { kind: "ai-activity"; activity: AiActivity | null }
-  | { kind: "import-mermaid"; source: string; requestId: string; focus?: "new" | "fit-all" | "none" };
+  | { kind: "import-mermaid"; source: string; requestId: string; focus?: "new" | "fit-all" | "none" }
+  | { kind: "fit-text"; requestId: string; targets?: string[] };
 
 // ---------------------------------------------------------------------------
 // BoardFocusBeacon — standalone factory for sending board-focus WS messages.
@@ -176,6 +177,15 @@ export type StoreSyncDeps = {
     rootIds?: string[];
     error?: string;
   }>;
+  /**
+   * DRW-228: called on a fit-text command frame. Should fit the given targets
+   * (shape ids or didrawNames; omitted → all fittable geo/note) and return the
+   * count. Text measurement is browser-only, hence the WS round-trip.
+   */
+  onFitText?: (
+    targets: string[] | undefined,
+    requestId: string,
+  ) => Promise<{ ok: boolean; count?: number; shapeIds?: string[]; error?: string }>;
 };
 
 /**
@@ -403,6 +413,39 @@ export function startStoreSync(deps: StoreSyncDeps): {
               ws.send(
                 JSON.stringify({
                   kind: "import-mermaid-result",
+                  requestId,
+                  ok: false,
+                  error: err instanceof Error ? err.message : String(err),
+                }),
+              );
+            },
+          );
+        }
+        break;
+      case "fit-text":
+        if (deps.onFitText) {
+          const { requestId, targets } = msg;
+          void deps.onFitText(targets, requestId).then(
+            (result) => {
+              if (stopped) return;
+              if (ws.readyState !== ws.OPEN) return;
+              ws.send(
+                JSON.stringify({
+                  kind: "fit-text-result",
+                  requestId,
+                  ok: result.ok,
+                  count: result.count,
+                  shape_ids: result.shapeIds,
+                  error: result.error,
+                }),
+              );
+            },
+            (err: unknown) => {
+              if (stopped) return;
+              if (ws.readyState !== ws.OPEN) return;
+              ws.send(
+                JSON.stringify({
+                  kind: "fit-text-result",
                   requestId,
                   ok: false,
                   error: err instanceof Error ? err.message : String(err),

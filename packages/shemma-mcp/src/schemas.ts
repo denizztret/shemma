@@ -119,6 +119,17 @@ export const ImportMermaidArgs = {
   mode: z.enum(["browser", "storage", "auto"]).optional(),
 };
 
+// DRW-228: fit text shapes to their content. Browser-only (needs tldraw font
+// metrics) → WS round-trip, requires an open tab like browser-mode import.
+export const FitTextArgs = {
+  room: z.string().optional(),
+  space: z.string().optional(),
+  clientOpId: z.string().optional(),
+  /** Shape ids or didrawNames to fit; omitted → all fittable geo/note shapes
+   *  the user hasn't size-pinned. */
+  targets: z.array(z.string().min(1)).optional(),
+};
+
 // ── DRW-134: Schema API schemas ────────────────────────────────────────────
 
 /** Overlay entry schema for shemma_set_overlay. */
