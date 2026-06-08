@@ -12,8 +12,8 @@
  * (no-op в данных, но лишний network round-trip).
  */
 
+import { type OverlayEntry, coerceColor } from "@shemma/domain";
 import type { Editor, TLShape, TLShapeId } from "tldraw";
-import type { OverlayEntry } from "@shemma/domain";
 
 /**
  * Frame-shape с `meta.didrawSchemaFrame===true`. Hydrate проходит только по таким.
@@ -46,7 +46,8 @@ function getProps(shape: TLShape): ShapeProps | undefined {
 export function collectOverlayApplications(
   shapes: TLShape[],
 ): Array<{ frameId: string; nodeId: string; overlay: OverlayEntry }> {
-  const out: Array<{ frameId: string; nodeId: string; overlay: OverlayEntry }> = [];
+  const out: Array<{ frameId: string; nodeId: string; overlay: OverlayEntry }> =
+    [];
   for (const shape of shapes) {
     if (shape.type !== "frame") continue;
     const meta = getMeta(shape);
@@ -122,10 +123,7 @@ export function computeShapeUpdateFromOverlay(
   let changed = false;
 
   if (overlay.position) {
-    if (
-      shape.x !== overlay.position.x ||
-      shape.y !== overlay.position.y
-    ) {
+    if (shape.x !== overlay.position.x || shape.y !== overlay.position.y) {
       update.x = overlay.position.x;
       update.y = overlay.position.y;
       changed = true;
@@ -133,9 +131,11 @@ export function computeShapeUpdateFromOverlay(
   }
 
   if (overlay.color !== undefined) {
+    // DRW-231: coerce to palette — a raw hex here would make loadSnapshot throw.
+    const color = coerceColor(overlay.color);
     const props = getProps(shape);
-    if (props?.color !== overlay.color) {
-      update.props = { ...(update.props ?? {}), color: overlay.color };
+    if (props?.color !== color) {
+      update.props = { ...(update.props ?? {}), color };
       changed = true;
     }
   }

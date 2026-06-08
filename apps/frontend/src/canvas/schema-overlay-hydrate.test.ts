@@ -46,7 +46,10 @@ describe("collectOverlayApplications", () => {
   it("skips non-frame shapes", () => {
     const shape = makeShape({
       type: "geo",
-      meta: { didrawSchemaFrame: true, didrawOverlays: { n1: { color: "red" } } },
+      meta: {
+        didrawSchemaFrame: true,
+        didrawOverlays: { n1: { color: "red" } },
+      },
     });
     expect(collectOverlayApplications([shape])).toEqual([]);
   });
@@ -200,6 +203,16 @@ describe("computeShapeUpdateFromOverlay", () => {
     });
   });
 
+  it("coerces a raw hex overlay.color to the nearest palette name (DRW-231)", () => {
+    const shape = makeShape({ props: { color: "blue" } });
+    const update = computeShapeUpdateFromOverlay(shape, { color: "#6A1B9A" });
+    expect(update).toEqual({
+      id: shape.id,
+      type: shape.type,
+      props: { color: "violet" },
+    });
+  });
+
   it("skip's color update если совпадает", () => {
     const shape = makeShape({ props: { color: "red" } });
     expect(computeShapeUpdateFromOverlay(shape, { color: "red" })).toBeNull();
@@ -296,7 +309,9 @@ describe("applyOverlaysToShapes", () => {
       type: "frame",
       meta: {
         didrawSchemaFrame: true,
-        didrawOverlays: { n1: { position: { x: 999, y: 888 }, styleOwnedBy: "user" } },
+        didrawOverlays: {
+          n1: { position: { x: 999, y: 888 }, styleOwnedBy: "user" },
+        },
       },
     });
     const child = makeShape({

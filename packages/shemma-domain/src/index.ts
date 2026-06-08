@@ -36,3 +36,12 @@ export {
   validateStyleDefaults,
   applyStyleDefaultsResolution,
 } from "./style-defaults";
+export {
+  type RGB,
+  type TldrawColor,
+  TLDRAW_COLOR_NAMES,
+  TLDRAW_PALETTE,
+  parseHex,
+  isValidColor,
+  coerceColor,
+} from "./color";
