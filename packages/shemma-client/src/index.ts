@@ -112,7 +112,7 @@ export class CanvasClient {
     const r = await fetch(
       `${this.base}/api/state?${this.q({ fmt: opts.fmt ?? "compact", since: opts.since })}`,
     );
-    return r.json();
+    return this.result(r);
   }
 
   async applyPatch(
@@ -300,7 +300,7 @@ export class CanvasClient {
 
   async listRooms() {
     const r = await fetch(`${this.base}/api/rooms?${this.qSpaceOnly()}`);
-    return r.json();
+    return this.result(r);
   }
 
   /**
@@ -443,7 +443,7 @@ export class CanvasClient {
     if (opts.viewport) params.set("viewport", opts.viewport);
     if (opts.select?.length) params.set("select", opts.select.join(","));
     const r = await fetch(`${this.base}/api/agent/context?${params.toString()}`);
-    return r.json();
+    return this.result(r);
   }
 
   /**
@@ -463,7 +463,7 @@ export class CanvasClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    return r.json();
+    return this.result(r);
   }
 
   /**
@@ -478,7 +478,7 @@ export class CanvasClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    return r.json();
+    return this.result(r);
   }
 
   /**
@@ -498,7 +498,7 @@ export class CanvasClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    return r.json();
+    return this.result(r);
   }
 
   /**
@@ -517,7 +517,7 @@ export class CanvasClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    return r.json();
+    return this.result(r);
   }
 
   async postViewport(vp: { x: number; y: number; w: number; h: number; zoom?: number }) {
@@ -542,7 +542,7 @@ export class CanvasClient {
       room: this.room,
     });
     const r = await fetch(`${this.base}/api/canvas/view?${params.toString()}`);
-    return r.json();
+    return this.result(r);
   }
 
   /**
@@ -561,7 +561,7 @@ export class CanvasClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    return r.json();
+    return this.result(r);
   }
 
   /**
@@ -582,7 +582,7 @@ export class CanvasClient {
         body: JSON.stringify(body),
       },
     );
-    return r.json();
+    return this.result(r);
   }
 
   /**
@@ -604,7 +604,7 @@ export class CanvasClient {
         body: JSON.stringify(body),
       },
     );
-    return r.json();
+    return this.result(r);
   }
 
   /**
@@ -623,7 +623,7 @@ export class CanvasClient {
         body: JSON.stringify(body),
       },
     );
-    return r.json();
+    return this.result(r);
   }
 
   /**
@@ -637,6 +637,6 @@ export class CanvasClient {
         method: "DELETE",
       },
     );
-    return r.json();
+    return this.result(r);
   }
 }

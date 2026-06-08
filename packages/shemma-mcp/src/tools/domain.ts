@@ -1,7 +1,13 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
-import { mapBackendError, mapFetchError, toolResult, type ToolResult } from "../errors";
+import {
+  isBackendError,
+  mapBackendError,
+  mapFetchError,
+  toolResult,
+  type ToolResult,
+} from "../errors";
 import type { RoomResolver } from "../room-resolver";
 import type { AutoOpenManager } from "../auto-open";
 import { resolveSpaceOrError, type ResolveSpaceFn } from "../space-resolver";
@@ -333,6 +339,7 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
         });
       }
 
+      if (isBackendError(resp)) return toolResult(mapBackendError(resp));
       return toolResult({
         ok: false,
         code: "layout-failed",
@@ -524,6 +531,7 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
         });
       }
 
+      if (isBackendError(resp)) return toolResult(mapBackendError(resp, clientOpId));
       return toolResult({
         ok: false,
         code: "import-failed",
@@ -611,6 +619,7 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
         });
       }
 
+      if (isBackendError(resp)) return toolResult(mapBackendError(resp));
       return toolResult({
         ok: false,
         code: "unexpected-error",
@@ -666,6 +675,7 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
         clientOpId,
         sessionId: process.env.CLAUDE_SESSION_ID,
       })) as { ok?: boolean; recorded?: boolean; reason?: string };
+      if (isBackendError(resp)) return toolResult(mapBackendError(resp, clientOpId));
       deps.resolver.recordTouch(resolved.room);
       return toolResult({
         ok: true,

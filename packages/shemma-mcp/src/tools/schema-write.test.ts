@@ -157,6 +157,27 @@ describe("shemma_create_schema", () => {
     expect(r.structuredContent).toMatchObject({ ok: false, code: "daemon-unavailable" });
     expect(r.isError).toBe(true);
   });
+
+  // DRW-229: a backend 500 must NOT be conflated with daemon-unavailable.
+  it("backend 500 (JSON) → unexpected-error WITH status (not daemon-unavailable)", async () => {
+    mockFetch(() => ({ body: { error: "boom" }, status: 500 }));
+    const { handles } = setup();
+    const r = await handles.create_schema.call({ label: "L", raw: "graph LR\n  a[A]" });
+    expect(r.structuredContent).toMatchObject({ ok: false, code: "unexpected-error", status: 500 });
+    expect(r.isError).toBe(true);
+  });
+
+  it("backend 500 (non-JSON body) → unexpected-error, not daemon-unavailable", async () => {
+    globalThis.fetch = (async () =>
+      new Response("Internal Server Error", {
+        status: 500,
+        headers: { "content-type": "text/plain" },
+      })) as typeof fetch;
+    const { handles } = setup();
+    const r = await handles.create_schema.call({ label: "L", raw: "graph LR\n  a[A]" });
+    expect(r.structuredContent).toMatchObject({ ok: false, code: "unexpected-error", status: 500 });
+    expect(r.isError).toBe(true);
+  });
 });
 
 describe("shemma_patch_schema", () => {

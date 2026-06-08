@@ -13,7 +13,13 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
-import { mapFetchError, toolResult, type ToolResult } from "../errors";
+import {
+  isBackendError,
+  mapBackendError,
+  mapFetchError,
+  toolResult,
+  type ToolResult,
+} from "../errors";
 import { resolveSpaceOrError, type ResolveSpaceFn } from "../space-resolver";
 import { CreateSchemaArgs, PatchSchemaArgs, SetOverlayArgs, type OverlayEntrySchema } from "../schemas";
 import type { z as ZodType } from "zod";
@@ -186,6 +192,11 @@ export function registerSchemaWriteTools(
         });
       }
 
+      // DRW-229: a real backend HTTP error (non-2xx, carries httpStatus) → coded
+      // error WITH status; an in-band 2xx {ok:false, errors} stays validation-error.
+      if (isBackendError(resp)) {
+        return toolResult(mapBackendError(resp, clientOpIdFinal));
+      }
       const firstCreateError = Array.isArray(resp.errors) && resp.errors.length > 0
         ? (resp.errors[0] as { code?: string; message?: string })
         : undefined;
@@ -284,6 +295,9 @@ export function registerSchemaWriteTools(
         });
       }
 
+      if (isBackendError(resp)) {
+        return toolResult(mapBackendError(resp, clientOpIdFinal));
+      }
       const firstError = Array.isArray(resp.errors) && resp.errors.length > 0
         ? (resp.errors[0] as { code?: string; message?: string })
         : undefined;
@@ -377,6 +391,9 @@ export function registerSchemaWriteTools(
         });
       }
 
+      if (isBackendError(resp)) {
+        return toolResult(mapBackendError(resp, clientOpIdFinal));
+      }
       return toolResult({
         ok: false,
         code: "validation-error",

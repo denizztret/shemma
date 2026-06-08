@@ -85,6 +85,33 @@ describe("read-only tools", () => {
     expect(r.structuredContent).toMatchObject({ ok: true });
   });
 
+  // DRW-229: read-only paths distinguish backend error from daemon-unavailable.
+  it("shemma_rooms_list backend 500 → unexpected-error (not ok, not daemon-unavailable)", async () => {
+    mockFetch(() => ({ body: { error: "boom" }, status: 500 }));
+    const { handles } = setup();
+    const r = await handles.rooms_list.call({});
+    expect(r.structuredContent).toMatchObject({ ok: false, code: "unexpected-error", status: 500 });
+    expect(r.isError).toBe(true);
+  });
+
+  it("shemma_rooms_list transport failure → daemon-unavailable", async () => {
+    globalThis.fetch = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as typeof fetch;
+    const { handles } = setup();
+    const r = await handles.rooms_list.call({});
+    expect(r.structuredContent).toMatchObject({ ok: false, code: "daemon-unavailable" });
+    expect(r.isError).toBe(true);
+  });
+
+  it("shemma_context backend 500 → unexpected-error (not ok:true data)", async () => {
+    mockFetch(() => ({ body: { error: "boom" }, status: 500 }));
+    const { handles } = setup();
+    const r = await handles.context.call({ room: "r" });
+    expect(r.structuredContent).toMatchObject({ ok: false, code: "unexpected-error", status: 500 });
+    expect(r.isError).toBe(true);
+  });
+
   it("shemma_active_rooms returns active rooms", async () => {
     mockFetch(() => ({ body: { rooms: [{ room: "x", clientCount: 1, lastFocusedAt: 1 }] } }));
     const { handles } = setup();
