@@ -1,9 +1,11 @@
-// DRW-217: кнопка темы 🌓 в шапке доски (цикл light → dark → system).
+// DRW-217 / DRW-230: кнопка темы 🌓 в шапке доски. Обычный клик — светлая⇄тёмная,
+// Opt-клик (altHeld) — системная; иконка отражает режим / 🌓 при зажатом Opt.
 // Делегирует в ChromeButton — проверяем переданные props.
 import { describe, expect, test } from "bun:test";
-import { isValidElement, type ReactElement } from "react";
+import { type ReactElement, isValidElement } from "react";
 import { ChromeButton } from "../chrome/ChromeButton";
 import { ThemeToggleButton } from "./ThemeToggleButton";
+import type { ColorMode, ThemeMode } from "./theme-mode";
 
 type AnyElement = ReactElement<{
   children?: unknown;
@@ -25,42 +27,65 @@ function findChromeButton(root: unknown): AnyElement | null {
   return flatten(root).find((el) => el.type === ChromeButton) ?? null;
 }
 
+function render(props: {
+  mode: ThemeMode;
+  colorMode?: ColorMode;
+  altHeld?: boolean;
+  onSelect?: (m: ThemeMode) => void;
+}): AnyElement | null {
+  return findChromeButton(
+    ThemeToggleButton({
+      mode: props.mode,
+      colorMode: props.colorMode ?? "light",
+      altHeld: props.altHeld ?? false,
+      onSelect: props.onSelect ?? (() => {}),
+    }),
+  );
+}
+
 describe("ThemeToggleButton", () => {
   test("renders a ChromeButton with aria-label including current mode", () => {
-    const cb = findChromeButton(
-      ThemeToggleButton({ mode: "dark", onCycle: () => {} }),
-    );
+    const cb = render({ mode: "dark" });
     expect(cb).not.toBeNull();
-    expect(String(cb!.props.ariaLabel)).toContain("Тема");
+    expect(String(cb?.props.ariaLabel)).toContain("Тема");
   });
 
-  test("click invokes onCycle", () => {
-    let cycled = 0;
-    const cb = findChromeButton(
-      ThemeToggleButton({
-        mode: "light",
-        onCycle: () => {
-          cycled += 1;
-        },
-      }),
-    );
-    (cb?.props.onClick as (() => void) | undefined)?.();
-    expect(cycled).toBe(1);
+  test("icon reflects mode when Opt is not held: light ☀️ / dark 🌙 / system 🌓", () => {
+    expect(render({ mode: "light" })?.props.children).toBe("☀️");
+    expect(render({ mode: "dark" })?.props.children).toBe("🌙");
+    expect(render({ mode: "system" })?.props.children).toBe("🌓");
   });
 
-  test("icon reflects mode: light ☀️ / dark 🌙 / system 🌓", () => {
-    const icon = (mode: "light" | "dark" | "system") =>
-      findChromeButton(ThemeToggleButton({ mode, onCycle: () => {} }))?.props
-        .children;
-    expect(icon("light")).toBe("☀️");
-    expect(icon("dark")).toBe("🌙");
-    expect(icon("system")).toBe("🌓");
+  test("Opt held → icon previews system 🌓 regardless of mode", () => {
+    expect(render({ mode: "light", altHeld: true })?.props.children).toBe("🌓");
+    expect(render({ mode: "dark", altHeld: true })?.props.children).toBe("🌓");
+  });
+
+  test("plain click toggles light⇄dark by visible colorMode (never system)", () => {
+    const picks: ThemeMode[] = [];
+    const onSelect = (m: ThemeMode) => picks.push(m);
+    (render({ mode: "dark", colorMode: "dark", onSelect })?.props.onClick as () => void)();
+    (render({ mode: "light", colorMode: "light", onSelect })?.props.onClick as () => void)();
+    // From a system mode resolving to dark, a plain click still flips to light.
+    (render({ mode: "system", colorMode: "dark", onSelect })?.props.onClick as () => void)();
+    expect(picks).toEqual(["light", "dark", "light"]);
+  });
+
+  test("Opt-click selects system", () => {
+    let picked: ThemeMode | null = null;
+    const cb = render({
+      mode: "light",
+      colorMode: "light",
+      altHeld: true,
+      onSelect: (m) => {
+        picked = m;
+      },
+    });
+    (cb?.props.onClick as () => void)();
+    expect(picked).toBe("system");
   });
 
   test("marked with dataRole for live identification", () => {
-    const cb = findChromeButton(
-      ThemeToggleButton({ mode: "system", onCycle: () => {} }),
-    );
-    expect(cb!.props.dataRole).toBe("theme-toggle");
+    expect(render({ mode: "system" })?.props.dataRole).toBe("theme-toggle");
   });
 });

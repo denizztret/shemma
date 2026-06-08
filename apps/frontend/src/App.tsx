@@ -63,9 +63,7 @@ import {
   applyTextFitToSelection,
 } from "./canvas/apply-text-fit";
 import { registerAutoTextFit } from "./canvas/auto-text-fit";
-import { ThemeToggleButton } from "./theme/ThemeToggleButton";
-import { cycleThemeMode } from "./theme/theme-mode";
-import { setThemeMode } from "./theme/theme-store";
+import { ThemeToggleButtonContainer } from "./theme/ThemeToggleButtonContainer";
 import { useThemeMode } from "./theme/useThemeMode";
 import { getState, seedSchema } from "./transport/api";
 import { computeTruncatedBackoff } from "./transport/sync-recovery";
@@ -982,10 +980,7 @@ export function App({
               onClose={() => setPickerOpen(false)}
             />
           )}
-          <ThemeToggleButton
-            mode={themeMode}
-            onCycle={() => setThemeMode(cycleThemeMode(themeMode))}
-          />
+          <ThemeToggleButtonContainer />
           <PromptDrawer space={space} room={room} tick={promptsTick} />
           <AiActivityBadge activity={aiActivity} />
           <ErrorBanner />
