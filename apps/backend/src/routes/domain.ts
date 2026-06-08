@@ -4,6 +4,7 @@ import { config } from "../config";
 import { roomArrowKind } from "../domain/arrow-kind";
 import { compile } from "../domain/compile";
 import { runLayout } from "../domain/layout";
+import { placeNewFreeShapes } from "../domain/place-free";
 import type {
   ActionResult,
   DomainRequest,
@@ -232,6 +233,12 @@ export function domainRoutes(bus: StoreChangeBus) {
 
     // Apply domain mutations atomically (if any).
     if (!isEmptyBatch(compiled.batch)) {
+      // DRW-223: compile places every new shape at (0,0); the post-apply layout
+      // is a no-op for a single/disconnected affected node, so without this pass
+      // agents creating nodes one-at-a-time pile them all at the origin. Seed new
+      // free shapes into empty slots beside existing content (occupants read from
+      // the pre-apply store). A connected batch is still re-distributed by ELK.
+      placeNewFreeShapes(room.store, compiled.batch.added);
       room.store = applyStoreChanges(room.store, compiled.batch);
       room.didrawIndex = rebuildDidrawIndex(room.store);
       room.version += 1;

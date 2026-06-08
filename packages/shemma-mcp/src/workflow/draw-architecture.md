@@ -42,6 +42,14 @@ Forward references resolve within one batch — define a name, then `connect`/`g
 - **Multi-line labels are supported.** A `\n` inside `label` (define/connect) or `text` (note) renders as a **hard line break** — the canvas uses `white-space: pre-wrap`, so newlines are honored, not collapsed.
 - **Emoji are safe.** Variation-selector sequences (e.g. ⚙️) and supplementary-plane codepoints (e.g. 🚀) pass through and render intact.
 
+### Placement — you don't set coordinates (DRW-223)
+
+New shapes are auto-placed; you never pass `x`/`y`:
+
+- **Single / incremental creates don't pile.** Each new free shape (`shemma_define`, `note`) is dropped into an empty slot beside the existing content, so creating nodes one at a time no longer stacks them at the origin.
+- **Connected batches are laid out.** A batch that contains edges (`define` + `connect`) is additionally distributed by the ELK layout engine — a chain/tree comes out spaced, not overlapping.
+- **Tidying is explicit.** To re-arrange an existing diagram use `shemma_layout` (whole canvas) or `shemma_layout_selection` (a subset). Per the no-auto-relayout contract, **don't** call layout after incremental edits unless the user asks — their manual arrangement must survive your edits.
+
 ## Element identity
 
 Use the `name` arg as a stable, human-meaningful id ("api-gateway", "user-db"). Re-using a name in `define` is idempotent (no duplicate created).
