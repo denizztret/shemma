@@ -482,6 +482,26 @@ export class CanvasClient {
   }
 
   /**
+   * DRW-227.02: record an optional agent annotation ("what I wanted / where I
+   * got stuck") into the per-room feedback JSONL. No-op (recorded:false) when
+   * the daemon has feedback disabled; never throws on that path.
+   */
+  async feedback(body: {
+    text: string;
+    phase?: "intent" | "blocker" | "resolution";
+    clientOpId?: string;
+    agent?: string;
+    sessionId?: string;
+  }) {
+    const r = await fetch(`${this.base}/api/agent/feedback?${this.q()}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return r.json();
+  }
+
+  /**
    * DRW-088: Tidy layout for a subset of selected shapes.
    * Calls POST /api/agent/layout-selection — runs ELK only on the given ids,
    * leaving all other shapes untouched.

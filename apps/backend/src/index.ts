@@ -35,6 +35,7 @@ import { exportRoutes } from "./routes/export";
 import { makeHealthRoutes } from "./routes/health";
 import { fitTextRoutes } from "./routes/fit-text";
 import { feedbackMiddleware } from "./feedback/middleware";
+import { feedbackRoutes } from "./routes/feedback";
 import { FeedbackWriter } from "./feedback/writer";
 import { importMermaidRoutes } from "./routes/import-mermaid";
 import { boardLayoutParamsRoutes } from "./routes/board-layout-params";
@@ -377,6 +378,9 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", canvasViewRoutes());
   app.route("/", importMermaidRoutes(bus));
   app.route("/", fitTextRoutes(bus));
+  // DRW-227.02: agent annotation endpoint. Always mounted; no-ops with
+  // recorded:false when feedback is off (opts.feedback undefined).
+  app.route("/", feedbackRoutes(opts.feedback));
   app.route("/", activeRoomsRoutes(bus.getActiveRooms()));
   app.route("/", exportRoutes());
   return {

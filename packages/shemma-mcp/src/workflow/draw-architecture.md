@@ -79,6 +79,10 @@ User-pinned shapes (`meta.pinned: true`) are not moved by layout. User-drawn fre
 
 Pass `dryRun: true` to validate + compute the would-be batch without applying. Useful before destructive operations.
 
+## Recording feedback (optional, DRW-227)
+
+If a tool result surprises you, an error is unclear, or you had to guess the right tool — drop a one-line note with `shemma_feedback` (`text`, optional `phase`: intent | blocker | resolution, optional `clientOpId` of the call it's about). It never touches the canvas and always succeeds (returns `recorded:false` if the daemon isn't collecting feedback). These notes are paired offline with what the server actually did, so the tools and docs get fixed where they didn't guide you. Purely optional — skip it when everything went as expected.
+
 ## Mermaid-first / hybrid workflow
 
 For complex diagrams with **many nodes** (≥10) and **long multi-line labels**, the manual `shemma_define → shemma_connect → shemma_layout` path produces tight or cramped output:

@@ -16,6 +16,7 @@ import {
   ApplyArgs,
   ImportMermaidArgs,
   FitTextArgs,
+  FeedbackArgs,
 } from "../schemas";
 
 export type DomainDeps = {
@@ -37,6 +38,7 @@ type DeleteInput = z.infer<z.ZodObject<typeof DeleteArgs>>;
 type ApplyInput = z.infer<z.ZodObject<typeof ApplyArgs>>;
 type ImportMermaidInput = z.infer<z.ZodObject<typeof ImportMermaidArgs>>;
 type FitTextInput = z.infer<z.ZodObject<typeof FitTextArgs>>;
+type FeedbackInput = z.infer<z.ZodObject<typeof FeedbackArgs>>;
 
 export type DomainHandles = {
   define: { call: (input: DefineInput) => Promise<ToolResult> };
@@ -49,6 +51,7 @@ export type DomainHandles = {
   apply: { call: (input: ApplyInput) => Promise<ToolResult> };
   importMermaid: { call: (input: ImportMermaidInput) => Promise<ToolResult> };
   fitText: { call: (input: FitTextInput) => Promise<ToolResult> };
+  feedback: { call: (input: FeedbackInput) => Promise<ToolResult> };
 };
 
 type CommonArgs = {
@@ -633,6 +636,62 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
     async (args) => fitTextCall(args as FitTextInput),
   );
 
+  // ── shemma_feedback (DRW-227.02) ────────────────────────────────────────────
+  async function feedbackCall(input: FeedbackInput): Promise<ToolResult> {
+    const { room: argRoom, space: argSpace, text, phase, clientOpId } = input;
+
+    const spaceRes = resolveSpaceOrError(deps, argSpace);
+    if ("error" in spaceRes) return spaceRes.error;
+
+    const resolved = await deps.resolver.resolve({ argRoom });
+    if (!resolved.ok) {
+      return toolResult({
+        ok: false,
+        code: "ambiguous-room",
+        message: resolved.message,
+        details: { candidates: resolved.candidates },
+      });
+    }
+
+    const c = new CanvasClient({
+      baseUrl: deps.client.baseUrl,
+      room: resolved.room,
+      space: spaceRes.spaceId,
+    });
+
+    try {
+      const resp = (await c.feedback({
+        text,
+        phase,
+        clientOpId,
+        sessionId: process.env.CLAUDE_SESSION_ID,
+      })) as { ok?: boolean; recorded?: boolean; reason?: string };
+      deps.resolver.recordTouch(resolved.room);
+      return toolResult({
+        ok: true,
+        room: resolved.room,
+        roomSource: resolved.source,
+        recorded: resp.recorded ?? false,
+        ...(resp.reason ? { reason: resp.reason } : {}),
+      });
+    } catch (e) {
+      return toolResult({ ...mapFetchError(e) });
+    }
+  }
+
+  server.registerTool(
+    "shemma_feedback",
+    {
+      description:
+        "Records an optional, free-form note about your own experience working on the schema — what you were trying to do and where a tool result surprised you or you got stuck. This feeds offline DX analysis (pairing your note with what the server actually did) so the tools and docs can be improved.\n\n" +
+        "Use it whenever a result didn't match your expectation, an error was unclear, or you had to guess the right tool — a one-line note is enough. It NEVER changes the canvas and is safe to call anytime; it's purely advisory and optional.\n\n" +
+        "`text` (required) — your note. `phase` — intent | blocker | resolution. `clientOpId` — the id of the action the note is about (e.g. the clientOpId of the call that surprised you), so it can be joined to the actual outcome.\n\n" +
+        "Returns `recorded: true` when stored, or `recorded: false` (with a reason like \"feedback disabled\") when the daemon isn't collecting feedback — either way the call succeeds and never blocks your work.",
+      inputSchema: FeedbackArgs,
+    },
+    async (args) => feedbackCall(args as FeedbackInput),
+  );
+
   return {
     define: { call: defineCall },
     connect: { call: connectCall },
@@ -644,5 +703,6 @@ export function registerDomainTools(server: McpServer, deps: DomainDeps): Domain
     apply: { call: applyCall },
     importMermaid: { call: importMermaidCall },
     fitText: { call: fitTextCall },
+    feedback: { call: feedbackCall },
   };
 }

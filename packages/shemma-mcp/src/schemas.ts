@@ -119,6 +119,19 @@ export const ImportMermaidArgs = {
   mode: z.enum(["browser", "storage", "auto"]).optional(),
 };
 
+// DRW-227.02: record an optional agent annotation into the feedback JSONL.
+// Off-by-default on the daemon (SHEMMA_FEEDBACK); no-ops with recorded:false.
+export const FeedbackArgs = {
+  room: z.string().optional(),
+  space: z.string().optional(),
+  /** Free-form note: what you wanted / where you got stuck. */
+  text: z.string().min(1),
+  /** Rough phase of the note. */
+  phase: z.enum(["intent", "blocker", "resolution"]).optional(),
+  /** The action this note is about (e.g. the last write's clientOpId). */
+  clientOpId: z.string().optional(),
+};
+
 // DRW-228: fit text shapes to their content. Browser-only (needs tldraw font
 // metrics) → WS round-trip, requires an open tab like browser-mode import.
 export const FitTextArgs = {
