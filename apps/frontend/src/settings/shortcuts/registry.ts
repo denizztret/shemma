@@ -65,9 +65,19 @@ export const SHORTCUT_REGISTRY: ReadonlyArray<ShortcutCommand> = [
     id: "fit-text",
     label: "Обтянуть текст",
     category: "layout",
-    // ⌘⇧F / Ctrl+Shift+F — shift, key "f". DRW-219.
+    // ⌘⇧F / Ctrl+Shift+F — shift, !alt, key "f". DRW-219.
     defaultBinding: { mod: true, shift: true, code: "KeyF" },
-    description: "Подогнать размер выделенных объектов под текст (оптимальная ширина, минимальная высота)",
+    description:
+      "Подогнать размер выделенных объектов (и детей контейнера/фрейма) под текст (оптимальная ширина, минимальная высота)",
+  },
+  {
+    id: "fit-text-force",
+    label: "Обтянуть с пинами",
+    category: "layout",
+    // ⌘⌥⇧F / Ctrl+Alt+Shift+F — alt + shift, key "f". DRW-232.
+    defaultBinding: { mod: true, alt: true, shift: true, code: "KeyF" },
+    description:
+      "Обтянуть текст, включая узлы с вручную заданным размером (игнор size-pin)",
   },
   {
     id: "copy-link",

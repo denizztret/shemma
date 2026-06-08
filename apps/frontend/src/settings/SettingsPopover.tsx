@@ -32,7 +32,7 @@ import {
   type SchemaContainerTitlePosition,
   normalizeTitlePosition,
 } from "../shapes/schema-container/title-position";
-import { applyTextFitToSelection } from "../canvas/apply-text-fit";
+import { fitTextWithReflow } from "../canvas/apply-text-fit";
 import {
   applyStyleToSelection,
   collectDescendantIds,
@@ -1033,9 +1033,9 @@ const SelectionPanelContainer: FC<{
         void applyStyleToSelection(editor, ids, { arrowKind: v });
       }}
       showTextFit={showTextFit}
-      onTextFit={() => {
+      onTextFit={(force) => {
         const ids = editor.getSelectedShapeIds() as unknown as string[];
-        applyTextFitToSelection(editor, ids);
+        fitTextWithReflow(editor, ids, { force });
       }}
       singleContainerTitlePosition={singleContainer?.props.titlePosition}
       onSingleContainerTitlePositionChange={

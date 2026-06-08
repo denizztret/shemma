@@ -62,6 +62,23 @@ const HISTORICAL: Record<
     meta: ev({ metaKey: true, shiftKey: true, code: "KeyF", key: "f" }),
     ctrl: ev({ ctrlKey: true, shiftKey: true, code: "KeyF", key: "f" }),
   },
+  // DRW-232: ⌘⌥⇧F / Ctrl+Alt+Shift+F — force-fit (ignore size-pins).
+  "fit-text-force": {
+    meta: ev({
+      metaKey: true,
+      altKey: true,
+      shiftKey: true,
+      code: "KeyF",
+      key: "f",
+    }),
+    ctrl: ev({
+      ctrlKey: true,
+      altKey: true,
+      shiftKey: true,
+      code: "KeyF",
+      key: "f",
+    }),
+  },
   // copy-link default is ⇧⌘S (moved off ⌘⌥C — that's Chrome's Inspect-Element
   // DevTools accelerator on macOS and never reaches the page handler).
   "copy-link": {
@@ -134,6 +151,30 @@ describe("matchShortcut — near-misses do NOT match", () => {
       matchShortcut(
         getCommand("force-relayout")!.defaultBinding,
         ev({ metaKey: true, shiftKey: true, code: "KeyL", key: "l" }),
+      ),
+    ).toBe(false);
+  });
+
+  test("fit-text (⌘⇧F) does NOT match ⌘⌥⇧F (fit-text-force)", () => {
+    expect(
+      matchShortcut(
+        getCommand("fit-text")!.defaultBinding,
+        ev({
+          metaKey: true,
+          altKey: true,
+          shiftKey: true,
+          code: "KeyF",
+          key: "f",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  test("fit-text-force (⌘⌥⇧F) does NOT match ⌘⇧F (no alt)", () => {
+    expect(
+      matchShortcut(
+        getCommand("fit-text-force")!.defaultBinding,
+        ev({ metaKey: true, shiftKey: true, code: "KeyF", key: "f" }),
       ),
     ).toBe(false);
   });
