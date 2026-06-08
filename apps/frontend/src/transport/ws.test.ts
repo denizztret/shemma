@@ -582,6 +582,90 @@ describe("startStoreSync — import-mermaid callback (DRW-083)", () => {
   });
 });
 
+describe("startStoreSync — fit-text callback (DRW-228)", () => {
+  function makeDepsWithFit(
+    onFitText?: (
+      targets: string[] | undefined,
+      requestId: string,
+    ) => Promise<{ ok: boolean; count?: number; shapeIds?: string[]; error?: string }>,
+  ) {
+    const sock = new MockSocket();
+    const store = new MockStore();
+    const editor = { store } as unknown as Parameters<typeof startStoreSync>[0]["editor"];
+    const sync = startStoreSync({
+      editor,
+      wsUrl: "ws://test/ws?room=t",
+      room: "test-room",
+      initialVersion: 0,
+      onTruncated: () => {},
+      debounceMs: 5,
+      socketFactory: () => sock as unknown as WebSocket,
+      onFitText,
+    });
+    return { sock, store, stop: sync.stop };
+  }
+
+  test("fit-text frame calls onFitText and sends fit-text-result back", async () => {
+    const calls: Array<{ targets: string[] | undefined; requestId: string }> = [];
+    const { sock, stop } = makeDepsWithFit(async (targets, requestId) => {
+      calls.push({ targets, requestId });
+      return { ok: true, count: 2, shapeIds: ["shape:a", "shape:b"] };
+    });
+    sock.open();
+    const beforeSent = sock.sent.length;
+
+    sock.message({ kind: "fit-text", requestId: "req-fit", targets: ["api", "db"] });
+    await sleep(20);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.targets).toEqual(["api", "db"]);
+    expect(calls[0]!.requestId).toBe("req-fit");
+
+    const resultFrames = sock.sent.slice(beforeSent).map((s) => JSON.parse(s));
+    const resultFrame = resultFrames.find((f: { kind: string }) => f.kind === "fit-text-result");
+    expect(resultFrame).toBeDefined();
+    expect(resultFrame.ok).toBe(true);
+    expect(resultFrame.requestId).toBe("req-fit");
+    expect(resultFrame.count).toBe(2);
+    expect(resultFrame.shape_ids).toEqual(["shape:a", "shape:b"]);
+
+    stop();
+  });
+
+  test("fit-text sends error result when callback throws", async () => {
+    const { sock, stop } = makeDepsWithFit(async () => {
+      throw new Error("no editor");
+    });
+    sock.open();
+    const beforeSent = sock.sent.length;
+
+    sock.message({ kind: "fit-text", requestId: "req-fit-err" });
+    await sleep(20);
+
+    const resultFrames = sock.sent.slice(beforeSent).map((s) => JSON.parse(s));
+    const resultFrame = resultFrames.find((f: { kind: string }) => f.kind === "fit-text-result");
+    expect(resultFrame).toBeDefined();
+    expect(resultFrame.ok).toBe(false);
+    expect(resultFrame.error).toContain("no editor");
+    expect(resultFrame.requestId).toBe("req-fit-err");
+
+    stop();
+  });
+
+  test("fit-text is silently ignored when no onFitText callback", async () => {
+    const { sock, stop } = makeDepsWithFit(undefined);
+    sock.open();
+    const beforeSent = sock.sent.length;
+
+    sock.message({ kind: "fit-text", requestId: "req-noop" });
+    await sleep(20);
+
+    expect(sock.sent.slice(beforeSent).length).toBe(0);
+
+    stop();
+  });
+});
+
 // DRW-149: layoutAction flag dispatches through history wrap (Cmd+Z support)
 describe("startStoreSync — layoutAction undo path (DRW-149)", () => {
   // Extended MockStore that also captures editor.markHistoryStoppingPoint /

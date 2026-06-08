@@ -93,6 +93,44 @@ describe("parseClientMessage — import-mermaid-result", () => {
   });
 });
 
+describe("parseClientMessage — fit-text-result (DRW-228)", () => {
+  it("parses ok:true result with count + shape_ids", () => {
+    const msg = parseClientMessage(JSON.stringify({
+      kind: "fit-text-result",
+      requestId: "req-fit",
+      ok: true,
+      count: 3,
+      shape_ids: ["s1", "s2", "s3"],
+    }));
+    expect(msg?.kind).toBe("fit-text-result");
+    if (msg?.kind === "fit-text-result") {
+      expect(msg.requestId).toBe("req-fit");
+      expect(msg.ok).toBe(true);
+      expect(msg.count).toBe(3);
+      expect(msg.shape_ids).toEqual(["s1", "s2", "s3"]);
+    }
+  });
+
+  it("parses ok:false result with error field", () => {
+    const msg = parseClientMessage(JSON.stringify({
+      kind: "fit-text-result",
+      requestId: "req-fit-err",
+      ok: false,
+      error: "no editor",
+    }));
+    expect(msg?.kind).toBe("fit-text-result");
+    if (msg?.kind === "fit-text-result") {
+      expect(msg.ok).toBe(false);
+      expect(msg.error).toBe("no editor");
+    }
+  });
+
+  it("rejects fit-text-result with missing requestId / ok", () => {
+    expect(parseClientMessage(JSON.stringify({ kind: "fit-text-result", ok: true }))).toBeNull();
+    expect(parseClientMessage(JSON.stringify({ kind: "fit-text-result", requestId: "r" }))).toBeNull();
+  });
+});
+
 describe("isPlaceholderSchema", () => {
   it("identifies the V1 stub produced by defaultSchema() as placeholder", () => {
     const stub = { schemaVersion: 1, storeVersion: 4, recordVersions: {} };

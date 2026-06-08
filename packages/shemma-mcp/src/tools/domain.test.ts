@@ -893,3 +893,80 @@ describe("shemma_layout_selection tool (DRW-088)", () => {
     expect((capturedBody as { spacing: string }).spacing).toBe("compact");
   });
 });
+
+describe("shemma_fit_text tool (DRW-228)", () => {
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("registers shemma_fit_text without throwing", () => {
+    expect(() => setup()).not.toThrow();
+  });
+
+  it("fitText POSTs /api/agent/fit-text with targets and returns count + shape_ids", async () => {
+    let capturedUrl = "";
+    let capturedBody: unknown;
+    mockFetch((url, init) => {
+      capturedUrl = url;
+      capturedBody = JSON.parse(init?.body as string);
+      return { body: { ok: true, count: 2, shape_ids: ["s1", "s2"] } };
+    });
+    const { handles } = setup({ mode: "direct", room: "test-room" });
+    const r = await handles.fitText.call({ targets: ["api", "db"] });
+    expect(capturedUrl).toContain("/api/agent/fit-text");
+    expect(capturedUrl).toContain("room=test-room");
+    expect((capturedBody as { targets: string[] }).targets).toEqual(["api", "db"]);
+    expect(r.structuredContent).toMatchObject({
+      ok: true,
+      room: "test-room",
+      count: 2,
+      shape_ids: ["s1", "s2"],
+    });
+    expect(r.isError).toBeUndefined();
+  });
+
+  it("fitText omits targets when not provided (fit all)", async () => {
+    let capturedBody: unknown;
+    mockFetch((_url, init) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return { body: { ok: true, count: 5, shape_ids: [] } };
+    });
+    const { handles } = setup({ mode: "direct", room: "r" });
+    await handles.fitText.call({});
+    expect((capturedBody as { targets?: unknown }).targets).toBeUndefined();
+  });
+
+  it("fitText surfaces room_url on 503 no-client-connected", async () => {
+    mockFetch(() => ({
+      body: { error: "no client connected", room_url: "http://127.0.0.1:8787/?room=r" },
+      status: 503,
+    }));
+    const { handles } = setup({ mode: "direct", room: "r" });
+    const r = await handles.fitText.call({});
+    expect(r.structuredContent).toMatchObject({
+      ok: false,
+      code: "no-client-connected",
+      details: { room_url: "http://127.0.0.1:8787/?room=r" },
+    });
+    const sc = r.structuredContent as { message: string };
+    expect(sc.message).toContain("http://127.0.0.1:8787/?room=r");
+    expect(r.isError).toBe(true);
+  });
+
+  it("fitText network error returns daemon-unavailable", async () => {
+    globalThis.fetch = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as typeof fetch;
+    const { handles } = setup({ mode: "direct", room: "r" });
+    const r = await handles.fitText.call({});
+    expect(r.structuredContent).toMatchObject({ ok: false, code: "daemon-unavailable" });
+    expect(r.isError).toBe(true);
+  });
+
+  it("fitText with ambiguous resolver returns ambiguous-room", async () => {
+    const { handles } = setup({ mode: "ambiguous" });
+    const r = await handles.fitText.call({});
+    expect(r.structuredContent).toMatchObject({ ok: false, code: "ambiguous-room" });
+    expect(r.isError).toBe(true);
+  });
+});

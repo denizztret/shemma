@@ -32,6 +32,7 @@ import { schemaDuplicateRoutes } from "./routes/schema-duplicate";
 import { domainRoutes } from "./routes/domain";
 import { exportRoutes } from "./routes/export";
 import { makeHealthRoutes } from "./routes/health";
+import { fitTextRoutes } from "./routes/fit-text";
 import { importMermaidRoutes } from "./routes/import-mermaid";
 import { boardLayoutParamsRoutes } from "./routes/board-layout-params";
 import { boardStyleDefaultsRoutes } from "./routes/board-style-defaults";
@@ -358,6 +359,7 @@ export function makeApp(opts: AppOpts = {}) {
   app.route("/", contextRoutes());
   app.route("/", canvasViewRoutes());
   app.route("/", importMermaidRoutes(bus));
+  app.route("/", fitTextRoutes(bus));
   app.route("/", activeRoomsRoutes(bus.getActiveRooms()));
   app.route("/", exportRoutes());
   return {
@@ -688,6 +690,15 @@ export async function startServer(opts: AppOpts = {}) {
             shape_ids: msg.shape_ids,
             didraw_names: msg.didraw_names,
             root_ids: msg.root_ids,
+            error: msg.error,
+          });
+          return;
+        }
+        if (msg.kind === "fit-text-result") {
+          bus.resolveFitText(msg.requestId, {
+            ok: msg.ok,
+            count: msg.count,
+            shape_ids: msg.shape_ids,
             error: msg.error,
           });
           return;

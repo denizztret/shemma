@@ -96,6 +96,14 @@ export function parseClientMessage(
     const error = typeof obj.error === "string" ? obj.error : undefined;
     return { kind: "import-mermaid-result", requestId: obj.requestId, ok: obj.ok, shape_ids, didraw_names, root_ids, error } as WsClientMessage;
   }
+  if (obj.kind === "fit-text-result") {
+    if (typeof obj.requestId !== "string" || obj.requestId === "") return null;
+    if (typeof obj.ok !== "boolean") return null;
+    const count = typeof obj.count === "number" ? obj.count : undefined;
+    const shape_ids = Array.isArray(obj.shape_ids) ? (obj.shape_ids as string[]) : undefined;
+    const error = typeof obj.error === "string" ? obj.error : undefined;
+    return { kind: "fit-text-result", requestId: obj.requestId, ok: obj.ok, count, shape_ids, error } as WsClientMessage;
+  }
   return null;
 }
 

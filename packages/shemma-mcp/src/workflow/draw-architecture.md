@@ -50,6 +50,15 @@ New shapes are auto-placed; you never pass `x`/`y`:
 - **Connected batches are laid out.** A batch that contains edges (`define` + `connect`) is additionally distributed by the ELK layout engine — a chain/tree comes out spaced, not overlapping.
 - **Tidying is explicit.** To re-arrange an existing diagram use `shemma_layout` (whole canvas) or `shemma_layout_selection` (a subset). Per the no-auto-relayout contract, **don't** call layout after incremental edits unless the user asks — their manual arrangement must survive your edits.
 
+### Text fit — boxes hug their label (DRW-228)
+
+A `geo`/`note` box is auto-sized to its text (optimal width, minimal height) so labels don't overflow or leave the box oversized:
+
+- **Automatic when a tab is open.** When a browser tab is connected, newly added or edited text is fitted on the frontend automatically (on add — including your MCP-created shapes — and when a human finishes editing; the live tab also fits the state it loads on open). You don't need to do anything in the common case.
+- **`shemma_fit_text` — explicit fit.** An agent-invokable pass to force/confirm fitting — e.g. right before a layout, or to cover any shape the live auto-fitter didn't catch. `targets` (shape ids / didrawNames) limits scope; omit to fit all fittable shapes. **Requires an open tab** (text metrics are browser-only): on `no-client-connected` open the returned `room_url` and retry, exactly like `shemma_import_mermaid` mode:"browser". Returns `count` (only un-pinned, un-fitted shapes are changed — already-fitted boxes report 0).
+- **Never overwrites a user size.** Size-pinned shapes (a human's manual resize, or already-fitted boxes) are skipped — fitting respects pin discipline.
+- **Order:** fit *before* a layout pass so the layout sees correct dimensions. After fit, sizes are pinned and survive layout.
+
 ## Element identity
 
 Use the `name` arg as a stable, human-meaningful id ("api-gateway", "user-db"). Re-using a name in `define` is idempotent (no duplicate created).
@@ -73,7 +82,7 @@ Pass `dryRun: true` to validate + compute the would-be batch without applying. U
 ## Mermaid-first / hybrid workflow
 
 For complex diagrams with **many nodes** (≥10) and **long multi-line labels**, the manual `shemma_define → shemma_connect → shemma_layout` path produces tight or cramped output:
-- `geo` shape labels don't shrink-to-fit programmatically (no public auto-resize API in tldraw 5.x; mitigated by 220×80 defaults).
+- `geo` boxes are auto-fitted to their text (DRW-228, see "Text fit" above), but very long single-line labels still read better split across lines — Mermaid handles that wrapping for you.
 - ELK layered routing crowds parallel edges in dense graphs.
 
 For these cases prefer **Mermaid import via MCP**, then fall back to `shemma_*` calls for incremental tweaks.

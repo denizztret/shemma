@@ -6,12 +6,21 @@ export type Sock = { send: (data: string) => void; readyState: number };
 const OPEN = 1;
 
 const IMPORT_MERMAID_TIMEOUT_MS = 10_000;
+const FIT_TEXT_TIMEOUT_MS = 10_000;
 
 export type ImportMermaidResult = {
   ok: boolean;
   shape_ids?: string[];
   didraw_names?: string[];
   root_ids?: string[];
+  error?: string;
+};
+
+// DRW-228: result of a frontend fit-text command.
+export type FitTextResult = {
+  ok: boolean;
+  count?: number;
+  shape_ids?: string[];
   error?: string;
 };
 
@@ -43,6 +52,12 @@ export class WsHub implements StoreChangeBus {
   /** Pending import-mermaid requests awaiting frontend result. */
   private pendingImports = new Map<string, {
     resolve: (result: ImportMermaidResult) => void;
+    reject: (err: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  /** DRW-228: pending fit-text requests awaiting frontend result. */
+  private pendingFits = new Map<string, {
+    resolve: (result: FitTextResult) => void;
     reject: (err: Error) => void;
     timer: ReturnType<typeof setTimeout>;
   }>();
@@ -181,6 +196,68 @@ export class WsHub implements StoreChangeBus {
     if (!pending) return; // already timed out — ignore
     clearTimeout(pending.timer);
     this.pendingImports.delete(requestId);
+    pending.resolve(result);
+  }
+
+  /**
+   * DRW-228: send a fit-text command to the first open subscriber in
+   * `(space, room)`. Returns a Promise that resolves with the frontend result
+   * or rejects on timeout / no client. Caller checks `subscriberCount() > 0`
+   * first so a clean 503 with room_url can be surfaced.
+   *
+   * `targets` (shape ids or didrawNames) limits the fit scope; omitted → all
+   * fittable geo/note shapes that the user has not size-pinned.
+   */
+  sendFitText(
+    space: string,
+    room: string,
+    requestId: string,
+    targets?: string[],
+  ): Promise<FitTextResult> {
+    return new Promise<FitTextResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingFits.delete(requestId);
+        reject(new Error("client did not respond"));
+      }, FIT_TEXT_TIMEOUT_MS);
+
+      this.pendingFits.set(requestId, { resolve, reject, timer });
+
+      const set = this.subs.get(compositeKey(space, room));
+      if (!set) {
+        clearTimeout(timer);
+        this.pendingFits.delete(requestId);
+        reject(new Error("no client connected"));
+        return;
+      }
+      let sent = false;
+      for (const s of set) {
+        if (s.readyState === OPEN) {
+          const frame: { kind: string; requestId: string; targets?: string[] } = {
+            kind: "fit-text",
+            requestId,
+          };
+          if (targets !== undefined) frame.targets = targets;
+          s.send(JSON.stringify(frame));
+          sent = true;
+          break;
+        }
+      }
+      if (!sent) {
+        clearTimeout(timer);
+        this.pendingFits.delete(requestId);
+        reject(new Error("no client connected"));
+      }
+    });
+  }
+
+  /**
+   * DRW-228: resolve a pending fit-text request when the client replies.
+   */
+  resolveFitText(requestId: string, result: FitTextResult): void {
+    const pending = this.pendingFits.get(requestId);
+    if (!pending) return; // already timed out — ignore
+    clearTimeout(pending.timer);
+    this.pendingFits.delete(requestId);
     pending.resolve(result);
   }
 

@@ -58,7 +58,11 @@ import { UpdateBanner } from "./chrome/UpdateBanner";
 import { MermaidImportModal } from "./mermaid/MermaidImportModal";
 import { PromptDrawer } from "./prompts/PromptDrawer";
 import { PromptInput } from "./prompts/PromptInput";
-import { applyTextFitToSelection } from "./canvas/apply-text-fit";
+import {
+  applyTextFitToShape,
+  applyTextFitToSelection,
+} from "./canvas/apply-text-fit";
+import { registerAutoTextFit } from "./canvas/auto-text-fit";
 import { ThemeToggleButton } from "./theme/ThemeToggleButton";
 import { cycleThemeMode } from "./theme/theme-mode";
 import { setThemeMode } from "./theme/theme-store";
@@ -179,6 +183,8 @@ export function App({
   const titlePosInheritDisposerRef = useRef<(() => void) | null>(null);
   // DRW-194: disposer for registerDidrawIdDedup (regen didrawId on duplicate).
   const didrawDedupDisposerRef = useRef<(() => void) | null>(null);
+  // DRW-228: disposer for registerAutoTextFit (event-driven text-fit on add/edit).
+  const autoTextFitDisposerRef = useRef<(() => void) | null>(null);
   // DL: deep-link toast sink — устанавливается ToastBridge внутри Tldraw
   // UI-контекста, вызывается из мест вне контекста (hydrate-ретрай, ⌘⌥C).
   const toastRef = useRef<ToastSink["current"]>(null);
@@ -222,6 +228,8 @@ export function App({
       titlePosInheritDisposerRef.current = null;
       didrawDedupDisposerRef.current?.();
       didrawDedupDisposerRef.current = null;
+      autoTextFitDisposerRef.current?.();
+      autoTextFitDisposerRef.current = null;
     };
   }, []);
 
@@ -635,6 +643,48 @@ export function App({
       };
     };
 
+    // DRW-228: backend-routed fit-text command (shemma_fit_text). Fits the
+    // given targets (shape ids / didrawName / didrawId / didrawLabel) to their
+    // text; omitted → all fittable geo/note shapes the user hasn't size-pinned.
+    // Respects size-pins (pin discipline): a user's manual resize and an
+    // already-fitted box are skipped — so the main use is filling in default-
+    // sized shapes after a fresh tab load (snapshot load doesn't fire the
+    // auto-fit listener).
+    const runTextFit = async (
+      targets: string[] | undefined,
+      _requestId: string,
+    ) => {
+      const all = editor.getCurrentPageShapes();
+      let pool = all;
+      if (targets && targets.length > 0) {
+        const wanted = new Set(targets);
+        pool = all.filter((s) => {
+          if (wanted.has(s.id as unknown as string)) return true;
+          const m = s.meta as Record<string, unknown> | undefined;
+          return (
+            (typeof m?.didrawName === "string" && wanted.has(m.didrawName)) ||
+            (typeof m?.didrawId === "string" && wanted.has(m.didrawId)) ||
+            (typeof m?.didrawLabel === "string" && wanted.has(m.didrawLabel))
+          );
+        });
+      }
+      const fittedIds: string[] = [];
+      editor.run(() => {
+        editor.markHistoryStoppingPoint("fit-text-mcp");
+        for (const s of pool) {
+          const pinned =
+            (s.meta as Record<string, unknown> | undefined)
+              ?.didrawSizePinned === true;
+          if (pinned) continue;
+          // applyTextFitToShape further filters type (geo/note) + non-empty text.
+          if (applyTextFitToShape(editor, s)) {
+            fittedIds.push(s.id as unknown as string);
+          }
+        }
+      });
+      return { ok: true, count: fittedIds.length, shapeIds: fittedIds };
+    };
+
     // DRW-075: debounced zoomToFit after AI mutations; fires at most once per
     // 100ms burst of AI store-change frames. Cancelled on room change via the
     // `active` flag checked inside the callback.
@@ -747,6 +797,7 @@ export function App({
             scheduleAiZoom();
           },
           onImportMermaid: runMermaidImport,
+          onFitText: runTextFit,
           onTruncated: () => {
             if (!active) return;
             // DRW-018: pause immediately so straggler frames don't apply to
@@ -983,6 +1034,10 @@ export function App({
           // DRW-194: regenerate colliding didrawId on local duplicate/paste.
           didrawDedupDisposerRef.current?.();
           didrawDedupDisposerRef.current = registerDidrawIdDedup(ed);
+          // DRW-228: event-driven text-fit — size geo/note to its text on
+          // add (incl. AI/remote) and on editing-end (skips mid-typing).
+          autoTextFitDisposerRef.current?.();
+          autoTextFitDisposerRef.current = registerAutoTextFit(ed);
           // DRW-150: wire direction callback for context-menu (requires live editor).
           // Task #6 (frame-container-direction-layout): explicit "custom" stays as
           // schema-container props write (auto-flip parity); cardinal directions

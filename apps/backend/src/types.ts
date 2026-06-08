@@ -108,6 +108,15 @@ export type WsClientMessage =
       didraw_names?: string[];
       root_ids?: string[];
       error?: string;
+    }
+  // DRW-228: frontend result for a fit-text command.
+  | {
+      kind: "fit-text-result";
+      requestId: string;
+      ok: boolean;
+      count?: number;
+      shape_ids?: string[];
+      error?: string;
     };
 
 export type WsMessage =
@@ -132,6 +141,13 @@ export type WsMessage =
       requestId: string;
       /** DRW-086: viewport behavior after import. Default 'new'. */
       focus?: "new" | "fit-all" | "none";
+    }
+  // DRW-228: command to fit text shapes to their content. `targets` (shape ids
+  // or didrawNames) limits scope; omitted → all fittable geo/note shapes.
+  | {
+      kind: "fit-text";
+      requestId: string;
+      targets?: string[];
     };
 
 export type StoreChangeBus = {

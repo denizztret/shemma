@@ -16,7 +16,7 @@ import { pickOptimalWidth } from "./text-fit";
 
 // geo/note несут явный размер + growY-механику. text-shape само-ресайзится
 // (autoSize) и в обтяжке не нуждается — не трогаем.
-const TEXT_FIT_TYPES: ReadonlySet<string> = new Set(["geo", "note"]);
+export const TEXT_FIT_TYPES: ReadonlySet<string> = new Set(["geo", "note"]);
 
 // Границы поиска ширины. MAX — предел читаемости (не делаем строку-простыню),
 // MIN — нижняя граница узкого бокса.
@@ -29,7 +29,8 @@ export const TEXT_FIT_MAX_WIDTH = 400;
 // уже большой бокс» (иначе высота никогда не уменьшалась бы).
 const MEASURE_BASE_H = 1;
 
-function hasText(shape: TLShape): boolean {
+/** Объект несёт непустой текст (geo/note richText). */
+export function shapeHasText(shape: TLShape): boolean {
   const rt = (shape.props as { richText?: unknown }).richText;
   const text = extractPlaintextFromRichText(rt);
   return text !== null && text.trim().length > 0;
@@ -56,6 +57,41 @@ function makeMeasureH(
 }
 
 /**
+ * Подгоняет размер ОДНОГО объекта с текстом (geo/note) под оптимальную ширину.
+ * Возвращает true, если объект был обтянут. Нетекстовые типы и объекты без
+ * текста пропускаются (false). Размер помечается user-owned
+ * (meta.didrawSizePinned) — AI-layout его не перетирает.
+ *
+ * Чистого undo-grouping не делает: вызывающая сторона оборачивает в
+ * editor.run() + markHistoryStoppingPoint(), если нужна отдельная undo-точка
+ * (DRW-228: переиспользуется и командой ⌘⇧F, и авто-обтяжкой по событию).
+ */
+export function applyTextFitToShape(editor: Editor, shape: TLShape): boolean {
+  if (!TEXT_FIT_TYPES.has(shape.type)) return false;
+  if (!shapeHasText(shape)) return false;
+
+  const measureH = makeMeasureH(editor, shape);
+  const { width, height } = pickOptimalWidth(measureH, {
+    minWidth: TEXT_FIT_MIN_WIDTH,
+    maxWidth: TEXT_FIT_MAX_WIDTH,
+  });
+  const props = shape.props as { w?: number; h?: number; growY?: number };
+  const hasGrowY = typeof props.growY === "number";
+  const nextProps: Record<string, unknown> = { w: width, h: height };
+  // geo/note: высота поглощает growY → плотный бокс без авто-роста.
+  if (hasGrowY) nextProps.growY = 0;
+  const meta = (shape.meta ?? {}) as Record<string, unknown>;
+  editor.updateShape({
+    id: shape.id,
+    type: shape.type,
+    props: nextProps,
+    meta: { ...meta, didrawSizePinned: true },
+    // biome-ignore lint/suspicious/noExplicitAny: TLShape props union
+  } as any);
+  return true;
+}
+
+/**
  * Подгоняет размеры выделенных текстовых объектов. Возвращает число изменённых.
  */
 export function applyTextFitToSelection(
@@ -66,7 +102,7 @@ export function applyTextFitToSelection(
   for (const id of selectedIds) {
     const s = editor.getShape(id as TLShapeId);
     if (!s || !TEXT_FIT_TYPES.has(s.type)) continue;
-    if (!hasText(s)) continue;
+    if (!shapeHasText(s)) continue;
     targets.push(s);
   }
   if (targets.length === 0) return 0;
@@ -75,25 +111,7 @@ export function applyTextFitToSelection(
   editor.run(() => {
     editor.markHistoryStoppingPoint("fit-text");
     for (const s of targets) {
-      const measureH = makeMeasureH(editor, s);
-      const { width, height } = pickOptimalWidth(measureH, {
-        minWidth: TEXT_FIT_MIN_WIDTH,
-        maxWidth: TEXT_FIT_MAX_WIDTH,
-      });
-      const props = s.props as { w?: number; h?: number; growY?: number };
-      const hasGrowY = typeof props.growY === "number";
-      const nextProps: Record<string, unknown> = { w: width, h: height };
-      // geo/note: высота поглощает growY → плотный бокс без авто-роста.
-      if (hasGrowY) nextProps.growY = 0;
-      const meta = (s.meta ?? {}) as Record<string, unknown>;
-      editor.updateShape({
-        id: s.id,
-        type: s.type,
-        props: nextProps,
-        meta: { ...meta, didrawSizePinned: true },
-        // biome-ignore lint/suspicious/noExplicitAny: TLShape props union
-      } as any);
-      changed++;
+      if (applyTextFitToShape(editor, s)) changed++;
     }
   });
   return changed;
