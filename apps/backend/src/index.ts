@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { releaseLock, writeLockMetadata } from "@shemma/lockfile";
 import { runStartupMigration } from "./migration/legacy-spaces.js";
@@ -33,6 +34,8 @@ import { domainRoutes } from "./routes/domain";
 import { exportRoutes } from "./routes/export";
 import { makeHealthRoutes } from "./routes/health";
 import { fitTextRoutes } from "./routes/fit-text";
+import { feedbackMiddleware } from "./feedback/middleware";
+import { FeedbackWriter } from "./feedback/writer";
 import { importMermaidRoutes } from "./routes/import-mermaid";
 import { boardLayoutParamsRoutes } from "./routes/board-layout-params";
 import { boardStyleDefaultsRoutes } from "./routes/board-style-defaults";
@@ -96,6 +99,14 @@ export type AppOpts = {
    * `s list --by-last-used`).
    */
   onSpaceResolved?: (space: SpaceRecord) => void;
+  /**
+   * DRW-227.01: optional feedback-telemetry writer. When provided, a best-effort
+   * middleware logs every agent-facing mutation + /api/agent/context as a
+   * `request` record. Omitted (the default) → no middleware, no file, zero
+   * overhead. The daemon constructs this from `config.feedback` only when the
+   * `SHEMMA_FEEDBACK` flag is enabled; tests inject a tmpdir-scoped writer.
+   */
+  feedback?: FeedbackWriter;
 };
 
 /**
@@ -293,6 +304,12 @@ export function makeApp(opts: AppOpts = {}) {
   // exclusively through `bundleForRequest(c)` from here on.
   app.use("/api/*", installBundleResolver(bundleResolver));
 
+  // DRW-227.01: feedback-telemetry backbone. Mounts AFTER the bundle resolver
+  // (so it can read space/room) and ONLY when a writer is provided (flag on).
+  if (opts.feedback) {
+    app.use("/api/*", feedbackMiddleware({ writer: opts.feedback }));
+  }
+
   app.route("/", makeHealthRoutes(storageDir));
   app.route("/", versionRoutes);
   app.route("/", sessionRoutes);
@@ -483,9 +500,17 @@ export async function startServer(opts: AppOpts = {}) {
   // the daemonMode-derived `true` — splitting persistence into two
   // in-memory states for the same (space, room).
   const effectiveSpaceMiddleware = opts.enableSpaceMiddleware ?? daemonMode;
+  // DRW-227.01: construct the feedback writer only for a real daemon when the
+  // flag is on; in-process/test usage stays clean (tests inject via opts).
+  const feedback =
+    opts.feedback ??
+    (daemonMode && config.feedback.enabled
+      ? new FeedbackWriter({ baseDir: path.join(homedir(), ".shemma", "feedback") })
+      : undefined);
   const { app, bus, persistence, bundleForSpace, legacyBundle } = makeApp({
     ...opts,
     idle,
+    feedback,
     enableSpaceMiddleware: effectiveSpaceMiddleware,
     onSpaceResolved: debouncedTouch
       ? (s) => debouncedTouch.touch(s.id)
