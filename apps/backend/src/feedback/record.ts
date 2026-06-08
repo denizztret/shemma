@@ -98,8 +98,10 @@ export function boundValue(value: unknown, maxBytes: number): unknown {
 /**
  * Derive the objective outcome from the HTTP status + response body. An
  * in-band `{ ok: false }` at HTTP 200 (the daemon's domain-rejection shape)
- * counts as not-ok; the error code prefers `body.code`, then `body.error`,
- * then a synthesized `http-<status>`.
+ * counts as not-ok. The error code prefers `body.code`, then `body.error`,
+ * then the first code of a domain-validation `errors[]` array (the common
+ * `{ ok:false, errors:[{ code, field, … }] }` shape — the most actionable
+ * signal for DX analysis), then a synthesized `http-<status>`.
  */
 export function extractOutcome(
   httpStatus: number,
@@ -115,7 +117,11 @@ export function extractOutcome(
   let errorCode: string | null = null;
   if (b && typeof b.code === "string") errorCode = b.code;
   else if (b && typeof b.error === "string") errorCode = b.error;
-  else if (!ok) errorCode = `http-${httpStatus}`;
+  else if (b && Array.isArray(b.errors)) {
+    const first = b.errors[0] as Record<string, unknown> | undefined;
+    if (first && typeof first.code === "string") errorCode = first.code;
+  }
+  if (errorCode === null && !ok) errorCode = `http-${httpStatus}`;
 
   return { ok, errorCode };
 }
