@@ -130,6 +130,15 @@ describe("extractOutcome", () => {
     });
   });
 
+  it("domain validation shape {ok:false, errors:[{code}]} → errorCode from first error code", () => {
+    expect(
+      extractOutcome(422, {
+        ok: false,
+        errors: [{ actionIndex: 0, field: "role", code: "unknown-role" }],
+      }),
+    ).toEqual({ ok: false, errorCode: "unknown-role" });
+  });
+
   it("500 with non-json body → not ok, errorCode http-500", () => {
     expect(extractOutcome(500, undefined)).toEqual({
       ok: false,
