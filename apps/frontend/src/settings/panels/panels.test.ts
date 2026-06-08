@@ -120,7 +120,6 @@ function renderBoardPanel(overrides: Partial<Parameters<typeof BoardPanel>[0]> =
   return BoardPanel({
     effective: defaultEffective,
     onDirectionChange: () => {},
-    onPresetSelect: () => {},
     onOpenAdvanced: () => {},
     onOpenShortcuts: () => {},
     styleEffective: DEFAULT_STYLE_DEFAULTS,
@@ -278,7 +277,8 @@ function renderSelectionPanel(overrides: Partial<SelectionPanelProps> = {}): Ret
     direction: "TB",
     onDirectionChange: () => {},
     layoutSettings: defaultLayoutSettings,
-    onPreset: () => {},
+    onDensity: { start: () => {}, change: () => {}, end: () => {} },
+    showDensity: true,
     onAdvanced: () => {},
     onReset: () => {},
     showReset: false,
@@ -315,6 +315,25 @@ describe("SelectionPanel", () => {
     expect(hasComponent(tree, "LayoutSettingsSection")).toBe(false);
     expect(hasComponent(tree, "PinSection")).toBe(true);
     expect(hasComponent(tree, "LayoutActionsSection")).toBe(true);
+  });
+
+  test("DRW-239: density slider shows for a plain node selection (showDensity), even when container sections are hidden", () => {
+    const tree = renderSelectionPanel({
+      counts: { containers: 0, nodes: 3 },
+      showContainerSections: false,
+      showDensity: true,
+    });
+    expect(hasComponent(tree, "DensitySection")).toBe(true);
+    expect(hasComponent(tree, "LayoutSettingsSection")).toBe(false); // no engine/direction for nodes
+  });
+
+  test("DRW-239: density slider hidden when nothing respreadable (showDensity=false)", () => {
+    const tree = renderSelectionPanel({
+      counts: { containers: 0, nodes: 1 },
+      showContainerSections: false,
+      showDensity: false,
+    });
+    expect(hasComponent(tree, "DensitySection")).toBe(false);
   });
 
   test("showReset=true → Reset link visible (showReset prop пробрасывается)", () => {
@@ -354,7 +373,7 @@ describe("SelectionPanel", () => {
     });
     const section = findComponent(tree, "ContainerTitlePositionSection");
     expect(section).not.toBeNull();
-    expect(section!.props.title).toBe("Заголовок этого контейнера");
+    expect(section!.props.title).toBe("Заголовок контейнера");
     expect(section!.props.current).toBe("inside-center");
   });
 
@@ -387,7 +406,7 @@ describe("SelectionPanel", () => {
     });
     const section = findComponent(tree, "ContainerTitlePositionSection");
     expect(section).not.toBeNull();
-    expect(section!.props.title).toBe("Заголовок контейнеров в этом фрейме");
+    expect(section!.props.title).toBe("Заголовок контейнеров");
     expect(section!.props.current).toBe("inside-left");
   });
 

@@ -19,6 +19,12 @@ import ELK from "elkjs/lib/elk.bundled.js";
 import type { Editor, TLShape, TLShapeId } from "tldraw";
 import { withAutoFlipSuppressed } from "../shapes/schema-container/SchemaContainerAutoFlip";
 import { buildFlowChainEdges } from "./flow-chains";
+import {
+  type Anchor,
+  computeRespreadLevel,
+  levelMinK,
+  type RespreadNode,
+} from "./respread";
 
 // elkjs is pure JS and runs on the main thread from the bundled build.
 // Lazily constructed: building it eagerly at module load instantiates a worker
@@ -1382,4 +1388,290 @@ export function autoElkLayout(
   void runElkLayout(editor, ids, opts).then((r) => {
     if (r.kind === "error") console.warn("[elk-layout] auto failed", r.message);
   });
+}
+
+// DRW-239 density respread. Refit padding: a frame keeps a 56px margin around its
+// content (matches the anti-drift `pad` of the ELK writeback); a container keeps a
+// tight 16px right/bottom margin — its left/top margins already live in the
+// children's container-relative coords. Default min-gap on compression.
+const FRAME_REFIT_PAD = 56;
+const CONTAINER_REFIT_PAD = 16;
+const RESPREAD_MIN_GAP = 24;
+
+// Box-like leaf shapes the density control may reposition. Excludes arrows/lines/
+// draw/highlight (bound or path shapes — moving their x/y is meaningless or breaks
+// bindings; bound arrows follow their nodes on their own). NOT just "geo" so plain
+// objects on the board (notes, text, images, …) respread too — DRW-239 feedback.
+const RESPREAD_LEAF_TYPES: ReadonlySet<string> = new Set([
+  "geo",
+  "text",
+  "note",
+  "image",
+  "embed",
+  "bookmark",
+]);
+const isRespreadLeaf = (type: string): boolean => RESPREAD_LEAF_TYPES.has(type);
+
+/** Rendered size of a shape (page bounds — robust for any leaf type, incl. growY). */
+function leafSize(editor: Editor, id: string): { w: number; h: number } {
+  const b = editor.getShapePageBounds(id as TLShapeId);
+  if (b) return { w: b.w, h: b.h };
+  const p = (editor.getShape(id as TLShapeId)?.props ?? {}) as {
+    w?: number;
+    h?: number;
+  };
+  return { w: typeof p.w === "number" ? p.w : 0, h: typeof p.h === "number" ? p.h : 0 };
+}
+
+/** Captured parent-relative geometry of every node a respread gesture may move. */
+export type RespreadSnapshot = Map<
+  string,
+  { x: number; y: number; w: number; h: number }
+>;
+
+// A level = the children of one parent that scale together about one anchor.
+type RespreadGroup = {
+  parentId: string;
+  /** "min" → keep content top-left fixed (wrapper, refit); "center" → symmetric (loose). */
+  anchor: Anchor;
+  /** Refit pad when the parent is a wrapper we resize; null for loose page nodes. */
+  refitPad: number | null;
+  /** Whether the parent is a frame (refit ordering: containers before frames). */
+  parentIsFrame: boolean;
+  /** Node ids to scale on this level. */
+  nodeIds: string[];
+};
+
+/**
+ * Resolve the selection into respread groups (children-of-one-parent that scale
+ * together). A frame → two levels (each container's geo kids + the frame's own
+ * top-level boxes); a container → its geo kids; loose geo → grouped by parent
+ * (page → "center" anchor, wrapper → "min" + refit). Empty selection → every
+ * frame on the page plus loose page nodes (board-wide spread).
+ */
+function resolveRespreadGroups(
+  editor: Editor,
+  ids: TLShapeId[],
+): RespreadGroup[] {
+  const groups = new Map<string, RespreadGroup>();
+  const add = (
+    parentId: string,
+    childId: string,
+    anchor: Anchor,
+    refitPad: number | null,
+    parentIsFrame: boolean,
+  ): void => {
+    let g = groups.get(parentId);
+    if (!g) {
+      g = { parentId, anchor, refitPad, parentIsFrame, nodeIds: [] };
+      groups.set(parentId, g);
+    }
+    if (!g.nodeIds.includes(childId)) g.nodeIds.push(childId);
+  };
+
+  const addFrame = (frame: TLShape): void => {
+    if (frame.meta?.didrawLocked) return;
+    for (const child of childrenOf(editor, frame.id)) {
+      if (child.type === "schema-container") {
+        for (const k of childrenOf(editor, child.id)) {
+          if (isRespreadLeaf(k.type))
+            add(child.id as string, k.id as string, "min", CONTAINER_REFIT_PAD, false);
+        }
+        add(frame.id as string, child.id as string, "min", FRAME_REFIT_PAD, true);
+      } else if (isRespreadLeaf(child.type)) {
+        add(frame.id as string, child.id as string, "min", FRAME_REFIT_PAD, true);
+      }
+    }
+  };
+
+  const sel = ids.map((id) => editor.getShape(id)).filter((s): s is TLShape => !!s);
+
+  if (sel.length === 0) {
+    // board: every frame + loose page-level nodes
+    for (const s of editor.getCurrentPageShapes()) {
+      if (s.type === "frame") addFrame(s);
+      else if (
+        (isRespreadLeaf(s.type) || s.type === "schema-container") &&
+        s.parentId.startsWith("page:")
+      )
+        add(s.parentId, s.id as string, "center", null, false);
+    }
+  } else {
+    for (const s of sel) {
+      if (s.type === "frame") {
+        addFrame(s);
+      } else if (s.type === "schema-container") {
+        for (const k of childrenOf(editor, s.id)) {
+          if (isRespreadLeaf(k.type))
+            add(s.id as string, k.id as string, "min", CONTAINER_REFIT_PAD, false);
+        }
+      } else if (isRespreadLeaf(s.type)) {
+        const parent = editor.getShape(s.parentId as TLShapeId);
+        if (parent?.type === "schema-container")
+          add(parent.id as string, s.id as string, "min", CONTAINER_REFIT_PAD, false);
+        else if (parent?.type === "frame")
+          add(parent.id as string, s.id as string, "min", FRAME_REFIT_PAD, true);
+        else add(s.parentId, s.id as string, "center", null, false);
+      }
+    }
+  }
+  return [...groups.values()];
+}
+
+/** Build a RespreadNode for `id`, reading geometry from the snapshot or live. */
+function toRespreadNode(
+  editor: Editor,
+  id: string,
+  snapshot?: RespreadSnapshot,
+): RespreadNode | null {
+  const s = editor.getShape(id as TLShapeId);
+  if (!s) return null;
+  const snap = snapshot?.get(id);
+  const wh = snap ?? leafSize(editor, id);
+  return {
+    id,
+    x: snap ? snap.x : s.x,
+    y: snap ? snap.y : s.y,
+    w: wh.w,
+    h: wh.h,
+    // The density gesture is a DIRECT user manipulation of the selection — it sets
+    // user positions, so it moves shapes regardless of meta.pinned (pins guard only
+    // against AI / auto-layout, not the user's own spread; without this it would be
+    // a no-op on hand-arranged content, which is auto-pinned on drag — DRW-185).
+    // Shapes keep their pinned flag (their new position is still user-owned).
+    pinned: false,
+  };
+}
+
+/** Resize a frame/container to wrap its (just-moved) children, top-left fixed. */
+function refitWrapper(editor: Editor, parentId: TLShapeId, pad: number): void {
+  const f = editor.getShape(parentId);
+  const fb = editor.getShapePageBounds(parentId);
+  if (!f || !fb) return;
+  let maxx = Number.NEGATIVE_INFINITY;
+  let maxy = Number.NEGATIVE_INFINITY;
+  for (const t of childrenOf(editor, parentId)) {
+    const b = editor.getShapePageBounds(t.id);
+    if (!b) continue;
+    maxx = Math.max(maxx, b.x + b.w);
+    maxy = Math.max(maxy, b.y + b.h);
+  }
+  if (!Number.isFinite(maxx)) return;
+  editor.updateShape({
+    id: parentId,
+    type: f.type,
+    props: { w: maxx - fb.x + pad, h: maxy - fb.y + pad },
+  } as never);
+}
+
+/** Capture parent-relative geometry of every node the gesture may move. */
+export function captureRespreadSnapshot(
+  editor: Editor,
+  ids: TLShapeId[],
+): RespreadSnapshot {
+  const snap: RespreadSnapshot = new Map();
+  for (const g of resolveRespreadGroups(editor, ids)) {
+    for (const id of g.nodeIds) {
+      const s = editor.getShape(id as TLShapeId);
+      if (s) snap.set(id, { x: s.x, y: s.y, ...leafSize(editor, id) });
+    }
+  }
+  return snap;
+}
+
+/**
+ * DRW-239: relative density respread — scale the addressed shapes' positions by
+ * `k` (k>1 spreads, k<1 compresses) WITHOUT re-running ELK, so structure and
+ * direction are preserved by construction. Sizes are never changed; connectors
+ * (bound elbows) follow on their own; containers/frames refit to content.
+ *
+ * The factor is clamped per the min-gap guard so compression never overlaps boxes
+ * (the most restrictive level wins, applied uniformly). Pinned nodes and
+ * size-pinned/locked wrappers are left untouched. `opts.snapshot` (captured at a
+ * gesture's pointer-down) makes a live drag scale the START layout rather than
+ * compounding; without it the current layout is the base.
+ */
+export function applyRespread(
+  editor: Editor,
+  ids: TLShapeId[],
+  k: number,
+  opts?: { snapshot?: RespreadSnapshot; minGap?: number; markHistory?: boolean },
+): ElkLayoutResult {
+  const minGap = opts?.minGap ?? RESPREAD_MIN_GAP;
+  const groups = resolveRespreadGroups(editor, ids);
+  if (groups.length === 0)
+    return { kind: "noop", reason: "nothing to respread" };
+
+  // Build each level's nodes once; compute the global compression floor so one
+  // uniform factor keeps EVERY level's boxes ≥ minGap apart (the tightest wins).
+  const levels = groups
+    .map((g) => ({
+      group: g,
+      nodes: g.nodeIds
+        .map((id) => toRespreadNode(editor, id, opts?.snapshot))
+        .filter((n): n is RespreadNode => n !== null),
+    }))
+    .filter((l) => l.nodes.length > 0);
+  if (levels.length === 0)
+    return { kind: "noop", reason: "nothing movable to respread" };
+
+  let floor = 0;
+  for (const l of levels) floor = Math.max(floor, levelMinK(l.nodes, minGap));
+  const kEff = Math.max(k, floor);
+
+  const updates: Record<string, unknown>[] = [];
+  for (const l of levels) {
+    for (const r of computeRespreadLevel(l.nodes, kEff, l.group.anchor)) {
+      const s = editor.getShape(r.id as TLShapeId);
+      if (s) updates.push({ id: s.id, type: s.type, x: r.x, y: r.y });
+    }
+  }
+  if (updates.length === 0)
+    return { kind: "noop", reason: "everything is pinned — nothing to respread" };
+
+  // Wrappers to refit: the in-scope wrapper parents PLUS every ancestor frame of a
+  // moved shape, so a frame grows/shrinks to wrap spread content even when only its
+  // children (a container, loose nodes) were addressed — not just when the frame
+  // itself was selected. Density is a direct user gesture, so it refits even
+  // size-pinned wrappers (they keep the pin, just at the new size — like a pinned
+  // shape that the user drags). Containers first, then frames (a frame wraps the
+  // already-resized boxes).
+  const refits = new Map<string, { id: string; pad: number; isFrame: boolean }>();
+  for (const g of groups) {
+    if (g.refitPad !== null)
+      refits.set(g.parentId, {
+        id: g.parentId,
+        pad: g.refitPad,
+        isFrame: g.parentIsFrame,
+      });
+  }
+  for (const u of updates) {
+    const f = ancestorFrame(editor, u.id as TLShapeId);
+    if (f && !refits.has(f as string))
+      refits.set(f as string, { id: f as string, pad: FRAME_REFIT_PAD, isFrame: true });
+  }
+  const refitList = [...refits.values()].sort(
+    (a, b) => Number(a.isFrame) - Number(b.isFrame),
+  );
+
+  // One-shot callers get an undo boundary here; a live drag passes markHistory:false
+  // and marks ONCE at gesture start so the whole drag collapses to a single ⌘Z.
+  if (opts?.markHistory !== false) editor.markHistoryStoppingPoint();
+  // Suppress schema-container auto-flip (moving a container's children through
+  // editor.run is stamped source:"user" → would rewrite props.direction).
+  withAutoFlipSuppressed(() =>
+    editor.run(() => {
+      editor.updateShapes(updates as never);
+      for (const r of refitList) {
+        if (editor.getShape(r.id as TLShapeId))
+          refitWrapper(editor, r.id as TLShapeId, r.pad);
+      }
+    }),
+  );
+  return {
+    kind: "ok",
+    applied: updates.length,
+    frameId: "",
+    affected: updates.map((u) => u.id as string),
+  };
 }

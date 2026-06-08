@@ -21,6 +21,10 @@ import {
   LayoutSettingsSection,
   type LayoutSettingsValue,
 } from "../sections/LayoutSettingsSection";
+import {
+  DensitySection,
+  type DensityHandlers,
+} from "../sections/DensitySection";
 import { LockSection, LockedNotice } from "../sections/LockSection";
 import { PinSection, type PinTriState } from "../sections/PinSection";
 import {
@@ -75,7 +79,9 @@ export type SelectionPanelProps = {
   onDirectionChange: (d: DirectionValue) => void;
   /** Aggregate layout-params для текущего выделения (null = mixed/indeterminate per field). */
   layoutSettings: LayoutSettingsValue;
-  onPreset: (p: "compact" | "normal" | "loose") => void;
+  onDensity: DensityHandlers;
+  /** Show the density slider — true for any respreadable selection (container/frame, or ≥2 nodes). */
+  showDensity: boolean;
   onEngine: (e: LayoutAlgorithm) => void;
   onAdvanced: () => void;
   onReset: () => void;
@@ -148,7 +154,8 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
   direction,
   onDirectionChange,
   layoutSettings,
-  onPreset,
+  onDensity,
+  showDensity,
   onEngine,
   onAdvanced,
   onReset,
@@ -200,7 +207,6 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
           <DirectionSection current={direction} onChange={onDirectionChange} />
           <LayoutSettingsSection
             current={layoutSettings}
-            onPreset={onPreset}
             onEngine={onEngine}
             onAdvanced={onAdvanced}
             onReset={onReset}
@@ -212,7 +218,7 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
               <ContainerTitlePositionSection
                 current={singleContainerTitlePosition}
                 onChange={onSingleContainerTitlePositionChange}
-                title="Заголовок этого контейнера"
+                title="Заголовок контейнера"
               />
             )}
           {singleFrameContainerTitlePosition !== undefined &&
@@ -220,7 +226,7 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
               <ContainerTitlePositionSection
                 current={singleFrameContainerTitlePosition}
                 onChange={onSingleFrameContainerTitlePositionChange}
-                title="Заголовок контейнеров в этом фрейме"
+                title="Заголовок контейнеров"
               />
             )}
         </>
@@ -234,6 +240,11 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
         <LockSection locked={!!frameLocked} onToggle={onFrameLockToggle} />
       )}
       <PinSection values={pinValues} onToggle={onPinToggle} label={pinLabel} />
+      {/* Density belongs with size/position controls — it moves shapes apart /
+          together (a position operation), so it sits with the «Размеры и позиции»
+          (pin) block, not with Direction/engine. Shown for any respreadable
+          selection (container/frame OR ≥2 nodes). */}
+      {showDensity && <DensitySection onDensity={onDensity} />}
       {showStyles && (
         <StylesSection
           current={styleState}

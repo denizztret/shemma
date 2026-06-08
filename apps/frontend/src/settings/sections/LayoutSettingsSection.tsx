@@ -36,23 +36,8 @@ const ENGINE_HINTS: Record<LayoutAlgorithm, string> = {
     "Силы (force) — силовая «пружинная» раскладка для сильно связных графов без выраженной иерархии.",
 };
 
-// UI labels (Compact / Normal / Roomy) intentionally differ from the @shemma/domain
-// Spacing enum ("compact" | "normal" | "loose"). "Roomy" — пользовательская строка для "loose".
-export const PRESET_LABELS: Record<"compact" | "normal" | "loose", string> = {
-  compact: "Compact",
-  normal: "Normal",
-  loose: "Roomy",
-};
-
-export const PRESET_HINTS: Record<"compact" | "normal" | "loose", string> = {
-  compact: "Плотная компоновка — больше элементов на экране",
-  normal: "Стандартный шаг сетки",
-  loose: "Просторно — легче читать диаграмму",
-};
-
 export type LayoutSettingsSectionProps = {
   current: LayoutSettingsValue;
-  onPreset: (p: "compact" | "normal" | "loose") => void;
   // Optional — only the per-frame/container panel renders the engine selector.
   onEngine?: (e: LayoutAlgorithm) => void;
   onAdvanced: () => void;
@@ -63,7 +48,6 @@ export type LayoutSettingsSectionProps = {
 
 export const LayoutSettingsSection: FC<LayoutSettingsSectionProps> = ({
   current,
-  onPreset,
   onEngine,
   onAdvanced,
   onReset,
@@ -90,21 +74,6 @@ export const LayoutSettingsSection: FC<LayoutSettingsSectionProps> = ({
         </div>
       </>
     )}
-    <div className="settings-section__label">Компоновка</div>
-    <div className="settings-section__row">
-      {(["compact", "normal", "loose"] as const).map((p) => (
-        <button
-          key={p}
-          type="button"
-          data-preset={p}
-          title={PRESET_HINTS[p]}
-          onClick={() => onPreset(p)}
-          className={`settings-btn${current.preset === p ? " settings-btn--on" : ""}`}
-        >
-          {PRESET_LABELS[p]}
-        </button>
-      ))}
-    </div>
     {showAdvanced && (
       <button
         type="button"

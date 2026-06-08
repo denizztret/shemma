@@ -71,12 +71,11 @@ describe("StylesSection", () => {
 });
 
 import { type ReactElement, isValidElement } from "react";
+import { DensitySection } from "./DensitySection";
 import {
   LayoutSettingsSection,
   type LayoutSettingsSectionProps,
   type LayoutSettingsValue,
-  PRESET_HINTS,
-  PRESET_LABELS,
 } from "./LayoutSettingsSection";
 
 type AnyElement = ReactElement<{ children?: unknown; [key: string]: unknown }>;
@@ -109,7 +108,6 @@ function defaultProps(
 ): LayoutSettingsSectionProps {
   return {
     current: { preset: null },
-    onPreset: () => {},
     onAdvanced: () => {},
     onReset: () => {},
     showReset: false,
@@ -117,83 +115,20 @@ function defaultProps(
   };
 }
 
-describe("LayoutSettingsSection — constants", () => {
-  test("PRESET_LABELS maps compact/normal/loose to Compact/Normal/Roomy", () => {
-    expect(PRESET_LABELS).toEqual({
-      compact: "Compact",
-      normal: "Normal",
-      loose: "Roomy",
-    });
-  });
-
-  test("PRESET_HINTS provides non-empty hint for each preset", () => {
-    (["compact", "normal", "loose"] as const).forEach((p) => {
-      expect(typeof PRESET_HINTS[p]).toBe("string");
-      expect(PRESET_HINTS[p].length).toBeGreaterThan(0);
-    });
-  });
-});
-
 describe("LayoutSettingsSection — rendering", () => {
   test("exports a component", () => {
     expect(typeof LayoutSettingsSection).toBe("function");
   });
 
-  test("renders 3 preset buttons + Advanced link (no Reset when showReset=false)", () => {
+  test("renders the Advanced link; NO Compact/Normal/Roomy preset buttons (DRW-239)", () => {
     const tree = LayoutSettingsSection(defaultProps());
     const buttons = findAllButtons(tree);
-    // 3 presets + 1 Advanced = 4
-    expect(buttons.length).toBe(4);
-
-    const presetButtons = buttons.filter(
-      (b) => typeof b.props["data-preset"] === "string",
-    );
-    expect(presetButtons.map((b) => b.props["data-preset"])).toEqual([
-      "compact",
-      "normal",
-      "loose",
-    ]);
-
-    // Vestigial controls removed (auto-direction, even/centered midpoints).
-    expect(buttons.some((b) => b.props["data-role"] === "auto-direction")).toBe(
-      false,
-    );
+    // density replaced the preset buttons; this section is now engine + links only
     expect(
-      buttons.some((b) => typeof b.props["data-midpoint"] === "string"),
+      buttons.some((b) => typeof b.props["data-preset"] === "string"),
     ).toBe(false);
-
     expect(buttons.some((b) => b.props["data-role"] === "advanced")).toBe(true);
     expect(buttons.some((b) => b.props["data-role"] === "reset")).toBe(false);
-  });
-
-  test("preset click → onPreset called with preset value", () => {
-    const calls: Array<"compact" | "normal" | "loose"> = [];
-    const tree = LayoutSettingsSection(
-      defaultProps({ onPreset: (p) => calls.push(p) }),
-    );
-    const compactBtn = findAllButtons(tree).find(
-      (b) => b.props["data-preset"] === "compact",
-    );
-    expect(compactBtn).toBeDefined();
-    (compactBtn!.props.onClick as () => void)();
-    expect(calls).toEqual(["compact"]);
-  });
-
-  test("active preset gets settings-btn--on; others don't", () => {
-    const tree = LayoutSettingsSection(
-      defaultProps({
-        current: { preset: "compact" },
-      }),
-    );
-    const buttons = findAllButtons(tree).filter(
-      (b) => typeof b.props["data-preset"] === "string",
-    );
-    const byPreset = Object.fromEntries(
-      buttons.map((b) => [b.props["data-preset"], b.props.className as string]),
-    );
-    expect(byPreset.compact).toContain("settings-btn--on");
-    expect(byPreset.normal ?? "").not.toContain("settings-btn--on");
-    expect(byPreset.loose ?? "").not.toContain("settings-btn--on");
   });
 
   test("showReset=true renders Reset button; false hides it", () => {
@@ -217,5 +152,51 @@ describe("LayoutSettingsSection — rendering", () => {
       preset: null,
     };
     expect(v.preset).toBeNull();
+  });
+});
+
+describe("DensitySection — slider (DRW-239)", () => {
+  function findDensitySlider(tree: unknown): AnyElement | undefined {
+    return findAll(
+      tree,
+      (el) => el.type === "input" && el.props["data-role"] === "density",
+    )[0];
+  }
+
+  test("renders a range slider", () => {
+    const tree = DensitySection({
+      onDensity: { start: () => {}, change: () => {}, end: () => {} },
+    });
+    const slider = findDensitySlider(tree);
+    expect(slider).toBeDefined();
+    expect(slider?.props.type).toBe("range");
+  });
+
+  test("gesture wiring: pointer-down→start, input→change(value), pointer-up→end + reset to centre", () => {
+    const calls: string[] = [];
+    let lastK = -1;
+    const tree = DensitySection({
+      onDensity: {
+        start: () => calls.push("start"),
+        change: (k) => {
+          calls.push("change");
+          lastK = k;
+        },
+        end: () => calls.push("end"),
+      },
+    });
+    const slider = findDensitySlider(tree);
+    if (!slider) throw new Error("density slider not found");
+    (slider.props.onPointerDown as () => void)();
+    (slider.props.onInput as (e: { currentTarget: { value: string } }) => void)({
+      currentTarget: { value: "1.6" },
+    });
+    const ct = { value: "1.6" };
+    (slider.props.onPointerUp as (e: { currentTarget: { value: string } }) => void)({
+      currentTarget: ct,
+    });
+    expect(calls).toEqual(["start", "change", "end"]);
+    expect(lastK).toBe(1.6);
+    expect(ct.value).toBe("1"); // released → snaps back to centre
   });
 });

@@ -12,7 +12,13 @@ import type {
 import { DEFAULT_STYLE_DEFAULTS } from "@shemma/domain";
 import { type FC, useEffect, useRef, useState } from "react";
 import { type Editor, type TLShapeId, useEditor, useValue } from "tldraw";
-import { autoElkLayout, autoLayoutFrame } from "../canvas/elk-layout";
+import {
+  applyRespread,
+  autoElkLayout,
+  autoLayoutFrame,
+  captureRespreadSnapshot,
+  type RespreadSnapshot,
+} from "../canvas/elk-layout";
 import { setContainerLayoutParams } from "../shapes/container-layout-params";
 import {
   type StyleStateInput,
@@ -47,7 +53,6 @@ import { NodePanel } from "./panels/NodePanel";
 import { SelectionPanel } from "./panels/SelectionPanel";
 import { ShortcutsPanel } from "./panels/ShortcutsPanel";
 import { computePopoverPosition } from "./position";
-import { type PresetName, applyPreset } from "./presets";
 import type { LayoutSettingsValue } from "./sections/LayoutSettingsSection";
 import { type PinTriState, aggregatePinState } from "./sections/PinSection";
 import { useAltHeld } from "./useAltHeld";
@@ -426,19 +431,6 @@ export const SettingsPopover: FC<SettingsPopoverProps> = ({ space, room }) => {
               setBoardParams(boardParams);
             }
           }}
-          onPresetSelect={async (p: PresetName) => {
-            const next = applyPreset(boardParams.raw ?? {}, p);
-            setBoardParams({
-              raw: next,
-              effective: { ...boardParams.effective, ...next } as LayoutParams,
-            });
-            try {
-              const r = await postLayoutParams(space, room, next);
-              setBoardParams({ raw: next, effective: r.effective });
-            } catch {
-              setBoardParams(boardParams);
-            }
-          }}
           onOpenAdvanced={() => setAdvanced(true)}
           onOpenShortcuts={() => setShortcuts(true)}
           styleEffective={styleDefaults?.effective ?? DEFAULT_STYLE_DEFAULTS}
@@ -493,6 +485,9 @@ const SelectionPanelContainer: FC<{
   pending: "tidy" | "force-unpin" | null;
   setPending: (p: "tidy" | "force-unpin" | null) => void;
 }> = ({ editor, space, room, pending, setPending }) => {
+  // DRW-239: per-gesture snapshot for the density slider — captured at pointer-down
+  // so a live drag scales the START layout (not the compounding current one).
+  const densitySnapshotRef = useRef<RespreadSnapshot | null>(null);
   const counts = useValue(
     "selectionCounts",
     () => {
@@ -506,6 +501,9 @@ const SelectionPanelContainer: FC<{
   );
 
   const showContainerSections = counts.containers > 0 && counts.nodes === 0;
+  // DRW-239: density respread applies to any respreadable selection — a
+  // container/frame, OR ≥2 loose nodes (a single node has nothing to spread).
+  const showDensity = counts.containers > 0 || counts.nodes >= 2;
 
   const direction = useValue(
     "dir",
@@ -849,6 +847,7 @@ const SelectionPanelContainer: FC<{
     <SelectionPanel
       counts={counts}
       showContainerSections={showContainerSections}
+      showDensity={showDensity}
       direction={direction}
       onDirectionChange={(d) => {
         const ids = editor.getSelectedShapeIds() as unknown as string[];
@@ -920,18 +919,27 @@ const SelectionPanelContainer: FC<{
         });
       }}
       layoutSettings={layoutSettings}
-      onPreset={(p) => {
-        const ids = editor.getSelectedShapeIds() as unknown as string[];
-        // Spacing change → rewrite meta (no backend POST) → elk respread in place.
-        void setContainerLayoutParams(
-          editor,
-          ids,
-          buildPartial({ spacing: p }),
-          {
-            triggerLayout: false,
-          },
-        );
-        autoElkLayout(editor, ids as unknown as TLShapeId[]);
+      onDensity={{
+        // DRW-239: relative density gesture — spread/compress the selection in
+        // place WITHOUT re-running ELK. One ⌘Z per drag: mark history once at
+        // pointer-down, then each tick scales the captured snapshot (no extra
+        // marks) so the whole drag collapses to a single undo step.
+        start: () => {
+          const ids = editor.getSelectedShapeIds() as unknown as TLShapeId[];
+          editor.markHistoryStoppingPoint();
+          densitySnapshotRef.current = captureRespreadSnapshot(editor, ids);
+        },
+        change: (k: number) => {
+          if (!densitySnapshotRef.current) return;
+          const ids = editor.getSelectedShapeIds() as unknown as TLShapeId[];
+          applyRespread(editor, ids, k, {
+            snapshot: densitySnapshotRef.current,
+            markHistory: false,
+          });
+        },
+        end: () => {
+          densitySnapshotRef.current = null;
+        },
       }}
       onEngine={(e: LayoutAlgorithm) => {
         const ids = editor.getSelectedShapeIds() as unknown as string[];
