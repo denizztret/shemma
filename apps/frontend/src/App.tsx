@@ -61,7 +61,7 @@ import { PromptDrawer } from "./prompts/PromptDrawer";
 import { PromptInput } from "./prompts/PromptInput";
 import {
   applyTextFitToShape,
-  applyTextFitToSelection,
+  fitTextWithReflow,
 } from "./canvas/apply-text-fit";
 import { registerAutoTextFit } from "./canvas/auto-text-fit";
 import { ThemeToggleButtonContainer } from "./theme/ThemeToggleButtonContainer";
@@ -351,17 +351,19 @@ export function App({
       window.removeEventListener("keydown", handler, { capture: true });
   }, [editor]);
 
-  // DRW-219: ⌘⇧F / Ctrl+Shift+F — обтянуть текст выделенных объектов.
-  // Capture phase + ⌘⇧F свободен от браузерных акселераторов (⌘F = find).
+  // DRW-219/232: ⌘⇧F обтянуть текст выделения + вложенных; ⌘⌥⇧F (force) —
+  // включая узлы с заданным вручную размером. Capture phase + ⌘⇧F свободен от
+  // браузерных акселераторов (⌘F = find).
   useEffect(() => {
     if (!editor) return;
     const handler = (e: KeyboardEvent) => {
-      if (!matchShortcut(getActiveBinding("fit-text"), e)) return;
+      const force = matchShortcut(getActiveBinding("fit-text-force"), e);
+      if (!force && !matchShortcut(getActiveBinding("fit-text"), e)) return;
       const ids = editor.getSelectedShapeIds() as unknown as string[];
       if (ids.length === 0) return;
       e.preventDefault();
       e.stopPropagation();
-      applyTextFitToSelection(editor, ids);
+      fitTextWithReflow(editor, ids, { force });
     };
     window.addEventListener("keydown", handler, { capture: true });
     return () =>

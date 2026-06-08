@@ -11,6 +11,8 @@
 // Объекты без текста и нетекстовые типы не трогаются (AC#5).
 
 import type { Editor, TLShape, TLShapeId } from "tldraw";
+import { collectDescendantIds } from "../shapes/style-apply";
+import { reflowAfterFit } from "./elk-layout";
 import { extractPlaintextFromRichText } from "./schema-overlay-sync";
 import { pickOptimalWidth } from "./text-fit";
 
@@ -92,27 +94,64 @@ export function applyTextFitToShape(editor: Editor, shape: TLShape): boolean {
 }
 
 /**
- * Подгоняет размеры выделенных текстовых объектов. Возвращает число изменённых.
+ * DRW-232: чистый предикат «обтягивать ли этот объект вручную». geo/note с
+ * непустым текстом обтягиваются; size-pinned (вручную заданный размер) — только
+ * в force-режиме (⌘⌥⇧F / Opt-click), иначе уважаем пин (не ломаем форму).
  */
-export function applyTextFitToSelection(
-  editor: Editor,
-  selectedIds: ReadonlyArray<string>,
-): number {
-  const targets: TLShape[] = [];
-  for (const id of selectedIds) {
-    const s = editor.getShape(id as TLShapeId);
-    if (!s || !TEXT_FIT_TYPES.has(s.type)) continue;
-    if (!shapeHasText(s)) continue;
-    targets.push(s);
-  }
-  if (targets.length === 0) return 0;
+export function shouldManualFit(input: {
+  type: string;
+  hasText: boolean;
+  sizePinned: boolean;
+  force: boolean;
+}): boolean {
+  if (!TEXT_FIT_TYPES.has(input.type)) return false;
+  if (!input.hasText) return false;
+  if (input.sizePinned && !input.force) return false;
+  return true;
+}
 
+/**
+ * DRW-232: обтянуть текст рекурсивно по выделению/контейнеру/фрейму и привести
+ * обёртки в порядок — точечный push наезжающих соседей вдоль направления +
+ * envelope-рост/сжатие родителей по всей цепочке предков (reflowAfterFit). Вся
+ * операция — одна undo-точка. Возвращает число переобтянутых объектов.
+ *
+ * Цели обтяжки — текстовые geo/note среди ПОТОМКОВ выделения (collectDescendantIds:
+ * кнопка на контейнере/фрейме берёт вложенные узлы, в т.ч. во вложенных контейнерах;
+ * мульти-выделение — и сами узлы, и детей). `force` (⌘⌥⇧F / Opt-click) — обтягивать
+ * и size-pinned узлы тоже; обычный режим уважает вручную заданный размер.
+ *
+ * reflow по обёрткам ВСЕГО выделения выполняется ВСЕГДА, даже если ни один узел не
+ * переобтянут (все уже size-pinned, в т.ч. после авто-обтяжки DRW-228, которая не
+ * делает push/envelope): иначе наезд оставался бы, а кнопка была бы no-op. Размеры
+ * читаются из props (синхронно — effectiveSizeFromProps), поэтому push и envelope
+ * работают в одном run / одной undo-точке.
+ */
+export function fitTextWithReflow(
+  editor: Editor,
+  rootIds: ReadonlyArray<string>,
+  opts?: { force?: boolean },
+): number {
+  const force = opts?.force === true;
+  const scope = [...collectDescendantIds(editor, [...rootIds])];
+  if (scope.length === 0) return 0;
+  const targets: TLShape[] = [];
+  for (const id of scope) {
+    const s = editor.getShape(id as TLShapeId);
+    if (!s) continue;
+    const sizePinned =
+      (s.meta as Record<string, unknown> | undefined)?.didrawSizePinned ===
+      true;
+    if (shouldManualFit({ type: s.type, hasText: shapeHasText(s), sizePinned, force }))
+      targets.push(s);
+  }
   let changed = 0;
   editor.run(() => {
     editor.markHistoryStoppingPoint("fit-text");
     for (const s of targets) {
       if (applyTextFitToShape(editor, s)) changed++;
     }
+    reflowAfterFit(editor, scope);
   });
   return changed;
 }

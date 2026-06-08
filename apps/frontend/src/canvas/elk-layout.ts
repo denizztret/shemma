@@ -25,6 +25,7 @@ import {
   levelMinK,
   type RespreadNode,
 } from "./respread";
+import { type FlowNode, resolveOverlapsAlongFlow } from "./resolve-overlaps";
 
 // elkjs is pure JS and runs on the main thread from the bundled build.
 // Lazily constructed: building it eagerly at module load instantiates a worker
@@ -1562,6 +1563,153 @@ function refitWrapper(editor: Editor, parentId: TLShapeId, pad: number): void {
     type: f.type,
     props: { w: maxx - fb.x + pad, h: maxy - fb.y + pad },
   } as never);
+}
+
+/**
+ * Синхронный эффективный размер shape из props (`w`, `h + growY`) — НЕ через
+ * `getShapePageBounds`. Derived-геометрия (page bounds / пересчёт growY)
+ * обновляется лениво ПОСЛЕ транзакции, а props читаются сразу после updateShape;
+ * поэтому внутри одной транзакции, где обтяжка только что изменила РАЗМЕРЫ узлов
+ * (`applyTextFitToShape` ставит `props.w/h` и `growY=0`), синхронны именно props.
+ * (Density-респред меняет лишь x/y — прямые атомы — и потому корректно работает с
+ * page bounds; для обтяжки размеров это не так. DRW-232.)
+ */
+function effectiveSizeFromProps(s: TLShape): { w: number; h: number } {
+  const p = s.props as { w?: number; h?: number; growY?: number };
+  return {
+    w: typeof p.w === "number" ? p.w : 0,
+    h:
+      (typeof p.h === "number" ? p.h : 0) +
+      (typeof p.growY === "number" ? p.growY : 0),
+  };
+}
+
+/**
+ * DRW-232: устранить наезд box-like детей обёртки (контейнер/фрейм) вдоль её
+ * направления — точечный push (resolveOverlapsAlongFlow): двигаются ТОЛЬКО
+ * реально наезжающие узлы, остальные интервалы не трогаются. Направление берём из
+ * `props.direction` (контейнер) / `meta.didrawDirection` (фрейм); не-cardinal →
+ * ось из геометрии. `meta.pinned` дети не двигаются. Размеры — из props (синхронно
+ * внутри транзакции), координаты — parent-relative.
+ */
+function resolveOverlapsInWrapper(
+  editor: Editor,
+  parentId: TLShapeId,
+  gap: number,
+): void {
+  const parent = editor.getShape(parentId);
+  if (!parent) return;
+  const dir =
+    parent.type === "frame"
+      ? (parent.meta?.didrawDirection as string | null | undefined)
+      : (parent.props as { direction?: string }).direction;
+  const kids = childrenOf(editor, parentId).filter(
+    (s) => isRespreadLeaf(s.type) || s.type === "schema-container",
+  );
+  if (kids.length < 2) return;
+  const nodes: FlowNode[] = kids.map((s) => {
+    const sz = effectiveSizeFromProps(s);
+    return {
+      id: s.id as string,
+      x: s.x,
+      y: s.y,
+      w: sz.w,
+      h: sz.h,
+      pinned: s.meta?.pinned === true,
+    };
+  });
+  const moves = resolveOverlapsAlongFlow(nodes, dir, gap);
+  if (moves.length === 0) return;
+  const updates = moves.map((m) => {
+    const s = editor.getShape(m.id as TLShapeId);
+    return {
+      id: m.id,
+      type: s?.type,
+      ...(m.x !== undefined ? { x: m.x } : {}),
+      ...(m.y !== undefined ? { y: m.y } : {}),
+    };
+  });
+  editor.updateShapes(updates as never);
+}
+
+/**
+ * Синхронный envelope-refit обёртки под детей: правый/нижний край контента в
+ * parent-relative (`child.x + size`) + padding, top-left fixed (рост И сжатие).
+ * Размеры детей — из props (effectiveSizeFromProps), позиции — shape.x/y → верно
+ * внутри той же транзакции, где обтяжка и inner-refit только что изменили размеры
+ * (page bounds там ещё stale). Отдельно от density-`refitWrapper` (тот по page
+ * bounds — корректно для своего сценария смены позиций). DRW-232.
+ */
+function refitWrapperSync(
+  editor: Editor,
+  parentId: TLShapeId,
+  pad: number,
+): void {
+  const f = editor.getShape(parentId);
+  if (!f) return;
+  let maxx = Number.NEGATIVE_INFINITY;
+  let maxy = Number.NEGATIVE_INFINITY;
+  for (const t of childrenOf(editor, parentId)) {
+    const sz = effectiveSizeFromProps(t);
+    maxx = Math.max(maxx, t.x + sz.w);
+    maxy = Math.max(maxy, t.y + sz.h);
+  }
+  if (!Number.isFinite(maxx)) return;
+  editor.updateShape({
+    id: parentId,
+    type: f.type,
+    props: { w: maxx + pad, h: maxy + pad },
+  } as never);
+}
+
+/** Обёртки-предки (контейнер/фрейм) узла `id`, от ближайшей к дальней. */
+function wrapperAncestors(editor: Editor, id: TLShapeId): TLShapeId[] {
+  const out: TLShapeId[] = [];
+  let cur: TLShape | undefined = editor.getShape(id);
+  while (cur) {
+    const pid = cur.parentId;
+    if (!pid.startsWith("shape:")) break;
+    const parent = editor.getShape(pid as TLShapeId);
+    if (!parent) break;
+    if (parent.type === "schema-container" || parent.type === "frame")
+      out.push(parent.id);
+    cur = parent;
+  }
+  return out;
+}
+
+/**
+ * DRW-232: привести обёртки в порядок после ручной обтяжки. Для каждой обёртки,
+ * содержащей обтянутый узел, ИЗНУТРИ НАРУЖУ: (1) устранить наезд детей точечным
+ * push вдоль направления, (2) обтянуть обёртку под детей (envelope: рост И сжатие,
+ * top-left fixed). Порядок inner→outer важен — внутренний контейнер примет новый
+ * размер раньше, и внешний фрейм увидит его (через props) при своём push/refit.
+ * Размеры читаются из props (синхронно) → работает внутри одной editor.run().
+ * Ожидается ВНУТРИ editor.run() вызывающей стороны (одна undo-точка).
+ */
+export function reflowAfterFit(
+  editor: Editor,
+  fittedIds: ReadonlyArray<string>,
+): void {
+  const wrappers = new Set<string>();
+  for (const id of fittedIds)
+    for (const w of wrapperAncestors(editor, id as TLShapeId))
+      wrappers.add(w as string);
+  if (wrappers.size === 0) return;
+  // Сортируем по числу обёрток-предков убыв. → самая вложенная первой.
+  const ordered = [...wrappers]
+    .map((id) => ({
+      id,
+      depth: wrapperAncestors(editor, id as TLShapeId).length,
+    }))
+    .sort((a, b) => b.depth - a.depth);
+  for (const { id } of ordered) {
+    const s = editor.getShape(id as TLShapeId);
+    if (!s) continue;
+    resolveOverlapsInWrapper(editor, id as TLShapeId, RESPREAD_MIN_GAP);
+    const pad = s.type === "frame" ? FRAME_REFIT_PAD : CONTAINER_REFIT_PAD;
+    refitWrapperSync(editor, id as TLShapeId, pad);
+  }
 }
 
 /** Capture parent-relative geometry of every node the gesture may move. */

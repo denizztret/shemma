@@ -123,7 +123,8 @@ export type SelectionPanelProps = {
    * с текстом (geo/note/text).
    */
   showTextFit?: boolean;
-  onTextFit?: () => void;
+  /** force=true (Opt-клик / ⌘⌥⇧F) — обтянуть и узлы с заданным вручную размером. */
+  onTextFit?: (force: boolean) => void;
   /**
    * Per-container titlePosition override. Defined только когда выбран ровно
    * один SchemaContainer; иначе оба поля undefined и секция скрывается.
@@ -261,7 +262,9 @@ export const SelectionPanel: FC<SelectionPanelProps> = ({
           subtitle="Для выделения"
         />
       )}
-      {showTextFit && onTextFit && <TextFitSection onFit={onTextFit} />}
+      {showTextFit && onTextFit && (
+        <TextFitSection onFit={onTextFit} altHeld={altHeld} />
+      )}
       <div className="settings-popover__footer">
         {selectionFooterCounter(counts)}
       </div>
