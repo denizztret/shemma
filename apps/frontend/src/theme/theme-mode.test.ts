@@ -6,6 +6,7 @@ import {
   cycleThemeMode,
   normalizeThemeMode,
   resolveColorMode,
+  toggleColorMode,
 } from "./theme-mode";
 
 describe("theme-mode core", () => {
@@ -26,6 +27,13 @@ describe("theme-mode core", () => {
     expect(cycleThemeMode("light")).toBe("dark");
     expect(cycleThemeMode("dark")).toBe("system");
     expect(cycleThemeMode("system")).toBe("light");
+  });
+
+  // DRW-230: plain click flips between light/dark based on the currently
+  // VISIBLE color, never selecting system.
+  test("toggleColorMode flips the visible color to the opposite explicit mode", () => {
+    expect(toggleColorMode("light")).toBe("dark");
+    expect(toggleColorMode("dark")).toBe("light");
   });
 
   test("resolveColorMode: explicit modes ignore system preference", () => {

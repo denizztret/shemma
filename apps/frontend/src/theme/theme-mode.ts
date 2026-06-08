@@ -25,7 +25,8 @@ export function normalizeThemeMode(raw: unknown): ThemeMode {
     : "system";
 }
 
-/** Цикл кнопки 🌓: light → dark → system → light. */
+/** Цикл кнопки 🌓: light → dark → system → light. (Legacy — DRW-230 заменил
+ *  поведение кнопки на toggleColorMode; оставлено как переиспользуемый хелпер.) */
 export function cycleThemeMode(mode: ThemeMode): ThemeMode {
   switch (mode) {
     case "light":
@@ -35,6 +36,17 @@ export function cycleThemeMode(mode: ThemeMode): ThemeMode {
     case "system":
       return "light";
   }
+}
+
+/**
+ * DRW-230: обычный клик по кнопке темы — переключение ТОЛЬКО светлая⇄тёмная.
+ * Берём ВИДИМУЮ сейчас цветовую схему (`resolveColorMode`) и возвращаем
+ * противоположный явный режим — так клик из системного режима тоже флипает то,
+ * что пользователь видит, и никогда не «застревает» в системной. Системный
+ * режим выбирается отдельно (Opt-Click), не этим переключателем.
+ */
+export function toggleColorMode(current: ColorMode): ThemeMode {
+  return current === "dark" ? "light" : "dark";
 }
 
 /** Резолв режима в фактическую цветовую схему. */
