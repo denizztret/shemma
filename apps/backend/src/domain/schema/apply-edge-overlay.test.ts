@@ -203,6 +203,40 @@ describe("schema-set-edge-overlay (DRW-211)", () => {
     });
   });
 
+  test("coerces a raw hex color to the nearest palette name (DRW-231)", () => {
+    const room = makeRoom({
+      "shape:na": makeNode("shape:na", "svc-a-aaa001", "Svc A", 100),
+      "shape:nb": makeNode("shape:nb", "svc-b-aaa002", "Svc B", 500),
+      ...makeArrow("shape:ar1", "shape:na", "shape:nb"),
+    });
+    const frame = makeFrame(RAW);
+    room.store.store[FRAME] = frame as never;
+
+    const actions: SchemaAction[] = [
+      {
+        kind: "schema-set-edge-overlay",
+        from: "svc-a-aaa001",
+        to: "svc-b-aaa002",
+        overlay: { color: "#6A1B9A" },
+      },
+    ];
+    const res = applySchemaActions({
+      room,
+      frame,
+      actions,
+      suffixLen: SUFFIX_LEN,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    const upd = res.batch.updated["shape:ar1"];
+    expect(upd).toBeDefined();
+    if (!upd) return;
+    const props = (upd[1] as { props: Record<string, unknown> }).props;
+    // Raw hex must never reach props.color — strict tldraw loadSnapshot rejects it.
+    expect(props.color).toBe("violet");
+  });
+
   test("merge keeps previously stored edge style fields", () => {
     const room = makeRoom({
       "shape:na": makeNode("shape:na", "svc-a-aaa001", "Svc A", 100),

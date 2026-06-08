@@ -40,6 +40,7 @@ import { RolePicker } from "./canvas/role-picker.tsx";
 import { applyOverlaysToShapes } from "./canvas/schema-overlay-hydrate";
 import { installSchemaOverlaySync } from "./canvas/schema-overlay-sync";
 import { backfillStoreRecords } from "./canvas/schema-placeholder";
+import { loadSnapshotResilient } from "./canvas/resilient-load";
 import { registerStyleDefaultsSync } from "./canvas/style-defaults-sync";
 import {
   makeForceReLayoutHotkeyHandler,
@@ -505,7 +506,9 @@ export function App({
         store: backfillStoreRecords(s.store?.store),
       };
       editor.store.mergeRemoteChanges(() => {
-        editor.loadSnapshot(snapshot);
+        // DRW-231: tolerate individual invalid records — one bad shape (e.g. a
+        // raw-hex props.color) must not blank the whole board via a failed load.
+        loadSnapshotResilient(editor, snapshot);
         // DRW-135: backend store содержит RAW positions; user overlays лежат
         // в frame.meta.didrawOverlays и должны быть применены поверх RAW.
         // Внутри mergeRemoteChanges чтобы overlay-sync listener (source:"user")

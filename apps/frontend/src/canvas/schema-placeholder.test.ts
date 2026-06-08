@@ -18,7 +18,9 @@ describe("backfillStoreRecords", () => {
       },
     };
     const out = backfillStoreRecords(store);
-    expect((out["shape:arr"] as { props: Record<string, unknown> }).props.kind).toBe("arc");
+    expect(
+      (out["shape:arr"] as { props: Record<string, unknown> }).props.kind,
+    ).toBe("arc");
   });
 
   it("does not overwrite existing kind on arrow shapes", () => {
@@ -31,7 +33,9 @@ describe("backfillStoreRecords", () => {
       },
     };
     const out = backfillStoreRecords(store);
-    expect((out["shape:arr"] as { props: Record<string, unknown> }).props.kind).toBe("elbow");
+    expect(
+      (out["shape:arr"] as { props: Record<string, unknown> }).props.kind,
+    ).toBe("elbow");
   });
 
   it("adds elbowMidPoint=0.5 on arrow shapes missing elbowMidPoint (tldraw 5.0+ schema)", () => {
@@ -45,7 +49,8 @@ describe("backfillStoreRecords", () => {
     };
     const out = backfillStoreRecords(store);
     expect(
-      (out["shape:arr"] as { props: Record<string, unknown> }).props.elbowMidPoint,
+      (out["shape:arr"] as { props: Record<string, unknown> }).props
+        .elbowMidPoint,
     ).toBe(0.5);
   });
 
@@ -60,7 +65,8 @@ describe("backfillStoreRecords", () => {
     };
     const out = backfillStoreRecords(store);
     expect(
-      (out["shape:arr"] as { props: Record<string, unknown> }).props.elbowMidPoint,
+      (out["shape:arr"] as { props: Record<string, unknown> }).props
+        .elbowMidPoint,
     ).toBe(0.75);
   });
 
@@ -92,7 +98,8 @@ describe("backfillStoreRecords", () => {
       },
     };
     const out = backfillStoreRecords(store);
-    const props = (out["shape:arr"] as { props: Record<string, unknown> }).props;
+    const props = (out["shape:arr"] as { props: Record<string, unknown> })
+      .props;
     expect(Object.prototype.hasOwnProperty.call(props, "text")).toBe(false);
   });
 
@@ -117,12 +124,18 @@ describe("backfillStoreRecords", () => {
         type: "arrow",
         fromId: "shape:arrow1",
         toId: "shape:geo1",
-        props: { terminal: "start", normalizedAnchor: { x: 0.5, y: 0.5 }, isExact: false, isPrecise: false },
+        props: {
+          terminal: "start",
+          normalizedAnchor: { x: 0.5, y: 0.5 },
+          isExact: false,
+          isPrecise: false,
+        },
         meta: {},
       },
     };
     const out = backfillStoreRecords(store);
-    const props = (out["binding:b1"] as { props: Record<string, unknown> }).props;
+    const props = (out["binding:b1"] as { props: Record<string, unknown> })
+      .props;
     expect(props.snap).toBe("none");
   });
 
@@ -134,12 +147,19 @@ describe("backfillStoreRecords", () => {
         type: "arrow",
         fromId: "shape:arrow1",
         toId: "shape:geo1",
-        props: { terminal: "end", normalizedAnchor: { x: 0.5, y: 0.5 }, isExact: false, isPrecise: false, snap: "edge" },
+        props: {
+          terminal: "end",
+          normalizedAnchor: { x: 0.5, y: 0.5 },
+          isExact: false,
+          isPrecise: false,
+          snap: "edge",
+        },
         meta: {},
       },
     };
     const out = backfillStoreRecords(store);
-    const props = (out["binding:b2"] as { props: Record<string, unknown> }).props;
+    const props = (out["binding:b2"] as { props: Record<string, unknown> })
+      .props;
     expect(props.snap).toBe("edge");
   });
 
@@ -156,7 +176,8 @@ describe("backfillStoreRecords", () => {
       },
     };
     const out = backfillStoreRecords(store);
-    const props = (out["shape:fr1"] as { props: Record<string, unknown> }).props;
+    const props = (out["shape:fr1"] as { props: Record<string, unknown> })
+      .props;
     expect(props.color).toBe("black");
     expect(props.name).toBe("integration");
   });
@@ -171,7 +192,8 @@ describe("backfillStoreRecords", () => {
       },
     };
     const out = backfillStoreRecords(store);
-    const props = (out["shape:fr2"] as { props: Record<string, unknown> }).props;
+    const props = (out["shape:fr2"] as { props: Record<string, unknown> })
+      .props;
     expect(props.color).toBe("blue");
   });
 
@@ -189,7 +211,8 @@ describe("backfillStoreRecords", () => {
       },
     };
     const out = backfillStoreRecords(store);
-    const props = (out["shape:nt1"] as { props: Record<string, unknown> }).props;
+    const props = (out["shape:nt1"] as { props: Record<string, unknown> })
+      .props;
     expect(props.labelColor).toBe("black");
     expect(props.textFirstEditedBy).toBeNull();
     expect(props.color).toBe("yellow");
@@ -201,11 +224,17 @@ describe("backfillStoreRecords", () => {
         id: "shape:nt2",
         typeName: "shape",
         type: "note",
-        props: { color: "yellow", labelColor: "red", textFirstEditedBy: "user:42", size: "m" },
+        props: {
+          color: "yellow",
+          labelColor: "red",
+          textFirstEditedBy: "user:42",
+          size: "m",
+        },
       },
     };
     const out = backfillStoreRecords(store);
-    const props = (out["shape:nt2"] as { props: Record<string, unknown> }).props;
+    const props = (out["shape:nt2"] as { props: Record<string, unknown> })
+      .props;
     expect(props.labelColor).toBe("red");
     expect(props.textFirstEditedBy).toBe("user:42");
   });
@@ -220,8 +249,54 @@ describe("backfillStoreRecords", () => {
       },
     };
     const out = backfillStoreRecords(store);
-    const props = (out["shape:nt3"] as { props: Record<string, unknown> }).props;
+    const props = (out["shape:nt3"] as { props: Record<string, unknown> })
+      .props;
     expect(props.labelColor).toBe("white");
     expect(props.textFirstEditedBy).toBeNull();
+  });
+
+  // DRW-231: raw hex props.color (e.g. from a mermaid style directive) makes
+  // strict tldraw loadSnapshot throw and blanks the entire board. Coerce to the
+  // nearest palette name before load.
+  it("coerces a raw hex props.color to the nearest palette name", () => {
+    const store = {
+      "shape:c": {
+        id: "shape:c",
+        typeName: "shape",
+        type: "schema-container",
+        props: { color: "#6A1B9A", w: 200, h: 100 },
+      },
+    };
+    const out = backfillStoreRecords(store);
+    const props = (out["shape:c"] as { props: Record<string, unknown> }).props;
+    expect(props.color).toBe("violet");
+  });
+
+  it("coerces a raw hex props.labelColor to the nearest palette name", () => {
+    const store = {
+      "shape:g": {
+        id: "shape:g",
+        typeName: "shape",
+        type: "geo",
+        props: { color: "blue", labelColor: "#E65100", w: 200, h: 100 },
+      },
+    };
+    const out = backfillStoreRecords(store);
+    const props = (out["shape:g"] as { props: Record<string, unknown> }).props;
+    expect(props.color).toBe("blue"); // valid → untouched
+    expect(props.labelColor).toBe("orange");
+  });
+
+  it("leaves a valid palette color untouched (idempotent, no spurious writes)", () => {
+    const store = {
+      "shape:g": {
+        id: "shape:g",
+        typeName: "shape",
+        type: "geo",
+        props: { color: "green", w: 200, h: 100 },
+      },
+    };
+    const out = backfillStoreRecords(store);
+    expect(out["shape:g"]).toEqual(store["shape:g"]);
   });
 });

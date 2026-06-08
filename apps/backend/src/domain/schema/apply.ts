@@ -24,7 +24,7 @@ import {
   connectionPreset,
   slugify,
 } from "@shemma/domain";
-import { edgeOverlayKey } from "@shemma/domain";
+import { edgeOverlayKey, coerceColor } from "@shemma/domain";
 import type {
   ArrowKind,
   SchemaAction,
@@ -262,8 +262,9 @@ function applyEdgeOverlayToProps(
   entry: EdgeOverlayEntry,
 ): Record<string, unknown> {
   const next = { ...props };
-  if (entry.color) next.color = entry.color;
-  if (entry.labelColor) next.labelColor = entry.labelColor;
+  // DRW-231: coerce to palette — raw hex in props.color/labelColor breaks loadSnapshot.
+  if (entry.color) next.color = coerceColor(entry.color);
+  if (entry.labelColor) next.labelColor = coerceColor(entry.labelColor);
   if (entry.dash) next.dash = entry.dash;
   if (entry.size) next.size = entry.size;
   if (entry.font) next.font = entry.font;
@@ -1910,8 +1911,10 @@ export function applySchemaActions(opts: {
       // stamps styleOwnedBy:"user" even on position-only drags, so gating on
       // it here would block restyle of any node the user has ever moved.
       const stylePatch: Record<string, unknown> = {};
-      if (a.overlay.color) stylePatch.color = a.overlay.color;
-      if (a.overlay.labelColor) stylePatch.labelColor = a.overlay.labelColor;
+      // DRW-231: coerce to palette — raw hex breaks strict tldraw loadSnapshot.
+      if (a.overlay.color) stylePatch.color = coerceColor(a.overlay.color);
+      if (a.overlay.labelColor)
+        stylePatch.labelColor = coerceColor(a.overlay.labelColor);
       if (a.overlay.fill) stylePatch.fill = a.overlay.fill;
       if (a.overlay.dash) stylePatch.dash = a.overlay.dash;
       if (a.overlay.size) stylePatch.size = a.overlay.size;
@@ -1977,7 +1980,7 @@ export function applySchemaActions(opts: {
       const base = batch.added[contSid] ?? batch.updated[contSid]?.[1] ?? store[contSid];
       if (!base) continue;
       const props = { ...((base.props ?? {}) as Record<string, unknown>) };
-      if (a.style.color) props.color = a.style.color;
+      if (a.style.color) props.color = coerceColor(a.style.color); // DRW-231
       if (a.style.fill) props.fill = a.style.fill;
       if (a.style.dash) props.dash = a.style.dash;
       if (a.style.titlePosition) props.titlePosition = a.style.titlePosition;
@@ -1992,7 +1995,7 @@ export function applySchemaActions(opts: {
     if (a.kind === "schema-set-frame-style") {
       const base = batch.updated[frame.id]?.[1] ?? frame;
       const props = { ...((base.props ?? {}) as Record<string, unknown>) };
-      if (a.style.color) props.color = a.style.color;
+      if (a.style.color) props.color = coerceColor(a.style.color); // DRW-231
       if (a.style.label !== undefined) props.name = a.style.label;
       batch.updated[frame.id] = [frame, { ...base, props } as TLRecord];
     }
