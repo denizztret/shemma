@@ -218,6 +218,32 @@ describe("POST /api/domain", () => {
     // After layered-lr layout, a/b should have different x or y.
     expect(aShape?.x !== bShape?.x || aShape?.y !== bShape?.y).toBe(true);
   });
+
+  // DRW-223: an agent creating nodes one `shemma_define` at a time hits the
+  // layout no-op (a single affected node can't be laid out) — without smart
+  // placement every node lands at (0,0) and piles. Each separate single define
+  // must land in its own free slot.
+  test("separate single defines don't pile at the origin (DRW-223)", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    await postDomain(app, { actions: [{ kind: "define", role: "service", name: "a" }] });
+    await postDomain(app, { actions: [{ kind: "define", role: "service", name: "b" }] });
+    const r = await rooms.get("d1");
+    const aId = r.didrawIndex.get("a");
+    const bId = r.didrawIndex.get("b");
+    const a = aId ? r.store.store[aId] : undefined;
+    const b = bId ? r.store.store[bId] : undefined;
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
+    const ax = a?.x ?? 0;
+    const ay = a?.y ?? 0;
+    const bx = b?.x ?? 0;
+    const by = b?.y ?? 0;
+    // Not the same point...
+    expect(ax === bx && ay === by).toBe(false);
+    // ...and the two 220×80 boxes must not overlap.
+    const overlap = !(ax + 220 <= bx || bx + 220 <= ax || ay + 80 <= by || by + 80 <= ay);
+    expect(overlap).toBe(false);
+  });
 });
 
 // DRW-220: the MCP layer (shemma_group / GroupArgs) sends group members as
