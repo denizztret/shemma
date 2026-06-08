@@ -25,7 +25,11 @@ import {
   levelMinK,
   type RespreadNode,
 } from "./respread";
-import { type FlowNode, resolveOverlapsAlongFlow } from "./resolve-overlaps";
+import {
+  type FlowNode,
+  growOnlyBox,
+  resolveOverlapsAlongFlow,
+} from "./resolve-overlaps";
 
 // elkjs is pure JS and runs on the main thread from the bundled build.
 // Lazily constructed: building it eagerly at module load instantiates a worker
@@ -1574,7 +1578,7 @@ function refitWrapper(editor: Editor, parentId: TLShapeId, pad: number): void {
  * (Density-респред меняет лишь x/y — прямые атомы — и потому корректно работает с
  * page bounds; для обтяжки размеров это не так. DRW-232.)
  */
-function effectiveSizeFromProps(s: TLShape): { w: number; h: number } {
+export function effectiveSizeFromProps(s: TLShape): { w: number; h: number } {
   const p = s.props as { w?: number; h?: number; growY?: number };
   return {
     w: typeof p.w === "number" ? p.w : 0,
@@ -1710,6 +1714,88 @@ export function reflowAfterFit(
     const pad = s.type === "frame" ? FRAME_REFIT_PAD : CONTAINER_REFIT_PAD;
     refitWrapperSync(editor, id as TLShapeId, pad);
   }
+}
+
+/**
+ * DRW-232 (авто-envelope): вырастить ОДНУ обёртку под её содержимое — только
+ * рост, без сжатия и без push. В отличие от `refitWrapperSync` (ручной путь,
+ * растит И сжимает) тут `growOnlyBox` берёт max с текущим размером: уменьшение
+ * ребёнка не сжимает родителя (AC #7). User-pinned размер обёртки
+ * (`didrawSizePinned` с origin "user" — явный drag-resize фрейма/контейнера)
+ * уважается и НЕ трогается. Идемпотентно: если обёртка уже вмещает контент,
+ * возвращает false без записи — это делает авто-пасс loop-safe. Размеры детей —
+ * из props (синхронно внутри одной транзакции). Возвращает true, если обёртка
+ * выросла.
+ */
+function refitWrapperGrowOnly(
+  editor: Editor,
+  parentId: TLShapeId,
+  pad: number,
+): boolean {
+  const f = editor.getShape(parentId);
+  if (!f) return false;
+  const meta = f.meta as
+    | { didrawSizePinned?: unknown; didrawSizeOrigin?: unknown }
+    | undefined;
+  if (meta?.didrawSizePinned === true && meta?.didrawSizeOrigin === "user")
+    return false;
+  let right = Number.NEGATIVE_INFINITY;
+  let bottom = Number.NEGATIVE_INFINITY;
+  for (const t of childrenOf(editor, parentId)) {
+    const sz = effectiveSizeFromProps(t);
+    right = Math.max(right, t.x + sz.w);
+    bottom = Math.max(bottom, t.y + sz.h);
+  }
+  if (!Number.isFinite(right)) return false;
+  const cur = f.props as { w?: number; h?: number };
+  const grown = growOnlyBox(
+    {
+      w: typeof cur.w === "number" ? cur.w : 0,
+      h: typeof cur.h === "number" ? cur.h : 0,
+    },
+    { right, bottom },
+    pad,
+  );
+  if (!grown) return false;
+  editor.updateShape({
+    id: parentId,
+    type: f.type,
+    props: { w: grown.w, h: grown.h },
+  } as never);
+  return true;
+}
+
+/**
+ * DRW-232 (авто-envelope): вырастить все обёртки-предки переданных узлов под их
+ * содержимое — grow-only, изнутри наружу (как `reflowAfterFit`, но без push и без
+ * сжатия). Используется авто-listener'ом (`registerAutoEnvelope`) при росте/
+ * добавлении вложенного узла и при ручном drag-resize ребёнка (AC #5/#6/#7).
+ * Ожидается ВНУТРИ `editor.run()` вызывающей стороны (одна undo-точка).
+ * Возвращает true, если хоть одна обёртка выросла.
+ */
+export function growWrappersForShapes(
+  editor: Editor,
+  shapeIds: ReadonlyArray<string>,
+): boolean {
+  const wrappers = new Set<string>();
+  for (const id of shapeIds)
+    for (const w of wrapperAncestors(editor, id as TLShapeId))
+      wrappers.add(w as string);
+  if (wrappers.size === 0) return false;
+  const ordered = [...wrappers]
+    .map((id) => ({
+      id,
+      depth: wrapperAncestors(editor, id as TLShapeId).length,
+    }))
+    .sort((a, b) => b.depth - a.depth);
+  let any = false;
+  for (const { id } of ordered) {
+    const s = editor.getShape(id as TLShapeId);
+    if (!s) continue;
+    const pad = s.type === "frame" ? FRAME_REFIT_PAD : CONTAINER_REFIT_PAD;
+    if (refitWrapperGrowOnly(editor, id as TLShapeId, pad)) any = true;
+  }
+  return any;
 }
 
 /** Capture parent-relative geometry of every node the gesture may move. */

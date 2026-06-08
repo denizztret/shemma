@@ -21,6 +21,7 @@ import {
   applyTextFitToShape,
   shapeHasText,
 } from "./apply-text-fit";
+import { growWrappersForShapes } from "./elk-layout";
 import { extractPlaintextFromRichText } from "./schema-overlay-sync";
 
 /** Shape types that carry an explicit size + growY and benefit from fitting.
@@ -33,23 +34,32 @@ export type AutoFitInput = {
   type: string;
   /** Shape currently has non-empty text. */
   hasText: boolean;
-  /** `meta.didrawSizePinned === true` — user owns the size (explicit ⌘⇧F or
-   *  manual resize); never auto-fit over it. */
+  /** `meta.didrawSizePinned === true` — the size is owned (set by an auto-fit,
+   *  an explicit ⌘⇧F, or a manual drag-resize). */
   sizePinned: boolean;
   /** The text was just added or changed (vs. a move/resize/style-only change).
    *  Fitting only on text change keeps this from re-firing on every edit and
    *  from looping on its own size write. */
   textChanged: boolean;
+  /**
+   * DRW-232: who set the pinned size.
+   *  - "fit"  → a previous auto-/manual text-fit (the size IS the fit result) →
+   *             re-fittable when the text later changes.
+   *  - "user" → a deliberate drag-resize or force-fit → never auto-fit over it.
+   *  - undefined → pinned by an unknown path (legacy / AI) → conservative skip.
+   * Irrelevant when not pinned. */
+  sizeOrigin?: "fit" | "user";
 };
 
 /** Decide whether a just-added/changed shape should be auto-fitted. */
 export function shouldAutoFit(input: AutoFitInput): boolean {
-  return (
-    FITTABLE_TYPES.has(input.type) &&
-    input.hasText &&
-    !input.sizePinned &&
-    input.textChanged
-  );
+  if (!FITTABLE_TYPES.has(input.type)) return false;
+  if (!input.hasText) return false;
+  if (!input.textChanged) return false;
+  // A pinned size is only re-fittable if it was itself produced by a fit;
+  // a user-chosen size (drag-resize / force-fit) or an unknown pin is left alone.
+  if (input.sizePinned && input.sizeOrigin !== "fit") return false;
+  return true;
 }
 
 /** Plaintext of a shape changed between two versions. Empty string and null
@@ -66,6 +76,12 @@ function isSizePinned(shape: TLShape): boolean {
     (shape.meta as { didrawSizePinned?: unknown } | undefined)
       ?.didrawSizePinned === true
   );
+}
+
+function sizeOriginOf(shape: TLShape): "fit" | "user" | undefined {
+  const o = (shape.meta as { didrawSizeOrigin?: unknown } | undefined)
+    ?.didrawSizeOrigin;
+  return o === "fit" || o === "user" ? o : undefined;
 }
 
 function plaintextOf(shape: TLShape): string | null {
@@ -103,6 +119,7 @@ export function registerAutoTextFit(editor: Editor): () => void {
         type: shape.type,
         hasText: shapeHasText(shape),
         sizePinned: isSizePinned(shape),
+        sizeOrigin: sizeOriginOf(shape),
         // Only ever called for an added/text-changed shape.
         textChanged: true,
       })
@@ -111,7 +128,13 @@ export function registerAutoTextFit(editor: Editor): () => void {
     }
     editor.run(() => {
       editor.markHistoryStoppingPoint("auto-fit-text");
-      applyTextFitToShape(editor, shape);
+      if (applyTextFitToShape(editor, shape)) {
+        // DRW-232: if the fit grew the node beyond its container/frame, grow the
+        // wrapper(s) so it stays inside — grow-only, no repack, no push (AC #5/#6).
+        // Same run → one undo step; sizes read from props (sync, page bounds are
+        // stale mid-transaction). Idempotent: a node that still fits writes nothing.
+        growWrappersForShapes(editor, [shape.id]);
+      }
     });
   };
 
