@@ -140,6 +140,67 @@ export interface BuildRequestRecordInput {
   maxFieldBytes: number;
 }
 
+// ── DRW-227.02: agent annotation layer ──────────────────────────────────────
+
+export type AnnotationPhase = "intent" | "blocker" | "resolution";
+const ANNOTATION_PHASES: ReadonlySet<string> = new Set([
+  "intent",
+  "blocker",
+  "resolution",
+]);
+
+/** One optional agent annotation ("what I wanted / where I got stuck"). Shares
+ *  the room JSONL + `kind` discriminator with {@link RequestRecord}. */
+export interface AnnotationRecord {
+  ts: string;
+  kind: "annotation";
+  space: string;
+  room: string;
+  clientOpId: string | null;
+  phase: AnnotationPhase | null;
+  text: string;
+  agent: string | null;
+  sessionId: string | null;
+}
+
+export interface BuildAnnotationRecordInput {
+  ts: string;
+  space: string;
+  room: string;
+  text: string;
+  phase?: string;
+  clientOpId?: string;
+  agent?: string;
+  sessionId?: string;
+  maxFieldBytes: number;
+}
+
+/** Truncate a string to `maxBytes` chars, keeping the readable prefix + `…`. */
+function boundText(text: string, maxBytes: number): string {
+  return text.length > maxBytes ? `${text.slice(0, maxBytes)}…` : text;
+}
+
+/** Assemble an `annotation` record. Unknown phase → null; text size-bounded. Pure. */
+export function buildAnnotationRecord(
+  input: BuildAnnotationRecordInput,
+): AnnotationRecord {
+  const phase =
+    input.phase && ANNOTATION_PHASES.has(input.phase)
+      ? (input.phase as AnnotationPhase)
+      : null;
+  return {
+    ts: input.ts,
+    kind: "annotation",
+    space: input.space,
+    room: input.room,
+    clientOpId: input.clientOpId ?? null,
+    phase,
+    text: boundText(input.text, input.maxFieldBytes),
+    agent: input.agent ?? null,
+    sessionId: input.sessionId ?? null,
+  };
+}
+
 /** Assemble a `request` record from captured request/response data. Pure. */
 export function buildRequestRecord(
   input: BuildRequestRecordInput,

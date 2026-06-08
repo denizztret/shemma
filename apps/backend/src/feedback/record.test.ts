@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   boundValue,
+  buildAnnotationRecord,
   buildRequestRecord,
   extractOutcome,
   isLoggedRoute,
@@ -194,5 +195,72 @@ describe("buildRequestRecord", () => {
       maxFieldBytes: 4096,
     });
     expect(rec.clientOpId).toBeNull();
+  });
+});
+
+describe("buildAnnotationRecord (DRW-227.02)", () => {
+  it("assembles an annotation; absent optional fields → null", () => {
+    const rec = buildAnnotationRecord({
+      ts: "2026-06-08T10:00:05.000Z",
+      space: "di-draw",
+      room: "r",
+      text: "delete didn't work, I think it ignores v2",
+      maxFieldBytes: 4096,
+    });
+    expect(rec).toEqual({
+      ts: "2026-06-08T10:00:05.000Z",
+      kind: "annotation",
+      space: "di-draw",
+      room: "r",
+      clientOpId: null,
+      phase: null,
+      text: "delete didn't work, I think it ignores v2",
+      agent: null,
+      sessionId: null,
+    });
+  });
+
+  it("keeps a valid phase and the optional fields", () => {
+    const rec = buildAnnotationRecord({
+      ts: "t",
+      space: "s",
+      room: "r",
+      text: "stuck",
+      phase: "blocker",
+      clientOpId: "op-1",
+      agent: "claude-code",
+      sessionId: "sess-1",
+      maxFieldBytes: 4096,
+    });
+    expect(rec.phase).toBe("blocker");
+    expect(rec.clientOpId).toBe("op-1");
+    expect(rec.agent).toBe("claude-code");
+    expect(rec.sessionId).toBe("sess-1");
+  });
+
+  it("rejects an unknown phase → null", () => {
+    const rec = buildAnnotationRecord({
+      ts: "t",
+      space: "s",
+      room: "r",
+      text: "x",
+      phase: "whatever",
+      maxFieldBytes: 4096,
+    });
+    expect(rec.phase).toBeNull();
+  });
+
+  it("truncates over-long text but keeps the readable prefix", () => {
+    const long = "a".repeat(5000);
+    const rec = buildAnnotationRecord({
+      ts: "t",
+      space: "s",
+      room: "r",
+      text: long,
+      maxFieldBytes: 100,
+    });
+    expect(rec.text.length).toBeLessThanOrEqual(100 + 2);
+    expect(rec.text.startsWith("aaaa")).toBe(true);
+    expect(rec.text.endsWith("…")).toBe(true);
   });
 });

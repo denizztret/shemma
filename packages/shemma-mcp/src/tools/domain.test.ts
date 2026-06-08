@@ -970,3 +970,60 @@ describe("shemma_fit_text tool (DRW-228)", () => {
     expect(r.isError).toBe(true);
   });
 });
+
+describe("shemma_feedback tool (DRW-227.02)", () => {
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("registers shemma_feedback without throwing", () => {
+    expect(() => setup()).not.toThrow();
+  });
+
+  it("feedback POSTs /api/agent/feedback with text and returns recorded", async () => {
+    let capturedUrl = "";
+    let capturedBody: unknown;
+    mockFetch((url, init) => {
+      capturedUrl = url;
+      capturedBody = JSON.parse(init?.body as string);
+      return { body: { ok: true, recorded: true } };
+    });
+    const { handles } = setup({ mode: "direct", room: "test-room" });
+    const r = await handles.feedback.call({
+      text: "delete didn't work",
+      phase: "blocker",
+      clientOpId: "op-9",
+    });
+    expect(capturedUrl).toContain("/api/agent/feedback");
+    expect(capturedUrl).toContain("room=test-room");
+    expect((capturedBody as { text: string }).text).toBe("delete didn't work");
+    expect((capturedBody as { phase: string }).phase).toBe("blocker");
+    expect(r.structuredContent).toMatchObject({ ok: true, room: "test-room", recorded: true });
+    expect(r.isError).toBeUndefined();
+  });
+
+  it("feedback surfaces recorded:false + reason when daemon feedback is off", async () => {
+    mockFetch(() => ({ body: { ok: true, recorded: false, reason: "feedback disabled" } }));
+    const { handles } = setup({ mode: "direct", room: "r" });
+    const r = await handles.feedback.call({ text: "note" });
+    expect(r.structuredContent).toMatchObject({ ok: true, recorded: false, reason: "feedback disabled" });
+    expect(r.isError).toBeUndefined();
+  });
+
+  it("feedback network error returns daemon-unavailable", async () => {
+    globalThis.fetch = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as typeof fetch;
+    const { handles } = setup({ mode: "direct", room: "r" });
+    const r = await handles.feedback.call({ text: "note" });
+    expect(r.structuredContent).toMatchObject({ ok: false, code: "daemon-unavailable" });
+    expect(r.isError).toBe(true);
+  });
+
+  it("feedback with ambiguous resolver returns ambiguous-room", async () => {
+    const { handles } = setup({ mode: "ambiguous" });
+    const r = await handles.feedback.call({ text: "note" });
+    expect(r.structuredContent).toMatchObject({ ok: false, code: "ambiguous-room" });
+    expect(r.isError).toBe(true);
+  });
+});
