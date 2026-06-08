@@ -1,7 +1,13 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
-import { mapFetchError, toolResult, type ToolResult } from "../errors";
+import {
+  isBackendError,
+  mapBackendError,
+  mapFetchError,
+  toolResult,
+  type ToolResult,
+} from "../errors";
 import { clientForRoom } from "../client-utils";
 import { resolveSpaceOrError, type ResolveSpaceFn } from "../space-resolver";
 
@@ -27,6 +33,9 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
   async function fetchData(fetch: () => Promise<unknown>): Promise<ToolResult> {
     try {
       const data = await fetch();
+      // DRW-229: a non-2xx body (annotated httpStatus) is a backend error, not
+      // success data; map it with a code+status. `catch` stays transport-only.
+      if (isBackendError(data)) return toolResult(mapBackendError(data));
       return toolResult({ ok: true, data });
     } catch (e) {
       return toolResult(mapFetchError(e));
@@ -109,6 +118,7 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
     try {
       const client = new CanvasClient({ baseUrl: deps.client.baseUrl, space: spaceRes.spaceId });
       const data = await client.listRooms();
+      if (isBackendError(data)) return toolResult(mapBackendError(data));
       return toolResult({ ok: true, data });
     } catch (e) {
       return toolResult(mapFetchError(e));
@@ -194,6 +204,7 @@ export function registerReadOnlyTools(server: McpServer, deps: ReadOnlyDeps): Re
     try {
       const client = clientForRoom(deps.client, room, spaceRes.spaceId);
       const data = await client.getContext({ since: input.since, viewport: input.viewport, select: input.select });
+      if (isBackendError(data)) return toolResult(mapBackendError(data));
       return toolResult({ ok: true, room, data });
     } catch (e) {
       return toolResult(mapFetchError(e));

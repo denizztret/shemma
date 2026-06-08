@@ -10,7 +10,13 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
-import { mapFetchError, toolResult, type ToolResult } from "../errors";
+import {
+  isBackendError,
+  mapBackendError,
+  mapFetchError,
+  toolResult,
+  type ToolResult,
+} from "../errors";
 import { resolveSpaceOrError, type ResolveSpaceFn } from "../space-resolver";
 import { CanvasViewArgs } from "../schemas";
 
@@ -44,6 +50,7 @@ export function registerCanvasViewTool(
         space: spaceRes.spaceId,
       });
       const data = await client.getCanvasView();
+      if (isBackendError(data)) return toolResult(mapBackendError(data));
       return toolResult({ ok: true, data });
     } catch (e) {
       return toolResult(mapFetchError(e));

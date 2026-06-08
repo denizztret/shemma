@@ -59,6 +59,21 @@ export function mapHttpResponse(
  * transport failures — `daemon-unavailable`). A body without `httpStatus` is an
  * in-band 2xx `{ok:false}` rejection — keep the historical `validation-error`.
  */
+/**
+ * DRW-229: true when a `CanvasClient.result()` body is a backend-error
+ * envelope — a non-2xx response annotated with a numeric `httpStatus`. Tools
+ * route such bodies through {@link mapBackendError} (a coded error WITH status)
+ * instead of letting the generic success path swallow them or the transport
+ * `catch` misclassify them as `daemon-unavailable`.
+ */
+export function isBackendError(resp: unknown): resp is { httpStatus: number } {
+  return (
+    !!resp &&
+    typeof resp === "object" &&
+    typeof (resp as { httpStatus?: unknown }).httpStatus === "number"
+  );
+}
+
 export function mapBackendError(resp: unknown, clientOpId?: string): ShemmaMcpError {
   const status = (resp as { httpStatus?: unknown } | null)?.httpStatus;
   if (typeof status === "number") return mapHttpResponse(status, resp, clientOpId);
