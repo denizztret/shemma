@@ -1,8 +1,10 @@
 {
   "name": "@shemma/domain",
-  "version": "0.30.0",
+  "version": "0.31.0",
   "private": true,
   "type": "module",
   "main": "src/index.ts",
-  "scripts": { "test": "bun test" }
+  "scripts": {
+    "test": "bun test"
+  }
 }

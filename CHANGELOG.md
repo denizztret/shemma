@@ -1,6 +1,6 @@
-## 0.30.1 — 2026-06-07 — Schema insert hardening (elbow arrows, growY-aware placement, anchor bias, frame-fit)
+## 0.31.0 — 2026-06-08 — Feedback telemetry, event-driven text-fit, theme UX + schema-insert & error-code hardening
 
-Перепроверка и доработка schema AI-insert фиксов 0.30.0 (DRW-205): live-верификация на 8 разнообразных схемах (multi-node patch / dense / narrow / empty / large 51 узел / BT / RL / rename-growth) выявила и закрыла нахлёст текстово-выросших узлов; инкрементальные стрелки приведены к виду импортных.
+Крупный feature-батч поверх 0.30.0. Главное: (1) **детерминированная feedback-телеметрия** — сервер пишет действия агента, агент опционально аннотирует, ридер `shemma feedback --diff` показывает дифф «что агент думал vs что вышло» (umbrella DRW-227.01/.02/.03); (2) **событийная авто-обтяжка текста** + явный `shemma_fit_text` (DRW-219/228); (3) **кнопка темы** — клик переключает только светлая⇄тёмная, системная по Opt-Click (DRW-230) + dark mode (DRW-217); (4) **честные коды ошибок** на всех MCP-инструментах — `daemon-unavailable` только транспорт, backend-ошибка = код+статус (DRW-221/229); (5) **hardening AI-insert схем** — elbow-стрелки, growY-aware placement, материализация групп, GC orphan-overlay'ев, MCP-policy «один фрейм = одна связная схема», формат domain-actions для агентов (DRW-205/208-220/222/224-226).
 
 ### Fixes
 
