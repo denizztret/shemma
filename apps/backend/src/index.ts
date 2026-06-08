@@ -509,7 +509,13 @@ export async function startServer(opts: AppOpts = {}) {
   const feedback =
     opts.feedback ??
     (daemonMode && config.feedback.enabled
-      ? new FeedbackWriter({ baseDir: path.join(homedir(), ".shemma", "feedback") })
+      ? new FeedbackWriter({
+          // SHEMMA_FEEDBACK_DIR override keeps the writer + `shemma feedback`
+          // reader (DRW-227.03) pointed at the same place.
+          baseDir:
+            process.env.SHEMMA_FEEDBACK_DIR ??
+            path.join(homedir(), ".shemma", "feedback"),
+        })
       : undefined);
   const { app, bus, persistence, bundleForSpace, legacyBundle } = makeApp({
     ...opts,
