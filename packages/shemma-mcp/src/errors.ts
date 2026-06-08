@@ -51,6 +51,26 @@ export function mapHttpResponse(
   return { ok: false, code: "http-error", message: `HTTP ${status}`, status, details: body, clientOpId };
 }
 
+/**
+ * DRW-221: map an error response the daemon ACTUALLY returned to a backend
+ * code. The client (CanvasClient.result) annotates non-2xx bodies with
+ * `httpStatus`, so we route through `mapHttpResponse` (422→validation-error,
+ * 5xx→unexpected-error, …) instead of `mapFetchError` (which is reserved for
+ * transport failures — `daemon-unavailable`). A body without `httpStatus` is an
+ * in-band 2xx `{ok:false}` rejection — keep the historical `validation-error`.
+ */
+export function mapBackendError(resp: unknown, clientOpId?: string): ShemmaMcpError {
+  const status = (resp as { httpStatus?: unknown } | null)?.httpStatus;
+  if (typeof status === "number") return mapHttpResponse(status, resp, clientOpId);
+  return {
+    ok: false,
+    code: "validation-error",
+    message: "request rejected by backend",
+    details: resp,
+    clientOpId,
+  };
+}
+
 export type ToolResult = ReturnType<typeof toolResult>;
 
 export function toolResult<T>(payload: ShemmaMcpSuccess<T> | ShemmaMcpError) {

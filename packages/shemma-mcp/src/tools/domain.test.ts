@@ -328,6 +328,43 @@ describe("domain write tools", () => {
     expect(r.isError).toBe(true);
   });
 
+  // DRW-221: the daemon ANSWERED with an error — must NOT be conflated with a
+  // transport failure (`daemon-unavailable`). A plain-text 500 maps to
+  // `unexpected-error` (with status), a 422 to `validation-error` (with status).
+  it("HTTP 500 (non-JSON body) → unexpected-error with status, not daemon-unavailable", async () => {
+    globalThis.fetch = (async () =>
+      new Response("Internal Server Error", {
+        status: 500,
+        headers: { "content-type": "text/plain" },
+      })) as typeof fetch;
+    const { handles } = setup({ mode: "direct", room: "r" });
+    const r = await handles.define.call({ name: "x", role: "actor", clientOpId: "op-500" });
+    expect(r.structuredContent).toMatchObject({
+      ok: false,
+      code: "unexpected-error",
+      status: 500,
+      clientOpId: "op-500",
+    });
+    expect(r.isError).toBe(true);
+  });
+
+  it("HTTP 422 (backend rejected) → validation-error with status", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ ok: false, errors: [{ msg: "bad" }] }), {
+        status: 422,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+    const { handles } = setup({ mode: "direct", room: "r" });
+    const r = await handles.define.call({ name: "x", role: "actor", clientOpId: "op-422" });
+    expect(r.structuredContent).toMatchObject({
+      ok: false,
+      code: "validation-error",
+      status: 422,
+      clientOpId: "op-422",
+    });
+    expect(r.isError).toBe(true);
+  });
+
   // Auto-open integration tests
   it("shemma_define with autoOpen=always calls notifyWrite on success", async () => {
     mockFetch(() => ({ body: okDomainResponse }));

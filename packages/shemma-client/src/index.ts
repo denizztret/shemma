@@ -82,6 +82,32 @@ export class CanvasClient {
     }).toString();
   }
 
+  /**
+   * DRW-221: parse a response the daemon actually returned, WITHOUT blindly
+   * `r.json()`-ing it. A non-2xx (incl. a plain-text 500 from an unhandled
+   * error) is preserved — the body is annotated with `httpStatus` and returned,
+   * not thrown — so callers (MCP) can map it to a backend code instead of
+   * conflating it with a transport failure. A real fetch rejection (connection
+   * refused / timeout) still propagates as a throw → `daemon-unavailable`.
+   */
+  private async result(r: Response): Promise<unknown> {
+    const text = await r.text();
+    let body: unknown;
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = r.ok ? text : { ok: false, error: text };
+      }
+    } else {
+      body = r.ok ? {} : { ok: false };
+    }
+    if (!r.ok && body && typeof body === "object") {
+      (body as Record<string, unknown>).httpStatus = r.status;
+    }
+    return body;
+  }
+
   async getState(opts: { fmt?: "full" | "compact"; since?: number } = {}) {
     const r = await fetch(
       `${this.base}/api/state?${this.q({ fmt: opts.fmt ?? "compact", since: opts.since })}`,
@@ -403,7 +429,7 @@ export class CanvasClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    return r.json();
+    return this.result(r);
   }
 
   async getContext(

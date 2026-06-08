@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "@shemma/client";
-import { mapFetchError, toolResult, type ToolResult } from "../errors";
+import { mapBackendError, mapFetchError, toolResult, type ToolResult } from "../errors";
 import type { RoomResolver } from "../room-resolver";
 import type { AutoOpenManager } from "../auto-open";
 import { resolveSpaceOrError, type ResolveSpaceFn } from "../space-resolver";
@@ -116,13 +116,9 @@ async function runActions(
         data: { results: resp.results, layout: resp.layout, autoOpen },
       });
     }
-    return toolResult({
-      ok: false,
-      code: "validation-error",
-      message: "domain action rejected",
-      clientOpId,
-      details: { errors: resp.errors },
-    });
+    // DRW-221: the daemon answered with an error (resp carries `httpStatus` from
+    // the client). Map by status — backend error ≠ daemon-unavailable.
+    return toolResult(mapBackendError(resp, clientOpId));
   } catch (e) {
     return toolResult({ ...mapFetchError(e), clientOpId });
   }
