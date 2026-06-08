@@ -158,7 +158,19 @@ export function getConfig() {
     sessionId: process.env.CLAUDE_SESSION_ID ?? null,
     projectSlug: resolveProjectSlug(),
     workspaceDir: resolveWorkspaceDir(),
+    // DRW-227.01: agent feedback telemetry. Off by default; opt-in via
+    // SHEMMA_FEEDBACK=1 (privacy — the log holds real schema content).
+    feedback: {
+      enabled: parseFeedbackFlag(process.env.SHEMMA_FEEDBACK),
+    },
   } as const;
+}
+
+/** SHEMMA_FEEDBACK truthy ("1"/"true"/"yes", case-insensitive) → enabled. */
+function parseFeedbackFlag(v: string | undefined): boolean {
+  if (!v) return false;
+  const s = v.trim().toLowerCase();
+  return s === "1" || s === "true" || s === "yes";
 }
 
 // Lazy singleton: первое обращение читает env и кеширует;
