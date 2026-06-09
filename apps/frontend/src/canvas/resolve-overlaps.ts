@@ -138,3 +138,26 @@ export function resolveOverlapsAlongFlow(
     return horizontal ? { id: m.id, x: pos } : { id: m.id, y: pos };
   });
 }
+
+/**
+ * DRW-232: grow-only envelope size for a wrapper (container/frame). Given the
+ * wrapper's current size, the far edges of its content (rightmost child right
+ * edge / bottommost child bottom edge, in parent-relative coords) and a padding,
+ * returns the new size needed so the content fits — but ONLY larger (never
+ * shrinks; top-left stays fixed). Returns `null` when the wrapper already
+ * contains the content (no change) — callers skip the write, which makes the
+ * auto-envelope pass idempotent (and therefore loop-safe).
+ *
+ * Pure counterpart of `refitWrapperGrowOnly` (elk-layout) — auto-grow never
+ * shrinks (AC #7: shrinking a child must not shrink its parent).
+ */
+export function growOnlyBox(
+  current: { w: number; h: number },
+  content: { right: number; bottom: number },
+  pad: number,
+): { w: number; h: number } | null {
+  const w = Math.max(current.w, content.right + pad);
+  const h = Math.max(current.h, content.bottom + pad);
+  if (w === current.w && h === current.h) return null;
+  return { w, h };
+}

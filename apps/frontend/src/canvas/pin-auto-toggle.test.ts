@@ -111,6 +111,27 @@ describe("computePinUpdates — diff and meta", () => {
     expect(result).toHaveLength(1);
     expect(result[0].meta.pinned).toBe(true);
     expect(result[0].meta.didrawSizePinned).toBe(true);
+    // DRW-232: a user drag-resize marks the size as user-owned → auto-text-fit
+    // never re-fits over it (distinct from auto-fit's origin "fit").
+    expect(result[0].meta.didrawSizeOrigin).toBe("user");
+  });
+
+  it("DRW-232: user resize overrides a prior auto-fit origin (fit → user)", () => {
+    const snapshot: Snapshot = new Map([
+      ["shape:a" as TLShapeId, { x: 0, y: 0, w: 100, h: 100, type: "geo" }],
+    ]);
+    const getCurrent = makeGetCurrent({
+      "shape:a": {
+        x: 0,
+        y: 0,
+        w: 150,
+        h: 120,
+        type: "geo",
+        meta: { didrawSizePinned: true, didrawSizeOrigin: "fit" },
+      },
+    });
+    const result = computePinUpdates(snapshot, getCurrent, "resizing");
+    expect(result[0].meta.didrawSizeOrigin).toBe("user");
   });
 
   it("does not set didrawSizePinned on translate-only (no resize)", () => {
@@ -122,6 +143,8 @@ describe("computePinUpdates — diff and meta", () => {
     });
     const result = computePinUpdates(snapshot, getCurrent, "translating");
     expect(result[0].meta.didrawSizePinned).toBeUndefined();
+    // DRW-232: a move never marks size-origin (size didn't change).
+    expect(result[0].meta.didrawSizeOrigin).toBeUndefined();
   });
 
   it("handles resize with no bbox movement (anchored resize)", () => {

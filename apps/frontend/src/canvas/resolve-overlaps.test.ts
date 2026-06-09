@@ -3,6 +3,7 @@ import {
   type FlowNode,
   type Overlap1DItem,
   flowAxis,
+  growOnlyBox,
   resolveOverlaps1D,
   resolveOverlapsAlongFlow,
 } from "./resolve-overlaps";
@@ -173,5 +174,40 @@ describe("resolveOverlapsAlongFlow — устранение наезда по н
     );
     // p закреплён — не двигаем, даже при наезде выросшего a
     expect(r.find((m) => m.id === "p")).toBeUndefined();
+  });
+});
+
+describe("DRW-232 growOnlyBox — envelope grow-only", () => {
+  test("content exceeds current width → grows width, keeps larger height", () => {
+    // needW = 200 + 16 = 216 > 100; needH = 50 + 16 = 66 < 100 → keep 100.
+    expect(
+      growOnlyBox({ w: 100, h: 100 }, { right: 200, bottom: 50 }, 16),
+    ).toEqual({ w: 216, h: 100 });
+  });
+
+  test("content exceeds both axes → grows both", () => {
+    expect(
+      growOnlyBox({ w: 100, h: 100 }, { right: 300, bottom: 200 }, 56),
+    ).toEqual({ w: 356, h: 256 });
+  });
+
+  test("content already fits → null (never shrinks)", () => {
+    expect(
+      growOnlyBox({ w: 400, h: 400 }, { right: 100, bottom: 100 }, 16),
+    ).toBeNull();
+  });
+
+  test("exact fit (needed === current) → null (no spurious write)", () => {
+    // needW = 100 + 16 = 116; needH = 100 + 16 = 116.
+    expect(
+      growOnlyBox({ w: 116, h: 116 }, { right: 100, bottom: 100 }, 16),
+    ).toBeNull();
+  });
+
+  test("grows only the overflowing axis → null check is per-box, not per-axis", () => {
+    // width needs to grow (216 > 100), height fits (66 < 300) → returns box.
+    expect(
+      growOnlyBox({ w: 100, h: 300 }, { right: 200, bottom: 50 }, 16),
+    ).toEqual({ w: 216, h: 300 });
   });
 });

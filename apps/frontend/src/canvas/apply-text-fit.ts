@@ -87,7 +87,9 @@ export function applyTextFitToShape(editor: Editor, shape: TLShape): boolean {
     id: shape.id,
     type: shape.type,
     props: nextProps,
-    meta: { ...meta, didrawSizePinned: true },
+    // didrawSizeOrigin "fit" marks the pin as fit-produced (re-fittable when the
+    // text later changes), distinct from a user drag-resize ("user") — DRW-232.
+    meta: { ...meta, didrawSizePinned: true, didrawSizeOrigin: "fit" },
     // biome-ignore lint/suspicious/noExplicitAny: TLShape props union
   } as any);
   return true;
