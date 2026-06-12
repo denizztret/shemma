@@ -1,0 +1,257 @@
+{
+  "frame": "shape:t218frame",
+  "boxes": [
+    {
+      "id": "shape:t218c1",
+      "label": "C1",
+      "kind": "container",
+      "parent": null,
+      "x": 78.08168017929188,
+      "y": 56.93844032733523,
+      "w": 96,
+      "h": 392.236154982816
+    },
+    {
+      "id": "shape:t218c2",
+      "label": "C2",
+      "kind": "container",
+      "parent": null,
+      "x": 374.0816801792919,
+      "y": 56.939006161579016,
+      "w": 93,
+      "h": 273.24887860502827
+    },
+    {
+      "id": "shape:t218c3",
+      "label": "C3",
+      "kind": "container",
+      "parent": null,
+      "x": 667.0816801792919,
+      "y": 56.93946729515616,
+      "w": 94,
+      "h": 478.12447649666694
+    },
+    {
+      "id": "shape:t218a1",
+      "label": "shape:t218a1",
+      "kind": "leaf",
+      "parent": "shape:t218c1",
+      "x": 96.08168017929188,
+      "y": 100.93844032733523,
+      "w": 60,
+      "h": 62
+    },
+    {
+      "id": "shape:t218a2",
+      "label": "shape:t218a2",
+      "kind": "leaf",
+      "parent": "shape:t218c1",
+      "x": 94.08168017929188,
+      "y": 252.17459531015123,
+      "w": 64,
+      "h": 62
+    },
+    {
+      "id": "shape:t218a3",
+      "label": "shape:t218a3",
+      "kind": "leaf",
+      "parent": "shape:t218c1",
+      "x": 94.08168017929188,
+      "y": 371.17459531015123,
+      "w": 64,
+      "h": 62
+    },
+    {
+      "id": "shape:t218b1",
+      "label": "shape:t218b1",
+      "kind": "leaf",
+      "parent": "shape:t218c2",
+      "x": 390.5816801792919,
+      "y": 100.93900616157902,
+      "w": 60,
+      "h": 62
+    },
+    {
+      "id": "shape:t218b2",
+      "label": "shape:t218b2",
+      "kind": "leaf",
+      "parent": "shape:t218c2",
+      "x": 390.0816801792919,
+      "y": 252.18788476660728,
+      "w": 61,
+      "h": 62
+    },
+    {
+      "id": "shape:t218d1",
+      "label": "shape:t218d1",
+      "kind": "leaf",
+      "parent": "shape:t218c3",
+      "x": 684.0816801792919,
+      "y": 100.93946729515616,
+      "w": 60,
+      "h": 62
+    },
+    {
+      "id": "shape:t218d2",
+      "label": "shape:t218d2",
+      "kind": "leaf",
+      "parent": "shape:t218c3",
+      "x": 683.0816801792919,
+      "y": 252.19112592001068,
+      "w": 62,
+      "h": 62
+    },
+    {
+      "id": "shape:t218d3",
+      "label": "shape:t218d3",
+      "kind": "leaf",
+      "parent": "shape:t218c3",
+      "x": 683.0816801792919,
+      "y": 457.06394379182314,
+      "w": 62,
+      "h": 62
+    },
+    {
+      "id": "shape:t218x1",
+      "label": "shape:t218x1",
+      "kind": "leaf",
+      "parent": null,
+      "x": 78.08168017929188,
+      "y": 665.063943791823,
+      "w": 60,
+      "h": 62
+    },
+    {
+      "id": "shape:t218x2",
+      "label": "shape:t218x2",
+      "kind": "leaf",
+      "parent": null,
+      "x": 338.0816801792919,
+      "y": 665.063943791823,
+      "w": 62,
+      "h": 62
+    },
+    {
+      "id": "shape:t218x3",
+      "label": "shape:t218x3",
+      "kind": "leaf",
+      "parent": null,
+      "x": 600.0816801792919,
+      "y": 665.063943791823,
+      "w": 62,
+      "h": 62
+    },
+    {
+      "id": "shape:t218x4",
+      "label": "shape:t218x4",
+      "kind": "leaf",
+      "parent": null,
+      "x": 862.0816801792919,
+      "y": 665.063943791823,
+      "w": 62,
+      "h": 62
+    },
+    {
+      "id": "shape:t218x5",
+      "label": "shape:t218x5",
+      "kind": "leaf",
+      "parent": null,
+      "x": 1124.0816801792919,
+      "y": 665.063943791823,
+      "w": 60,
+      "h": 62
+    },
+    {
+      "id": "shape:t218c4",
+      "label": "C4",
+      "kind": "container",
+      "parent": null,
+      "x": 961.0816801792919,
+      "y": 56.93969786194475,
+      "w": 94,
+      "h": 392.2255075976777
+    },
+    {
+      "id": "shape:t218e1",
+      "label": "shape:t218e1",
+      "kind": "leaf",
+      "parent": "shape:t218c4",
+      "x": 978.0816801792919,
+      "y": 100.93969786194475,
+      "w": 60,
+      "h": 62
+    },
+    {
+      "id": "shape:t218e2",
+      "label": "shape:t218e2",
+      "kind": "leaf",
+      "parent": "shape:t218c4",
+      "x": 977.0816801792919,
+      "y": 371.1652054596224,
+      "w": 62,
+      "h": 62
+    }
+  ],
+  "edges": [
+    {
+      "id": "shape:t218arr0",
+      "from": "shape:t218a1",
+      "to": "shape:t218b1"
+    },
+    {
+      "id": "shape:t218arr1",
+      "from": "shape:t218a2",
+      "to": "shape:t218b2"
+    },
+    {
+      "id": "shape:t218arr2",
+      "from": "shape:t218b1",
+      "to": "shape:t218d1"
+    },
+    {
+      "id": "shape:t218arr3",
+      "from": "shape:t218b2",
+      "to": "shape:t218d2"
+    },
+    {
+      "id": "shape:t218arr4",
+      "from": "shape:t218d1",
+      "to": "shape:t218e1"
+    },
+    {
+      "id": "shape:t218arr5",
+      "from": "shape:t218a3",
+      "to": "shape:t218e2"
+    },
+    {
+      "id": "shape:t218arr6",
+      "from": "shape:t218a1",
+      "to": "shape:t218a2"
+    },
+    {
+      "id": "shape:t218arr7",
+      "from": "shape:t218d2",
+      "to": "shape:t218d3"
+    },
+    {
+      "id": "shape:t218xarr0",
+      "from": "shape:t218x1",
+      "to": "shape:t218x2"
+    },
+    {
+      "id": "shape:t218xarr1",
+      "from": "shape:t218x2",
+      "to": "shape:t218x3"
+    },
+    {
+      "id": "shape:t218xarr2",
+      "from": "shape:t218x3",
+      "to": "shape:t218x4"
+    },
+    {
+      "id": "shape:t218xarr3",
+      "from": "shape:t218x4",
+      "to": "shape:t218x5"
+    }
+  ]
+}

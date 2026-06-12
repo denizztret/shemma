@@ -1,0 +1,16 @@
+boxes-probe.json
+  V-A (листья+контейнеры): violations=1, segments={"1":6,"3":5,"5":1}
+    shape:t218a3 -> shape:t218e2: сквозь [C3]
+  V-B (только листья): violations=1, segments={"1":6,"3":6}
+    shape:t218a3 -> shape:t218e2: сквозь [C3]
+  V-F (per-class, 7 классов, 6.4ms): violations=1, segments={"1":6,"3":5,"5":1}
+    shape:t218a3 -> shape:t218e2: сквозь [C3]
+  V-H (hierarchical per-class, 7 классов, 3.7ms): violations=0, segments={"1":6,"3":6}
+boxes-probe2.json
+  V-A (листья+контейнеры): violations=1, segments={"1":2,"2":7,"3":10,"7":1}
+    fastlane-omni@1.77.0<br/>AllureFastfile  -> distribute:allure:ios:greybox<br/>fastla: сквозь [Pool: kmp-mac (no TestOps cert)]
+  V-B (только листья): violations=1, segments={"1":2,"2":7,"3":10,"7":1}
+    fastlane-omni@1.77.0<br/>AllureFastfile  -> distribute:allure:ios:greybox<br/>fastla: сквозь [Pool: kmp-mac (no TestOps cert)]
+  V-F (per-class, 7 классов, 8.4ms): violations=1, segments={"1":2,"2":7,"3":10,"7":1}
+    fastlane-omni@1.77.0<br/>AllureFastfile  -> distribute:allure:ios:greybox<br/>fastla: сквозь [Pool: kmp-mac (no TestOps cert)]
+  V-H (hierarchical per-class, 7 классов, 4.4ms): violations=0, segments={"1":2,"2":7,"3":10,"6":1}

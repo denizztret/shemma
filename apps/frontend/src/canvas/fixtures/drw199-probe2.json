@@ -1,0 +1,327 @@
+{
+  "frame": "shape:f_de93d472f6",
+  "boxes": [
+    {
+      "id": "shape:a5e62eb0c4",
+      "label": "External templates (import)",
+      "kind": "container",
+      "parent": null,
+      "x": -83.78710016653395,
+      "y": -1395.125,
+      "w": 765.1518577598677,
+      "h": 182
+    },
+    {
+      "id": "shape:e4f0f19645",
+      "label": "Pool: kmp-mac (no TestOps cert)",
+      "kind": "container",
+      "parent": null,
+      "x": -131.4434319377042,
+      "y": -533.325,
+      "w": 996,
+      "h": 211
+    },
+    {
+      "id": "shape:4c0f00a3f9",
+      "label": "Pool: magnit-platform (TestOps cert in s",
+      "kind": "container",
+      "parent": null,
+      "x": -206.5087352815176,
+      "y": 324.875,
+      "w": 372,
+      "h": 152
+    },
+    {
+      "id": "shape:5a0c070ace",
+      "label": "Pool: k8s linux (Docker image w/ corp ce",
+      "kind": "container",
+      "parent": null,
+      "x": 955.4716543436734,
+      "y": -721.125,
+      "w": 377,
+      "h": 524
+    },
+    {
+      "id": "shape:fc4f0a0f7c",
+      "label": "GitLab CI<br/>mads-sdk MR !345",
+      "kind": "leaf",
+      "parent": null,
+      "x": 362.8647575933337,
+      "y": -1013.125,
+      "w": 274,
+      "h": 92
+    },
+    {
+      "id": "shape:d2edcff153",
+      "label": "mobile-ci-template@7.20.0<br/>snippets/i",
+      "kind": "leaf",
+      "parent": "shape:a5e62eb0c4",
+      "x": 334.3647575933337,
+      "y": -1351.125,
+      "w": 331,
+      "h": 122
+    },
+    {
+      "id": "shape:255d0f2036",
+      "label": "fastlane-omni@1.77.0<br/>AllureFastfile ",
+      "kind": "leaf",
+      "parent": "shape:a5e62eb0c4",
+      "x": -67.78710016653395,
+      "y": -1351.125,
+      "w": 288,
+      "h": 122
+    },
+    {
+      "id": "shape:06a97d2a86",
+      "label": "test:ios-greybox<br/>bundle exec fastlan",
+      "kind": "leaf",
+      "parent": "shape:e4f0f19645",
+      "x": -115.44343193770419,
+      "y": -489.32500000000005,
+      "w": 320,
+      "h": 151
+    },
+    {
+      "id": "shape:73ae7f42f1",
+      "label": "build:ios",
+      "kind": "leaf",
+      "parent": "shape:e4f0f19645",
+      "x": 494.5565680622958,
+      "y": -444.82500000000005,
+      "w": 125,
+      "h": 62
+    },
+    {
+      "id": "shape:a77ed07fc3",
+      "label": "test:ios-unit",
+      "kind": "leaf",
+      "parent": "shape:e4f0f19645",
+      "x": 676.5565680622958,
+      "y": -444.82500000000005,
+      "w": 172,
+      "h": 62
+    },
+    {
+      "id": "shape:19e3a84db3",
+      "label": "lint:swiftlint",
+      "kind": "leaf",
+      "parent": "shape:e4f0f19645",
+      "x": 261.5565680622958,
+      "y": -444.82500000000005,
+      "w": 176,
+      "h": 62
+    },
+    {
+      "id": "shape:ab98a79117",
+      "label": "distribute:allure:ios:greybox<br/>fastla",
+      "kind": "leaf",
+      "parent": "shape:4c0f00a3f9",
+      "x": -190.5087352815176,
+      "y": 368.875,
+      "w": 340,
+      "h": 92
+    },
+    {
+      "id": "shape:e56534de55",
+      "label": "test:android-greybox",
+      "kind": "leaf",
+      "parent": "shape:5a0c070ace",
+      "x": 1006.9716543436734,
+      "y": -677.125,
+      "w": 274,
+      "h": 62
+    },
+    {
+      "id": "shape:958ce6f3dc",
+      "label": "distribute:allure:android:greybox<br/>fa",
+      "kind": "leaf",
+      "parent": "shape:5a0c070ace",
+      "x": 971.4716543436734,
+      "y": -491.125,
+      "w": 345,
+      "h": 92
+    },
+    {
+      "id": "shape:82ff0a6802",
+      "label": "build:android",
+      "kind": "leaf",
+      "parent": "shape:5a0c070ace",
+      "x": 1052.9716543436734,
+      "y": -275.125,
+      "w": 182,
+      "h": 62
+    },
+    {
+      "id": "shape:117dfd220c",
+      "label": "xcresult artifact<br/>MadSDKSampleGreybo",
+      "kind": "leaf",
+      "parent": null,
+      "x": -275.0192840414775,
+      "y": 2.875,
+      "w": 304,
+      "h": 122
+    },
+    {
+      "id": "shape:5c558f106f",
+      "label": "allure-results JSON<br/>(38 test summari",
+      "kind": "leaf",
+      "parent": null,
+      "x": 61.5,
+      "y": 676.875,
+      "w": 317,
+      "h": 92
+    },
+    {
+      "id": "shape:326336d015",
+      "label": "Allure TestOps<br/>https://allure.platfo",
+      "kind": "leaf",
+      "parent": null,
+      "x": -55.098687763019825,
+      "y": 968.875,
+      "w": 380,
+      "h": 122
+    },
+    {
+      "id": "shape:024227ecf5",
+      "label": "GitHub Releases<br/>xcresults bin + allu",
+      "kind": "leaf",
+      "parent": null,
+      "x": -380.5,
+      "y": 676.875,
+      "w": 385,
+      "h": 92
+    },
+    {
+      "id": "shape:db3f32d236",
+      "label": "Corp Certs Repo<br/>CERTS_GIT_URL<br/>pl",
+      "kind": "leaf",
+      "parent": null,
+      "x": 85.98071595852252,
+      "y": 2.875,
+      "w": 333,
+      "h": 122
+    },
+    {
+      "id": "shape:827b80ff01",
+      "label": "WireMock per-MR<br/>k8s.mobile.platform.",
+      "kind": "leaf",
+      "parent": null,
+      "x": 222.4912647184824,
+      "y": 324.875,
+      "w": 326,
+      "h": 122
+    },
+    {
+      "id": "shape:de31fb303e",
+      "label": "iOS Simulator<br/>iPhone 17 Pro<br/>cert",
+      "kind": "leaf",
+      "parent": null,
+      "x": 475.9807159585225,
+      "y": 17.875,
+      "w": 347,
+      "h": 92
+    }
+  ],
+  "edges": [
+    {
+      "id": "shape:a2c1793047",
+      "from": "shape:d2edcff153",
+      "to": "shape:fc4f0a0f7c"
+    },
+    {
+      "id": "shape:cd7374047a",
+      "from": "shape:255d0f2036",
+      "to": "shape:06a97d2a86"
+    },
+    {
+      "id": "shape:1595583324",
+      "from": "shape:255d0f2036",
+      "to": "shape:ab98a79117"
+    },
+    {
+      "id": "shape:6dc6f4f75b",
+      "from": "shape:fc4f0a0f7c",
+      "to": "shape:06a97d2a86"
+    },
+    {
+      "id": "shape:fd49ed9eba",
+      "from": "shape:fc4f0a0f7c",
+      "to": "shape:73ae7f42f1"
+    },
+    {
+      "id": "shape:66afa0b7c0",
+      "from": "shape:fc4f0a0f7c",
+      "to": "shape:a77ed07fc3"
+    },
+    {
+      "id": "shape:9d9c94e30b",
+      "from": "shape:fc4f0a0f7c",
+      "to": "shape:19e3a84db3"
+    },
+    {
+      "id": "shape:d58934a5ec",
+      "from": "shape:fc4f0a0f7c",
+      "to": "shape:e56534de55"
+    },
+    {
+      "id": "shape:723b24f104",
+      "from": "shape:fc4f0a0f7c",
+      "to": "shape:82ff0a6802"
+    },
+    {
+      "id": "shape:b3fbbc49b9",
+      "from": "shape:06a97d2a86",
+      "to": "shape:db3f32d236"
+    },
+    {
+      "id": "shape:c4c5e73ae6",
+      "from": "shape:06a97d2a86",
+      "to": "shape:de31fb303e"
+    },
+    {
+      "id": "shape:e32bf99ea2",
+      "from": "shape:06a97d2a86",
+      "to": "shape:de31fb303e"
+    },
+    {
+      "id": "shape:b705471c2c",
+      "from": "shape:de31fb303e",
+      "to": "shape:827b80ff01"
+    },
+    {
+      "id": "shape:c668112e65",
+      "from": "shape:06a97d2a86",
+      "to": "shape:117dfd220c"
+    },
+    {
+      "id": "shape:52293a835c",
+      "from": "shape:117dfd220c",
+      "to": "shape:ab98a79117"
+    },
+    {
+      "id": "shape:999097d8e0",
+      "from": "shape:ab98a79117",
+      "to": "shape:024227ecf5"
+    },
+    {
+      "id": "shape:349b25b2a3",
+      "from": "shape:ab98a79117",
+      "to": "shape:5c558f106f"
+    },
+    {
+      "id": "shape:1dcdfdfcf5",
+      "from": "shape:5c558f106f",
+      "to": "shape:326336d015"
+    },
+    {
+      "id": "shape:3344fc0845",
+      "from": "shape:e56534de55",
+      "to": "shape:958ce6f3dc"
+    },
+    {
+      "id": "shape:6ae2046087",
+      "from": "shape:958ce6f3dc",
+      "to": "shape:326336d015"
+    }
+  ]
+}
