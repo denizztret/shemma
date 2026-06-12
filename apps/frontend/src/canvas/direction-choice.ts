@@ -64,3 +64,28 @@ export function pickDirectionCandidate<T>(
   }
   return best;
 }
+
+/**
+ * DRW-235: выбор inheritMode (auto vs perp) при ФИКСИРОВАННОМ направлении.
+ *
+ * Aspect-критерий planScore здесь не годится: он выбирает ориентацию на
+ * экране, а между двумя режимами ОДНОГО направления лучший план — тот, что
+ * говорит то же самое МЕНЬШЕЙ площадью, не ухудшая рёбра. С alignment-aware
+ * dry-run метриками perp-план (поперечные колонки) у схем с wired-контейнерами
+ * систематически компактнее — auto-план кладёт их вдоль потока, и выравнивание
+ * их детей недоступно (live-приёмка Фазы 2).
+ *
+ * Анти-дрейф: perp обязан быть ≥10% компактнее по площади И не хуже по
+ * пересечениям/наездам; идентичные планы (explicit-направления контейнеров
+ * без force) оставляют действующий auto.
+ */
+const PERP_AREA_MARGIN = 0.9;
+
+export function perpModeWins(auto: PlanMetrics, perp: PlanMetrics): boolean {
+  return (
+    perp.crossings <= auto.crossings &&
+    perp.overlaps <= auto.overlaps &&
+    perp.contentW * perp.contentH <
+      auto.contentW * auto.contentH * PERP_AREA_MARGIN
+  );
+}

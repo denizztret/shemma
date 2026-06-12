@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   type PlanMetrics,
   countBoxOverlaps,
+  perpModeWins,
   pickDirectionCandidate,
   planScore,
 } from "./direction-choice";
@@ -70,5 +71,34 @@ describe("pickDirectionCandidate", () => {
     expect(pickDirectionCandidate({ value: "TB", metrics: m({}) }, [])).toBe(
       "TB",
     );
+  });
+});
+
+describe("perpModeWins (DRW-235, inheritMode при фиксированном направлении)", () => {
+  const m = (
+    contentW: number,
+    contentH: number,
+    crossings = 0,
+    overlaps = 0,
+  ) => ({ contentW, contentH, crossings, overlaps });
+
+  it("perp побеждает: строго компактнее и не хуже по рёбрам (кейс CI-схемы)", () => {
+    expect(perpModeWins(m(4402, 1650, 3), m(3698, 1150, 3))).toBe(true);
+  });
+
+  it("идентичные планы — действующий auto остаётся", () => {
+    expect(perpModeWins(m(2000, 1000, 2), m(2000, 1000, 2))).toBe(false);
+  });
+
+  it("компактнее, но меньше 10% маржи — auto остаётся (анти-дрейф)", () => {
+    expect(perpModeWins(m(2000, 1000), m(1950, 1000))).toBe(false);
+  });
+
+  it("компактнее, но больше пересечений — auto остаётся", () => {
+    expect(perpModeWins(m(2000, 1000, 1), m(1000, 1000, 2))).toBe(false);
+  });
+
+  it("компактнее, но появились наезды на пины — auto остаётся", () => {
+    expect(perpModeWins(m(2000, 1000, 0, 0), m(1000, 1000, 0, 1))).toBe(false);
   });
 });
