@@ -872,7 +872,17 @@ const SelectionPanelContainer: FC<{
               editor.updateShape({
                 id: s.id as unknown as TLShapeId,
                 type: "frame",
-                meta: { ...(sh?.meta ?? {}), didrawDirection: null },
+                // «•» = "re-pick yourself": drop the pinned direction, the
+                // sticky champion AND the import-inherited marker — otherwise
+                // the auto search would just restart from the previous resolved
+                // direction (and a stale `inherited: true` without a direction
+                // would mislead future meta readers).
+                meta: {
+                  ...(sh?.meta ?? {}),
+                  didrawDirection: null,
+                  didrawDirectionResolved: null,
+                  didrawDirectionInherited: false,
+                },
               } as never);
             }
           });

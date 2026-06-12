@@ -384,6 +384,7 @@ function makeFrameShape(opts: {
   raw: string;
   position: { x: number; y: number };
   parentId: string;
+  direction?: MermaidDirection | string;
 }): TLRecord {
   return {
     id: opts.frameId,
@@ -411,6 +412,16 @@ function makeFrameShape(opts: {
       schemaProtocolVersion: "1.0",
       mermaidSource: opts.raw,
       didrawOverlays: {},
+      // DRW-218 AC#5: the imported top-level direction is recorded as
+      // INHERITED — the frontend lays the frame out along it, but the
+      // aspect-aware auto-direction stays eligible to re-infer it. An explicit
+      // user pick in the UI clears the marker (SchemaContainerActions).
+      ...(opts.direction
+        ? {
+            didrawDirection: opts.direction === "TD" ? "TB" : opts.direction,
+            didrawDirectionInherited: true,
+          }
+        : {}),
     },
   } as TLRecord;
 }
@@ -727,7 +738,7 @@ export function schemaRoutes(bus: StoreChangeBus) {
 
       const batch: StoreChangeBatch = { added: {}, updated: {}, removed: {} };
 
-      const frameShape = makeFrameShape({ frameId, label, raw, position, parentId: pageId });
+      const frameShape = makeFrameShape({ frameId, label, raw, position, parentId: pageId, direction });
       batch.added[frameId] = frameShape;
 
       // DRW-156: Pre-process schema-group actions to build a lookup map so that
