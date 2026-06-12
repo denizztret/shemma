@@ -19,9 +19,9 @@ import ELK from "elkjs/lib/elk.bundled.js";
 import type { Editor, TLShape, TLShapeId } from "tldraw";
 import { withAutoFlipSuppressed } from "../shapes/schema-container/SchemaContainerAutoFlip";
 import {
-  buildComponentGraphs,
   type ComponentGraph,
   type ComponentInfo,
+  buildComponentGraphs,
   packComponents,
   partitionComponents,
   rankComponents,
@@ -30,21 +30,23 @@ import {
 import {
   type Box as PlanBox,
   countBoxOverlaps,
+  perpModeWins,
   pickDirectionCandidate,
 } from "./direction-choice";
-import { ancestorFrame, resolveLayoutScope } from "./layout-scope";
 import { buildComponentBridgeEdges, buildFlowChainEdges } from "./flow-chains";
-import {
-  type Anchor,
-  computeRespreadLevel,
-  levelMinK,
-  type RespreadNode,
-} from "./respread";
+import { runGlobalAlignPass } from "./global-align";
+import { ancestorFrame, resolveLayoutScope } from "./layout-scope";
 import {
   type FlowNode,
   growOnlyBox,
   resolveOverlapsAlongFlow,
 } from "./resolve-overlaps";
+import {
+  type Anchor,
+  type RespreadNode,
+  computeRespreadLevel,
+  levelMinK,
+} from "./respread";
 
 // elkjs is pure JS and runs on the main thread from the bundled build.
 // Lazily constructed: building it eagerly at module load instantiates a worker
@@ -251,8 +253,8 @@ function centerCrossAxis(
   }
   for (const n of groups.values()) if (n > 1) return;
   if (vertical) {
-    let min = Infinity;
-    let max = -Infinity;
+    let min = Number.POSITIVE_INFINITY;
+    let max = Number.NEGATIVE_INFINITY;
     for (const p of entries) {
       min = Math.min(min, p.x);
       max = Math.max(max, p.x + (p.w ?? 0));
@@ -260,8 +262,8 @@ function centerCrossAxis(
     const cx = (min + max) / 2;
     for (const p of entries) p.x = cx - (p.w ?? 0) / 2;
   } else {
-    let min = Infinity;
-    let max = -Infinity;
+    let min = Number.POSITIVE_INFINITY;
+    let max = Number.NEGATIVE_INFINITY;
     for (const p of entries) {
       min = Math.min(min, p.y);
       max = Math.max(max, p.y + (p.h ?? 0));
@@ -337,7 +339,11 @@ type CrossSeg = { a: Pt; b: Pt; from: string; to: string };
  * themselves are already frame-relative. Shared by the flip pass and the dryRun
  * crossing estimate (identical owner-offset math).
  */
-function absCenter(flat: FlatPos, ownerOf: Record<string, string>, id: string): Pt | null {
+function absCenter(
+  flat: FlatPos,
+  ownerOf: Record<string, string>,
+  id: string,
+): Pt | null {
   const p = flat[id];
   if (!p) return null;
   const owner = ownerOf[id];
@@ -359,7 +365,12 @@ function countStraightCrossings(segs: ReadonlyArray<CrossSeg>): number {
       const s = segs[i]!;
       const t = segs[j]!;
       // adjacent edges fan out from a shared node — not a crossing
-      if (s.from === t.from || s.from === t.to || s.to === t.from || s.to === t.to)
+      if (
+        s.from === t.from ||
+        s.from === t.to ||
+        s.to === t.from ||
+        s.to === t.to
+      )
         continue;
       if (segmentsCross(s.a, s.b, t.a, t.b)) n++;
     }
@@ -568,7 +579,8 @@ async function layoutContainerInternal(
   childPos: Record<string, { x: number; y: number; w?: number; h?: number }>;
 }> {
   const dir = ctx.dir;
-  const csp = SPREAD[readSpacing(container.meta) ?? ctx.frameSpacing ?? "normal"];
+  const csp =
+    SPREAD[readSpacing(container.meta) ?? ctx.frameSpacing ?? "normal"];
   const cAlg: LayoutAlgorithm = readEngine(container.meta) ?? "layered";
   const kidIds = kids.map((k) => k.id as string);
   const kset = new Set(kidIds);
@@ -679,6 +691,7 @@ function distributeArrowPorts(
   inGraph: ReadonlySet<string>,
   byArrow: Record<string, { start?: string; end?: string }>,
   flowDir: string,
+  alignedEdges?: ReadonlySet<string>,
 ): void {
   const flowV = flowDir === "TB" || flowDir === "BT";
   type Box = {
@@ -764,6 +777,17 @@ function distributeArrowPorts(
     gs.push({ aid, term: "start", other: tc });
     ge.push({ aid, term: "end", other: sc });
   }
+  // helper: проверить, является ли стрелка выровненным ребром
+  const isAligned = (aid: string): boolean => {
+    if (!alignedEdges) return false;
+    const t = byArrow[aid];
+    if (!t?.start || !t?.end) return false;
+    return (
+      alignedEdges.has(`${t.start}>${t.end}`) ||
+      alignedEdges.has(`${t.end}>${t.start}`)
+    );
+  };
+
   const bindingUpdates: Record<string, unknown>[] = [];
   for (const [key, list] of Object.entries(portGroups)) {
     const side = key.slice(key.indexOf("|") + 1);
@@ -771,10 +795,20 @@ function distributeArrowPorts(
     list.sort((p, q) =>
       horiz ? p.other.cy - q.other.cy : p.other.cx - q.other.cx,
     );
-    const n = list.length;
-    list.forEach((item, i) => {
+    // Выровненные рёбра получают центр грани (0.5) и исключаются из дольного распределения
+    const unaligned = list.filter((item) => !isAligned(item.aid));
+    const n = unaligned.length;
+    let unalignedIdx = 0;
+    for (const item of list) {
       const rec = bindByKey[`${item.aid}|${item.term}`];
-      if (!rec) return;
+      if (!rec) continue;
+      let frac: number;
+      if (isAligned(item.aid)) {
+        frac = 0.5;
+      } else {
+        unalignedIdx += 1;
+        frac = unalignedIdx / (n + 1);
+      }
       bindingUpdates.push({
         id: rec.id,
         type: "arrow",
@@ -783,10 +817,10 @@ function distributeArrowPorts(
         props: {
           ...rec.props,
           isPrecise: true,
-          normalizedAnchor: anchorFor(side, (i + 1) / (n + 1)),
+          normalizedAnchor: anchorFor(side, frac),
         },
       });
-    });
+    }
   }
   if (bindingUpdates.length > 0) {
     editor.run(
@@ -1178,7 +1212,11 @@ export async function runElkLayout(
     for (const g of looseGeo) {
       const z = geoInputSize(editor, g.id, sp.nodeW);
       if (z.baseW != null) geoBaseW[g.id] = z.baseW;
-      rootChildren.push({ id: g.id as string, width: z.width, height: z.height });
+      rootChildren.push({
+        id: g.id as string,
+        width: z.width,
+        height: z.height,
+      });
     }
     // Collapse node→node arrows onto the owning boxes; skip intra-box (same owner)
     // and cross-frame edges (endpoint outside this frame's scope → not in ownerOf;
@@ -1310,6 +1348,22 @@ export async function runElkLayout(
     };
   }
 
+  // DRW-235: предикат участия контейнера в глобальном ordering (единый для
+  // flip-skip и хука выравнивания — чтобы не разъехались).
+  const gaAxisVertical = frameDir === "LR" || frameDir === "RL";
+  const gaLaneDir = gaAxisVertical ? "TB" : "LR";
+  const isAlignedColumn = (c: (typeof containerShapes)[number]): boolean => {
+    if (algorithm !== "layered") return false;
+    const cid = c.id as string;
+    if (resolvedDirs[cid] !== gaLaneDir) return false;
+    if ((containerKidsMap[cid] ?? []).length === 0) return false;
+    if (!forceUnpin && c.meta?.didrawSizePinned) return false;
+    return true;
+  };
+  const alignedColumnIds = new Set(
+    containerShapes.filter(isAlignedColumn).map((c) => c.id as string),
+  );
+
   // ---- flip-to-reduce-crossings: reversing a container's flow axis (LR↔RL /
   // TB↔BT) reverses its child order, which can untangle the external arrows that
   // attach to those children (user insight). For each container, mirror its
@@ -1371,6 +1425,9 @@ export async function runElkLayout(
       if (!isFlipEligible(c, forceDirections)) continue;
       // Respect pins: don't reorder a container whose children are user-placed.
       if (!forceUnpin && kids.some((k) => k.meta?.pinned)) continue;
+      // DRW-235: участвующие в глобальном ordering колонки не флипуем —
+      // ordering уже выбрал порядок по внешним связям (строго сильнее зеркала)
+      if (alignedColumnIds.has(cid)) continue;
       const kidSet = new Set(kids.map((k) => k.id as string));
       const hasExternal = scopedEdges.some(
         (e) => kidSet.has(e.from) !== kidSet.has(e.to),
@@ -1428,9 +1485,71 @@ export async function runElkLayout(
     };
   };
 
-  // dryRun (aspect-aware search in autoLayoutFrame): report the post-flip plan's
-  // content bounds + a cheap straight-segment crossing estimate, then bail BEFORE
-  // any store mutation. The caller compares candidate (frameDir × inheritMode)
+  // ---- DRW-235: глобальная координация строк поперёк контейнеров — порядок
+  // по внешним связям + выравнивание cross-рёбер в линии (solve1D), контейнеры
+  // обтягивают результат. Только для layered. Выполняется и в dryRun (мутирует
+  // только локальный план `flat`): метрики aspect-поиска видят ИТОГОВУЮ
+  // геометрию — иначе выбор направления систематически недооценивал
+  // конфигурации с поперечными колонками (live-приёмка Фазы 2). ----
+  let alignedEdgesSet: Set<string> | undefined;
+  if (algorithm === "layered") {
+    const alignColumns: Array<{ id: string; kidIds: string[] }> = [];
+    // Собираем pinned Set: при forceUnpin — пустой (пины игнорируются на этот пасс).
+    // Иначе: id узлов с meta.pinned (дети колонок, loose geo) + passive-элементы
+    // с meta.pinned или meta.didrawSizePinned (их бокс-вар фиксируется).
+    const alignPinned = new Set<string>();
+    for (const c of containerShapes) {
+      if (!isAlignedColumn(c)) continue;
+      const cid = c.id as string;
+      const kids = containerKidsMap[cid] ?? [];
+      alignColumns.push({ id: cid, kidIds: kids.map((k) => k.id as string) });
+      if (!forceUnpin) {
+        for (const k of kids) {
+          if (k.meta?.pinned) alignPinned.add(k.id as string);
+        }
+      }
+    }
+    const alignLoose: string[] = [];
+    for (const g of looseGeo) {
+      alignLoose.push(g.id as string);
+      if (!forceUnpin && g.meta?.pinned) alignPinned.add(g.id as string);
+    }
+    const alignPassive: Array<{ id: string }> = [];
+    for (const c of containerShapes) {
+      const cid = c.id as string;
+      // alignedColumnIds — это laneDir-колонки без sizePinned; они уже в alignColumns
+      if (alignedColumnIds.has(cid)) continue;
+      if ((containerKidsMap[cid] ?? []).length === 0) continue;
+      alignPassive.push({ id: cid });
+      if (!forceUnpin && (c.meta?.pinned || c.meta?.didrawSizePinned)) {
+        alignPinned.add(cid);
+      }
+    }
+    const alignResult = runGlobalAlignPass({
+      flat,
+      columns: alignColumns,
+      looseIds: alignLoose,
+      passive: alignPassive,
+      nodeEdges,
+      components: componentInfos.map((ci) => ci.ids),
+      rowGap: Math.round(sp.nodeNode * CONTAINER_SPACING_FRACTION),
+      compGap: sp.comp,
+      // padTop: заголовок контейнера всегда сверху по y.
+      // На LR/RL (axisVertical) решаем y — заголовок мешает: 44.
+      // На TB/BT (!axisVertical) решаем x — заголовок не мешает вдоль x: 16.
+      padTop: gaAxisVertical ? 44 : 16,
+      padBottom: 16,
+      pinned: alignPinned,
+      axisVertical: gaAxisVertical,
+      // RL/BT: поток идёт от большей perp-координаты, свип инвертируем
+      invertColumnOrder: frameDir === "RL" || frameDir === "BT",
+    });
+    alignedEdgesSet = new Set(alignResult.portHints.keys());
+  }
+
+  // dryRun (aspect-aware search in autoLayoutFrame): report the post-flip,
+  // post-alignment plan's content bounds + a cheap straight-segment crossing
+  // estimate, then bail BEFORE any store mutation. The caller compares candidate (frameDir × inheritMode)
   // configs and only the winner gets a real apply pass — so no flicker.
   if (opts?.dryRun) {
     // Metrics over the MAIN component only (flat holds just it in dryRun) —
@@ -1459,7 +1578,12 @@ export async function runElkLayout(
       // Pinned tops are post-override: the metric must see their FROZEN spot,
       // not the planned one — handled below; skip them here.
       if (!forceUnpin && s.meta?.pinned) continue;
-      planBoxes.push({ x: p.x + offX, y: p.y + offY, w: p.w ?? 0, h: p.h ?? 0 });
+      planBoxes.push({
+        x: p.x + offX,
+        y: p.y + offY,
+        w: p.w ?? 0,
+        h: p.h ?? 0,
+      });
     }
     for (const s of scopeNodes) {
       if (forceUnpin || !s.meta?.pinned) continue;
@@ -1547,34 +1671,34 @@ export async function runElkLayout(
     editor.run(() => {
       editor.updateShapes(updates as never);
       // Resize the frame to wrap its content with `pad`, WITHOUT moving its top-left
-    // (content was normalised to start `pad` inside above). Keeping the position
-    // fixed is what kills the per-run drift. Skip entirely if the size is pinned,
-    // or when there is no frame (frameless board layout).
-    if (frameId && frame && (forceUnpin || !frame.meta?.didrawSizePinned)) {
-      const f = editor.getShape(frameId);
-      const fb = editor.getShapePageBounds(frameId);
-      if (f && fb) {
-        let maxx = Number.NEGATIVE_INFINITY;
-        let maxy = Number.NEGATIVE_INFINITY;
-        for (const t of childrenOf(editor, frameId)) {
-          const b = editor.getShapePageBounds(t.id);
-          if (!b) continue;
-          maxx = Math.max(maxx, b.x + b.w);
-          maxy = Math.max(maxy, b.y + b.h);
-        }
-        if (Number.isFinite(maxx)) {
-          editor.updateShape({
-            id: frameId,
-            type: "frame",
-            props: { w: maxx - fb.x + pad, h: maxy - fb.y + pad },
-          } as never);
+      // (content was normalised to start `pad` inside above). Keeping the position
+      // fixed is what kills the per-run drift. Skip entirely if the size is pinned,
+      // or when there is no frame (frameless board layout).
+      if (frameId && frame && (forceUnpin || !frame.meta?.didrawSizePinned)) {
+        const f = editor.getShape(frameId);
+        const fb = editor.getShapePageBounds(frameId);
+        if (f && fb) {
+          let maxx = Number.NEGATIVE_INFINITY;
+          let maxy = Number.NEGATIVE_INFINITY;
+          for (const t of childrenOf(editor, frameId)) {
+            const b = editor.getShapePageBounds(t.id);
+            if (!b) continue;
+            maxx = Math.max(maxx, b.x + b.w);
+            maxy = Math.max(maxy, b.y + b.h);
+          }
+          if (Number.isFinite(maxx)) {
+            editor.updateShape({
+              id: frameId,
+              type: "frame",
+              props: { w: maxx - fb.x + pad, h: maxy - fb.y + pad },
+            } as never);
+          }
         }
       }
-    }
     }),
   );
 
-  distributeArrowPorts(editor, inGraph, byArrow, frameDir);
+  distributeArrowPorts(editor, inGraph, byArrow, frameDir, alignedEdgesSet);
   optimizeScopedElbows(editor, inGraph, byArrow);
 
   return {
@@ -1647,9 +1771,49 @@ export async function autoLayoutFrame(
   // Auto-direction only when the user hasn't EXPLICITLY pinned the frame's
   // direction. An import-inherited direction (marker set, AC#5) stays
   // auto-eligible — it seeds the incumbent below instead of disabling the
-  // search. Vanished / pinned frames → runElkLayout decides as before.
-  if (!frame || (pinnedDir && !inherited)) {
-    return runElkLayout(editor, ids, opts);
+  // search. Vanished frames → runElkLayout decides as before.
+  if (!frame) return runElkLayout(editor, ids, opts);
+  // Auto-vs-perp inheritMode comparison for a FIXED direction (no dir search).
+  // Alignment-aware dryRun metrics (DRW-235) can strongly favour cross-flow
+  // columns, which the auto plan can't see — wired containers land along the
+  // flow and their kids never align. The criterion here is COMPACTNESS, not
+  // aspect: aspect picks the screen orientation (direction choice), but
+  // between two modes of the SAME direction the better plan is the one that
+  // says the same thing in less area without getting worse edges. Anti-drift:
+  // perp must be ≥10% smaller AND not worse on crossings/overlaps — identical
+  // plans (explicit container dirs, no force) keep the auto incumbent.
+  const pickModeFor = async (
+    dir: string,
+    autoPlan?: ElkLayoutResult,
+  ): Promise<InheritMode> => {
+    const a =
+      autoPlan ??
+      (await runElkLayout(editor, ids, {
+        ...opts,
+        frameDirOverride: dir,
+        inheritMode: "auto",
+        dryRun: true,
+      }));
+    if (a.kind !== "plan") return "auto";
+    const p = await runElkLayout(editor, ids, {
+      ...opts,
+      frameDirOverride: dir,
+      inheritMode: "perp",
+      dryRun: true,
+    });
+    if (p.kind !== "plan") return "auto";
+    return perpModeWins(a, p) ? "perp" : "auto";
+  };
+  if (pinnedDir && !inherited) {
+    // Pinned direction: no search, no champion writeback — but the inheritMode
+    // is still the engine's choice (matters under forceDirections, when
+    // explicit container directions are deliberately re-inferred).
+    const mode = await pickModeFor(pinnedDir);
+    return runElkLayout(editor, ids, {
+      ...opts,
+      frameDirOverride: pinnedDir,
+      inheritMode: mode,
+    });
   }
 
   // Incumbent (sticky champion): the last auto-applied direction, else the
@@ -1680,12 +1844,15 @@ export async function autoLayoutFrame(
     inheritMode: "auto",
     dryRun: true,
   });
-  // Fast path: a balanced incumbent is applied verbatim — no search, no drift.
+  // Fast path: a balanced incumbent keeps its direction — no dir search, no
+  // drift. The inheritMode still gets the auto-vs-perp comparison (see
+  // pickModeFor above).
   if (
     basePlan.kind !== "plan" ||
     ratioOf(basePlan) <= ASPECT_SEARCH_THRESHOLD
   ) {
-    return applyConfig(base, "auto");
+    if (basePlan.kind !== "plan") return applyConfig(base, "auto");
+    return applyConfig(base, await pickModeFor(base, basePlan));
   }
 
   // Lopsided → search; candidates dry-run in parallel (perf, AC#6) and are
@@ -1760,7 +1927,10 @@ function leafSize(editor: Editor, id: string): { w: number; h: number } {
     w?: number;
     h?: number;
   };
-  return { w: typeof p.w === "number" ? p.w : 0, h: typeof p.h === "number" ? p.h : 0 };
+  return {
+    w: typeof p.w === "number" ? p.w : 0,
+    h: typeof p.h === "number" ? p.h : 0,
+  };
 }
 
 /** Captured parent-relative geometry of every node a respread gesture may move. */
@@ -1815,16 +1985,36 @@ function resolveRespreadGroups(
       if (child.type === "schema-container") {
         for (const k of childrenOf(editor, child.id)) {
           if (isRespreadLeaf(k.type))
-            add(child.id as string, k.id as string, "min", CONTAINER_REFIT_PAD, false);
+            add(
+              child.id as string,
+              k.id as string,
+              "min",
+              CONTAINER_REFIT_PAD,
+              false,
+            );
         }
-        add(frame.id as string, child.id as string, "min", FRAME_REFIT_PAD, true);
+        add(
+          frame.id as string,
+          child.id as string,
+          "min",
+          FRAME_REFIT_PAD,
+          true,
+        );
       } else if (isRespreadLeaf(child.type)) {
-        add(frame.id as string, child.id as string, "min", FRAME_REFIT_PAD, true);
+        add(
+          frame.id as string,
+          child.id as string,
+          "min",
+          FRAME_REFIT_PAD,
+          true,
+        );
       }
     }
   };
 
-  const sel = ids.map((id) => editor.getShape(id)).filter((s): s is TLShape => !!s);
+  const sel = ids
+    .map((id) => editor.getShape(id))
+    .filter((s): s is TLShape => !!s);
 
   if (sel.length === 0) {
     // board: every frame + loose page-level nodes
@@ -1843,14 +2033,32 @@ function resolveRespreadGroups(
       } else if (s.type === "schema-container") {
         for (const k of childrenOf(editor, s.id)) {
           if (isRespreadLeaf(k.type))
-            add(s.id as string, k.id as string, "min", CONTAINER_REFIT_PAD, false);
+            add(
+              s.id as string,
+              k.id as string,
+              "min",
+              CONTAINER_REFIT_PAD,
+              false,
+            );
         }
       } else if (isRespreadLeaf(s.type)) {
         const parent = editor.getShape(s.parentId as TLShapeId);
         if (parent?.type === "schema-container")
-          add(parent.id as string, s.id as string, "min", CONTAINER_REFIT_PAD, false);
+          add(
+            parent.id as string,
+            s.id as string,
+            "min",
+            CONTAINER_REFIT_PAD,
+            false,
+          );
         else if (parent?.type === "frame")
-          add(parent.id as string, s.id as string, "min", FRAME_REFIT_PAD, true);
+          add(
+            parent.id as string,
+            s.id as string,
+            "min",
+            FRAME_REFIT_PAD,
+            true,
+          );
         else add(s.parentId, s.id as string, "center", null, false);
       }
     }
@@ -2164,7 +2372,11 @@ export function applyRespread(
   editor: Editor,
   ids: TLShapeId[],
   k: number,
-  opts?: { snapshot?: RespreadSnapshot; minGap?: number; markHistory?: boolean },
+  opts?: {
+    snapshot?: RespreadSnapshot;
+    minGap?: number;
+    markHistory?: boolean;
+  },
 ): ElkLayoutResult {
   const minGap = opts?.minGap ?? RESPREAD_MIN_GAP;
   const groups = resolveRespreadGroups(editor, ids);
@@ -2196,7 +2408,10 @@ export function applyRespread(
     }
   }
   if (updates.length === 0)
-    return { kind: "noop", reason: "everything is pinned — nothing to respread" };
+    return {
+      kind: "noop",
+      reason: "everything is pinned — nothing to respread",
+    };
 
   // Wrappers to refit: the in-scope wrapper parents PLUS every ancestor frame of a
   // moved shape, so a frame grows/shrinks to wrap spread content even when only its
@@ -2205,7 +2420,10 @@ export function applyRespread(
   // size-pinned wrappers (they keep the pin, just at the new size — like a pinned
   // shape that the user drags). Containers first, then frames (a frame wraps the
   // already-resized boxes).
-  const refits = new Map<string, { id: string; pad: number; isFrame: boolean }>();
+  const refits = new Map<
+    string,
+    { id: string; pad: number; isFrame: boolean }
+  >();
   for (const g of groups) {
     if (g.refitPad !== null)
       refits.set(g.parentId, {
@@ -2217,7 +2435,11 @@ export function applyRespread(
   for (const u of updates) {
     const f = ancestorFrame(editor, u.id as TLShapeId);
     if (f && !refits.has(f as string))
-      refits.set(f as string, { id: f as string, pad: FRAME_REFIT_PAD, isFrame: true });
+      refits.set(f as string, {
+        id: f as string,
+        pad: FRAME_REFIT_PAD,
+        isFrame: true,
+      });
   }
   const refitList = [...refits.values()].sort(
     (a, b) => Number(a.isFrame) - Number(b.isFrame),

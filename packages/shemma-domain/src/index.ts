@@ -1,3 +1,4 @@
+export * from "./layout-solver";
 export * from "./roles";
 export * from "./connections";
 export * from "./layout-modes";
