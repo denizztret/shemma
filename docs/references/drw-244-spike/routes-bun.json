@@ -1,0 +1,131 @@
+[
+  {
+    "from": "mobile-ci-template@7.20.0<br/>snippets/i",
+    "to": "GitLab CI<br/>mads-sdk MR !345",
+    "segments": 1,
+    "points": [[500, -1290], [500, -967]]
+  },
+  {
+    "from": "fastlane-omni@1.77.0<br/>AllureFastfile ",
+    "to": "test:ios-greybox<br/>bundle exec fastlan",
+    "segments": 3,
+    "points": [[68, -1290], [68, -881], [53, -881], [53, -414]]
+  },
+  {
+    "from": "fastlane-omni@1.77.0<br/>AllureFastfile ",
+    "to": "distribute:allure:ios:greybox<br/>fastla",
+    "segments": 7,
+    "points": [
+      [84, -1290],
+      [84, -881],
+      [217, -881],
+      [217, -162],
+      [73, -162],
+      [73, 225],
+      [-13, 225],
+      [-13, 415]
+    ]
+  },
+  {
+    "from": "GitLab CI<br/>mads-sdk MR !345",
+    "to": "test:ios-greybox<br/>bundle exec fastlan",
+    "segments": 2,
+    "points": [[500, -975], [37, -975], [37, -414]]
+  },
+  {
+    "from": "GitLab CI<br/>mads-sdk MR !345",
+    "to": "build:ios",
+    "segments": 3,
+    "points": [[508, -967], [508, -727], [557, -727], [557, -414]]
+  },
+  {
+    "from": "GitLab CI<br/>mads-sdk MR !345",
+    "to": "test:ios-unit",
+    "segments": 2,
+    "points": [[500, -959], [763, -959], [763, -414]]
+  },
+  {
+    "from": "GitLab CI<br/>mads-sdk MR !345",
+    "to": "lint:swiftlint",
+    "segments": 2,
+    "points": [[500, -959], [350, -959], [350, -414]]
+  },
+  {
+    "from": "GitLab CI<br/>mads-sdk MR !345",
+    "to": "test:android-greybox",
+    "segments": 2,
+    "points": [[492, -967], [492, -646], [1144, -646]]
+  },
+  {
+    "from": "GitLab CI<br/>mads-sdk MR !345",
+    "to": "build:android",
+    "segments": 3,
+    "points": [[500, -975], [918, -975], [918, -244], [1144, -244]]
+  },
+  {
+    "from": "test:ios-greybox<br/>bundle exec fastlan",
+    "to": "Corp Certs Repo<br/>CERTS_GIT_URL<br/>pl",
+    "segments": 2,
+    "points": [[57, -414], [57, 64], [252, 64]]
+  },
+  {
+    "from": "test:ios-greybox<br/>bundle exec fastlan",
+    "to": "iOS Simulator<br/>iPhone 17 Pro<br/>cert",
+    "segments": 3,
+    "points": [[89, -414], [89, -146], [657, -146], [657, 64]]
+  },
+  {
+    "from": "test:ios-greybox<br/>bundle exec fastlan",
+    "to": "iOS Simulator<br/>iPhone 17 Pro<br/>cert",
+    "segments": 3,
+    "points": [[73, -414], [73, -178], [641, -178], [641, 64]]
+  },
+  {
+    "from": "iOS Simulator<br/>iPhone 17 Pro<br/>cert",
+    "to": "WireMock per-MR<br/>k8s.mobile.platform.",
+    "segments": 2,
+    "points": [[649, 64], [649, 386], [385, 386]]
+  },
+  {
+    "from": "test:ios-greybox<br/>bundle exec fastlan",
+    "to": "xcresult artifact<br/>MadSDKSampleGreybo",
+    "segments": 2,
+    "points": [[41, -414], [41, 64], [-123, 64]]
+  },
+  {
+    "from": "xcresult artifact<br/>MadSDKSampleGreybo",
+    "to": "distribute:allure:ios:greybox<br/>fastla",
+    "segments": 3,
+    "points": [[-123, 64], [-123, 225], [-29, 225], [-29, 415]]
+  },
+  {
+    "from": "distribute:allure:ios:greybox<br/>fastla",
+    "to": "GitHub Releases<br/>xcresults bin + allu",
+    "segments": 3,
+    "points": [[-29, 415], [-29, 569], [-188, 569], [-188, 723]]
+  },
+  {
+    "from": "distribute:allure:ios:greybox<br/>fastla",
+    "to": "allure-results JSON<br/>(38 test summari",
+    "segments": 3,
+    "points": [[-13, 415], [-13, 577], [220, 577], [220, 723]]
+  },
+  {
+    "from": "allure-results JSON<br/>(38 test summari",
+    "to": "Allure TestOps<br/>https://allure.platfo",
+    "segments": 3,
+    "points": [[220, 723], [220, 869], [135, 869], [135, 1030]]
+  },
+  {
+    "from": "test:android-greybox",
+    "to": "distribute:allure:android:greybox<br/>fa",
+    "segments": 1,
+    "points": [[1144, -646], [1144, -445]]
+  },
+  {
+    "from": "distribute:allure:android:greybox<br/>fa",
+    "to": "Allure TestOps<br/>https://allure.platfo",
+    "segments": 3,
+    "points": [[1144, -445], [902, -445], [902, 1030], [135, 1030]]
+  }
+]
