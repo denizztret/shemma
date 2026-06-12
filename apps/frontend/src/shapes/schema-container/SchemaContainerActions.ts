@@ -90,12 +90,22 @@ export function setContainerDirection(
 
       if (shape.type === "frame") {
         const meta = (shape.meta ?? {}) as Record<string, unknown>;
-        if (meta.didrawDirection !== direction) {
-          // biome-ignore lint/suspicious/noExplicitAny: tldraw frame meta untyped
+        const markerSet =
+          meta.didrawDirectionInherited === true ||
+          meta.didrawDirectionResolved != null;
+        if (meta.didrawDirection !== direction || markerSet) {
+          // Explicit user pick: pin the direction AND clear the import-inherited
+          // marker + the engine's last-resolved champion — auto-direction must
+          // not re-infer a frame the user explicitly pinned (DRW-218 AC#5).
           editor.updateShape({
             id: shape.id,
             type: "frame",
-            meta: { ...meta, didrawDirection: direction },
+            meta: {
+              ...meta,
+              didrawDirection: direction,
+              didrawDirectionInherited: false,
+              didrawDirectionResolved: null,
+            },
           } as never);
         }
         accepted.push(id);

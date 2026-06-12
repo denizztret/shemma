@@ -22,6 +22,40 @@ import type { ElkExtendedEdge } from "elkjs";
  * "arrange a node's direct children along its Direction" = elk-layered + this
  * chain for the edge-less case.
  */
+/**
+ * Synthetic bridges between DISCONNECTED components of a container's internal
+ * graph, chaining them along the container's Direction (DRW-218 follow-up).
+ *
+ * Without them elk-layered drops an isolated child into layer 0 NEXT TO the
+ * wired component (a second column across the flow) — e.g. C1 holding A1→A2
+ * plus a loose A3 renders A3 beside A1 instead of in the same lane. One edge
+ * per adjacent pair, sink of the previous component → source of the next, so
+ * each component starts in a fresh layer of the same flow lane. Components
+ * arrive ranked (main first) — the caller uses rankComponents.
+ *
+ * Layout-only edges (`__bridge__` prefix), same contract as `__flow__` ones:
+ * no shapes, ignored by the arrow-port pass, cycle-safe because they only ever
+ * connect distinct components.
+ */
+export function buildComponentBridgeEdges(
+  components: ReadonlyArray<ReadonlyArray<string>>,
+  internalEdges: ReadonlyArray<{ from: string; to: string }>,
+): ElkExtendedEdge[] {
+  if (components.length < 2) return [];
+  const hasOut = new Set(internalEdges.map((e) => e.from));
+  const hasIn = new Set(internalEdges.map((e) => e.to));
+  const out: ElkExtendedEdge[] = [];
+  for (let i = 0; i < components.length - 1; i++) {
+    const prev = components[i] ?? [];
+    const next = components[i + 1] ?? [];
+    const tail = prev.find((id) => !hasOut.has(id)) ?? prev[prev.length - 1];
+    const head = next.find((id) => !hasIn.has(id)) ?? next[0];
+    if (tail == null || head == null) continue;
+    out.push({ id: `__bridge__${i}`, sources: [tail], targets: [head] });
+  }
+  return out;
+}
+
 export function buildFlowChainEdges(
   containerChildren: Record<string, string[]>,
   containersWithInternalEdge: ReadonlySet<string>,

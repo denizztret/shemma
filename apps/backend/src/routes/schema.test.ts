@@ -1366,6 +1366,32 @@ describe("POST /api/schema/create — DRW-178 subgraph without explicit directio
     expect((s2!.meta as Record<string, unknown>).didrawDirectionInherited).toBe(true);
   });
 
+  test("schema frame records the imported top-level direction as INHERITED", async () => {
+    const { app, rooms } = makeApp({ inMemory: true });
+    const res = await postCreate(
+      app,
+      {
+        label: "frame direction test",
+        raw: "flowchart LR\n  a[A] --> b[B]",
+      },
+      "drw218-frame-dir-room",
+    );
+    expect(res.status).toBe(200);
+
+    const room = await rooms.get("drw218-frame-dir-room");
+    const shapes = Object.values(room.store.store);
+
+    const frame = shapes.find(
+      (s) =>
+        s?.typeName === "shape" &&
+        s?.type === "frame" &&
+        (s?.meta as { didrawSchemaFrame?: boolean })?.didrawSchemaFrame === true,
+    );
+    expect(frame).toBeDefined();
+    expect((frame!.meta as Record<string, unknown>).didrawDirection).toBe("LR");
+    expect((frame!.meta as Record<string, unknown>).didrawDirectionInherited).toBe(true);
+  });
+
   test("subgraph WITH explicit direction does NOT get meta.didrawDirectionInherited", async () => {
     const { app, rooms } = makeApp({ inMemory: true });
     const res = await postCreate(

@@ -18,7 +18,22 @@ import type { ElkExtendedEdge, ElkNode } from "elkjs";
 import ELK from "elkjs/lib/elk.bundled.js";
 import type { Editor, TLShape, TLShapeId } from "tldraw";
 import { withAutoFlipSuppressed } from "../shapes/schema-container/SchemaContainerAutoFlip";
-import { buildFlowChainEdges } from "./flow-chains";
+import {
+  buildComponentGraphs,
+  type ComponentGraph,
+  type ComponentInfo,
+  packComponents,
+  partitionComponents,
+  rankComponents,
+  splitStrays,
+} from "./component-partition";
+import {
+  type Box as PlanBox,
+  countBoxOverlaps,
+  pickDirectionCandidate,
+} from "./direction-choice";
+import { ancestorFrame, resolveLayoutScope } from "./layout-scope";
+import { buildComponentBridgeEdges, buildFlowChainEdges } from "./flow-chains";
 import {
   type Anchor,
   computeRespreadLevel,
@@ -477,57 +492,15 @@ export type ElkLayoutResult =
   | { kind: "ok"; applied: number; frameId: string; affected: string[] }
   // dryRun: the computed plan's metrics (no store mutation) — drives the
   // aspect-aware auto-direction search in autoLayoutFrame.
-  | { kind: "plan"; contentW: number; contentH: number; crossings: number }
+  | {
+      kind: "plan";
+      contentW: number;
+      contentH: number;
+      crossings: number;
+      overlaps: number;
+    }
   | { kind: "noop"; reason: string }
   | { kind: "error"; message: string };
-
-/** Walk up the parent chain until a frame shape is found. */
-function ancestorFrame(editor: Editor, id: TLShapeId): TLShapeId | null {
-  let cur: TLShape | undefined = editor.getShape(id);
-  while (cur) {
-    if (cur.type === "frame") return cur.id;
-    const parent = cur.parentId;
-    cur = parent.startsWith("shape:")
-      ? editor.getShape(parent as TLShapeId)
-      : undefined;
-  }
-  return null;
-}
-
-/**
- * The frame that owns the current selection (a selected frame itself, or the
- * ancestor frame of a selected container/leaf). Null when the selection sits
- * outside any frame — the caller then considers frameless board layout.
- */
-function selectionFrame(editor: Editor, ids: TLShapeId[]): TLShapeId | null {
-  for (const id of ids) {
-    const f = ancestorFrame(editor, id);
-    if (f) return f;
-  }
-  return null;
-}
-
-/**
- * Fallback frame when the selection points at no frame and isn't a layoutable
- * loose selection: the frame under the viewport centre, else the only frame.
- * (Drives "⌘⇧L with nothing selected lays out the obvious frame".)
- */
-function fallbackFrame(editor: Editor): TLShapeId | null {
-  const frames = editor
-    .getCurrentPageShapes()
-    .filter((s) => s.type === "frame");
-  const first = frames[0];
-  if (!first) return null;
-  if (frames.length === 1) return first.id;
-  const c = editor.getViewportPageBounds().center;
-  const hit = frames.find((f) => {
-    const b = editor.getShapePageBounds(f.id);
-    return (
-      !!b && c.x >= b.x && c.x <= b.x + b.w && c.y >= b.y && c.y <= b.y + b.h
-    );
-  });
-  return (hit ?? first).id;
-}
 
 function childrenOf(editor: Editor, parentId: TLShapeId): TLShape[] {
   return editor.getCurrentPageShapes().filter((s) => s.parentId === parentId);
@@ -599,17 +572,35 @@ async function layoutContainerInternal(
   const cAlg: LayoutAlgorithm = readEngine(container.meta) ?? "layered";
   const kidIds = kids.map((k) => k.id as string);
   const kset = new Set(kidIds);
-  const edges: ElkExtendedEdge[] = [];
+  const internal: Array<{ from: string; to: string }> = [];
   for (const e of ctx.nodeEdges) {
-    if (kset.has(e.from) && kset.has(e.to)) {
-      edges.push({ id: `${e.from}>${e.to}`, sources: [e.from], targets: [e.to] });
-    }
+    if (kset.has(e.from) && kset.has(e.to)) internal.push(e);
   }
+  const edges: ElkExtendedEdge[] = internal.map((e) => ({
+    id: `${e.from}>${e.to}`,
+    sources: [e.from],
+    targets: [e.to],
+  }));
   // Flow chain when the children aren't wired internally (else they clump on the
   // cross axis and the container's Direction looks dead).
   const withInternal =
     edges.length > 0 ? new Set([container.id as string]) : new Set<string>();
   edges.push(...buildFlowChainEdges({ [container.id]: kidIds }, withInternal));
+  // Partially wired children form DISCONNECTED internal components (A1→A2 + a
+  // loose A3): bridge them into one chain along the Direction, else elk puts
+  // the isolated ones in a second column across the flow.
+  if (internal.length > 0) {
+    const comps = partitionComponents(kidIds, internal);
+    if (comps.length > 1) {
+      const ranked = rankComponents(comps, {});
+      edges.push(
+        ...buildComponentBridgeEdges(
+          ranked.map((c) => c.ids),
+          internal,
+        ),
+      );
+    }
+  }
   const cf = CONTAINER_SPACING_FRACTION;
   const children: ElkNode[] = kids.map((k) => {
     const z = geoInputSize(ctx.editor, k.id, csp.nodeW);
@@ -650,122 +641,11 @@ async function layoutContainerInternal(
   };
 }
 
-/**
- * Re-layout the schema frame addressed by `ids` (selection) using elkjs.
- * Pure side effect on the editor store (which syncs to the backend); returns a
- * small result for the caller to drive camera feedback.
- */
-export async function runElkLayout(
-  editor: Editor,
-  ids: TLShapeId[],
-  opts?: {
-    forceUnpin?: boolean;
-    forceDirections?: boolean;
-    // aspect-aware auto-direction overrides (set by autoLayoutFrame's search):
-    frameDirOverride?: string; // use this frame direction instead of the meta one
-    inheritMode?: InheritMode; // how inherit containers pick their direction
-    dryRun?: boolean; // compute the plan + return its metrics WITHOUT applying
-  },
-): Promise<ElkLayoutResult> {
-  // forceUnpin (⌘⌥⇧L / «Принудительно») lays out *everything* for this single
-  // pass — pinned position + sizePinned containers + the frame refit included.
-  // The pin meta flags are NOT cleared; they simply don't veto this one layout.
-  const forceUnpin = opts?.forceUnpin === true;
-  const inheritMode: InheritMode = opts?.inheritMode ?? "auto";
-  // forceDirections (also ⌘⌥⇧L) additionally ignores EXPLICIT container
-  // directions, re-inferring every container from topology for a clean-slate
-  // pass. Kept separate from forceUnpin so a plain direction-change re-layout can
-  // ignore pins WITHOUT discarding the direction the user just set.
-  const forceDirections = opts?.forceDirections === true;
-  // Scope priority: (1) the selection's own frame; (2) an explicit loose
-  // selection of ≥2 page-level nodes → frameless board layout; (3) fall back to
-  // the viewport / only frame (so ⌘⇧L with nothing selected still does something).
-  let frameId = selectionFrame(editor, ids);
-  // Frameless: no frame around the selection → lay out the selected page-level
-  // nodes in place on the board (schema drawn loose, not wrapped in a frame).
-  const looseNodes: TLShape[] = !frameId
-    ? ids
-        .map((id) => editor.getShape(id))
-        .filter(
-          (s): s is TLShape =>
-            !!s &&
-            (s.type === "geo" || s.type === "schema-container") &&
-            s.parentId.startsWith("page:"),
-        )
-    : [];
-  if (!frameId && looseNodes.length < 2) {
-    // Not a loose multi-node selection → fall back to an obvious frame.
-    frameId = fallbackFrame(editor);
-  }
-  const frame = frameId ? editor.getShape(frameId) : null;
-  if (!frameId) {
-    if (looseNodes.length < 2) {
-      return {
-        kind: "noop",
-        reason:
-          "no schema frame found — select ≥2 connected nodes on the board, or draw a frame",
-      };
-    }
-  } else {
-    if (!frame) return { kind: "noop", reason: "frame vanished" };
-    // Lock: a locked frame ignores ALL layout — even forceUnpin. Unlock to re-flow.
-    if (frame.meta?.didrawLocked) {
-      return { kind: "noop", reason: "frame locked — unlock to re-layout" };
-    }
-  }
-  // The shapes to lay out at the root level: a frame's direct children, or the
-  // loose page-level selection. Everything downstream is scope-agnostic.
-  const scopeNodes: TLShape[] = frameId
-    ? childrenOf(editor, frameId)
-    : looseNodes;
-
-  // ---- build the elk graph from the frame's descendants ----
-  // frameDirOverride (autoLayoutFrame's aspect search) wins over the stored meta.
-  const frameDir =
-    opts?.frameDirOverride ??
-    ((frame?.meta?.didrawDirection as string) || DEFAULT_FRAME_DIR);
-  // spacing preset (Compact / Normal / Roomy) from the frame or any container meta
-  let spacingName = readSpacing(frame?.meta);
-  if (!spacingName) {
-    for (const c of scopeNodes) {
-      const v = readSpacing(c.meta);
-      if (v) {
-        spacingName = v;
-        break;
-      }
-    }
-  }
-  const sp = SPREAD[spacingName ?? "normal"];
-  // placement engine (Layered / Tree / Stress / Force) — frame meta first, then
-  // any container meta, else default "layered". All four handle compound nodes
-  // (containers) under INCLUDE_CHILDREN; layered-specific options below are
-  // simply ignored by the other algorithms.
-  let engine = readEngine(frame?.meta);
-  if (!engine) {
-    for (const c of scopeNodes) {
-      const v = readEngine(c.meta);
-      if (v) {
-        engine = v;
-        break;
-      }
-    }
-  }
-  const algorithm: LayoutAlgorithm = engine ?? "layered";
-  // Recursive 2-level layout. elk's SEPARATE_CHILDREN ignores the root direction
-  // (the frame can't re-arrange its containers); INCLUDE_CHILDREN flattens the
-  // container directions. Neither gives "containers compose their own children AND
-  // the frame arranges the containers". So we do it in two explicit passes:
-  //   step 1 — lay each container out internally with its own dir/spacing/engine
-  //            → a fixed-size box (layoutContainerInternal);
-  //   step 2 — lay the frame out FLAT (those boxes + loose geo + collapsed edges)
-  //            with the frame's own dir/spacing/engine.
-  // Both the frame direction AND each container direction now take effect. (This is
-  // the 2-level case of the general recursive model; nested containers = future.)
-  const rootElkDir = DIR_MAP[frameDir] || "RIGHT";
-  // base width per geo id (captured on writeback so width-growth is reversible)
-  const geoBaseW: Record<string, number> = {};
-
-  // --- arrows: terminal map drives internal/root edges AND the port pass below ---
+/** Arrow-binding map (arrowId → start/end shape) + node→node edge list. */
+function collectArrowEdges(editor: Editor): {
+  byArrow: Record<string, { start?: string; end?: string }>;
+  nodeEdges: Array<{ from: string; to: string }>;
+} {
   const byArrow: Record<string, { start?: string; end?: string }> = {};
   for (const r of editor.store.allRecords()) {
     const rec = r as {
@@ -786,368 +666,21 @@ export async function runElkLayout(
   for (const t of Object.values(byArrow)) {
     if (t.start && t.end) nodeEdges.push({ from: t.start, to: t.end });
   }
+  return { byArrow, nodeEdges };
+}
 
-  // Classify the frame's direct children: schema-containers (≥1 geo kid) vs loose
-  // geo. Every container is laid out in its OWN pass (step 1) as an opaque box —
-  // the engine picks each inherit container's direction by topology, explicit
-  // directions win — then the frame arranges the boxes + loose geo (step 2). Map
-  // each geo leaf → its owning container so inter-container arrows collapse onto
-  // the box.
-  const containerShapes: TLShape[] = [];
-  const looseGeo: TLShape[] = [];
-  const ownerOf: Record<string, string> = {};
-  const containerKidsMap: Record<string, TLShape[]> = {};
-  for (const s of scopeNodes) {
-    if (s.type === "schema-container") {
-      const kids = childrenOf(editor, s.id).filter((k) => k.type === "geo");
-      if (kids.length === 0) continue;
-      containerShapes.push(s);
-      containerKidsMap[s.id] = kids;
-      for (const k of kids) ownerOf[k.id] = s.id;
-    } else if (s.type === "geo") {
-      looseGeo.push(s);
-      ownerOf[s.id] = s.id;
-    }
-  }
-  if (containerShapes.length === 0 && looseGeo.length === 0)
-    return { kind: "noop", reason: "frame has no layoutable nodes" };
-
-  // every laid-out node — scopes the arrow-port pass to this frame
-  const inGraph = new Set<string>();
-  for (const g of looseGeo) inGraph.add(g.id);
-  for (const c of containerShapes) {
-    inGraph.add(c.id);
-    for (const k of containerKidsMap[c.id]!) inGraph.add(k.id);
-  }
-
-  // parent-relative positions for every node (container internals relative to
-  // their container; top-level containers/loose-geo relative to the frame origin).
-  const flat: Record<string, { x: number; y: number; w?: number; h?: number }> =
-    {};
-  // resolved layout direction per container (for the flip-to-reduce-crossings pass).
-  const resolvedDirs: Record<string, string> = {};
-
-  let res: ElkNode;
-  try {
-    // ---- step 1: every container laid out internally as a fixed-size opaque box.
-    // The engine picks each inherit container's direction by topology
-    // (resolveContainerDir); explicit directions win; forceUnpin re-infers all. ----
-    const boxes = await Promise.all(
-      containerShapes.map((c) => {
-        const dir = resolveContainerDir(
-          c,
-          new Set(containerKidsMap[c.id]!.map((k) => k.id as string)),
-          frameDir,
-          nodeEdges,
-          forceDirections,
-          inheritMode,
-        );
-        resolvedDirs[c.id as string] = dir;
-        return layoutContainerInternal(c, containerKidsMap[c.id]!, {
-          editor,
-          dir,
-          frameSpacing: spacingName,
-          nodeEdges,
-          geoBaseW,
-        });
-      }),
-    );
-    const boxSize: Record<string, { w: number; h: number }> = {};
-    for (const box of boxes) {
-      boxSize[box.id] = { w: box.w, h: box.h };
-      for (const [kid, p] of Object.entries(box.childPos)) flat[kid] = p;
-    }
-
-    // ---- step 2: the frame lays the container boxes + loose geo out FLAT by its
-    // own direction / engine / spacing; inter-container arrows collapse onto the
-    // owning boxes. ----
-    const rootChildren: ElkNode[] = [];
-    for (const c of containerShapes) {
-      const bs = boxSize[c.id]!;
-      rootChildren.push({ id: c.id as string, width: bs.w, height: bs.h });
-    }
-    for (const g of looseGeo) {
-      const z = geoInputSize(editor, g.id, sp.nodeW);
-      if (z.baseW != null) geoBaseW[g.id] = z.baseW;
-      rootChildren.push({ id: g.id as string, width: z.width, height: z.height });
-    }
-    // Collapse node→node arrows onto the owning boxes; skip intra-box (same owner)
-    // and cross-frame edges (endpoint outside this frame's scope → not in ownerOf;
-    // elk would otherwise throw "Referenced shape does not exist").
-    const rootSeen = new Set<string>();
-    const rootEdges: ElkExtendedEdge[] = [];
-    for (const e of nodeEdges) {
-      const a = ownerOf[e.from];
-      const b = ownerOf[e.to];
-      if (!a || !b || a === b) continue;
-      const key = `${a}>${b}`;
-      if (rootSeen.has(key)) continue;
-      rootSeen.add(key);
-      rootEdges.push({ id: key, sources: [a], targets: [b] });
-    }
-    // a frame of disconnected top-level nodes still lines up along the frame dir
-    const topLevelIds = rootChildren.map((n) => n.id);
-    rootEdges.push(
-      ...buildFlowChainEdges(
-        { __root__: topLevelIds },
-        new Set(rootEdges.length > 0 ? ["__root__"] : []),
-      ),
-    );
-    const rootGraph: ElkNode = {
-      id: "root",
-      layoutOptions: {
-        "elk.algorithm": algorithm,
-        "elk.direction": rootElkDir,
-        "elk.edgeRouting": "ORTHOGONAL",
-        "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
-        "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
-        "elk.layered.thoroughness": "12",
-        "elk.spacing.nodeNode": String(sp.nodeNode),
-        "elk.spacing.componentComponent": String(sp.comp),
-        "elk.spacing.edgeNode": String(sp.edgeNode),
-        "elk.spacing.edgeEdge": String(sp.edgeEdge),
-        "elk.layered.spacing.nodeNodeBetweenLayers": String(sp.between),
-        "elk.layered.spacing.edgeNodeBetweenLayers": String(sp.edgeNode),
-        "elk.layered.spacing.edgeEdgeBetweenLayers": String(sp.edgeEdge),
-      },
-      children: rootChildren,
-      edges: rootEdges,
-    };
-    res = await elk().layout(rootGraph);
-  } catch (e) {
-    return {
-      kind: "error",
-      message: e instanceof Error ? e.message : String(e),
-    };
-  }
-
-  // Top-level (container box + loose geo) positions, relative to the frame origin.
-  // Each container's internal children are already in `flat` from step 1
-  // (container-relative — tldraw's parent-relative convention).
-  for (const c of res.children ?? []) {
-    flat[c.id] = { x: c.x ?? 0, y: c.y ?? 0, w: c.width, h: c.height };
-  }
-
-  // ---- flip-to-reduce-crossings: reversing a container's flow axis (LR↔RL /
-  // TB↔BT) reverses its child order, which can untangle the external arrows that
-  // attach to those children (user insight). For each container, mirror its
-  // children within their own span and keep the orientation with fewer
-  // straight-line edge crossings across the whole frame. ----
-  {
-    const scopedEdges = nodeEdges.filter(
-      (e) => inGraph.has(e.from) && inGraph.has(e.to),
-    );
-    const countCrossings = (): number => {
-      const segs = scopedEdges
-        .map((e) => {
-          const a = absCenter(flat, ownerOf, e.from);
-          const b = absCenter(flat, ownerOf, e.to);
-          return a && b ? { a, b, from: e.from, to: e.to } : null;
-        })
-        .filter((s): s is CrossSeg => s !== null);
-      return countStraightCrossings(segs);
-    };
-    // Mirror a container's children within their OWN bounding span (preserves the
-    // box + title padding, just reverses order along the flow axis).
-    const mirrorContainer = (cid: string): void => {
-      const dir = resolvedDirs[cid] ?? "TB";
-      const vertical = dir === "TB" || dir === "BT";
-      const ps = (containerKidsMap[cid] ?? [])
-        .map((k) => flat[k.id as string])
-        .filter((p): p is NonNullable<typeof p> => !!p);
-      if (ps.length < 2) return;
-      let lo = Number.POSITIVE_INFINITY;
-      let hi = Number.NEGATIVE_INFINITY;
-      for (const p of ps) {
-        const a = vertical ? p.y : p.x;
-        const b = a + (vertical ? (p.h ?? 0) : (p.w ?? 0));
-        lo = Math.min(lo, a);
-        hi = Math.max(hi, b);
-      }
-      for (const p of ps) {
-        if (vertical) p.y = lo + hi - p.y - (p.h ?? 0);
-        else p.x = lo + hi - p.x - (p.w ?? 0);
-      }
-    };
-    for (const c of containerShapes) {
-      const cid = c.id as string;
-      const kids = containerKidsMap[cid] ?? [];
-      if (kids.length < 2) continue;
-      // Honour an explicit user direction sense: never auto-reverse a container
-      // the user pinned to a cardinal direction (LR ≠ RL). This both makes the
-      // explicit pick stick AND keeps the pass local — editing a sibling no
-      // longer flips this untouched container. forceDirections re-enables it.
-      if (!isFlipEligible(c, forceDirections)) continue;
-      // Respect pins: don't reorder a container whose children are user-placed.
-      if (!forceUnpin && kids.some((k) => k.meta?.pinned)) continue;
-      const kidSet = new Set(kids.map((k) => k.id as string));
-      const hasExternal = scopedEdges.some(
-        (e) => kidSet.has(e.from) !== kidSet.has(e.to),
-      );
-      if (!hasExternal) continue;
-      const before = countCrossings();
-      mirrorContainer(cid);
-      if (countCrossings() >= before) mirrorContainer(cid); // no gain → revert
-    }
-  }
-
-  // dryRun (aspect-aware search in autoLayoutFrame): report the post-flip plan's
-  // content bounds + a cheap straight-segment crossing estimate, then bail BEFORE
-  // any store mutation. The caller compares candidate (frameDir × inheritMode)
-  // configs and only the winner gets a real apply pass — so no flicker.
-  if (opts?.dryRun) {
-    let minx = Number.POSITIVE_INFINITY;
-    let miny = Number.POSITIVE_INFINITY;
-    let maxx = Number.NEGATIVE_INFINITY;
-    let maxy = Number.NEGATIVE_INFINITY;
-    for (const s of scopeNodes) {
-      const p = flat[s.id as string];
-      if (!p) continue;
-      minx = Math.min(minx, p.x);
-      miny = Math.min(miny, p.y);
-      maxx = Math.max(maxx, p.x + (p.w ?? 0));
-      maxy = Math.max(maxy, p.y + (p.h ?? 0));
-    }
-    const segs = nodeEdges
-      .filter((e) => inGraph.has(e.from) && inGraph.has(e.to))
-      .map((e) => {
-        const a = absCenter(flat, ownerOf, e.from);
-        const b = absCenter(flat, ownerOf, e.to);
-        return a && b ? { a, b, from: e.from, to: e.to } : null;
-      })
-      .filter((s): s is CrossSeg => s !== null);
-    const crossings = countStraightCrossings(segs);
-    return {
-      kind: "plan",
-      contentW: Math.max(1, Number.isFinite(minx) ? maxx - minx : 1),
-      contentH: Math.max(1, Number.isFinite(miny) ? maxy - miny : 1),
-      crossings,
-    };
-  }
-
-  // Anti-drift: elk lays the frame's direct children out starting near its own
-  // origin (min ≈ 0). The frame's top-left stays put; we normalise the top-level
-  // children so their bounding box sits `pad` inside it. (The old code moved the
-  // frame to `min - pad` instead — but the children are parent-relative, so moving
-  // the frame dragged them along, nudging the whole frame up-left every run.)
-  const pad = 56;
-  const topIds = new Set(scopeNodes.map((s) => s.id as string));
-  let minTopX = Number.POSITIVE_INFINITY;
-  let minTopY = Number.POSITIVE_INFINITY;
-  // Frameless: also track the selection's CURRENT page top-left so the new layout
-  // can be anchored there (schema stays where the user drew it on the board).
-  let curMinX = Number.POSITIVE_INFINITY;
-  let curMinY = Number.POSITIVE_INFINITY;
-  for (const id of topIds) {
-    const s = editor.getShape(id as TLShapeId);
-    if (!forceUnpin && s?.meta?.pinned) continue; // pinned tops keep their spot
-    const fp = flat[id];
-    if (!fp) continue;
-    minTopX = Math.min(minTopX, fp.x);
-    minTopY = Math.min(minTopY, fp.y);
-    if (!frameId) {
-      const b = editor.getShapePageBounds(id as TLShapeId);
-      if (b) {
-        curMinX = Math.min(curMinX, b.x);
-        curMinY = Math.min(curMinY, b.y);
-      }
-    }
-  }
-  // Frame mode: place content `pad` inside the frame top-left (anti-drift).
-  // Frameless mode: land the new layout on the selection's previous top-left.
-  const anchorX = frameId ? pad : curMinX;
-  const anchorY = frameId ? pad : curMinY;
-  const offX =
-    Number.isFinite(minTopX) && Number.isFinite(anchorX) ? anchorX - minTopX : 0;
-  const offY =
-    Number.isFinite(minTopY) && Number.isFinite(anchorY) ? anchorY - minTopY : 0;
-
-  const updates: Record<string, unknown>[] = [];
-  const affected: string[] = [];
-  for (const [id, p] of Object.entries(flat)) {
-    const s = editor.getShape(id as TLShapeId);
-    if (!s) continue;
-    if (!forceUnpin && s.meta?.pinned) continue; // pin discipline: keep user-placed nodes
-    // Only top-level children are shifted (their coords are frame-relative);
-    // nodes inside containers are relative to the container, which already moved.
-    const top = topIds.has(id);
-    const upd: Record<string, unknown> = {
-      id,
-      type: s.type,
-      x: top ? p.x + offX : p.x,
-      y: top ? p.y + offY : p.y,
-    };
-    if (
-      s.type === "schema-container" &&
-      (forceUnpin || !s.meta?.didrawSizePinned) &&
-      p.w != null &&
-      p.h != null
-    ) {
-      upd.props = { w: p.w, h: p.h };
-    } else if (s.type === "geo" && !s.meta?.didrawSizePinned) {
-      // Roomy width-growth: elk echoes back our scaled input width (p.w). Apply
-      // it when it actually changed, and capture the natural base width once so
-      // a later switch to a smaller spacing can shrink back.
-      const curW = Math.round((s.props as { w?: number }).w ?? 0);
-      const targetW = p.w != null ? Math.round(p.w) : curW;
-      if (targetW !== curW) upd.props = { w: targetW };
-      const baseW = geoBaseW[id];
-      if (baseW != null && typeof s.meta?.didrawBaseW !== "number") {
-        upd.meta = { ...(s.meta ?? {}), didrawBaseW: baseW };
-      }
-    }
-    updates.push(upd);
-    affected.push(id);
-  }
-  if (updates.length === 0)
-    return {
-      kind: "noop",
-      reason: "everything is pinned — nothing to lay out",
-    };
-
-  editor.markHistoryStoppingPoint();
-  // Suppress schema-container auto-flip: layout runs through editor.run() which
-  // tldraw stamps source:"user", so moving a container's children would trip the
-  // auto-flip listener and rewrite props.direction → "custom" (DRW-150) — which
-  // then makes the container follow the FRAME direction instead of its own. The
-  // WS-driven layout path already wraps its apply the same way.
-  withAutoFlipSuppressed(() =>
-    editor.run(() => {
-      editor.updateShapes(updates as never);
-      // Resize the frame to wrap its content with `pad`, WITHOUT moving its top-left
-    // (content was normalised to start `pad` inside above). Keeping the position
-    // fixed is what kills the per-run drift. Skip entirely if the size is pinned,
-    // or when there is no frame (frameless board layout).
-    if (frameId && frame && (forceUnpin || !frame.meta?.didrawSizePinned)) {
-      const f = editor.getShape(frameId);
-      const fb = editor.getShapePageBounds(frameId);
-      if (f && fb) {
-        let maxx = Number.NEGATIVE_INFINITY;
-        let maxy = Number.NEGATIVE_INFINITY;
-        for (const t of childrenOf(editor, frameId)) {
-          const b = editor.getShapePageBounds(t.id);
-          if (!b) continue;
-          maxx = Math.max(maxx, b.x + b.w);
-          maxy = Math.max(maxy, b.y + b.h);
-        }
-        if (Number.isFinite(maxx)) {
-          editor.updateShape({
-            id: frameId,
-            type: "frame",
-            props: { w: maxx - fb.x + pad, h: maxy - fb.y + pad },
-          } as never);
-        }
-      }
-    }
-    }),
-  );
-
-  // ---- distribute arrow ports over the new layout so tldraw's elbow router
-  // draws clean, non-overlapping connectors: each arrow exits/enters on the side
-  // facing its neighbour; multiple arrows on one side spread out (DRW-172-style). ----
-  // Flow axis from the frame direction: TB/BT stack layers vertically (inter-layer
-  // edges exit/enter on top/bottom), LR/RL stack horizontally (left/right).
-  const flowV = frameDir === "TB" || frameDir === "BT";
+// ---- distribute arrow ports over the new layout so tldraw's elbow router
+// draws clean, non-overlapping connectors: each arrow exits/enters on the side
+// facing its neighbour; multiple arrows on one side spread out (DRW-172-style). ----
+// Flow axis from the flow direction: TB/BT stack layers vertically (inter-layer
+// edges exit/enter on top/bottom), LR/RL stack horizontally (left/right).
+function distributeArrowPorts(
+  editor: Editor,
+  inGraph: ReadonlySet<string>,
+  byArrow: Record<string, { start?: string; end?: string }>,
+  flowDir: string,
+): void {
+  const flowV = flowDir === "TB" || flowDir === "BT";
   type Box = {
     cx: number;
     cy: number;
@@ -1263,38 +796,786 @@ export async function runElkLayout(
       { history: "ignore" },
     );
   }
+}
 
-  // ---- obstacle-aware elbow routing: now that nodes + ports are final, pick
-  // each arrow's elbowMidPoint to dodge other arrows and non-endpoint boxes. ----
-  {
-    const elbowArrowIds = Object.keys(byArrow).filter((aid) => {
-      const t = byArrow[aid]!;
-      return (
-        !!t.start &&
-        !!t.end &&
-        inGraph.has(t.start) &&
-        inGraph.has(t.end) &&
-        editor.getShape(aid as TLShapeId)?.type === "arrow"
-      );
-    });
-    const obstacleBoxes = [...inGraph]
-      .map((id) => editor.getShape(id as TLShapeId))
-      .filter((s): s is TLShape => !!s && s.type === "geo")
-      .map((s) => {
-        const b = editor.getShapePageBounds(s.id);
-        return b
-          ? {
-              id: s.id as string,
-              minX: b.x,
-              minY: b.y,
-              maxX: b.x + b.w,
-              maxY: b.y + b.h,
-            }
-          : null;
-      })
-      .filter((b): b is Rect & { id: string } => b !== null);
-    optimizeElbowMidpoints(editor, elbowArrowIds, byArrow, obstacleBoxes);
+// ---- obstacle-aware elbow routing: now that nodes + ports are final, pick
+// each arrow's elbowMidPoint to dodge other arrows and non-endpoint boxes. ----
+function optimizeScopedElbows(
+  editor: Editor,
+  inGraph: ReadonlySet<string>,
+  byArrow: Record<string, { start?: string; end?: string }>,
+): void {
+  const elbowArrowIds = Object.keys(byArrow).filter((aid) => {
+    const t = byArrow[aid]!;
+    return (
+      !!t.start &&
+      !!t.end &&
+      inGraph.has(t.start) &&
+      inGraph.has(t.end) &&
+      editor.getShape(aid as TLShapeId)?.type === "arrow"
+    );
+  });
+  const obstacleBoxes = [...inGraph]
+    .map((id) => editor.getShape(id as TLShapeId))
+    .filter((s): s is TLShape => !!s && s.type === "geo")
+    .map((s) => {
+      const b = editor.getShapePageBounds(s.id);
+      return b
+        ? {
+            id: s.id as string,
+            minX: b.x,
+            minY: b.y,
+            maxX: b.x + b.w,
+            maxY: b.y + b.h,
+          }
+        : null;
+    })
+    .filter((b): b is Rect & { id: string } => b !== null);
+  optimizeElbowMidpoints(editor, elbowArrowIds, byArrow, obstacleBoxes);
+}
+
+/**
+ * Effective frame direction for a plain (non-search) pass: an EXPLICIT user
+ * direction wins; otherwise the sticky champion (didrawDirectionResolved, the
+ * direction actually on the canvas after the last auto pass) beats an
+ * import-INHERITED didrawDirection — else an Engine/Spacing toggle would flip
+ * an auto-re-picked frame back to its imported direction.
+ */
+function resolveFrameDir(frame: TLShape | null | undefined): string {
+  const meta = frame?.meta as
+    | {
+        didrawDirection?: unknown;
+        didrawDirectionInherited?: unknown;
+        didrawDirectionResolved?: unknown;
+      }
+    | undefined;
+  const stored =
+    typeof meta?.didrawDirection === "string" ? meta.didrawDirection : "";
+  const resolved =
+    typeof meta?.didrawDirectionResolved === "string"
+      ? meta.didrawDirectionResolved
+      : "";
+  if (stored && meta?.didrawDirectionInherited !== true) return stored;
+  return resolved || stored || DEFAULT_FRAME_DIR;
+}
+
+/**
+ * DRW-233: container scope — lay out ONLY the selected container's children
+ * (its own dir/spacing/engine), then resolve the new box against the world via
+ * the DRW-232 mechanics (push overlapping siblings + refit ancestors). The
+ * frame's own arrangement, sibling containers and the frame direction decision
+ * are NOT touched (DRW-218 AC#7 falls out constructively).
+ */
+async function runContainerScoped(
+  editor: Editor,
+  containerId: TLShapeId,
+  opts?: { forceUnpin?: boolean; forceDirections?: boolean; dryRun?: boolean },
+): Promise<ElkLayoutResult> {
+  const container = editor.getShape(containerId);
+  if (!container) return { kind: "noop", reason: "container vanished" };
+  const frameId = ancestorFrame(editor, containerId);
+  const frame = frameId ? editor.getShape(frameId) : null;
+  if (frame?.meta?.didrawLocked) {
+    return { kind: "noop", reason: "frame locked — unlock to re-layout" };
   }
+  const kids = childrenOf(editor, containerId).filter((k) => k.type === "geo");
+  if (kids.length === 0) {
+    return { kind: "noop", reason: "container has no layoutable nodes" };
+  }
+  const forceUnpin = opts?.forceUnpin === true;
+  const { byArrow, nodeEdges } = collectArrowEdges(editor);
+  const frameDir = resolveFrameDir(frame);
+  const kidIds = new Set(kids.map((k) => k.id as string));
+  const dir = resolveContainerDir(
+    container,
+    kidIds,
+    frameDir,
+    nodeEdges,
+    opts?.forceDirections === true,
+  );
+  const geoBaseW: Record<string, number> = {};
+  let box: Awaited<ReturnType<typeof layoutContainerInternal>>;
+  try {
+    box = await layoutContainerInternal(container, kids, {
+      editor,
+      dir,
+      frameSpacing: readSpacing(frame?.meta),
+      nodeEdges,
+      geoBaseW,
+    });
+  } catch (e) {
+    return {
+      kind: "error",
+      message: e instanceof Error ? e.message : String(e),
+    };
+  }
+  if (opts?.dryRun) {
+    return {
+      kind: "plan",
+      contentW: Math.max(1, box.w),
+      contentH: Math.max(1, box.h),
+      crossings: 0,
+      overlaps: 0,
+    };
+  }
+  const updates: Record<string, unknown>[] = [];
+  const affected: string[] = [];
+  for (const [id, p] of Object.entries(box.childPos)) {
+    const s = editor.getShape(id as TLShapeId);
+    if (!s) continue;
+    if (!forceUnpin && s.meta?.pinned) continue; // pin discipline as in the frame pass
+    const upd: Record<string, unknown> = { id, type: s.type, x: p.x, y: p.y };
+    if (s.type === "geo" && !s.meta?.didrawSizePinned) {
+      // Width writeback as in the frame pass: positions were computed for the
+      // spacing-scaled input width (geoInputSize), so the shape must take it —
+      // otherwise a Roomy/Normal toggle leaves stale widths under new x/y and
+      // the children overlap. Capture the natural base width once so a later
+      // switch to a smaller spacing can shrink back.
+      const curW = Math.round((s.props as { w?: number }).w ?? 0);
+      const targetW = p.w != null ? Math.round(p.w) : curW;
+      if (targetW !== curW) upd.props = { w: targetW };
+      const baseW = geoBaseW[id];
+      if (baseW != null && typeof s.meta?.didrawBaseW !== "number") {
+        upd.meta = { ...(s.meta ?? {}), didrawBaseW: baseW };
+      }
+    }
+    updates.push(upd);
+    affected.push(id);
+  }
+  if (updates.length === 0) {
+    return {
+      kind: "noop",
+      reason: "everything is pinned — nothing to lay out",
+    };
+  }
+  editor.markHistoryStoppingPoint();
+  const prev = effectiveSizeFromProps(container);
+  withAutoFlipSuppressed(() =>
+    editor.run(() => {
+      editor.updateShapes(updates as never);
+      if (forceUnpin || !container.meta?.didrawSizePinned) {
+        editor.updateShape({
+          id: containerId,
+          type: container.type,
+          props: { w: box.w, h: box.h },
+        } as never);
+      }
+      // DRW-232 mechanics, but only when the box actually GREW: the flow push
+      // (resolveOverlaps1D) is one-dimensional and would shove unrelated
+      // cross-axis neighbours (e.g. a second component packed below) purely by
+      // axis projection. An unchanged/shrunken box needs no push at all —
+      // grow-only envelope keeps the ancestors fitting (usually a no-op).
+      if (box.w > prev.w + 0.5 || box.h > prev.h + 0.5) {
+        reflowAfterFit(editor, [containerId as string]);
+      } else {
+        growWrappersForShapes(editor, [containerId as string]);
+      }
+    }),
+  );
+  // Re-anchor only the arrows fully inside this container (cross-scope arrows
+  // keep their anchors — same invariant as the frame pass's inGraph filter).
+  const inScope: ReadonlySet<string> = new Set<string>([
+    ...kidIds,
+    containerId as string,
+  ]);
+  distributeArrowPorts(editor, inScope, byArrow, dir);
+  optimizeScopedElbows(editor, inScope, byArrow);
+  return {
+    kind: "ok",
+    applied: updates.length,
+    frameId: frameId ?? "",
+    affected: [...affected, containerId as string],
+  };
+}
+
+/**
+ * Re-layout the schema frame addressed by `ids` (selection) using elkjs.
+ * Pure side effect on the editor store (which syncs to the backend); returns a
+ * small result for the caller to drive camera feedback.
+ */
+export async function runElkLayout(
+  editor: Editor,
+  ids: TLShapeId[],
+  opts?: {
+    forceUnpin?: boolean;
+    forceDirections?: boolean;
+    // aspect-aware auto-direction overrides (set by autoLayoutFrame's search):
+    frameDirOverride?: string; // use this frame direction instead of the meta one
+    inheritMode?: InheritMode; // how inherit containers pick their direction
+    dryRun?: boolean; // compute the plan + return its metrics WITHOUT applying
+  },
+): Promise<ElkLayoutResult> {
+  // forceUnpin (⌘⌥⇧L / «Принудительно») lays out *everything* for this single
+  // pass — pinned position + sizePinned containers + the frame refit included.
+  // The pin meta flags are NOT cleared; they simply don't veto this one layout.
+  const forceUnpin = opts?.forceUnpin === true;
+  const inheritMode: InheritMode = opts?.inheritMode ?? "auto";
+  // forceDirections (also ⌘⌥⇧L) additionally ignores EXPLICIT container
+  // directions, re-inferring every container from topology for a clean-slate
+  // pass. Kept separate from forceUnpin so a plain direction-change re-layout can
+  // ignore pins WITHOUT discarding the direction the user just set.
+  const forceDirections = opts?.forceDirections === true;
+  // Scope = subject (DRW-233): a single selected container lays out in
+  // isolation; otherwise the selection's frame / a loose ≥2-node selection /
+  // the fallback frame — resolved centrally in resolveLayoutScope.
+  const scope = resolveLayoutScope(editor, ids);
+  if (scope.kind === "none") return { kind: "noop", reason: scope.reason };
+  if (scope.kind === "container") {
+    return runContainerScoped(editor, scope.containerId, opts);
+  }
+  const frameId = scope.kind === "frame" ? scope.frameId : null;
+  const looseNodes: TLShape[] =
+    scope.kind === "loose"
+      ? scope.ids
+          .map((id) => editor.getShape(id))
+          .filter((s): s is TLShape => !!s)
+      : [];
+  const frame = frameId ? editor.getShape(frameId) : null;
+  if (frameId) {
+    if (!frame) return { kind: "noop", reason: "frame vanished" };
+    // Lock: a locked frame ignores ALL layout — even forceUnpin.
+    if (frame.meta?.didrawLocked) {
+      return { kind: "noop", reason: "frame locked — unlock to re-layout" };
+    }
+  }
+  // The shapes to lay out at the root level: a frame's direct children, or the
+  // loose page-level selection. Everything downstream is scope-agnostic.
+  const scopeNodes: TLShape[] = frameId
+    ? childrenOf(editor, frameId)
+    : looseNodes;
+
+  // ---- build the elk graph from the frame's descendants ----
+  // frameDirOverride (autoLayoutFrame's aspect search) wins over the stored meta;
+  // a plain direct call (Engine/Spacing toggles via autoElkLayout) follows
+  // resolveFrameDir so an unpinned frame doesn't drift off its sticky champion.
+  const frameDir = opts?.frameDirOverride ?? resolveFrameDir(frame);
+  // spacing preset (Compact / Normal / Roomy) from the frame or any container meta
+  let spacingName = readSpacing(frame?.meta);
+  if (!spacingName) {
+    for (const c of scopeNodes) {
+      const v = readSpacing(c.meta);
+      if (v) {
+        spacingName = v;
+        break;
+      }
+    }
+  }
+  const sp = SPREAD[spacingName ?? "normal"];
+  // placement engine (Layered / Tree / Stress / Force) — frame meta first, then
+  // any container meta, else default "layered". All four handle compound nodes
+  // (containers) under INCLUDE_CHILDREN; layered-specific options below are
+  // simply ignored by the other algorithms.
+  let engine = readEngine(frame?.meta);
+  if (!engine) {
+    for (const c of scopeNodes) {
+      const v = readEngine(c.meta);
+      if (v) {
+        engine = v;
+        break;
+      }
+    }
+  }
+  const algorithm: LayoutAlgorithm = engine ?? "layered";
+  // Recursive 2-level layout. elk's SEPARATE_CHILDREN ignores the root direction
+  // (the frame can't re-arrange its containers); INCLUDE_CHILDREN flattens the
+  // container directions. Neither gives "containers compose their own children AND
+  // the frame arranges the containers". So we do it in two explicit passes:
+  //   step 1 — lay each container out internally with its own dir/spacing/engine
+  //            → a fixed-size box (layoutContainerInternal);
+  //   step 2 — lay the frame out FLAT (those boxes + loose geo + collapsed edges)
+  //            with the frame's own dir/spacing/engine.
+  // Both the frame direction AND each container direction now take effect. (This is
+  // the 2-level case of the general recursive model; nested containers = future.)
+  const rootElkDir = DIR_MAP[frameDir] || "RIGHT";
+  // base width per geo id (captured on writeback so width-growth is reversible)
+  const geoBaseW: Record<string, number> = {};
+
+  // --- arrows: terminal map drives internal/root edges AND the port pass below ---
+  const { byArrow, nodeEdges } = collectArrowEdges(editor);
+
+  // Classify the frame's direct children: schema-containers (≥1 geo kid) vs loose
+  // geo. Every container is laid out in its OWN pass (step 1) as an opaque box —
+  // the engine picks each inherit container's direction by topology, explicit
+  // directions win — then the frame arranges the boxes + loose geo (step 2). Map
+  // each geo leaf → its owning container so inter-container arrows collapse onto
+  // the box.
+  const containerShapes: TLShape[] = [];
+  const looseGeo: TLShape[] = [];
+  const ownerOf: Record<string, string> = {};
+  const containerKidsMap: Record<string, TLShape[]> = {};
+  for (const s of scopeNodes) {
+    if (s.type === "schema-container") {
+      const kids = childrenOf(editor, s.id).filter((k) => k.type === "geo");
+      if (kids.length === 0) continue;
+      containerShapes.push(s);
+      containerKidsMap[s.id] = kids;
+      for (const k of kids) ownerOf[k.id] = s.id;
+    } else if (s.type === "geo") {
+      looseGeo.push(s);
+      ownerOf[s.id] = s.id;
+    }
+  }
+  if (containerShapes.length === 0 && looseGeo.length === 0)
+    return { kind: "noop", reason: "frame has no layoutable nodes" };
+
+  // every laid-out node — scopes the arrow-port pass to this frame
+  const inGraph = new Set<string>();
+  for (const g of looseGeo) inGraph.add(g.id);
+  for (const c of containerShapes) {
+    inGraph.add(c.id);
+    for (const k of containerKidsMap[c.id]!) inGraph.add(k.id);
+  }
+
+  // parent-relative positions for every node (container internals relative to
+  // their container; top-level containers/loose-geo relative to the frame origin).
+  const flat: Record<string, { x: number; y: number; w?: number; h?: number }> =
+    {};
+  // resolved layout direction per container (for the flip-to-reduce-crossings pass).
+  const resolvedDirs: Record<string, string> = {};
+
+  // Ranked components (index 0 = main) — set in step 2, read by the flip pass
+  // (per-component crossings) and the dryRun metrics (main-only scoring).
+  let componentInfos: ComponentInfo[] = [];
+  let componentGraphs: ComponentGraph[] = [];
+  try {
+    // ---- step 1: every container laid out internally as a fixed-size opaque box.
+    // The engine picks each inherit container's direction by topology
+    // (resolveContainerDir); explicit directions win; forceUnpin re-infers all. ----
+    const boxes = await Promise.all(
+      containerShapes.map((c) => {
+        const dir = resolveContainerDir(
+          c,
+          new Set(containerKidsMap[c.id]!.map((k) => k.id as string)),
+          frameDir,
+          nodeEdges,
+          forceDirections,
+          inheritMode,
+        );
+        resolvedDirs[c.id as string] = dir;
+        return layoutContainerInternal(c, containerKidsMap[c.id]!, {
+          editor,
+          dir,
+          frameSpacing: spacingName,
+          nodeEdges,
+          geoBaseW,
+        });
+      }),
+    );
+    const boxSize: Record<string, { w: number; h: number }> = {};
+    for (const box of boxes) {
+      boxSize[box.id] = { w: box.w, h: box.h };
+      for (const [kid, p] of Object.entries(box.childPos)) flat[kid] = p;
+    }
+
+    // ---- step 2: the frame lays the container boxes + loose geo out FLAT by its
+    // own direction / engine / spacing; inter-container arrows collapse onto the
+    // owning boxes. ----
+    const rootChildren: ElkNode[] = [];
+    for (const c of containerShapes) {
+      const bs = boxSize[c.id]!;
+      rootChildren.push({ id: c.id as string, width: bs.w, height: bs.h });
+    }
+    for (const g of looseGeo) {
+      const z = geoInputSize(editor, g.id, sp.nodeW);
+      if (z.baseW != null) geoBaseW[g.id] = z.baseW;
+      rootChildren.push({ id: g.id as string, width: z.width, height: z.height });
+    }
+    // Collapse node→node arrows onto the owning boxes; skip intra-box (same owner)
+    // and cross-frame edges (endpoint outside this frame's scope → not in ownerOf;
+    // elk would otherwise throw "Referenced shape does not exist").
+    const rootSeen = new Set<string>();
+    const rootEdges: ElkExtendedEdge[] = [];
+    for (const e of nodeEdges) {
+      const a = ownerOf[e.from];
+      const b = ownerOf[e.to];
+      if (!a || !b || a === b) continue;
+      const key = `${a}>${b}`;
+      if (rootSeen.has(key)) continue;
+      rootSeen.add(key);
+      rootEdges.push({ id: key, sources: [a], targets: [b] });
+    }
+    // ---- DRW-218: partition into connected components; ELK only ever sees a
+    // CONNECTED graph (separateConnectedComponents would otherwise pack the
+    // components by aggregate bbox — editing one shifts the others). ----
+    const topLevelIds = rootChildren.map((n) => n.id);
+    if (rootEdges.length === 0) {
+      // Degenerate: nothing is connected at the root → ONE pseudo-component
+      // flow-chained along the frame direction. Preserves the established UX
+      // for both "frame of loose notes" and "frame of unconnected containers"
+      // (spec §5.2 amendment): they line up ALONG the direction, no cross-axis
+      // stacking when there is no main schema to stack against.
+      componentInfos = [{ ids: topLevelIds, leaves: 0, area: 0 }];
+      componentGraphs = [
+        {
+          ids: topLevelIds,
+          edges: buildFlowChainEdges({ __strays__: topLevelIds }, new Set()),
+        },
+      ];
+    } else {
+      const info: Record<string, { leaves: number; area: number }> = {};
+      for (const c of containerShapes) {
+        const bs = boxSize[c.id];
+        info[c.id] = {
+          leaves: containerKidsMap[c.id]?.length ?? 0,
+          area: bs ? bs.w * bs.h : 0,
+        };
+      }
+      for (const n of rootChildren) {
+        if (info[n.id]) continue; // container already counted
+        info[n.id] = {
+          leaves: 1,
+          area: (n.width ?? 0) * (n.height ?? 0),
+        };
+      }
+      const realEdgePairs = rootEdges.map((e) => ({
+        from: e.sources[0] ?? "",
+        to: e.targets[0] ?? "",
+      }));
+      const ranked = rankComponents(
+        partitionComponents(topLevelIds, realEdgePairs),
+        info,
+      );
+      const geoIds = new Set(looseGeo.map((g) => g.id as string));
+      const { real, strays } = splitStrays(ranked, (id) => geoIds.has(id));
+      componentInfos = [...real];
+      componentGraphs = buildComponentGraphs(real, rootEdges);
+      if (strays.length > 0) {
+        // All stray notes form one trailing pseudo-component, chained along
+        // the frame direction (last in the cross-axis stack).
+        componentInfos.push({ ids: strays, leaves: strays.length, area: 0 });
+        componentGraphs.push({
+          ids: strays,
+          edges: buildFlowChainEdges({ __strays__: strays }, new Set()),
+        });
+      }
+    }
+    // dryRun (auto-direction search) prices ONLY the main component — secondary
+    // components follow the frame direction and never influence the choice (AC#2).
+    const runCount = opts?.dryRun ? 1 : componentGraphs.length;
+    const nodeById = new Map(rootChildren.map((n) => [n.id, n]));
+    const componentLayouts = await Promise.all(
+      componentGraphs.slice(0, runCount).map((g) => {
+        const graph: ElkNode = {
+          id: "root",
+          layoutOptions: {
+            "elk.algorithm": algorithm,
+            "elk.direction": rootElkDir,
+            "elk.edgeRouting": "ORTHOGONAL",
+            "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
+            "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
+            "elk.layered.thoroughness": "12",
+            // The graph is connected by construction; pin the option anyway so
+            // a future regression can't silently re-enable ELK's own packing.
+            "elk.separateConnectedComponents": "false",
+            "elk.spacing.nodeNode": String(sp.nodeNode),
+            "elk.spacing.edgeNode": String(sp.edgeNode),
+            "elk.spacing.edgeEdge": String(sp.edgeEdge),
+            "elk.layered.spacing.nodeNodeBetweenLayers": String(sp.between),
+            "elk.layered.spacing.edgeNodeBetweenLayers": String(sp.edgeNode),
+            "elk.layered.spacing.edgeEdgeBetweenLayers": String(sp.edgeEdge),
+          },
+          children: g.ids
+            .map((id) => nodeById.get(id))
+            .filter((n): n is ElkNode => !!n),
+          edges: g.edges,
+        };
+        return elk().layout(graph);
+      }),
+    );
+    // Deterministic cross-axis packing: main keeps its coords, secondaries
+    // stack across the flow axis in ranked order, gap = component spacing.
+    const offsets = packComponents(
+      componentLayouts.map((r) => ({ w: r.width ?? 0, h: r.height ?? 0 })),
+      frameDir,
+      sp.comp,
+    );
+    // Top-level (container box + loose geo) positions, relative to the frame
+    // origin. Each container's internal children are already in `flat` from
+    // step 1 (container-relative — tldraw's parent-relative convention).
+    componentLayouts.forEach((res, i) => {
+      const off = offsets[i] ?? { dx: 0, dy: 0 };
+      for (const c of res.children ?? []) {
+        flat[c.id] = {
+          x: (c.x ?? 0) + off.dx,
+          y: (c.y ?? 0) + off.dy,
+          w: c.width,
+          h: c.height,
+        };
+      }
+    });
+  } catch (e) {
+    return {
+      kind: "error",
+      message: e instanceof Error ? e.message : String(e),
+    };
+  }
+
+  // ---- flip-to-reduce-crossings: reversing a container's flow axis (LR↔RL /
+  // TB↔BT) reverses its child order, which can untangle the external arrows that
+  // attach to those children (user insight). For each container, mirror its
+  // children within their own span and keep the orientation with fewer
+  // straight-line edge crossings across the whole frame. ----
+  {
+    const scopedEdges = nodeEdges.filter(
+      (e) => inGraph.has(e.from) && inGraph.has(e.to),
+    );
+    const componentOfTop = new Map<string, number>();
+    componentInfos.forEach((ci, i) => {
+      for (const id of ci.ids) componentOfTop.set(id, i);
+    });
+    const edgeComponent = (e: {
+      from: string;
+      to: string;
+    }): number | undefined => componentOfTop.get(ownerOf[e.from] ?? "");
+    const countCrossings = (comp?: number): number => {
+      const segs = scopedEdges
+        .filter((e) => comp == null || edgeComponent(e) === comp)
+        .map((e) => {
+          const a = absCenter(flat, ownerOf, e.from);
+          const b = absCenter(flat, ownerOf, e.to);
+          return a && b ? { a, b, from: e.from, to: e.to } : null;
+        })
+        .filter((s): s is CrossSeg => s !== null);
+      return countStraightCrossings(segs);
+    };
+    // Mirror a container's children within their OWN bounding span (preserves the
+    // box + title padding, just reverses order along the flow axis).
+    const mirrorContainer = (cid: string): void => {
+      const dir = resolvedDirs[cid] ?? "TB";
+      const vertical = dir === "TB" || dir === "BT";
+      const ps = (containerKidsMap[cid] ?? [])
+        .map((k) => flat[k.id as string])
+        .filter((p): p is NonNullable<typeof p> => !!p);
+      if (ps.length < 2) return;
+      let lo = Number.POSITIVE_INFINITY;
+      let hi = Number.NEGATIVE_INFINITY;
+      for (const p of ps) {
+        const a = vertical ? p.y : p.x;
+        const b = a + (vertical ? (p.h ?? 0) : (p.w ?? 0));
+        lo = Math.min(lo, a);
+        hi = Math.max(hi, b);
+      }
+      for (const p of ps) {
+        if (vertical) p.y = lo + hi - p.y - (p.h ?? 0);
+        else p.x = lo + hi - p.x - (p.w ?? 0);
+      }
+    };
+    for (const c of containerShapes) {
+      const cid = c.id as string;
+      const kids = containerKidsMap[cid] ?? [];
+      if (kids.length < 2) continue;
+      // Honour an explicit user direction sense: never auto-reverse a container
+      // the user pinned to a cardinal direction (LR ≠ RL). This both makes the
+      // explicit pick stick AND keeps the pass local — editing a sibling no
+      // longer flips this untouched container. forceDirections re-enables it.
+      if (!isFlipEligible(c, forceDirections)) continue;
+      // Respect pins: don't reorder a container whose children are user-placed.
+      if (!forceUnpin && kids.some((k) => k.meta?.pinned)) continue;
+      const kidSet = new Set(kids.map((k) => k.id as string));
+      const hasExternal = scopedEdges.some(
+        (e) => kidSet.has(e.from) !== kidSet.has(e.to),
+      );
+      if (!hasExternal) continue;
+      const comp = componentOfTop.get(cid);
+      if (opts?.dryRun && comp !== 0) continue; // dryRun lays out main only
+      const before = countCrossings(comp);
+      mirrorContainer(cid);
+      if (countCrossings(comp) >= before) mirrorContainer(cid); // no gain → revert
+    }
+  }
+
+  // Anti-drift anchor offset, shared by the dryRun overlap metric and the apply
+  // pass below: elk lays the top-level children out near its own origin (min ≈
+  // 0); the plan is shifted so its bounding box sits `pad` inside the frame
+  // (frame mode) or lands on the selection's current page top-left (frameless).
+  const pad = 56;
+  const topIds = new Set(scopeNodes.map((s) => s.id as string));
+  const computeAnchorOffset = (): { offX: number; offY: number } => {
+    let minTopX = Number.POSITIVE_INFINITY;
+    let minTopY = Number.POSITIVE_INFINITY;
+    // Frameless: also track the selection's CURRENT page top-left so the new
+    // layout can be anchored there (schema stays where the user drew it).
+    let curMinX = Number.POSITIVE_INFINITY;
+    let curMinY = Number.POSITIVE_INFINITY;
+    for (const id of topIds) {
+      const s = editor.getShape(id as TLShapeId);
+      if (!forceUnpin && s?.meta?.pinned) continue; // pinned tops keep their spot
+      const fp = flat[id];
+      if (!fp) continue;
+      minTopX = Math.min(minTopX, fp.x);
+      minTopY = Math.min(minTopY, fp.y);
+      if (!frameId) {
+        const b = editor.getShapePageBounds(id as TLShapeId);
+        if (b) {
+          curMinX = Math.min(curMinX, b.x);
+          curMinY = Math.min(curMinY, b.y);
+        }
+      }
+    }
+    // Frame mode: place content `pad` inside the frame top-left (anti-drift).
+    // Frameless mode: land the new layout on the selection's previous top-left.
+    const anchorX = frameId ? pad : curMinX;
+    const anchorY = frameId ? pad : curMinY;
+    return {
+      offX:
+        Number.isFinite(minTopX) && Number.isFinite(anchorX)
+          ? anchorX - minTopX
+          : 0,
+      offY:
+        Number.isFinite(minTopY) && Number.isFinite(anchorY)
+          ? anchorY - minTopY
+          : 0,
+    };
+  };
+
+  // dryRun (aspect-aware search in autoLayoutFrame): report the post-flip plan's
+  // content bounds + a cheap straight-segment crossing estimate, then bail BEFORE
+  // any store mutation. The caller compares candidate (frameDir × inheritMode)
+  // configs and only the winner gets a real apply pass — so no flicker.
+  if (opts?.dryRun) {
+    // Metrics over the MAIN component only (flat holds just it in dryRun) —
+    // a secondary schema must not influence the direction choice (AC#2).
+    const mainIds = new Set(componentInfos[0]?.ids ?? []);
+    // Planned boxes come out of `flat` (raw ELK coords near the origin) while
+    // the frozen pins below sit in final shape coords — shift the plan by the
+    // SAME anti-drift offset the apply pass uses, so the overlap metric
+    // compares both in one coordinate space. The content bbox dims are
+    // shift-invariant and stay in raw coords.
+    const { offX, offY } = computeAnchorOffset();
+    let minx = Number.POSITIVE_INFINITY;
+    let miny = Number.POSITIVE_INFINITY;
+    let maxx = Number.NEGATIVE_INFINITY;
+    let maxy = Number.NEGATIVE_INFINITY;
+    const planBoxes: PlanBox[] = [];
+    for (const s of scopeNodes) {
+      const id = s.id as string;
+      if (!mainIds.has(id)) continue;
+      const p = flat[id];
+      if (!p) continue;
+      minx = Math.min(minx, p.x);
+      miny = Math.min(miny, p.y);
+      maxx = Math.max(maxx, p.x + (p.w ?? 0));
+      maxy = Math.max(maxy, p.y + (p.h ?? 0));
+      // Pinned tops are post-override: the metric must see their FROZEN spot,
+      // not the planned one — handled below; skip them here.
+      if (!forceUnpin && s.meta?.pinned) continue;
+      planBoxes.push({ x: p.x + offX, y: p.y + offY, w: p.w ?? 0, h: p.h ?? 0 });
+    }
+    for (const s of scopeNodes) {
+      if (forceUnpin || !s.meta?.pinned) continue;
+      const sz = effectiveSizeFromProps(s);
+      planBoxes.push({ x: s.x, y: s.y, w: sz.w, h: sz.h });
+    }
+    const overlaps = countBoxOverlaps(planBoxes);
+    const mainEdge = (e: { from: string; to: string }): boolean =>
+      mainIds.has(ownerOf[e.from] ?? "") && mainIds.has(ownerOf[e.to] ?? "");
+    const segs = nodeEdges
+      .filter((e) => inGraph.has(e.from) && inGraph.has(e.to) && mainEdge(e))
+      .map((e) => {
+        const a = absCenter(flat, ownerOf, e.from);
+        const b = absCenter(flat, ownerOf, e.to);
+        return a && b ? { a, b, from: e.from, to: e.to } : null;
+      })
+      .filter((s): s is CrossSeg => s !== null);
+    const crossings = countStraightCrossings(segs);
+    return {
+      kind: "plan",
+      contentW: Math.max(1, Number.isFinite(minx) ? maxx - minx : 1),
+      contentH: Math.max(1, Number.isFinite(miny) ? maxy - miny : 1),
+      crossings,
+      overlaps,
+    };
+  }
+
+  // Anti-drift: elk lays the frame's direct children out starting near its own
+  // origin (min ≈ 0). The frame's top-left stays put; we normalise the top-level
+  // children so their bounding box sits `pad` inside it. (The old code moved the
+  // frame to `min - pad` instead — but the children are parent-relative, so moving
+  // the frame dragged them along, nudging the whole frame up-left every run.)
+  const { offX, offY } = computeAnchorOffset();
+
+  const updates: Record<string, unknown>[] = [];
+  const affected: string[] = [];
+  for (const [id, p] of Object.entries(flat)) {
+    const s = editor.getShape(id as TLShapeId);
+    if (!s) continue;
+    if (!forceUnpin && s.meta?.pinned) continue; // pin discipline: keep user-placed nodes
+    // Only top-level children are shifted (their coords are frame-relative);
+    // nodes inside containers are relative to the container, which already moved.
+    const top = topIds.has(id);
+    const upd: Record<string, unknown> = {
+      id,
+      type: s.type,
+      x: top ? p.x + offX : p.x,
+      y: top ? p.y + offY : p.y,
+    };
+    if (
+      s.type === "schema-container" &&
+      (forceUnpin || !s.meta?.didrawSizePinned) &&
+      p.w != null &&
+      p.h != null
+    ) {
+      upd.props = { w: p.w, h: p.h };
+    } else if (s.type === "geo" && !s.meta?.didrawSizePinned) {
+      // Roomy width-growth: elk echoes back our scaled input width (p.w). Apply
+      // it when it actually changed, and capture the natural base width once so
+      // a later switch to a smaller spacing can shrink back.
+      const curW = Math.round((s.props as { w?: number }).w ?? 0);
+      const targetW = p.w != null ? Math.round(p.w) : curW;
+      if (targetW !== curW) upd.props = { w: targetW };
+      const baseW = geoBaseW[id];
+      if (baseW != null && typeof s.meta?.didrawBaseW !== "number") {
+        upd.meta = { ...(s.meta ?? {}), didrawBaseW: baseW };
+      }
+    }
+    updates.push(upd);
+    affected.push(id);
+  }
+  if (updates.length === 0)
+    return {
+      kind: "noop",
+      reason: "everything is pinned — nothing to lay out",
+    };
+
+  editor.markHistoryStoppingPoint();
+  // Suppress schema-container auto-flip: layout runs through editor.run() which
+  // tldraw stamps source:"user", so moving a container's children would trip the
+  // auto-flip listener and rewrite props.direction → "custom" (DRW-150) — which
+  // then makes the container follow the FRAME direction instead of its own. The
+  // WS-driven layout path already wraps its apply the same way.
+  withAutoFlipSuppressed(() =>
+    editor.run(() => {
+      editor.updateShapes(updates as never);
+      // Resize the frame to wrap its content with `pad`, WITHOUT moving its top-left
+    // (content was normalised to start `pad` inside above). Keeping the position
+    // fixed is what kills the per-run drift. Skip entirely if the size is pinned,
+    // or when there is no frame (frameless board layout).
+    if (frameId && frame && (forceUnpin || !frame.meta?.didrawSizePinned)) {
+      const f = editor.getShape(frameId);
+      const fb = editor.getShapePageBounds(frameId);
+      if (f && fb) {
+        let maxx = Number.NEGATIVE_INFINITY;
+        let maxy = Number.NEGATIVE_INFINITY;
+        for (const t of childrenOf(editor, frameId)) {
+          const b = editor.getShapePageBounds(t.id);
+          if (!b) continue;
+          maxx = Math.max(maxx, b.x + b.w);
+          maxy = Math.max(maxy, b.y + b.h);
+        }
+        if (Number.isFinite(maxx)) {
+          editor.updateShape({
+            id: frameId,
+            type: "frame",
+            props: { w: maxx - fb.x + pad, h: maxy - fb.y + pad },
+          } as never);
+        }
+      }
+    }
+    }),
+  );
+
+  distributeArrowPorts(editor, inGraph, byArrow, frameDir);
+  optimizeScopedElbows(editor, inGraph, byArrow);
 
   return {
     kind: "ok",
@@ -1310,74 +1591,128 @@ export async function runElkLayout(
 const ASPECT_SEARCH_THRESHOLD = 2.2;
 
 /**
+ * Engine-owned memory of the last auto-applied frame direction — the "sticky
+ * champion" of the aspect search (DRW-218 AC#2). history:"ignore": layout undo
+ * восстанавливает позиции, а чемпион остаётся — иначе ⌘Z воскрешал бы дрейф.
+ */
+function writeResolvedDir(
+  editor: Editor,
+  frameId: TLShapeId,
+  dir: string,
+): void {
+  const f = editor.getShape(frameId);
+  if (!f || (f.meta?.didrawDirectionResolved as string | undefined) === dir)
+    return;
+  editor.run(
+    () => {
+      editor.updateShape({
+        id: frameId,
+        type: "frame",
+        meta: { ...(f.meta ?? {}), didrawDirectionResolved: dir },
+      } as never);
+    },
+    { history: "ignore" },
+  );
+}
+
+/**
  * Aspect-aware layout entry point for the explicit layout triggers (⌘⇧L /
  * ⌘⌥⇧L / panel «Упорядочить»). For a frame whose direction the user has NOT
- * pinned, it dry-runs candidate configurations — frame direction × inherit
- * container mode — and applies the most compact one (least extreme aspect ratio,
- * tie-broken by fewer crossings), so a long pipeline lands as a balanced block
- * instead of an extreme-wide strip. Balanced frames, frames with an explicit
- * direction, frameless selections and locked frames defer to runElkLayout
- * unchanged — only a genuinely lopsided auto frame pays for the search.
+ * explicitly pinned, it dry-runs candidate configurations — frame direction ×
+ * inherit container mode — and applies the best-scoring one (planScore: aspect
+ * extremity + crossings + overlaps), so a long pipeline lands as a balanced
+ * block instead of an extreme-wide strip. The incumbent is sticky (DRW-218
+ * AC#2): the last auto-applied direction (meta.didrawDirectionResolved) seeds
+ * the search and a candidate must STRICTLY beat it — repeat runs don't drift.
+ * An import-inherited direction (meta.didrawDirectionInherited, AC#5) stays
+ * auto-eligible and only seeds the incumbent. Balanced frames, frames with an
+ * explicit direction, frameless selections and locked frames defer to
+ * runElkLayout unchanged — only a genuinely lopsided auto frame pays for the
+ * search.
  */
 export async function autoLayoutFrame(
   editor: Editor,
   ids: TLShapeId[],
   opts?: { forceUnpin?: boolean; forceDirections?: boolean },
 ): Promise<ElkLayoutResult> {
-  const frameId = selectionFrame(editor, ids);
-  const frame = frameId ? editor.getShape(frameId) : null;
-  // Auto-direction only when there IS a frame and the user hasn't pinned its
-  // direction. Otherwise (explicit dir / frameless / locked) → runElkLayout.
-  if (!frame || frame.meta?.didrawDirection) {
+  const scopeProbe = resolveLayoutScope(editor, ids);
+  // Direction search is a FRAME-level operation: container scope gets a plain
+  // pass, loose/none keep the frameless behaviour — no unrelated frame's meta
+  // is read or written.
+  if (scopeProbe.kind !== "frame") return runElkLayout(editor, ids, opts);
+  const frameId = scopeProbe.frameId;
+  const frame = editor.getShape(frameId);
+  const pinnedDir = frame?.meta?.didrawDirection as string | undefined;
+  const inherited = frame?.meta?.didrawDirectionInherited === true;
+  // Auto-direction only when the user hasn't EXPLICITLY pinned the frame's
+  // direction. An import-inherited direction (marker set, AC#5) stays
+  // auto-eligible — it seeds the incumbent below instead of disabling the
+  // search. Vanished / pinned frames → runElkLayout decides as before.
+  if (!frame || (pinnedDir && !inherited)) {
     return runElkLayout(editor, ids, opts);
   }
 
-  const base = DEFAULT_FRAME_DIR;
+  // Incumbent (sticky champion): the last auto-applied direction, else the
+  // imported one, else the default. Candidates must STRICTLY beat it.
+  const base =
+    (frame.meta?.didrawDirectionResolved as string | undefined) ||
+    pinnedDir ||
+    DEFAULT_FRAME_DIR;
   const perp = perpendicular(base);
   const ratioOf = (p: { contentW: number; contentH: number }): number =>
     Math.max(p.contentW / p.contentH, p.contentH / p.contentW);
+  const applyConfig = async (
+    dir: string,
+    mode: InheritMode,
+  ): Promise<ElkLayoutResult> => {
+    const r = await runElkLayout(editor, ids, {
+      ...opts,
+      frameDirOverride: dir,
+      inheritMode: mode,
+    });
+    if (r.kind === "ok") writeResolvedDir(editor, frameId, dir);
+    return r;
+  };
 
-  // Fast path: dry-run the default config; if it is already reasonably balanced,
-  // apply it as-is (no search → already-good frames behave exactly as before).
   const basePlan = await runElkLayout(editor, ids, {
     ...opts,
     frameDirOverride: base,
     inheritMode: "auto",
     dryRun: true,
   });
-  if (basePlan.kind !== "plan" || ratioOf(basePlan) <= ASPECT_SEARCH_THRESHOLD) {
-    return runElkLayout(editor, ids, opts);
+  // Fast path: a balanced incumbent is applied verbatim — no search, no drift.
+  if (
+    basePlan.kind !== "plan" ||
+    ratioOf(basePlan) <= ASPECT_SEARCH_THRESHOLD
+  ) {
+    return applyConfig(base, "auto");
   }
 
-  // Lopsided → search the remaining candidates for the most compact arrangement.
+  // Lopsided → search; candidates dry-run in parallel (perf, AC#6) and are
+  // priced on the MAIN component only (runElkLayout dryRun, AC#2).
   const candidates: Array<{ dir: string; mode: InheritMode }> = [
     { dir: perp, mode: "auto" },
     { dir: base, mode: "perp" },
     { dir: perp, mode: "perp" },
   ];
-  let best: { dir: string; mode: InheritMode } = { dir: base, mode: "auto" };
-  // aspect extremity dominates; a small crossing increase is acceptable for a big
-  // compactness gain (0.15 per crossing ≈ a 0.15 ratio worsening).
-  let bestScore = ratioOf(basePlan) + basePlan.crossings * 0.15;
-  for (const c of candidates) {
-    const plan = await runElkLayout(editor, ids, {
-      ...opts,
-      frameDirOverride: c.dir,
-      inheritMode: c.mode,
-      dryRun: true,
-    });
-    if (plan.kind !== "plan") continue;
-    const score = ratioOf(plan) + plan.crossings * 0.15;
-    if (score < bestScore) {
-      bestScore = score;
-      best = c;
-    }
-  }
-  return runElkLayout(editor, ids, {
-    ...opts,
-    frameDirOverride: best.dir,
-    inheritMode: best.mode,
-  });
+  const plans = await Promise.all(
+    candidates.map((c) =>
+      runElkLayout(editor, ids, {
+        ...opts,
+        frameDirOverride: c.dir,
+        inheritMode: c.mode,
+        dryRun: true,
+      }),
+    ),
+  );
+  const winner = pickDirectionCandidate(
+    { value: { dir: base, mode: "auto" as InheritMode }, metrics: basePlan },
+    candidates.flatMap((c, i) => {
+      const p = plans[i];
+      return p && p.kind === "plan" ? [{ value: c, metrics: p }] : [];
+    }),
+  );
+  return applyConfig(winner.dir, winner.mode);
 }
 
 /**
