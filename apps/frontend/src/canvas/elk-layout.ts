@@ -33,6 +33,7 @@ import {
   perpModeWins,
   pickDirectionCandidate,
 } from "./direction-choice";
+import { type EdgeRoutingReport, runEdgeRoutingPass } from "./edge-routing";
 import { buildComponentBridgeEdges, buildFlowChainEdges } from "./flow-chains";
 import { runGlobalAlignPass } from "./global-align";
 import { ancestorFrame, resolveLayoutScope } from "./layout-scope";
@@ -681,6 +682,25 @@ function collectArrowEdges(editor: Editor): {
   return { byArrow, nodeEdges };
 }
 
+// ---- DRW-199: edge-routing (libavoid-as-layout-hint) — штатный финальный пасс.
+// При недоступном WASM (loadAvoid → null) или явном opt-out через
+// window.__SHEMMA_EDGE_ROUTING = false деградация к прежней паре
+// distributeArrowPorts + optimizeScopedElbows. ----
+function edgeRoutingEnabled(): boolean {
+  if (typeof window === "undefined") return true;
+  return (
+    (window as { __SHEMMA_EDGE_ROUTING?: boolean }).__SHEMMA_EDGE_ROUTING !==
+    false
+  );
+}
+
+function publishRoutingReport(report: EdgeRoutingReport): void {
+  if (typeof window === "undefined") return;
+  (
+    window as { __SHEMMA_LAST_ROUTING?: EdgeRoutingReport }
+  ).__SHEMMA_LAST_ROUTING = report;
+}
+
 // ---- distribute arrow ports over the new layout so tldraw's elbow router
 // draws clean, non-overlapping connectors: each arrow exits/enters on the side
 // facing its neighbour; multiple arrows on one side spread out (DRW-172-style). ----
@@ -1012,8 +1032,24 @@ async function runContainerScoped(
     ...kidIds,
     containerId as string,
   ]);
-  distributeArrowPorts(editor, inScope, byArrow, dir);
-  optimizeScopedElbows(editor, inScope, byArrow);
+  const containerRouting = edgeRoutingEnabled()
+    ? await runEdgeRoutingPass(editor, inScope, byArrow, { flowDir: dir })
+    : null;
+  if (containerRouting) {
+    publishRoutingReport(containerRouting);
+    // Residual-порты для рёбер, которые пасс пропустил (лист→свой контейнер и т.п.)
+    if (containerRouting.unrouted.length > 0) {
+      const unroutedSet = new Set(containerRouting.unrouted);
+      const residualByArrow: Record<string, { start?: string; end?: string }> =
+        Object.fromEntries(
+          Object.entries(byArrow).filter(([id]) => unroutedSet.has(id)),
+        );
+      distributeArrowPorts(editor, inScope, residualByArrow, dir);
+    }
+  } else {
+    distributeArrowPorts(editor, inScope, byArrow, dir);
+    optimizeScopedElbows(editor, inScope, byArrow);
+  }
   return {
     kind: "ok",
     applied: updates.length,
@@ -1623,7 +1659,23 @@ export async function runElkLayout(
   for (const [id, p] of Object.entries(flat)) {
     const s = editor.getShape(id as TLShapeId);
     if (!s) continue;
-    if (!forceUnpin && s.meta?.pinned) continue; // pin discipline: keep user-placed nodes
+    if (!forceUnpin && s.meta?.pinned) {
+      // pin discipline: позиция user-placed узла не двигается. НО обтяжка
+      // pinned-КОНТЕЙНЕРА обязана пройти: его дети (parent-relative) уже
+      // переразложены этим же пассом, и без w/h-writeback они вылезают из
+      // не-обжатого бокса (приёмка dl-test: «дети распределились, контейнер
+      // не обжал»). Размер охраняет отдельный флаг didrawSizePinned.
+      if (
+        s.type === "schema-container" &&
+        !s.meta?.didrawSizePinned &&
+        p.w != null &&
+        p.h != null
+      ) {
+        updates.push({ id, type: s.type, props: { w: p.w, h: p.h } });
+        affected.push(id);
+      }
+      continue;
+    }
     // Only top-level children are shifted (their coords are frame-relative);
     // nodes inside containers are relative to the container, which already moved.
     const top = topIds.has(id);
@@ -1698,8 +1750,33 @@ export async function runElkLayout(
     }),
   );
 
-  distributeArrowPorts(editor, inGraph, byArrow, frameDir, alignedEdgesSet);
-  optimizeScopedElbows(editor, inGraph, byArrow);
+  const routingReport = edgeRoutingEnabled()
+    ? await runEdgeRoutingPass(editor, inGraph, byArrow, {
+        alignedEdges: alignedEdgesSet ?? undefined,
+        flowDir: frameDir,
+      })
+    : null;
+  if (routingReport) {
+    publishRoutingReport(routingReport);
+    // Residual-порты для рёбер, которые пасс пропустил (лист→свой контейнер и т.п.)
+    if (routingReport.unrouted.length > 0) {
+      const unroutedSet = new Set(routingReport.unrouted);
+      const residualByArrow: Record<string, { start?: string; end?: string }> =
+        Object.fromEntries(
+          Object.entries(byArrow).filter(([id]) => unroutedSet.has(id)),
+        );
+      distributeArrowPorts(
+        editor,
+        inGraph,
+        residualByArrow,
+        frameDir,
+        alignedEdgesSet,
+      );
+    }
+  } else {
+    distributeArrowPorts(editor, inGraph, byArrow, frameDir, alignedEdgesSet);
+    optimizeScopedElbows(editor, inGraph, byArrow);
+  }
 
   return {
     kind: "ok",
