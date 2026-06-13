@@ -104,9 +104,14 @@ describe("runLayout", () => {
     expect(Math.abs(ns.store["shape:e_a"]!.y! - 300)).toBeLessThan(5);
   });
 
-  test("returns reason 'elk-error' when ELK fails (edge references missing node)", async () => {
+  // DRW-245: scope='all' теперь идёт через тот же per-container multi-pass, что и
+  // scope='affected'. Multi-pass строит рёбра через resolveArrowEndpoints + фильтр
+  // по присутствию endpoint'ов в графе → dangling binding (toId на отсутствующую
+  // запись) просто ДРОПАЕТСЯ, а не отправляется в ELK с падением. Поведение
+  // graceful (как на фронте ⌘⇧L и как scope='affected' всегда): раскладка валидной
+  // части проходит, no-op-результат без reason='elk-error'.
+  test("dangling binding (edge → missing node) дропается gracefully, без elk-error", async () => {
     const a = makeShape("shape:e_a", "a");
-    // Arrow с bindings на отсутствующий target → ELK кинет ошибку.
     const arrow: TLRecord = {
       id: "shape:c_0",
       typeName: "shape",
@@ -134,8 +139,9 @@ describe("runLayout", () => {
     const s = snapshotWith([a, arrow, b1, b2]);
     const idx = rebuildDidrawIndex(s);
     const r = await runLayout(s, { mode: "layered-lr", scope: "all", spacing: "normal" }, idx);
-    expect(r.reason).toBe("elk-error");
-    expect(Object.keys(r.batch.updated)).toEqual([]);
+    // graceful: не падает, нет reason='elk-error'. Единственный валидный узел не
+    // получает осмысленной перестановки (нет рёбер) → batch может быть пустым.
+    expect(r.reason).toBeUndefined();
   });
 
   test("frame containers become ELK compound nodes — children laid out inside parent", async () => {

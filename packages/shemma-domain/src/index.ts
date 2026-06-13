@@ -1,5 +1,6 @@
 export * from "./layout-solver";
 export * from "./layout-global-align";
+export * from "./layout-global-align-spacing";
 export * from "./layout-components";
 export * from "./roles";
 export * from "./connections";

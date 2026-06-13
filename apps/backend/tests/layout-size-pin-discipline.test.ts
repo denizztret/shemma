@@ -108,9 +108,10 @@ describe("shapeBounds — forceUnpin bypass", () => {
 // DRW-185 W2: forceUnpin propagation к shapeBounds внутри runLayout
 // =====================================================================
 //
-// Регрессионный тест: до fix'а call-sites в buildElkGraph/runPassA/runLayoutSubgraph
+// Регрессионный тест: до fix'а call-sites в runPassA/runLayoutSubgraph
 // использовали shapeBounds(s) без forceUnpin → при forceUnpin=true ELK Pass A видел
 // старый (strict props.h) размер size-pinned shape, а writeback уже видел growY-aware.
+// (DRW-245: scope='all' теперь тоже идёт через этот multi-pass — buildElkGraph удалён.)
 // После fix'а оба пути используют одинаковый ignoreSizePin=forceUnpin.
 
 function makeSnapshotWithSizePinnedChild(): TLStoreSnapshot {
@@ -175,9 +176,9 @@ describe("runLayout — forceUnpin propagation (W2 regression)", () => {
   });
 
   test("runLayout scope=all forceUnpin=true completes without error", async () => {
-    // Regression: до fix'а buildElkGraph использовал shapeBounds(s) без forceUnpin,
+    // Regression: раньше scope='all' использовал shapeBounds(s) без forceUnpin,
     // что при forceUnpin=true давало inconsistent bounds между ELK Pass A и writeback.
-    // После fix'а buildLeaf/buildFrame в buildElkGraph передают hint.forceUnpin.
+    // Теперь scope='all' идёт через runLayoutSubgraph (runPassA передаёт forceUnpin).
     const snap = makeSnapshotWithSizePinnedChild();
     const result = await runLayout(snap, { scope: "all", forceUnpin: true }, new Map());
     expect(result.batch).toBeDefined();
