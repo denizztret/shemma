@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  type CrossAxis,
   type FlowNode,
+  LANE_EPS,
   type Overlap1DItem,
   flowAxis,
+  groupLanes,
   growOnlyBox,
   resolveOverlaps1D,
   resolveOverlapsAlongFlow,
@@ -98,6 +101,88 @@ describe("flowAxis — ось потока из направления", () => {
   });
 });
 
+describe("groupLanes — поперечные полосы", () => {
+  const node = (
+    id: string,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    pinned = false,
+  ): FlowNode => ({ id, x, y, w, h, pinned });
+
+  test("все узлы выровнены поперечно → одна полоса", () => {
+    // flow=x → cross=y; y-интервалы перекрываются → одна полоса
+    const lanes = groupLanes(
+      [node("a", 0, 0, 50, 40), node("b", 200, 5, 50, 40)],
+      "y",
+    );
+    expect(lanes.length).toBe(1);
+    expect(lanes[0].map((n) => n.id).sort()).toEqual(["a", "b"]);
+  });
+
+  test("чистый поперечный зазор > LANE_EPS → две полосы", () => {
+    // y-интервалы [0,40] и [100,140] не пересекаются → две полосы
+    const lanes = groupLanes(
+      [node("a", 0, 0, 50, 40), node("b", 0, 100, 50, 40)],
+      "y",
+    );
+    expect(lanes.length).toBe(2);
+  });
+
+  test("перекрытие ровно на LANE_EPS → разные полосы (строгое >)", () => {
+    // a:[0,40], b:[39,79] → перекрытие = 40-39 = 1 = LANE_EPS → НЕ объединять
+    const lanes = groupLanes(
+      [node("a", 0, 0, 50, 40), node("b", 0, 39, 50, 40)],
+      "y",
+    );
+    expect(lanes.length).toBe(2);
+    expect(LANE_EPS).toBe(1);
+  });
+
+  test("перекрытие чуть больше LANE_EPS → одна полоса", () => {
+    // a:[0,40], b:[38,78] → перекрытие = 2 > 1 → одна полоса
+    const lanes = groupLanes(
+      [node("a", 0, 0, 50, 40), node("b", 0, 38, 50, 40)],
+      "y",
+    );
+    expect(lanes.length).toBe(1);
+  });
+
+  test("транзитивный мост: A∩B, B∩C, A∌C → одна полоса", () => {
+    // y: A[0,100], B[90,190], C[180,280] — A и C не пересекаются напрямую,
+    // но связаны через B → одна связная полоса
+    const lanes = groupLanes(
+      [
+        node("a", 0, 0, 50, 100),
+        node("b", 0, 90, 50, 100),
+        node("c", 0, 180, 50, 100),
+      ],
+      "y",
+    );
+    expect(lanes.length).toBe(1);
+    expect(lanes[0].length).toBe(3);
+  });
+
+  test("cross='x' (вертикальный поток): полосы по x-интервалам", () => {
+    // flow=y → cross=x; x[0,50] и x[200,250] → две полосы
+    const cross: CrossAxis = "x";
+    const lanes = groupLanes(
+      [node("a", 0, 0, 50, 40), node("b", 200, 0, 50, 40)],
+      cross,
+    );
+    expect(lanes.length).toBe(2);
+  });
+
+  test("детерминизм: полосы по возрастанию начала интервала", () => {
+    const lanes = groupLanes(
+      [node("b", 0, 200, 50, 40), node("a", 0, 0, 50, 40)],
+      "y",
+    );
+    expect(lanes.map((l) => l[0].id)).toEqual(["a", "b"]);
+  });
+});
+
 describe("resolveOverlapsAlongFlow — устранение наезда по направлению", () => {
   const node = (
     id: string,
@@ -174,6 +259,52 @@ describe("resolveOverlapsAlongFlow — устранение наезда по н
     );
     // p закреплён — не двигаем, даже при наезде выросшего a
     expect(r.find((m) => m.id === "p")).toBeUndefined();
+  });
+
+  test("две полосы: наезд только в одной → вторая полоса нетронута", () => {
+    // Полоса A (y0): a[x0,w90] вырос, b[x70] наезжает → b.x=114.
+    // Полоса B (y200): c[x0], d[x300] — зазор большой, наезда нет → не двигаются.
+    const r = resolveOverlapsAlongFlow(
+      [
+        node("a", 0, 0, 90, 40),
+        node("b", 70, 0, 100, 40),
+        node("c", 0, 200, 50, 40),
+        node("d", 300, 200, 50, 40),
+      ],
+      "LR",
+      24,
+    );
+    expect(r).toEqual([{ id: "b", x: 114 }]);
+  });
+
+  test("узлы разных полос не толкают друг друга по проекции", () => {
+    // a[x0,w200] в верхней полосе (y0), x[x50] в НИЖНЕЙ полосе (y300).
+    // Проекции на x пересекаются, но полосы разные → НЕ толкать.
+    const r = resolveOverlapsAlongFlow(
+      [node("a", 0, 0, 200, 40), node("x", 50, 300, 100, 40)],
+      "LR",
+      24,
+    );
+    expect(r).toEqual([]);
+  });
+
+  test("регресс DRW-242 (live drw242-repro): рост контейнера не двигает чужую полосу", () => {
+    // Геометрия из живой репродукции: фрейм LR. Контейнер G1 вырос вширь до
+    // x[-390,206] в верхней полосе (y[180,320]). X-цепочка в НИЖНЕЙ полосе
+    // (y[486,566]), внутренние зазоры ровные (120px > gap). До фикса 1D-каскад
+    // толкал Ingest на +240; lane-aware → НЕТ движения.
+    const r = resolveOverlapsAlongFlow(
+      [
+        node("g1", -390, 180, 596, 140),
+        node("ingest", -10, 486, 220, 80),
+        node("parse", 330, 486, 220, 80),
+        node("store", 670, 486, 220, 80),
+        node("index", 1010, 486, 220, 80),
+      ],
+      "LR",
+      24,
+    );
+    expect(r).toEqual([]);
   });
 });
 

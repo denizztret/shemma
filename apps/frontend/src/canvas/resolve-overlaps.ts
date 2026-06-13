@@ -106,12 +106,69 @@ export function flowAxis(
   }
 }
 
+/** Поперечная ось относительно оси потока: flow="x" → cross="y", и наоборот. */
+export type CrossAxis = "x" | "y";
+
+/** Минимальное поперечное перекрытие (px), чтобы считать узлы одной полосой. */
+export const LANE_EPS = 1;
+
+function crossInterval(n: FlowNode, cross: CrossAxis): [number, number] {
+  return cross === "y" ? [n.y, n.y + n.h] : [n.x, n.x + n.w];
+}
+
+/** Начало поперечного интервала узла (для сортировки — без аллокации tuple). */
+function crossStart(n: FlowNode, cross: CrossAxis): number {
+  return cross === "y" ? n.y : n.x;
+}
+
+/**
+ * DRW-242: группирует узлы в поперечные полосы. Два узла в одной полосе ⟺ их
+ * интервалы по поперечной оси перекрываются больше чем на {@link LANE_EPS}.
+ * Связность транзитивна (полоса = связная компонента графа перекрытий). Узлы
+ * сортируются по началу поперечного интервала (tie-break по `id`); поскольку
+ * отсортированы по началу, покрытие полосы непрерывно, и связные компоненты =
+ * слитые перекрывающиеся интервалы. Слияние происходит ТОЛЬКО при `s < curEnd`
+ * (узел касается покрытия), поэтому по индукции покрытие — непрерывный интервал
+ * `[firstStart, curEnd]`; ложных слияний через зазор быть не может. Детерминирован.
+ */
+export function groupLanes(
+  nodes: ReadonlyArray<FlowNode>,
+  cross: CrossAxis,
+): FlowNode[][] {
+  const sorted = [...nodes].sort(
+    (a, b) =>
+      crossStart(a, cross) - crossStart(b, cross) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
+  const lanes: FlowNode[][] = [];
+  let cur: FlowNode[] = [];
+  let curEnd = Number.NEGATIVE_INFINITY;
+  for (const n of sorted) {
+    const [s, e] = crossInterval(n, cross);
+    // Перекрытие с покрытием текущей полосы = curEnd - s (узлы отсортированы по s).
+    if (cur.length > 0 && curEnd - s > LANE_EPS) {
+      cur.push(n);
+      curEnd = Math.max(curEnd, e);
+    } else {
+      if (cur.length > 0) lanes.push(cur);
+      cur = [n];
+      curEnd = e;
+    }
+  }
+  if (cur.length > 0) lanes.push(cur);
+  return lanes;
+}
+
 /**
  * Устранение наезда вдоль направления потока. Выбирает ось (cardinal или из
  * геометрии), для reverse-направлений (RL/BT) зеркалит координату так, что
  * «вперёд по потоку» = возрастание, зовёт {@link resolveOverlaps1D}, и
  * возвращает новые позиции вдоль оси только для СДВИНУТЫХ узлов (другая
  * координата не меняется). `pinned`-узлы не двигаются.
+ *
+ * DRW-242: наезд устраняется НЕЗАВИСИМО в каждой поперечной полосе
+ * ({@link groupLanes}) — узлы из разных полос не толкают друг друга по проекции
+ * оси потока (несвязный компонент в соседнем ряду фрейма остаётся на месте).
  */
 export function resolveOverlapsAlongFlow(
   nodes: ReadonlyArray<FlowNode>,
@@ -121,22 +178,27 @@ export function resolveOverlapsAlongFlow(
   if (nodes.length < 2) return [];
   const { axis, reverse } = flowAxis(dir, nodes);
   const horizontal = axis === "x";
+  const cross: CrossAxis = horizontal ? "y" : "x";
 
-  const items: Overlap1DItem[] = nodes.map((n) => {
-    const pos = horizontal ? n.x : n.y;
-    const size = horizontal ? n.w : n.h;
-    // reverse: зеркалим в u = -(pos + size) так, что поток идёт в +u.
-    const start = reverse ? -(pos + size) : pos;
-    return { id: n.id, start, size, pinned: n.pinned };
-  });
-
-  const sizeOf = new Map(nodes.map((n) => [n.id, horizontal ? n.w : n.h]));
-  return resolveOverlaps1D(items, gap).map((m) => {
-    const size = sizeOf.get(m.id) ?? 0;
-    // Обратное преобразование зеркала.
-    const pos = reverse ? -m.start - size : m.start;
-    return horizontal ? { id: m.id, x: pos } : { id: m.id, y: pos };
-  });
+  const moves: Array<{ id: string; x?: number; y?: number }> = [];
+  for (const lane of groupLanes(nodes, cross)) {
+    if (lane.length < 2) continue; // одиночка в полосе никогда не двигается
+    const items: Overlap1DItem[] = lane.map((n) => {
+      const pos = horizontal ? n.x : n.y;
+      const size = horizontal ? n.w : n.h;
+      // reverse: зеркалим в u = -(pos + size) так, что поток идёт в +u.
+      const start = reverse ? -(pos + size) : pos;
+      return { id: n.id, start, size, pinned: n.pinned };
+    });
+    const sizeOf = new Map(lane.map((n) => [n.id, horizontal ? n.w : n.h]));
+    for (const m of resolveOverlaps1D(items, gap)) {
+      const size = sizeOf.get(m.id) ?? 0;
+      // Обратное преобразование зеркала.
+      const pos = reverse ? -m.start - size : m.start;
+      moves.push(horizontal ? { id: m.id, x: pos } : { id: m.id, y: pos });
+    }
+  }
+  return moves;
 }
 
 /**
