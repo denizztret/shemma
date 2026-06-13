@@ -26,6 +26,13 @@ import {
   sampleArc,
   sampledForeignCrossings,
 } from "./edge-routing-core";
+import {
+  type ShiftCandidate,
+  type ShiftTarget,
+  evaluateShift,
+  genShiftCandidates,
+  pickMovableEnd,
+} from "./edge-routing-shift";
 import { loadAvoid, routeClasses } from "./libavoid-router";
 
 // ─── Константы ────────────────────────────────────────────────────────────────
@@ -43,6 +50,14 @@ export interface EdgeDecision {
   readonly foreignBest?: number;
   readonly foreignRoute?: number;
   readonly arcBend?: number;
+  /** Концы ребра — нужны shift-прогону (и отчёту inexpressible). */
+  readonly from?: string;
+  readonly to?: string;
+  /** Тип нерешённого elbow-плана для action "arc"/"inexpressible" — цель сдвига. */
+  readonly planKind?: "U" | "detour";
+  /** Score лучшего ТЕКУЩЕГО варианта этого ребра: для "arc" — score принятой
+   * дуги, для "inexpressible" — foreignBest. Базовая планка для shift-прогона. */
+  readonly currentScore?: number;
 }
 
 function metricsFor(
@@ -127,6 +142,11 @@ export function decideEdges(
               action: "arc",
               route,
               arcBend: bend,
+              from: edge.from,
+              to: edge.to,
+              planKind: plan.kind,
+              // Базовая планка для shift-прогона — score принятой дуги.
+              currentScore: routeScore(arcMetrics),
             });
             continue;
           }
@@ -139,6 +159,10 @@ export function decideEdges(
         action: "inexpressible",
         foreignBest,
         foreignRoute,
+        from: edge.from,
+        to: edge.to,
+        planKind: plan.kind,
+        currentScore: foreignBest,
       });
       continue;
     }
@@ -156,6 +180,122 @@ export function decideEdges(
   }
 
   return decisions;
+}
+
+// ─── Планирование сдвигов блоков (чистая, тестируется без WASM — DRW-246) ─────
+
+/** Один принятый сдвиг: какое ребро его спровоцировало, какой узел сдвинут,
+ * новая позиция и дельта относительно исходной. */
+export interface PlannedShift {
+  readonly edgeId: string;
+  readonly movedId: string;
+  readonly x: number;
+  readonly y: number;
+  readonly dx: number;
+  readonly dy: number;
+}
+
+/**
+ * Из решений decideEdges выбирает цели сдвига (arc/inexpressible с planKind
+ * U/detour), и для каждой пытается сдвинуть подвижный конец так, чтобы маршрут
+ * стал выразимым elbow'ом. Принятые сдвиги применяются к РАБОЧЕЙ КОПИИ боксов
+ * последовательно: следующая цель видит сдвиг предыдущей.
+ *
+ * Детерминизм: цели сортируются по edgeId; порядок кандидатов фиксирован в
+ * genShiftCandidates; тай-брейки — в evaluateShift.
+ *
+ * Чистая функция: editor/WASM не трогает. routeFn — инъекция роутера.
+ */
+export function planShiftsForDecisions(
+  decisions: ReadonlyArray<EdgeDecision>,
+  boxes: ReadonlyArray<RouteBox>,
+  edges: ReadonlyArray<RouteEdge>,
+  degree: ReadonlyMap<string, number>,
+  pinned: ReadonlySet<string>,
+  routeFn: (
+    boxes: ReadonlyArray<RouteBox>,
+    edges: ReadonlyArray<RouteEdge>,
+  ) => ReadonlyMap<string, Polyline>,
+): PlannedShift[] {
+  // Цели: только arc/inexpressible с planKind U/detour, детерминированно по edgeId.
+  const targets = decisions
+    .filter(
+      (d) =>
+        (d.action === "arc" || d.action === "inexpressible") &&
+        (d.planKind === "U" || d.planKind === "detour") &&
+        d.from !== undefined &&
+        d.to !== undefined &&
+        d.currentScore !== undefined,
+    )
+    .sort((a, b) => a.edgeId.localeCompare(b.edgeId));
+
+  // Рабочая копия боксов — мутируется по мере принятия сдвигов (id → box).
+  let workBoxes: RouteBox[] = boxes.map((b) => ({ ...b }));
+  const result: PlannedShift[] = [];
+
+  for (const d of targets) {
+    const from = d.from as string;
+    const to = d.to as string;
+    const byId = buildBoxIndex(workBoxes);
+    const edge: RouteEdge = { id: d.edgeId, from, to };
+
+    const moveId = pickMovableEnd(edge, byId, degree, pinned);
+    if (moveId === null) continue;
+
+    const move = byId.get(moveId);
+    if (!move) continue;
+    const partnerId = moveId === from ? to : from;
+    const partner = byId.get(partnerId);
+    if (!partner) continue;
+
+    // parent-бокс move — RouteBox с id === move.parent (может отсутствовать).
+    const parent = move.parent ? (byId.get(move.parent) ?? null) : null;
+    const srcBox = byId.get(from);
+    const dstBox = byId.get(to);
+    const sameParent =
+      srcBox !== undefined &&
+      dstBox !== undefined &&
+      srcBox.parent === dstBox.parent;
+
+    const candidates: ShiftCandidate[] = genShiftCandidates(
+      move,
+      partner,
+      parent,
+      sameParent,
+      // obstacles = весь scope (рабочая копия): lane-кандидаты ищут препятствия коридора.
+      workBoxes,
+    );
+    if (candidates.length === 0) continue;
+
+    const target: ShiftTarget = {
+      edge,
+      planKind: d.planKind as "U" | "detour",
+      currentScore: d.currentScore as number,
+      // arc → дуга-паллиатив (гейт `<=`); inexpressible → строгий `<`.
+      currentIsArc: d.action === "arc",
+    };
+    const picked = evaluateShift(target, candidates, workBoxes, edges, routeFn);
+    if (!picked) continue;
+
+    const { candidate } = picked;
+    const dx = candidate.x - move.x;
+    const dy = candidate.y - move.y;
+    result.push({
+      edgeId: d.edgeId,
+      movedId: moveId,
+      x: candidate.x,
+      y: candidate.y,
+      dx,
+      dy,
+    });
+
+    // Применяем сдвиг к рабочей копии — следующая цель видит его.
+    workBoxes = workBoxes.map((b) =>
+      b.id === moveId ? { ...b, x: candidate.x, y: candidate.y } : b,
+    );
+  }
+
+  return result;
 }
 
 // ─── Фильтрация роутабельных рёбер (чистая, тестируется отдельно) ─────────────
@@ -207,9 +347,14 @@ export interface EdgeRoutingReport {
   alignedKept: number;
   inexpressible: Array<{
     edgeId: string;
+    from: string;
+    to: string;
     foreignBest: number;
     foreignRoute: number;
   }>;
+  /** Принятые сдвиги блоков (DRW-246): ребро, сдвинутый узел, дельта позиции.
+   * Всегда присутствует (пустой, если сдвигов нет). */
+  shifted: Array<{ edgeId: string; movedId: string; dx: number; dy: number }>;
 }
 
 export interface EdgeRoutingOpts {
@@ -217,6 +362,13 @@ export interface EdgeRoutingOpts {
   readonly pinsPerSide?: number;
   /** Направление потока scope-фрейма/контейнера ("TB"|"BT"|"LR"|"RL"). */
   readonly flowDir?: string;
+  /** Grow-only обтяжка предков для сдвинутых узлов (DRW-246). Передаётся
+   * call-site'ами из elk-layout (growWrappersForShapes) — параметром, а не
+   * импортом, чтобы избежать цикла зависимостей. По умолчанию no-op. */
+  readonly refitWrappers?: (movedIds: ReadonlyArray<string>) => void;
+  /** Force-семантика ⌘⌥⇧L: раскладка переразложила и pinned-узлы, поэтому
+   * и сдвиг блока (DRW-246) не должен считать их неподвижными. */
+  readonly forceUnpin?: boolean;
 }
 
 /** Собирает RouteBox из editor по inScope.
@@ -409,12 +561,44 @@ function loadBindingIndex(editor: Editor): Map<
   return new Map(bindings.map((b) => [`${b.fromId}|${b.props.terminal}`, b]));
 }
 
-/** Главный пасс. Возвращает null если libavoid недоступен или при ошибке. */
+/** Степень узлов scope: сколько routable-рёбер инцидентно каждому концу. */
+function buildDegreeMap(edges: ReadonlyArray<RouteEdge>): Map<string, number> {
+  const degree = new Map<string, number>();
+  for (const e of edges) {
+    degree.set(e.from, (degree.get(e.from) ?? 0) + 1);
+    degree.set(e.to, (degree.get(e.to) ?? 0) + 1);
+  }
+  return degree;
+}
+
+/** Pinned-узлы scope: только ПОЗИЦИОННЫЙ пин (meta.pinned). didrawSizePinned
+ * охраняет размер, не позицию — его ставит авто-обтяжка текста каждому узлу,
+ * и он не должен запрещать сдвиг блока. */
+function collectPinnedSet(
+  editor: Editor,
+  inScope: ReadonlySet<string>,
+): Set<string> {
+  const pinned = new Set<string>();
+  for (const id of inScope) {
+    const shape = editor.getShape(id as TLShapeId);
+    // biome-ignore lint/suspicious/noExplicitAny: tldraw shape meta
+    const meta = (shape as any)?.meta as Record<string, unknown> | undefined;
+    if (meta?.pinned === true) {
+      pinned.add(id);
+    }
+  }
+  return pinned;
+}
+
+/** Главный пасс. Возвращает null если libavoid недоступен или при ошибке.
+ * `depth` — внутренний: 0 = первичный прогон (выполняет shift-прогон),
+ * 1 = повторный прогон после применённых сдвигов (shift не выполняется). */
 export async function runEdgeRoutingPass(
   editor: Editor,
   inScope: ReadonlySet<string>,
   byArrow: Readonly<Record<string, { start?: string; end?: string }>>,
   opts: EdgeRoutingOpts = {},
+  depth = 0,
 ): Promise<EdgeRoutingReport | null> {
   const Avoid = await loadAvoid();
   if (!Avoid) return null;
@@ -430,6 +614,7 @@ export async function runEdgeRoutingPass(
     unrouted: [],
     alignedKept: 0,
     inexpressible: [],
+    shifted: [],
   };
 
   const { routable, alignedIds } = filterRoutableEdges(
@@ -468,6 +653,80 @@ export async function runEdgeRoutingPass(
 
     const decisions = decideEdges(boxes, routedEdges, routes, currents);
 
+    // ─── Shift-прогон (DRW-246) — только на глубине 0 ──────────────────────
+    // Цели = arc/inexpressible (U/detour). Сдвигаем подвижный конец ребра так,
+    // чтобы маршрут стал выразимым elbow'ом, затем перезапускаем пасс (depth=1).
+    if (depth === 0) {
+      const degree = buildDegreeMap(routedEdges);
+      const pinned = opts.forceUnpin
+        ? new Set<string>()
+        : collectPinnedSet(editor, inScope);
+      // routeFn для shift-ядра: те же opts роутера, что и основной прогон.
+      const routeFn = (
+        b2: ReadonlyArray<RouteBox>,
+        e2: ReadonlyArray<RouteEdge>,
+      ): ReadonlyMap<string, Polyline> => {
+        const { classes: cls2 } = classifyEdges(b2, e2);
+        return routeClasses(Avoid, b2, cls2, {
+          bufferDistance: BUFFER_DISTANCE,
+          nudgeDistance: NUDGE_DISTANCE,
+          pinsPerSide,
+        });
+      };
+      const shifts = planShiftsForDecisions(
+        decisions,
+        boxes,
+        routedEdges,
+        degree,
+        pinned,
+        routeFn,
+      );
+
+      if (shifts.length > 0) {
+        const movedIds = shifts.map((s) => s.movedId);
+        // Применяем сдвиги: page-координаты ядра → parent-локальные шейпа.
+        editor.run(
+          () => {
+            for (const s of shifts) {
+              const local = editor.getPointInParentSpace(
+                s.movedId as TLShapeId,
+                {
+                  x: s.x,
+                  y: s.y,
+                },
+              );
+              editor.updateShape({
+                id: s.movedId as TLShapeId,
+                type: editor.getShape(s.movedId as TLShapeId)?.type as string,
+                x: local.x,
+                y: local.y,
+              } as never);
+            }
+            // Grow-only обтяжка предков сдвинутых узлов (call-site прокидывает
+            // growWrappersForShapes; дефолт no-op).
+            opts.refitWrappers?.(movedIds);
+          },
+          { history: "ignore" },
+        );
+
+        // Перезапуск пасса на изменённой геометрии — он сделает реальный writeback.
+        const sub = await runEdgeRoutingPass(editor, inScope, byArrow, opts, 1);
+        const shiftedRecords = shifts.map((s) => ({
+          edgeId: s.edgeId,
+          movedId: s.movedId,
+          dx: s.dx,
+          dy: s.dy,
+        }));
+        if (sub) {
+          sub.shifted = shiftedRecords;
+          return sub;
+        }
+        // Sub-пасс упал/недоступен — отдаём отчёт без writeback, но со сдвигами.
+        report.shifted = shiftedRecords;
+        return report;
+      }
+    }
+
     const appliedEdges: RouteEdge[] = [];
     const appliedRoutes = new Map<string, Polyline>();
 
@@ -490,6 +749,8 @@ export async function runEdgeRoutingPass(
       } else if (d.action === "inexpressible") {
         report.inexpressible.push({
           edgeId: d.edgeId,
+          from: d.from ?? "",
+          to: d.to ?? "",
           foreignBest: d.foreignBest ?? 0,
           foreignRoute: d.foreignRoute ?? 0,
         });

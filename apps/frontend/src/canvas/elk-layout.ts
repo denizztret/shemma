@@ -589,6 +589,10 @@ async function layoutContainerInternal(
   for (const e of ctx.nodeEdges) {
     if (kset.has(e.from) && kset.has(e.to)) internal.push(e);
   }
+  const cf = CONTAINER_SPACING_FRACTION;
+  const nodeNodeGap = Math.round(csp.nodeNode * cf);
+  const betweenGap = Math.round(csp.between * cf);
+
   const edges: ElkExtendedEdge[] = internal.map((e) => ({
     id: `${e.from}>${e.to}`,
     sources: [e.from],
@@ -614,7 +618,6 @@ async function layoutContainerInternal(
       );
     }
   }
-  const cf = CONTAINER_SPACING_FRACTION;
   const children: ElkNode[] = kids.map((k) => {
     const z = geoInputSize(ctx.editor, k.id, csp.nodeW);
     if (z.baseW != null) ctx.geoBaseW[k.id] = z.baseW;
@@ -627,10 +630,8 @@ async function layoutContainerInternal(
       "elk.direction": DIR_MAP[dir] || "DOWN",
       "elk.edgeRouting": "ORTHOGONAL",
       "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
-      "elk.spacing.nodeNode": String(Math.round(csp.nodeNode * cf)),
-      "elk.layered.spacing.nodeNodeBetweenLayers": String(
-        Math.round(csp.between * cf),
-      ),
+      "elk.spacing.nodeNode": String(nodeNodeGap),
+      "elk.layered.spacing.nodeNodeBetweenLayers": String(betweenGap),
       "elk.padding": "[top=44,left=16,bottom=16,right=16]",
     },
     children,
@@ -1033,7 +1034,12 @@ async function runContainerScoped(
     containerId as string,
   ]);
   const containerRouting = edgeRoutingEnabled()
-    ? await runEdgeRoutingPass(editor, inScope, byArrow, { flowDir: dir })
+    ? await runEdgeRoutingPass(editor, inScope, byArrow, {
+        flowDir: dir,
+        refitWrappers: (movedIds) =>
+          growWrappersForShapes(editor, movedIds, true),
+        forceUnpin,
+      })
     : null;
   if (containerRouting) {
     publishRoutingReport(containerRouting);
@@ -1754,6 +1760,9 @@ export async function runElkLayout(
     ? await runEdgeRoutingPass(editor, inGraph, byArrow, {
         alignedEdges: alignedEdgesSet ?? undefined,
         flowDir: frameDir,
+        refitWrappers: (movedIds) =>
+          growWrappersForShapes(editor, movedIds, true),
+        forceUnpin,
       })
     : null;
   if (routingReport) {
@@ -2351,13 +2360,21 @@ function refitWrapperGrowOnly(
   editor: Editor,
   parentId: TLShapeId,
   pad: number,
+  ignoreSizePin = false,
 ): boolean {
   const f = editor.getShape(parentId);
   if (!f) return false;
   const meta = f.meta as
     | { didrawSizePinned?: unknown; didrawSizeOrigin?: unknown }
     | undefined;
-  if (meta?.didrawSizePinned === true && meta?.didrawSizeOrigin === "user")
+  // ignoreSizePin: сдвиг блока (DRW-246) — осознанное размещение, контейнер обязан
+  // вырасти за сдвинутым ребёнком (иначе узел висит снаружи); user-size-pin здесь
+  // уступает. В авто-envelope (default false) пин по-прежнему уважается.
+  if (
+    !ignoreSizePin &&
+    meta?.didrawSizePinned === true &&
+    meta?.didrawSizeOrigin === "user"
+  )
     return false;
   let right = Number.NEGATIVE_INFINITY;
   let bottom = Number.NEGATIVE_INFINITY;
@@ -2396,6 +2413,7 @@ function refitWrapperGrowOnly(
 export function growWrappersForShapes(
   editor: Editor,
   shapeIds: ReadonlyArray<string>,
+  ignoreSizePin = false,
 ): boolean {
   const wrappers = new Set<string>();
   for (const id of shapeIds)
@@ -2413,7 +2431,8 @@ export function growWrappersForShapes(
     const s = editor.getShape(id as TLShapeId);
     if (!s) continue;
     const pad = s.type === "frame" ? FRAME_REFIT_PAD : CONTAINER_REFIT_PAD;
-    if (refitWrapperGrowOnly(editor, id as TLShapeId, pad)) any = true;
+    if (refitWrapperGrowOnly(editor, id as TLShapeId, pad, ignoreSizePin))
+      any = true;
   }
   return any;
 }
