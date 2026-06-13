@@ -5,11 +5,13 @@
 import { describe, expect, test } from "bun:test";
 import type { Editor, TLShapeId } from "tldraw";
 import {
+  type EdgeDecision,
   buildWritebackPlan,
   collectRouteBoxes,
   currentArrowPolyline,
   decideEdges,
   filterRoutableEdges,
+  planShiftsForDecisions,
 } from "./edge-routing";
 import { assignPorts, classifyEdges } from "./edge-routing-core";
 import type { Polyline, RouteBox, RouteEdge } from "./edge-routing-core";
@@ -735,5 +737,248 @@ describe("collectRouteBoxes — flowAxis", () => {
 
     const g1 = boxes.find((b) => b.id === "shape:g1");
     expect(g1?.flowAxis).toBeUndefined();
+  });
+});
+
+// ─── decideEdges — from/to/planKind/currentScore (DRW-246) ───────────────────
+
+describe("decideEdges — поля для shift-прогона", () => {
+  test("inexpressible-решение несёт from/to/planKind/currentScore", () => {
+    // T-arc-2 геометрия: огромная стена — дуга не находится → inexpressible.
+    const src: RouteBox = box({ id: "src", x: 0, y: 0, w: 50, h: 50 });
+    const dst: RouteBox = box({ id: "dst", x: 450, y: 0, w: 50, h: 50 });
+    const wall: RouteBox = box({
+      id: "wall",
+      x: 60,
+      y: -2000,
+      w: 380,
+      h: 4000,
+    });
+    const localBoxes = [src, dst, wall];
+    const e = edge({ id: "e1", from: "src", to: "dst" });
+    const uRouteBlocked: Polyline = [
+      [50, 25],
+      [50, 300],
+      [450, 300],
+      [450, 25],
+    ];
+    const routes = new Map<string, Polyline>([["e1", uRouteBlocked]]);
+    const decisions = decideEdges(localBoxes, [e], routes, new Map());
+    expect(decisions[0]?.action).toBe("inexpressible");
+    expect(decisions[0]?.from).toBe("src");
+    expect(decisions[0]?.to).toBe("dst");
+    // Маршрут 4 точки, srcSide(R) ≠ dstSide(R)? — здесь planTransfer даёт detour.
+    expect(["U", "detour"]).toContain(decisions[0]?.planKind);
+    expect(typeof decisions[0]?.currentScore).toBe("number");
+  });
+
+  test("arc-решение несёт from/to/planKind/currentScore", () => {
+    // T4 геометрия: U без стены → arc.
+    const aBoxes: RouteBox[] = [
+      box({ id: "A", x: 0, y: 0, w: 80, h: 60 }),
+      box({ id: "B", x: 0, y: 200, w: 80, h: 60 }),
+    ];
+    const uR: Polyline = [
+      [80, 30],
+      [140, 30],
+      [140, 230],
+      [80, 230],
+    ];
+    const e = edge({ id: "e1", from: "A", to: "B" });
+    const decisions = decideEdges(
+      aBoxes,
+      [e],
+      new Map([["e1", uR]]),
+      new Map(),
+    );
+    expect(decisions[0]?.action).toBe("arc");
+    expect(decisions[0]?.from).toBe("A");
+    expect(decisions[0]?.to).toBe("B");
+    expect(decisions[0]?.planKind).toBe("U");
+    expect(typeof decisions[0]?.currentScore).toBe("number");
+  });
+});
+
+// ─── planShiftsForDecisions (DRW-246) ────────────────────────────────────────
+
+describe("planShiftsForDecisions", () => {
+  // Геометрия: A (movable) слева, OBS посередине, B справа. Базовый маршрут
+  // eAB сквозь OBS → foreign → высокий score. Сдвиг A вниз (adj-bottom y=300)
+  // даёт чистый L → score 0.
+  const boxA = box({ id: "A", x: 0, y: 100, w: 80, h: 40 });
+  const boxObs = box({ id: "OBS", x: 200, y: 100, w: 80, h: 40 });
+  const boxB = box({ id: "B", x: 500, y: 100, w: 80, h: 40 });
+  const baseBoxes = [boxA, boxObs, boxB];
+  const edgeAB = edge({ id: "eAB", from: "A", to: "B" });
+
+  function badRoute(a: RouteBox, b: RouteBox): Polyline {
+    return [
+      [a.x + a.w, a.y + a.h / 2],
+      [b.x, b.y + b.h / 2],
+    ];
+  }
+  function goodL(a: RouteBox, b: RouteBox): Polyline {
+    return [
+      [a.x + a.w, a.y + a.h / 2],
+      [b.x, a.y + a.h / 2],
+      [b.x, b.y + b.h / 2],
+    ];
+  }
+  // routeFn: пока A на исходной высоте — плохой маршрут; после сдвига вниз — L.
+  function routeFn(
+    bxs: ReadonlyArray<RouteBox>,
+    _edges: ReadonlyArray<RouteEdge>,
+  ): ReadonlyMap<string, Polyline> {
+    const a = bxs.find((b) => b.id === "A");
+    const b = bxs.find((bx) => bx.id === "B");
+    if (!a || !b) return new Map();
+    const route = a.y === 100 ? badRoute(a, b) : goodL(a, b);
+    return new Map([["eAB", route]]);
+  }
+
+  const inexprDecision: EdgeDecision = {
+    edgeId: "eAB",
+    action: "inexpressible",
+    from: "A",
+    to: "B",
+    planKind: "U",
+    // currentScore высокий, чтобы любой чистый сдвиг победил.
+    currentScore: 999,
+  };
+
+  test("цель с пригодным концом → сдвиг (fake routeFn)", () => {
+    const degree = new Map([
+      ["A", 1],
+      ["B", 1],
+    ]);
+    const shifts = planShiftsForDecisions(
+      [inexprDecision],
+      baseBoxes,
+      [edgeAB],
+      degree,
+      new Set(),
+      routeFn,
+    );
+    expect(shifts).toHaveLength(1);
+    expect(shifts[0]?.edgeId).toBe("eAB");
+    // pickMovableEnd: оба deg=1, площади равны → предпочитает "to" (B).
+    expect(shifts[0]?.movedId).toBe("B");
+  });
+
+  test("цель без пригодного конца (оба pinned) → пропуск", () => {
+    const degree = new Map([
+      ["A", 1],
+      ["B", 1],
+    ]);
+    const shifts = planShiftsForDecisions(
+      [inexprDecision],
+      baseBoxes,
+      [edgeAB],
+      degree,
+      new Set(["A", "B"]),
+      routeFn,
+    );
+    expect(shifts).toHaveLength(0);
+  });
+
+  test("решение без planKind (apply/gate-skip) → не цель → пропуск (depth=1 не сдвигает)", () => {
+    // После сдвигов повторный прогон видит только apply/gate-skip — целей нет.
+    const applyDecision: EdgeDecision = {
+      edgeId: "eAB",
+      action: "apply",
+    };
+    const degree = new Map([
+      ["A", 1],
+      ["B", 1],
+    ]);
+    const shifts = planShiftsForDecisions(
+      [applyDecision],
+      baseBoxes,
+      [edgeAB],
+      degree,
+      new Set(),
+      routeFn,
+    );
+    expect(shifts).toHaveLength(0);
+  });
+
+  test("второй таргет видит сдвиг первого (последовательная рабочая копия)", () => {
+    // Два ребра: e1 двигает X к A, e2 двигает X к B. X — единственный подвижный
+    // конец обоих (A,B pinned). Цель e2 должна оценивать X уже на позиции после e1.
+    const A = box({ id: "A", x: 0, y: 0, w: 60, h: 40 });
+    const B = box({ id: "B", x: 600, y: 0, w: 60, h: 40 });
+    const X = box({ id: "X", x: 300, y: 300, w: 60, h: 40 });
+    const bxs = [A, B, X];
+    const e1 = edge({ id: "e1", from: "A", to: "X" });
+    const e2 = edge({ id: "e2", from: "X", to: "B" });
+    const d1: EdgeDecision = {
+      edgeId: "e1",
+      action: "inexpressible",
+      from: "A",
+      to: "X",
+      planKind: "U",
+      currentScore: 999,
+    };
+    const d2: EdgeDecision = {
+      edgeId: "e2",
+      action: "inexpressible",
+      from: "X",
+      to: "B",
+      planKind: "U",
+      currentScore: 999,
+    };
+    // Захватываем boxes, переданные в routeFn при оценке e2 — там X уже сдвинут e1.
+    const seenXForE2: Array<{ x: number; y: number }> = [];
+    function rf(
+      b2: ReadonlyArray<RouteBox>,
+      _e: ReadonlyArray<RouteEdge>,
+    ): ReadonlyMap<string, Polyline> {
+      const xb = b2.find((b) => b.id === "X");
+      const ab = b2.find((b) => b.id === "A");
+      const bb = b2.find((b) => b.id === "B");
+      if (!xb || !ab || !bb) return new Map();
+      // Любой сдвиг X даёт чистый прямой маршрут (score 0) — сдвиг всегда принимается.
+      const straight = (s: RouteBox, t: RouteBox): Polyline => [
+        [s.x + s.w, s.y + s.h / 2],
+        [t.x, t.y + t.h / 2],
+      ];
+      return new Map([
+        ["e1", straight(ab, xb)],
+        ["e2", straight(xb, bb)],
+      ]);
+    }
+    // degree X = 2 (≤2 → пригоден); A,B pinned.
+    const degree = new Map([
+      ["A", 1],
+      ["B", 1],
+      ["X", 2],
+    ]);
+    const wrapped = (
+      b2: ReadonlyArray<RouteBox>,
+      e: ReadonlyArray<RouteEdge>,
+    ): ReadonlyMap<string, Polyline> => {
+      // Запоминаем позицию X при оценке (грубо: любой вызов с X — фиксируем).
+      const xb = b2.find((b) => b.id === "X");
+      if (xb) seenXForE2.push({ x: xb.x, y: xb.y });
+      return rf(b2, e);
+    };
+    const shifts = planShiftsForDecisions(
+      [d2, d1], // нарочно в обратном порядке — функция сортирует по edgeId (e1 < e2)
+      bxs,
+      [e1, e2],
+      degree,
+      new Set(["A", "B"]),
+      wrapped,
+    );
+    // Оба ребра двигают X → два сдвига, e1 первым (сортировка по edgeId).
+    expect(shifts).toHaveLength(2);
+    expect(shifts[0]?.edgeId).toBe("e1");
+    expect(shifts[1]?.edgeId).toBe("e2");
+    expect(shifts[0]?.movedId).toBe("X");
+    expect(shifts[1]?.movedId).toBe("X");
+    // Второй сдвиг стартует от позиции X ПОСЛЕ первого (dx второго ≠ от исходной 300).
+    const afterFirst = { x: shifts[0]?.x ?? 0, y: shifts[0]?.y ?? 0 };
+    // dx второго = x2 - afterFirst.x (а не x2 - 300) → проверяем согласованность.
+    expect(shifts[1]?.dx).toBeCloseTo((shifts[1]?.x ?? 0) - afterFirst.x, 5);
   });
 });
