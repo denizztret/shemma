@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { globalAlign, orderColumn, runGlobalAlignPass } from "./global-align";
+import {
+  type GlobalAlignInput,
+  globalAlign,
+  orderColumn,
+  runGlobalAlignPass,
+} from "./layout-global-align";
 
 // Эталонная топология drw-218-stability (etalon2-chain-topline):
 // C1{A1→A2, A3} C2{B1,B2} C3{D1, D2→D3} C4{E1,E2};
@@ -11,7 +16,7 @@ const GAP = 46;
 const PITCH = H + GAP;
 const row = (i: number): number => 44 + i * PITCH;
 
-function etalonInput() {
+function etalonInput(): GlobalAlignInput {
   return {
     columns: {
       C1: [

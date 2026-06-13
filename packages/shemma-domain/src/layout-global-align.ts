@@ -17,12 +17,12 @@
  *     тот же решатель предназначен для 2D-пуша DRW-242.
  */
 
-import { solve1D } from "@shemma/domain";
+import { solve1D } from "./layout-solver";
 import type {
   AlignmentGoal,
   SeparationConstraint,
   SolverVar,
-} from "@shemma/domain";
+} from "./layout-solver";
 
 export interface ColumnKid {
   id: string;

@@ -13,20 +13,22 @@
 //   - arrows are bound elbow shapes → tldraw re-routes them automatically when
 //     the nodes move (single-lever elbow; full obstacle router deferred).
 
-import type { LayoutAlgorithm, Spacing } from "@shemma/domain";
-import type { ElkExtendedEdge, ElkNode } from "elkjs";
-import ELK from "elkjs/lib/elk.bundled.js";
-import type { Editor, TLShape, TLShapeId } from "tldraw";
-import { withAutoFlipSuppressed } from "../shapes/schema-container/SchemaContainerAutoFlip";
 import {
   type ComponentGraph,
   type ComponentInfo,
+  type LayoutAlgorithm,
+  type Spacing,
   buildComponentGraphs,
   packComponents,
   partitionComponents,
   rankComponents,
+  runGlobalAlignPass,
   splitStrays,
-} from "./component-partition";
+} from "@shemma/domain";
+import type { ElkExtendedEdge, ElkNode } from "elkjs";
+import ELK from "elkjs/lib/elk.bundled.js";
+import type { Editor, TLShape, TLShapeId } from "tldraw";
+import { withAutoFlipSuppressed } from "../shapes/schema-container/SchemaContainerAutoFlip";
 import {
   type Box as PlanBox,
   countBoxOverlaps,
@@ -35,7 +37,6 @@ import {
 } from "./direction-choice";
 import { type EdgeRoutingReport, runEdgeRoutingPass } from "./edge-routing";
 import { buildComponentBridgeEdges, buildFlowChainEdges } from "./flow-chains";
-import { runGlobalAlignPass } from "./global-align";
 import { ancestorFrame, resolveLayoutScope } from "./layout-scope";
 import {
   type FlowNode,
