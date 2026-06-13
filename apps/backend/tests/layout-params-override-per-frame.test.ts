@@ -139,8 +139,11 @@ describe("runLayoutSubgraph — per-anchor meta.didrawLayoutParams override", ()
       },
     };
 
-    // Use scope=affected with explicit anchor ids — drives runLayoutSubgraph path
-    // (scope='all' goes through buildElkGraph, where per-anchor override is not wired).
+    // Use scope=affected with explicit anchor ids — drives the runLayoutSubgraph
+    // multi-pass path that wires per-anchor meta.didrawLayoutParams override.
+    // (DRW-245: scope='all' now ALSO routes through runLayoutSubgraph, so the
+    // override applies there too; this test keeps scope='affected' for a focused
+    // anchor-scoped assertion.)
     const result = await runLayout(
       store,
       {

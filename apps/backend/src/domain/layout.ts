@@ -34,6 +34,16 @@ import type { ElementId, LayoutHint } from "./types";
 import { findEmptySlot } from "./empty-space";
 import { effectiveShapeBounds } from "./shape-size";
 import { inferContainerDirection, type Direction, type ExternalEdge } from "./directions";
+// DRW-245: Ф2 global-align — врезка пасса координации строк в scope='all'
+// (паритет с фронтовым ⌘⇧L). Адаптер строит вход чистого пасса @shemma/domain.
+import { runGlobalAlignPass } from "@shemma/domain";
+import {
+  type Cardinal,
+  absToFrameRelative,
+  buildGlobalAlignArgs,
+  frameRelativeToAbs,
+  resolveContainerCardinal,
+} from "./global-align-adapter";
 
 // biome-ignore lint/suspicious/noExplicitAny: third-party CJS module
 const ELK = require("elkjs/lib/main.js") as any;
@@ -53,7 +63,18 @@ const MERMAID_DIR_TO_ELK: Record<string, string> = {
   RL: "LEFT",
 };
 
-function readContainerDirection(container: ShapeRec): string | undefined {
+// DRW-245: layered LayoutMode → cardinal направление потока (для Ф2 global-align).
+// Не-layered режимы (tree/pack/force) отсутствуют → гейт Ф2 их не навешивает.
+const LAYERED_MODE_TO_CARDINAL: Partial<Record<LayoutMode, Cardinal>> = {
+  "layered-lr": "LR",
+  "layered-tb": "TB",
+  "layered-bt": "BT",
+  "layered-rl": "RL",
+};
+
+// DRW-245: экспортируется для global-align-adapter — нормализация ELK-dir в
+// cardinal делается там же.
+export function readContainerDirection(container: ShapeRec): string | undefined {
   // DRW-178 Task 2.6: auto-inferred direction wins over inherited props.direction.
   // If the user did NOT explicitly write `direction X` in mermaid, schema/create
   // stamps props.direction="TB" but sets meta.didrawDirectionInherited=true. The
@@ -109,7 +130,7 @@ const CONTAINER_PAD_TOP = 72;
 const CONTAINER_PAD_LR = 20;
 const CONTAINER_PAD_BOT = 20;
 
-type ShapeRec = TLRecord & {
+export type ShapeRec = TLRecord & {
   type?: string;
   x?: number;
   y?: number;
@@ -208,7 +229,7 @@ function isLayoutCandidate(r: ShapeRec): boolean {
 // DRW-157: storage-mode mermaid wrappers исторически писали meta.didrawSubgraph
 // без meta.role — также считаем containers для совместимости (новые шейпы
 // пишут оба поля, но старые комнаты могут содержать только didrawSubgraph).
-function isContainerShape(r: ShapeRec): boolean {
+export function isContainerShape(r: ShapeRec): boolean {
   if (r.type === "frame") return true;
   if (r.type === "schema-container") return true;
   if (r.type === "geo" && r.meta?.role === "boundary") return true;
@@ -216,7 +237,7 @@ function isContainerShape(r: ShapeRec): boolean {
   return false;
 }
 
-function isPinned(r: ShapeRec): boolean {
+export function isPinned(r: ShapeRec): boolean {
   return r.meta?.pinned === true;
 }
 
@@ -227,7 +248,7 @@ export function isSizePinned(r: ShapeRec): boolean {
   return r.meta?.didrawSizePinned === true;
 }
 
-function collectShapes(store: TLStoreSnapshot): ShapeRec[] {
+export function collectShapes(store: TLStoreSnapshot): ShapeRec[] {
   const out: ShapeRec[] = [];
   for (const id in store.store) {
     const r = store.store[id];
@@ -236,7 +257,7 @@ function collectShapes(store: TLStoreSnapshot): ShapeRec[] {
   return out;
 }
 
-function collectArrows(store: TLStoreSnapshot): ShapeRec[] {
+export function collectArrows(store: TLStoreSnapshot): ShapeRec[] {
   const out: ShapeRec[] = [];
   for (const id in store.store) {
     const r = store.store[id];
@@ -260,7 +281,7 @@ type ElkEdge = { id: string; sources: string[]; targets: string[] };
  * Resolve raw src/tgt shape ids for an arrow from its bindings.
  * Returns null if arrow has !=2 bindings or either endpoint id missing.
  */
-function resolveArrowEndpoints(
+export function resolveArrowEndpoints(
   store: TLStoreSnapshot,
   arrowId: string,
 ): { src: string; tgt: string } | null {
@@ -403,7 +424,10 @@ type ElkResult = {
   }>;
 };
 
-type Positions = Record<string, { x: number; y: number; w?: number; h?: number }>;
+export type Positions = Record<
+  string,
+  { x: number; y: number; w?: number; h?: number }
+>;
 
 function collectPositions(
   res: ElkResult,
@@ -606,81 +630,6 @@ function applyDisplacement(
   }
 }
 
-/**
- * Build ELK graph from shapes + arrow-bindings, treating frames as compound nodes.
- *
- * Used for scope='all' single-pass layout (INCLUDE_CHILDREN). For subgraph mode
- * (scope='affected'), runLayoutSubgraph implements hierarchical multi-pass (DRW-099).
- */
-function buildElkGraph(
-  store: TLStoreSnapshot,
-  shapes: ShapeRec[],
-  hint: Required<LayoutHint>,
-  params: LayoutParams,
-): unknown {
-  const opts = modeToElkOptions(hint.mode, hint.spacing);
-  // DRW-178: reserve horizontal layer spacing for the widest arrow label so
-  // labels never overflow into neighbouring shapes/arrows.
-  const labelDerivedSpacing = computeLabelDerivedSpacing(store, params);
-  if (labelDerivedSpacing > 0) {
-    const key = "elk.layered.spacing.nodeNodeBetweenLayers";
-    opts[key] = String(Math.max(Number(opts[key] ?? 0), labelDerivedSpacing));
-  }
-
-  // Partition shapes: frames (compound) vs leaves.
-  const frames = shapes.filter(isContainerShape);
-  const leaves = shapes.filter((s) => !isContainerShape(s));
-
-  // Children of each frame; leaves whose parent is not a frame become top-level.
-  const childrenByFrame = new Map<string, ShapeRec[]>();
-  for (const f of frames) childrenByFrame.set(f.id, []);
-  const topLevel: ShapeRec[] = [];
-  for (const s of leaves) {
-    if (s.parentId && childrenByFrame.has(s.parentId)) {
-      childrenByFrame.get(s.parentId)!.push(s);
-    } else {
-      topLevel.push(s);
-    }
-  }
-
-  const buildLeaf = (s: ShapeRec): ElkNode => {
-    const b = effectiveShapeBounds(s, shapeBounds(s, hint.forceUnpin));
-    return { id: s.id, width: Math.max(20, b.w), height: Math.max(20, b.h), ports: [] };
-  };
-
-  // DRW-092 v3: frames используют тот же layered algorithm что и outer — сохраняем
-  // ranks + edge routing. Не зажимаем размер: ELK сам вычислит compound size под
-  // реальный children layout, мы это запишем в frame.props.w/h.
-  const buildFrame = (f: ShapeRec): ElkNode => {
-    const b = shapeBounds(f, hint.forceUnpin);
-    return {
-      id: f.id,
-      width: b.w,
-      height: b.h,
-      layoutOptions: { ...opts, "elk.padding": "[top=40,left=20,bottom=20,right=20]" },
-      children: (childrenByFrame.get(f.id) ?? []).map(buildLeaf),
-    };
-  };
-
-  // Edges from bindings — без фильтра по присутствию endpoint'а в shapes.
-  // В scope='all' dangling bindings (toId на несуществующую запись) намеренно
-  // прокидываются в ELK: тот вернёт ошибку, runLayout вернёт reason='elk-error'
-  // (см. test: 'returns reason elk-error when ELK fails (edge references missing node)').
-  const edges: ElkEdge[] = [];
-  for (const a of collectArrows(store)) {
-    const ep = resolveArrowEndpoints(store, a.id);
-    if (!ep) continue;
-    edges.push({ id: a.id, sources: [ep.src], targets: [ep.tgt] });
-  }
-
-  return {
-    id: "root",
-    layoutOptions: { ...opts, "elk.hierarchyHandling": "INCLUDE_CHILDREN" },
-    children: [...topLevel.map(buildLeaf), ...frames.map(buildFrame)],
-    edges,
-  };
-}
-
 // =====================================================================
 // DRW-099: Hierarchical multi-pass layout for subgraph mode
 // =====================================================================
@@ -827,12 +776,19 @@ async function runPassA(
   const newH = maxY + CONTAINER_PAD_BOT;
 
   // Собираем parent-relative coords для всех children
-  const childPositions = new Map<string, { x: number; y: number }>();
+  const childPositions = new Map<
+    string,
+    { x: number; y: number; w?: number; h?: number }
+  >();
 
-  // Листья — из ELK output напрямую (root=0,0 → это уже relative coords внутри контейнера)
+  // Листья — из ELK output напрямую (root=0,0 → это уже relative coords внутри контейнера).
+  // DRW-245: переносим w/h из ELK-результата — без них Ф2 global-align (runGlobalAlignPass)
+  // читает высоту строки как 0 → separation между строками схлопывается с (h+rowGap)
+  // до rowGap → соседние строки колонки наезжают (parity AC#3). Single-pass collectPositions
+  // и фронтовый layoutContainerInternal тоже кладут w/h — это паритет, не отклонение.
   for (const s of childLeaves) {
     const p = positions[s.id];
-    if (p) childPositions.set(s.id, { x: p.x, y: p.y });
+    if (p) childPositions.set(s.id, { x: p.x, y: p.y, w: p.w, h: p.h });
   }
 
   // Контейнеры — из ELK output, плюс их вложенные дети
@@ -1473,6 +1429,164 @@ function inferContainerDirections(
 }
 
 /**
+ * DRW-245: cardinal-направление поперёк потока (всегда положительная полярность).
+ * Зеркало фронтового `perpendicular` (elk-layout.ts:176-178):
+ *   LR/RL → "TB", TB/BT → "LR".
+ */
+export function perpendicularCardinal(frameDir: Cardinal): Cardinal {
+  return frameDir === "LR" || frameDir === "RL" ? "TB" : "LR";
+}
+
+/**
+ * DRW-245: инференция направлений inherit-контейнеров для scope='all' по
+ * ФРОНТОВОМУ правилу (паритет с ⌘⇧L), отдельная от DRW-178
+ * `inferContainerDirections` (та обслуживает scope='affected' и покрыта
+ * directions-inference.test.ts + case1/case2 layout-direction-frame.test.ts).
+ *
+ * Фронтовый эталон — `resolveContainerDir`/`inferInheritDir`
+ * (elk-layout.ts:176-234):
+ *   - контейнер с ЯВНЫМ user-направлением (под non-force) → honored;
+ *   - inherit (none / inherited-default / custom-нет): hasInternalFlow
+ *     (≥1 ребро между двумя прямыми детьми) ? frameDir : perpendicular(frameDir),
+ *     где frameDir — resolved cardinal ближайшего предка-контейнера (или modeCardinal).
+ *
+ * Записывает `meta.didrawDirection = <cardinal>` (как inferContainerDirections),
+ * что персистится в storeForLayout → идемпотентно (повторный layout видит set →
+ * honored через ветку didrawDirection).
+ *
+ * Контейнеры обрабатываются shallow-first (по глубине вложенности), чтобы
+ * родительский resolved-cardinal был известен до детей. Frame НЕ инферится
+ * (direction только user-set, spec §4.1). Пустые контейнеры пропускаются.
+ */
+function inferContainerDirectionsAllScope(
+  store: TLStoreSnapshot,
+  shapes: ShapeRec[],
+  modeCardinal: Cardinal,
+): StoreChangeBatch {
+  const batch: StoreChangeBatch = { added: {}, updated: {}, removed: {} };
+
+  const shapeById = new Map(shapes.map((s) => [s.id, s]));
+
+  // Прямые дети контейнера: containerId → childIds (любые shape — для
+  // hasInternalFlow и проверки "пустой ли контейнер").
+  const directChildren = new Map<string, string[]>();
+  for (const s of shapes) {
+    const pid = s.parentId;
+    if (!pid) continue;
+    const parent = shapeById.get(pid);
+    if (!parent || !isContainerShape(parent)) continue;
+    const bucket = directChildren.get(pid);
+    if (bucket) bucket.push(s.id);
+    else directChildren.set(pid, [s.id]);
+  }
+
+  // Рёбра по bindings (для hasInternalFlow).
+  const nodeEdges: Array<{ from: string; to: string }> = [];
+  for (const a of collectArrows(store)) {
+    const ep = resolveArrowEndpoints(store, a.id);
+    if (!ep) continue;
+    nodeEdges.push({ from: ep.src, to: ep.tgt });
+  }
+
+  // Глубина вложенности контейнера (по цепочке parentId среди контейнеров) —
+  // для shallow-first обхода.
+  const depthOf = (id: string): number => {
+    let depth = 0;
+    let current = shapeById.get(id);
+    let safety = 32;
+    while (current?.parentId && safety-- > 0) {
+      const parent = shapeById.get(current.parentId);
+      if (!parent || !isContainerShape(parent)) break;
+      depth++;
+      current = parent;
+    }
+    return depth;
+  };
+
+  // Контейнеры (НЕ frame — у frame direction только user-set), отсортированные
+  // shallow-first.
+  const containers = shapes
+    .filter((s) => isContainerShape(s) && s.type !== "frame")
+    .sort((a, b) => depthOf(a.id) - depthOf(b.id));
+
+  // Resolved cardinal по id контейнера (заполняется по ходу обхода — родитель
+  // раньше детей благодаря shallow-first).
+  const resolvedDir = new Map<string, Cardinal>();
+
+  for (const c of containers) {
+    const kids = directChildren.get(c.id);
+    if (!kids || kids.length === 0) continue; // пустой контейнер не участвует
+
+    // Фронтовый resolveContainerDir honors ТОЛЬКО реальное user-направление;
+    // inherited (структурный дефолт импорта) и custom — re-инферит. Зеркалим.
+    const isInherited = c.meta?.didrawDirectionInherited === true;
+
+    // 1. ЯВНОЕ user-направление: props.direction валиден, не custom, НЕ inherited.
+    if (c.type === "schema-container") {
+      const d = (c.props as Record<string, unknown> | undefined)?.direction;
+      if (!isInherited && typeof d === "string" && d !== "custom" && MERMAID_DIR_TO_ELK[d]) {
+        resolvedDir.set(c.id, d as Cardinal);
+        continue;
+      }
+    }
+
+    // 2. НЕ-inherited meta.didrawDirection → honor. inherited meta.didrawDirection
+    // = результат прежней инференции (в т.ч. backend external-edge-sides при
+    // импорте: B/D/E=LR вместо TB) → НЕ honor, re-инферим фронт-правилом ниже.
+    const metaDir = c.meta?.didrawDirection;
+    if (!isInherited && typeof metaDir === "string" && MERMAID_DIR_TO_ELK[metaDir] && metaDir !== "custom") {
+      resolvedDir.set(c.id, metaDir as Cardinal);
+      continue;
+    }
+    // 3. legacy didrawSubgraphDirection (mermaid import) → honor.
+    const subgraphDir = c.meta?.didrawSubgraphDirection;
+    if (typeof subgraphDir === "string" && MERMAID_DIR_TO_ELK[subgraphDir]) {
+      resolvedDir.set(c.id, subgraphDir as Cardinal);
+      continue;
+    }
+    // 4. else (custom / inherited / none) → инферим фронт-правилом ниже.
+
+    // inherit/none → инферим фронтовым правилом.
+    // frameDir = resolved cardinal ближайшего предка-контейнера; если предок не
+    // контейнер/frame или его cardinal не определён → modeCardinal.
+    let frameDir: Cardinal = modeCardinal;
+    const pid = c.parentId;
+    if (pid) {
+      const parent = shapeById.get(pid);
+      if (parent && isContainerShape(parent)) {
+        // resolvedDir заполнен для родителя (shallow-first); fallback на его
+        // собственный resolved cardinal (явный/legacy у frame-предка).
+        frameDir = resolvedDir.get(pid) ?? resolveContainerCardinal(parent) ?? modeCardinal;
+      }
+    }
+
+    const kidSet = new Set(kids);
+    const hasInternalFlow = nodeEdges.some(
+      (e) => kidSet.has(e.from) && kidSet.has(e.to),
+    );
+    const dir: Cardinal = hasInternalFlow ? frameDir : perpendicularCardinal(frameDir);
+
+    // custom → перезаписываем props.direction на инферированный cardinal: иначе
+    // Pass A скипнет контейнер по isCustomDirection и не разложит детей (scope='all'
+    // overrides custom — DRW-150 + паритет с ⌘⇧L, который резолвит custom→cardinal).
+    // Для inherited/none props.direction не трогаем (readContainerDirection отдаёт
+    // meta.didrawDirection при inherited).
+    const propsRec = c.props as Record<string, unknown> | undefined;
+    const newProps =
+      propsRec?.direction === "custom" ? { ...propsRec, direction: dir } : c.props;
+    const updated: ShapeRec = {
+      ...c,
+      props: newProps,
+      meta: { ...(c.meta ?? {}), didrawDirection: dir },
+    } as ShapeRec;
+    batch.updated[c.id] = [c, updated as TLRecord];
+    resolvedDir.set(c.id, dir);
+  }
+
+  return batch;
+}
+
+/**
  * Apply a StoreChangeBatch to a TLStoreSnapshot, returning a new snapshot
  * with the updated records merged in. Used to apply direction inference
  * before layout passes so they see inferred directions.
@@ -1490,6 +1604,269 @@ function applyBatchToStore(store: TLStoreSnapshot, batch: StoreChangeBatch): TLS
     newStore[id] = batch.added[id]!;
   }
   return { ...store, store: newStore };
+}
+
+/**
+ * DRW-245: разрешает cardinal-направление scope-фрейма для Ф2 global-align.
+ * Паритет с фронтовым resolveFrameDir — приоритет у явного meta.didrawDirection
+ * фрейма (через readContainerDirection → cardinal); fallback — направление
+ * глобального режима (mode). custom/inherit фрейма → mode-направление.
+ */
+function resolveFrameCardinal(
+  frame: ShapeRec | undefined,
+  modeCardinal: Cardinal,
+): Cardinal {
+  if (frame) {
+    const own = resolveContainerCardinal(frame);
+    if (own !== undefined) return own;
+  }
+  return modeCardinal;
+}
+
+/**
+ * Восстанавливает координаты pinned-узлов в `positions` (ABSOLUTE для
+ * scope='all', PARENT-RELATIVE для subgraph). Pin-семантика: parent-relative
+ * координаты заморожены. Идемпотентна — можно вызывать повторно (например после
+ * GA-пасса, чтобы re-pack не сдвинул пин). DRW-245: вынесена из inline-блока
+ * runLayout, чтобы пере-применять после Ф2.
+ */
+function restorePinnedCoords(
+  positions: Positions,
+  shapes: ShapeRec[],
+  pinnedSet: ReadonlySet<string>,
+  containerIds: ReadonlySet<string>,
+  shapeById: ReadonlyMap<string, ShapeRec>,
+  isSubgraphMode: boolean,
+): void {
+  for (const s of shapes) {
+    if (!pinnedSet.has(s.id) || positions[s.id] === undefined) continue;
+    const sx = s.x ?? 0;
+    const sy = s.y ?? 0;
+    const parentId = typeof s.parentId === "string" ? s.parentId : undefined;
+    if (!isSubgraphMode && parentId && containerIds.has(parentId)) {
+      const parentPos = positions[parentId];
+      const parentShape = shapeById.get(parentId);
+      const px = parentPos ? parentPos.x : (parentShape?.x ?? 0);
+      const py = parentPos ? parentPos.y : (parentShape?.y ?? 0);
+      positions[s.id] = { ...positions[s.id], x: px + sx, y: py + sy };
+    } else {
+      positions[s.id] = { ...positions[s.id], x: sx, y: sy };
+    }
+  }
+}
+
+/**
+ * DRW-245: врезка Ф2 global-align (паритет ⌘⇧L) в scope='all' single-pass.
+ *
+ * Backend single-pass даёт ABSOLUTE `positions` со всеми top-level фреймами в
+ * одном ELK-графе. Фронтовый ⌘⇧L гоняет GA-пасс В ПРЕДЕЛАХ ОДНОГО фрейма (его
+ * координатном пространстве). Поэтому здесь пасс запускается ПО КАЖДОМУ
+ * top-level schema-фрейму отдельно (его id + направление), плюс один раз для
+ * frameless top-level группы (frameId=undefined). Для каждого scope:
+ *   abs → absToFrameRelative → buildGlobalAlignArgs → runGlobalAlignPass
+ *   (мутирует flat) → frameRelativeToAbs → запись обратно в `positions`.
+ *
+ * Мутирует `positions` на месте. portHints игнорируются (Ф3 не в scope).
+ */
+function applyGlobalAlignAllScope(
+  store: TLStoreSnapshot,
+  shapes: ShapeRec[],
+  positions: Positions,
+  modeCardinal: Cardinal,
+  spacing: Spacing,
+  forceUnpin: boolean,
+): void {
+  // top-level фреймы scope='all' — это контейнеры, чей parent не контейнер
+  // (фрейм/страница). Узким гейтом считаем именно tldraw-frame'ы как scope-root:
+  // schema-container на странице без фрейма уходит во frameless-группу.
+  const containerIds = new Set<string>();
+  for (const s of shapes) if (isContainerShape(s)) containerIds.add(s.id);
+
+  // top-level scope-фреймы: контейнер, чей родитель НЕ контейнер.
+  const topFrames: ShapeRec[] = [];
+  let hasFrameless = false;
+  for (const s of shapes) {
+    const pid = typeof s.parentId === "string" ? s.parentId : undefined;
+    const parentIsContainer = pid !== undefined && containerIds.has(pid);
+    if (parentIsContainer) continue; // вложенный — обработается в scope своего root-фрейма
+    if (containerIds.has(s.id)) {
+      topFrames.push(s);
+    } else {
+      hasFrameless = true; // top-level loose под страницей
+    }
+  }
+
+  // Для каждого top-level фрейма — отдельный GA-пасс в его пространстве.
+  // Подмножество positions: сам фрейм + всё его поддерево (дети + дети контейнеров).
+  for (const frame of topFrames) {
+    runGlobalAlignForScope(
+      store,
+      shapes,
+      containerIds,
+      positions,
+      frame.id,
+      resolveFrameCardinal(frame, modeCardinal),
+      spacing,
+      forceUnpin,
+    );
+  }
+
+  // frameless top-level (контейнеры/loose на странице без фрейма): один пасс,
+  // frameId=undefined → top-level остаются абсолютными (T2-нормализация).
+  if (hasFrameless) {
+    runGlobalAlignForScope(store, shapes, containerIds, positions, undefined, modeCardinal, spacing, forceUnpin);
+  }
+}
+
+/**
+ * DRW-245: scoped-store для одного GA-scope. Адаптер читает `store` целиком
+ * (shape-индекс + arrows), поэтому при нескольких top-level фреймах он принял
+ * бы соседние фреймы за колонки/passive. Ограничиваем store поддеревом scope:
+ *   - frameId задан → фрейм + весь его descendant-subtree;
+ *   - frameId undefined (frameless) → все top-level НЕ-фрейм shapes + их
+ *     container-дети (поддерево), но НИ ОДНОГО tldraw-frame.
+ * Bindings/arrows включаются как есть (resolveArrowEndpoints отфильтрует те,
+ * чьи endpoints вне scope, по shapeById). `page/document` записи переносятся.
+ */
+function buildScopedStore(
+  store: TLStoreSnapshot,
+  shapes: ShapeRec[],
+  containerIds: ReadonlySet<string>,
+  frameId: string | undefined,
+): TLStoreSnapshot {
+  const childrenByParent = new Map<string, ShapeRec[]>();
+  for (const s of shapes) {
+    const pid = typeof s.parentId === "string" ? s.parentId : undefined;
+    if (!pid) continue;
+    const bucket = childrenByParent.get(pid);
+    if (bucket) bucket.push(s);
+    else childrenByParent.set(pid, [s]);
+  }
+
+  const inScope = new Set<string>();
+  const addSubtree = (id: string): void => {
+    if (inScope.has(id)) return;
+    inScope.add(id);
+    for (const child of childrenByParent.get(id) ?? []) addSubtree(child.id);
+  };
+
+  if (frameId !== undefined) {
+    addSubtree(frameId);
+  } else {
+    // frameless: top-level НЕ-контейнер-родитель и НЕ tldraw-frame.
+    for (const s of shapes) {
+      const pid = typeof s.parentId === "string" ? s.parentId : undefined;
+      const parentIsContainer = pid !== undefined && containerIds.has(pid);
+      if (parentIsContainer) continue; // не top-level
+      if (s.type === "frame") continue; // frame — отдельный scope, не frameless
+      addSubtree(s.id);
+    }
+  }
+
+  const scoped: Record<string, TLRecord> = {};
+  for (const id in store.store) {
+    const r = store.store[id];
+    if (!r) continue;
+    if (r.typeName === "shape") {
+      const sr = r as ShapeRec;
+      if (sr.type === "arrow") {
+        scoped[id] = r; // arrows проходят; endpoints вне scope отфильтрует resolveArrowEndpoints
+      } else if (inScope.has(id)) {
+        scoped[id] = r;
+      }
+    } else {
+      scoped[id] = r; // page/document/binding — переносим
+    }
+  }
+  return { ...store, store: scoped };
+}
+
+/**
+ * DRW-245: один GA-пасс для одного scope (фрейм или frameless). Нормализует
+ * abs↔rel вокруг чистого пасса (на scoped-store) и пишет результат обратно в
+ * общий `positions`.
+ */
+function runGlobalAlignForScope(
+  store: TLStoreSnapshot,
+  shapes: ShapeRec[],
+  containerIds: ReadonlySet<string>,
+  positions: Positions,
+  frameId: string | undefined,
+  frameDir: Cardinal,
+  spacing: Spacing,
+  forceUnpin: boolean,
+): void {
+  const scopedStore = buildScopedStore(store, shapes, containerIds, frameId);
+  const rel = absToFrameRelative(positions, scopedStore, frameId);
+  const args = buildGlobalAlignArgs(scopedStore, rel, {
+    frameDir,
+    spacing,
+    frameId,
+    forceUnpin,
+  });
+  // Нет участников пасса (ни колонок, ни loose, ни passive) → пропускаем,
+  // чтобы не трогать координаты зря (детерминизм + no-op фикспоинт).
+  if (args.columns.length === 0 && args.looseIds.length === 0 && (args.passive?.length ?? 0) === 0) {
+    return;
+  }
+  runGlobalAlignPass(args); // мутирует args.flat (=rel) на месте; portHints игнорируем
+  const abs = frameRelativeToAbs(rel, scopedStore, frameId);
+  // Запись обратно: только узлы этого scope. `rel`/`abs` строились по scoped-store,
+  // но absToFrameRelative проходит по ВСЕМ ключам positions — узлы вне scope в нём
+  // нормализуются как top-level (parentId не в scoped containers) и обратно дают те
+  // же abs. Чтобы не трогать чужие scope, пишем только узлы scoped-store.
+  for (const id in scopedStore.store) {
+    const a = abs[id];
+    const cur = positions[id];
+    if (!a || !cur) continue;
+    positions[id] = { ...cur, x: a.x, y: a.y };
+  }
+}
+
+/**
+ * DRW-245: `runLayoutSubgraph` returns positions with top-level shapes ABSOLUTE
+ * (Pass B/Pass C) but every nested shape RELATIVE to its DIRECT parent — runPassA
+ * stores a nested container's children relative to that nested container (tldraw
+ * native model, see runPassA childPositions). The scope='all' downstream of
+ * runLayout (pinned restore, container coverage, batch builder) expects ABSOLUTE
+ * positions, exactly as the legacy single-pass `collectPositions` produced.
+ *
+ * Convert here: a shape parented to a container takes abs = container.abs + its
+ * relative coords; top-level shapes are already absolute. A memoized recursive
+ * resolve walks arbitrary nesting depth parent-first. Returns a NEW map; sizes
+ * (w/h) carried through unchanged.
+ */
+function absolutizeSubgraphPositions(
+  positions: Positions,
+  shapes: ShapeRec[],
+  containerIds: ReadonlySet<string>,
+): Positions {
+  const shapeById = new Map(shapes.map((s) => [s.id, s]));
+  const absOrigin = new Map<string, { x: number; y: number }>();
+  const resolve = (id: string): { x: number; y: number } => {
+    const cached = absOrigin.get(id);
+    if (cached) return cached;
+    const p = positions[id];
+    const shape = shapeById.get(id);
+    const pid = typeof shape?.parentId === "string" ? shape.parentId : undefined;
+    let r: { x: number; y: number };
+    if (p && pid && containerIds.has(pid) && positions[pid] !== undefined) {
+      const base = resolve(pid);
+      r = { x: base.x + p.x, y: base.y + p.y };
+    } else if (p) {
+      r = { x: p.x, y: p.y };
+    } else {
+      r = { x: shape?.x ?? 0, y: shape?.y ?? 0 };
+    }
+    absOrigin.set(id, r);
+    return r;
+  };
+  const out: Positions = {};
+  for (const id in positions) {
+    const a = resolve(id);
+    out[id] = { ...positions[id], x: a.x, y: a.y };
+  }
+  return out;
 }
 
 /**
@@ -1526,7 +1903,18 @@ export async function runLayout(
 
   // DRW-178 Task 2.6: auto-infer direction for containers without explicit setting.
   // Must run BEFORE layout passes so readContainerDirection sees inferred meta.didrawDirection.
-  const directionInferenceBatch = inferContainerDirections(store, shapes, params);
+  //
+  // DRW-245: для scope='all' (path, эквивалентный ⌘⇧L) инферим направления
+  // inherit-контейнеров ФРОНТОВЫМ правилом (inferInheritDir) — backend
+  // external-edge-sides DRW-178 расходился с фронтом на свежем непинованном
+  // контенте (B/D/E=LR вместо TB → cross-цепочки не выравнивались). scope='affected'
+  // и не-layered режимы — прежняя inferContainerDirections (без регрессий).
+  const isSubgraphMode_early = fullHint.scope === "affected" && fullHint.affectedIds.size > 0;
+  const modeCardinal_early = LAYERED_MODE_TO_CARDINAL[fullHint.mode];
+  const directionInferenceBatch =
+    !isSubgraphMode_early && modeCardinal_early !== undefined && params.autoDirectionEnabled !== false
+      ? inferContainerDirectionsAllScope(store, shapes, modeCardinal_early)
+      : inferContainerDirections(store, shapes, params);
   const storeForLayout = applyBatchToStore(store, directionInferenceBatch);
   // Refresh shapes from updated store so layout passes see inferred directions in meta.
   const shapesForLayout = collectShapes(storeForLayout);
@@ -1537,7 +1925,7 @@ export async function runLayout(
   // DRW-150: scope='all' (Cmd+Shift+L) overrides custom direction containers.
   // Per user expectation — global layout request implies "re-layout everything".
   // Per-container preserve (custom direction) applies only in scope='affected' path.
-  const isSubgraphMode = fullHint.scope === "affected" && affectedIds && affectedIds.size > 0;
+  const isSubgraphMode: boolean = fullHint.scope === "affected" && affectedIds !== undefined && affectedIds.size > 0;
 
   // Pin set: only meta.pinned === true shapes (DRW-003).
   const pinnedSet = new Set<string>();
@@ -1599,18 +1987,35 @@ export async function runLayout(
     positions = result.positions;
     anchorFrameIds = result.anchorFrameIds;
   } else {
-    // scope='all': single-pass through INCLUDE_CHILDREN (unchanged behavior).
-    // No anchor frames in scope='all' — every shape participates.
+    // scope='all': per-container multi-pass — DRW-245 parity with frontend ⌘⇧L.
+    // Was single-pass INCLUDE_CHILDREN, which laid the whole hierarchy out in one
+    // ELK graph. That gives a different per-container structure than the frontend's
+    // per-container isolation, so the Ф2 global-align pass below could not align
+    // cross-container chains (live blocker: chain A1→B1→D1→E1 stayed a 454px
+    // zigzag instead of one line). Route scope='all' through the SAME hierarchical
+    // multi-pass the subgraph path uses (Pass A lays out each container's children
+    // in isolation → Pass B top-level → Pass C assemble), with EVERY non-arrow
+    // shape in the filter so every container gets Pass A and no anchor frames arise.
+    // runLayoutSubgraph returns children parent-relative; absolutize before the
+    // scope='all' downstream (which expects absolute, as single-pass produced).
     anchorFrameIds = new Set();
-    const graph = buildElkGraph(storeForLayout, shapesForLayout, fullHint, params);
-
-    let res: { children?: unknown[]; edges?: unknown[] };
-    try {
-      res = await elk.layout(graph as never);
-    } catch (_e) {
+    const allLayoutIds = new Set<string>();
+    for (const s of shapesForLayout) {
+      if (s.type === "arrow") continue;
+      allLayoutIds.add(s.id);
+    }
+    const result = await runLayoutSubgraph(
+      storeForLayout,
+      shapesForLayout,
+      fullHint,
+      allLayoutIds,
+      params,
+      "auto",
+    );
+    if (!result) {
       return { batch: emptyBatch, affected: [], reason: "elk-error", appliedParams: params };
     }
-    positions = collectPositions(res);
+    positions = absolutizeSubgraphPositions(result.positions, shapesForLayout, containerIds);
   }
 
   // Restore pinned coords (ELK layered ignores fixed-position hints in elkjs 0.9.3 —
@@ -1620,22 +2025,7 @@ export async function runLayout(
   // restore wrote relative coords into the absolute map, so pinned children of
   // a frame jumped to garbage (often negative) coords after the batch builder
   // subtracted the frame position back out.
-  for (const s of shapesForLayout) {
-    if (pinnedSet.has(s.id) && positions[s.id] !== undefined) {
-      const sx = s.x ?? 0;
-      const sy = s.y ?? 0;
-      const parentId = typeof s.parentId === "string" ? s.parentId : undefined;
-      if (!isSubgraphMode && parentId && containerIds.has(parentId)) {
-        const parentPos = positions[parentId];
-        const parentShape = shapeById.get(parentId);
-        const px = parentPos ? parentPos.x : (parentShape?.x ?? 0);
-        const py = parentPos ? parentPos.y : (parentShape?.y ?? 0);
-        positions[s.id] = { ...positions[s.id], x: px + sx, y: py + sy };
-      } else {
-        positions[s.id] = { ...positions[s.id], x: sx, y: sy };
-      }
-    }
-  }
+  restorePinnedCoords(positions, shapesForLayout, pinnedSet, containerIds, shapeById, isSubgraphMode);
 
   // DRW-091 AC#2 / DRW-099 v2: origin preservation для subgraph mode.
   // Анчоры (centroid baseline) — top-level selected shapes (containers + bare leaves at root).
@@ -1699,7 +2089,34 @@ export async function runLayout(
     }
   }
 
-  // DRW-003 displacement.
+  // DRW-245: Ф2 global-align — паритет фронтового ⌘⇧L (координация строк
+  // поперёк контейнеров: порядок по внешним связям + VPSC-выравнивание cross-рёбер).
+  // ГЕЙТ применимости (спека §3.2 п.1): ТОЛЬКО путь, эквивалентный ⌘⇧L —
+  //   scope='all' (per-container multi-pass, !isSubgraphMode) + layered-режим.
+  // Для subgraph (scope='affected') и не-layered (tree/pack/force) — НЕ навешиваем
+  // (поведение прежнее, без регрессий). Выполняется ПЕРЕД displacement: Ф2 может
+  // положить узел цепочки на ось пина (выравнивание), и следующий за ним
+  // displacement разведёт наезд (DRW-208 — иначе displaced-узел возвращается на пин).
+  const modeCardinal = LAYERED_MODE_TO_CARDINAL[fullHint.mode];
+  if (!isSubgraphMode && modeCardinal !== undefined) {
+    applyGlobalAlignAllScope(
+      storeForLayout,
+      shapesForLayout,
+      positions,
+      modeCardinal,
+      fullHint.spacing,
+      fullHint.forceUnpin,
+    );
+    // Re-freeze пины: GA-пасс пропускает pinned в writeback, но его component
+    // re-pack (translate всей компоненты по cross-оси) НЕ знает о пинах и может
+    // их сдвинуть. Восстанавливаем pin-координаты после Ф2 (DRW-003/205-инвариант).
+    restorePinnedCoords(positions, shapesForLayout, pinnedSet, containerIds, shapeById, isSubgraphMode);
+  }
+
+  // DRW-003 displacement — ПОСЛЕ Ф2 (DRW-245): GA-пасс выравнивает цепочки на оси,
+  // что может вернуть узел на координату пина; displacement разводит наезды на
+  // ближайшие свободные слоты уже по финально-выровненным позициям (пины заморожены
+  // выше). До coverage-пасса (ниже) — инвариант обтяжки сохраняется.
   applyDisplacement(positions, shapesForLayout, pinnedSet);
 
   // DRW-205: containers must COVER their children's FINAL positions — pinned

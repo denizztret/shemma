@@ -311,8 +311,11 @@ describe("DRW-005: children coords внутри group bbox (absolute)", () => {
 });
 
 describe("ELK error path → empty batch + reason", () => {
-  test("arrow с binding на несуществующий target → no-op result", async () => {
-    // ELK падает, если edge endpoint не найден в графе.
+  test("arrow с binding на несуществующий target → graceful no-op (dangling дропается)", async () => {
+    // DRW-245: scope='all' идёт через per-container multi-pass — dangling binding
+    // (toId на отсутствующую запись) фильтруется при сборке рёбер, а не падает в
+    // ELK. Раскладка валидной части проходит без reason='elk-error' (parity с
+    // фронтовым ⌘⇧L и со scope='affected', который так делал всегда).
     const a = makeShape("shape:a", 0, 0, "a");
     const s = snapshotWithShapes([a]);
     s.store["shape:arr"] = {
@@ -341,7 +344,8 @@ describe("ELK error path → empty batch + reason", () => {
     } as TLRecord;
     const idx = rebuildDidrawIndex(s);
     const r = await runLayout(s, { mode: "layered-lr", scope: "all" }, idx);
-    expect(r.reason).toBe("elk-error");
+    // graceful: нет elk-error; единственный узел без валидных рёбер не двигается.
+    expect(r.reason).toBeUndefined();
     expect(Object.keys(r.batch.updated)).toEqual([]);
     expect(r.affected).toEqual([]);
   });
