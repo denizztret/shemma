@@ -6,7 +6,7 @@ import {
   partitionComponents,
   rankComponents,
   splitStrays,
-} from "./component-partition";
+} from "./layout-components";
 
 describe("partitionComponents", () => {
   it("splits a graph into connected components by collapsed edges", () => {
