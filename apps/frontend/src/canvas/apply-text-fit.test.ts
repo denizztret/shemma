@@ -13,7 +13,9 @@ describe("DRW-232 shouldManualFit — предикат ручной обтяжк
     ).toBe(true);
   });
 
-  test("note с текстом → обтягиваем", () => {
+  test("note НЕ обтягивается: само-размерный (нет props.w/h в tldraw)", () => {
+    // Регрессия: запись w/h в note → ValidationError «note.props.w: Unexpected
+    // property», падал весь холст. Ширина note фиксирована, высота авто (growY).
     expect(
       shouldManualFit({
         type: "note",
@@ -21,7 +23,16 @@ describe("DRW-232 shouldManualFit — предикат ручной обтяжк
         sizePinned: false,
         force: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
+    // даже force не обтягивает note
+    expect(
+      shouldManualFit({
+        type: "note",
+        hasText: true,
+        sizePinned: false,
+        force: true,
+      }),
+    ).toBe(false);
   });
 
   test("обычный режим уважает size-pin (вручную заданный размер не ломаем)", () => {
