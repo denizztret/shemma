@@ -8,10 +8,11 @@ describe("DRW-228 shouldAutoFit — event-driven fit decision", () => {
     ).toBe(true);
   });
 
-  test("note with new text → fit", () => {
+  test("note НЕ обтягивается даже с новым текстом (само-размерный, нет props.w/h)", () => {
+    // Регрессия: auto-fit писал w/h в note → ValidationError, падал холст.
     expect(
       shouldAutoFit({ type: "note", hasText: true, sizePinned: false, textChanged: true }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   test("text unchanged (e.g. a move/resize) → no fit (don't re-fit on every change)", () => {
@@ -82,7 +83,7 @@ describe("DRW-232 shouldAutoFit — pin origin (fit vs user)", () => {
   test("not pinned + origin 'fit' → fit (origin is irrelevant when not pinned)", () => {
     expect(
       shouldAutoFit({
-        type: "note",
+        type: "geo",
         hasText: true,
         sizePinned: false,
         textChanged: true,

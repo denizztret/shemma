@@ -1,10 +1,10 @@
 // apps/frontend/src/canvas/apply-text-fit.ts
 //
 // DRW-219: команда «обтянуть текст» для выделения. Для каждого выделенного
-// объекта с текстом (geo/note/text) подбирает оптимальную ширину и
-// минимальную высоту через pickOptimalWidth, измеряя реальную высоту под
-// каждую ширину-кандидат via ShapeUtil.onBeforeCreate (инкапсулирует
-// шрифт/размер shape — не зависим от внутренних tldraw-констант).
+// geo с текстом подбирает оптимальную ширину и минимальную высоту через
+// pickOptimalWidth, измеряя реальную высоту под каждую ширину-кандидат via
+// ShapeUtil.onBeforeCreate (инкапсулирует шрифт/размер shape — не зависим от
+// внутренних tldraw-констант). note/text — само-размерные, не обтягиваются.
 //
 // Новый размер помечается user-owned (meta.didrawSizePinned) — AI-layout его
 // не перетирает (pin discipline, DRW-185). Позиция (x/y) не меняется.
@@ -16,9 +16,12 @@ import { reflowAfterFit } from "./elk-layout";
 import { extractPlaintextFromRichText } from "./schema-overlay-sync";
 import { pickOptimalWidth } from "./text-fit";
 
-// geo/note несут явный размер + growY-механику. text-shape само-ресайзится
-// (autoSize) и в обтяжке не нуждается — не трогаем.
-export const TEXT_FIT_TYPES: ReadonlySet<string> = new Set(["geo", "note"]);
+// Только geo несёт явную ширину (props.w), которую обтяжка подбирает. text-shape
+// само-ресайзится (autoSize). note ИСКЛЮЧЁН: у tldraw-note нет props.w/h — ширина
+// фиксирована, высота авто-растёт через growY (NoteShapeUtil). Запись w/h в note
+// через updateShape → ValidationError «note.props.w: Unexpected property» (падал
+// весь холст). Обтягивать по ширине у note нечего — он само-размерный.
+export const TEXT_FIT_TYPES: ReadonlySet<string> = new Set(["geo"]);
 
 // Границы поиска ширины. MAX — предел читаемости (не делаем строку-простыню),
 // MIN — нижняя граница узкого бокса.
@@ -59,10 +62,10 @@ function makeMeasureH(
 }
 
 /**
- * Подгоняет размер ОДНОГО объекта с текстом (geo/note) под оптимальную ширину.
- * Возвращает true, если объект был обтянут. Нетекстовые типы и объекты без
- * текста пропускаются (false). Размер помечается user-owned
- * (meta.didrawSizePinned) — AI-layout его не перетирает.
+ * Подгоняет размер ОДНОГО объекта с текстом (geo) под оптимальную ширину.
+ * Возвращает true, если объект был обтянут. Нетекстовые типы, само-размерные
+ * (note/text) и объекты без текста пропускаются (false) — см. TEXT_FIT_TYPES.
+ * Размер помечается user-owned (meta.didrawSizePinned) — AI-layout не перетирает.
  *
  * Чистого undo-grouping не делает: вызывающая сторона оборачивает в
  * editor.run() + markHistoryStoppingPoint(), если нужна отдельная undo-точка
@@ -80,7 +83,7 @@ export function applyTextFitToShape(editor: Editor, shape: TLShape): boolean {
   const props = shape.props as { w?: number; h?: number; growY?: number };
   const hasGrowY = typeof props.growY === "number";
   const nextProps: Record<string, unknown> = { w: width, h: height };
-  // geo/note: высота поглощает growY → плотный бокс без авто-роста.
+  // geo: высота поглощает growY → плотный бокс без авто-роста.
   if (hasGrowY) nextProps.growY = 0;
   const meta = (shape.meta ?? {}) as Record<string, unknown>;
   editor.updateShape({
@@ -96,9 +99,10 @@ export function applyTextFitToShape(editor: Editor, shape: TLShape): boolean {
 }
 
 /**
- * DRW-232: чистый предикат «обтягивать ли этот объект вручную». geo/note с
- * непустым текстом обтягиваются; size-pinned (вручную заданный размер) — только
- * в force-режиме (⌘⌥⇧F / Opt-click), иначе уважаем пин (не ломаем форму).
+ * DRW-232: чистый предикат «обтягивать ли этот объект вручную». geo с непустым
+ * текстом обтягивается; size-pinned (вручную заданный размер) — только в
+ * force-режиме (⌘⌥⇧F / Opt-click), иначе уважаем пин (не ломаем форму).
+ * note/text исключены (само-размерные) — см. TEXT_FIT_TYPES.
  */
 export function shouldManualFit(input: {
   type: string;
@@ -118,7 +122,7 @@ export function shouldManualFit(input: {
  * envelope-рост/сжатие родителей по всей цепочке предков (reflowAfterFit). Вся
  * операция — одна undo-точка. Возвращает число переобтянутых объектов.
  *
- * Цели обтяжки — текстовые geo/note среди ПОТОМКОВ выделения (collectDescendantIds:
+ * Цели обтяжки — текстовые geo среди ПОТОМКОВ выделения (collectDescendantIds:
  * кнопка на контейнере/фрейме берёт вложенные узлы, в т.ч. во вложенных контейнерах;
  * мульти-выделение — и сами узлы, и детей). `force` (⌘⌥⇧F / Opt-click) — обтягивать
  * и size-pinned узлы тоже; обычный режим уважает вручную заданный размер.

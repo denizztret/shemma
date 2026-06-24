@@ -24,11 +24,6 @@ import {
 import { growWrappersForShapes } from "./elk-layout";
 import { extractPlaintextFromRichText } from "./schema-overlay-sync";
 
-/** Shape types that carry an explicit size + growY and benefit from fitting.
- *  `text` shapes auto-size themselves (autoSize) and are excluded — matches
- *  DRW-219 `TEXT_FIT_TYPES`. */
-const FITTABLE_TYPES: ReadonlySet<string> = new Set(["geo", "note"]);
-
 export type AutoFitInput = {
   /** tldraw shape type. */
   type: string;
@@ -51,9 +46,10 @@ export type AutoFitInput = {
   sizeOrigin?: "fit" | "user";
 };
 
-/** Decide whether a just-added/changed shape should be auto-fitted. */
+/** Decide whether a just-added/changed shape should be auto-fitted. Fittable
+ *  types = `TEXT_FIT_TYPES` (geo only): note/text are self-sizing and excluded. */
 export function shouldAutoFit(input: AutoFitInput): boolean {
-  if (!FITTABLE_TYPES.has(input.type)) return false;
+  if (!TEXT_FIT_TYPES.has(input.type)) return false;
   if (!input.hasText) return false;
   if (!input.textChanged) return false;
   // A pinned size is only re-fittable if it was itself produced by a fit;
@@ -91,10 +87,11 @@ function plaintextOf(shape: TLShape): string | null {
 }
 
 /**
- * DRW-228: event-driven auto text-fit. Fits a geo/note exactly once — when it
+ * DRW-228: event-driven auto text-fit. Fits a geo exactly once — when it
  * is added with text, or when its text is edited — so by the time a layout
  * runs the node already carries correct dimensions. A user's manual resize
- * (meta.didrawSizePinned) is never overwritten.
+ * (meta.didrawSizePinned) is never overwritten. note/text are self-sizing and
+ * never fitted (TEXT_FIT_TYPES = geo only).
  *
  * Two triggers:
  *  1. store.listen({source:'all'}) — catches both user edits AND AI/remote
@@ -104,7 +101,7 @@ function plaintextOf(shape: TLShape): string | null {
  *  2. react(getEditingShapeId) — when editing ends on a shape whose text
  *     changed during the session, fit it once.
  *
- * No feedback loop: the fit writes w/h/growY/meta but NOT richText, so the
+ * No feedback loop: the fit writes w/h/growY/meta (geo) but NOT richText, so the
  * re-entrant listener call sees textChanged=false and bails.
  *
  * Returns a disposer.
