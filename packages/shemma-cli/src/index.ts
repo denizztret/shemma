@@ -336,6 +336,11 @@ async function main() {
     die(`unknown config subcommand: ${sub}; expected set | get | unset`);
   }
 
+  if (cmd === "menubar") {
+    const { cmdMenubar } = await import("./menubar");
+    return cmdMenubar(argv.slice(1));
+  }
+
   // Zero-arg `shemma` === `shemma open` (no room → "default").
   // `shemma open <room>` overrides room. Also matches when user passes only
   // flags (e.g. `shemma --storage /foo`) — first token starts with `--`,
@@ -596,12 +601,18 @@ Config:
   config set <key> <value>                    # store credential / setting in ~/.config/shemma/config.json
   config get <key>                            # read setting (token values masked: "[set] (N chars)")
   config unset <key>                          # remove setting
-                                              # Supported keys (0.19.0): miro.token
+                                              # Supported keys: miro.token, menubar.label
 
 MCP integration:
   mcp start [--profile <p>] [--room <id>] [--base-url <url>]
             [--auto-open never|once|always|confirm] [--no-auto-ensure]
                                               # start stdio MCP server (for agentic clients)
+
+Menu bar (macOS):
+  menubar install [--interval 5s] [--plugin-dir <path>] [--yes]
+                                              # install SwiftBar shim (brew cask hint included)
+  menubar uninstall | status
+  menubar render | do <action> [arg]          # presentation interface for SwiftBar (not a machine API)
 
 Versioning:
   version

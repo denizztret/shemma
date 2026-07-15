@@ -19,7 +19,7 @@ function isChannel(s: string): s is Channel {
 // Resolve current version: prefer SHEMMA_VERSION injected by build-release.sh
 // (compiled binary); in dev fall back to package.json with a `-dev` suffix so
 // the channel comparison still parses, and the user sees something useful.
-function resolveCurrentVersion(): string {
+export function resolveCurrentVersion(): string {
   const env = process.env.SHEMMA_VERSION;
   if (env && env.length > 0) return env;
   try {
@@ -190,28 +190,35 @@ async function fetchManifest(): Promise<{
   return { manifest, release };
 }
 
-export async function cmdUpdateCheck() {
+export interface UpdateBadge {
+  current: string;
+  latest: string | null;
+  available: boolean;
+  channel: string;
+}
+
+/** Проверка наличия обновления (данные без печати) — используется update --check и menubar. */
+export async function checkUpdateAvailable(): Promise<UpdateBadge> {
   const channel = resolveChannel();
+  const { manifest } = await fetchManifest();
+  const latest = manifest.channels?.[channel]?.version ?? null;
+  const available = !!latest && semverCmp(latest, CURRENT_VERSION) > 0;
+  return { current: CURRENT_VERSION, latest, available, channel };
+}
+
+export async function cmdUpdateCheck() {
   try {
-    const { manifest } = await fetchManifest();
-    const latest = manifest.channels?.[channel]?.version ?? null;
-    const available = !!latest && semverCmp(latest, CURRENT_VERSION) > 0;
+    const { current, latest, available, channel } =
+      await checkUpdateAvailable();
     const ui = getOutput();
     if (ui.mode === "json") {
-      console.log(
-        JSON.stringify({
-          current: CURRENT_VERSION,
-          latest,
-          available,
-          channel,
-        }),
-      );
+      console.log(JSON.stringify({ current, latest, available, channel }));
     } else if (available) {
       uiSuccess(
-        `update available: v${latest} (current v${CURRENT_VERSION}, channel ${channel})`,
+        `update available: v${latest} (current v${current}, channel ${channel})`,
       );
     } else {
-      uiSuccess(`already on latest v${CURRENT_VERSION} (channel ${channel})`);
+      uiSuccess(`already on latest v${current} (channel ${channel})`);
     }
   } catch (e) {
     fail(e);

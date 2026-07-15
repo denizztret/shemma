@@ -495,20 +495,29 @@ export async function stop(profile: Profile) {
     return;
   }
   if (ui.mode === "json") {
-    console.log(JSON.stringify({ ok: true, stopped: outcome.stopped, profile }));
+    console.log(
+      JSON.stringify({ ok: true, stopped: outcome.stopped, profile }),
+    );
   } else {
     uiSuccess(`daemon stopped (pid ${outcome.stopped}, profile ${profile})`);
   }
 }
 
+export type StopAllResult = {
+  ok: true;
+  profile: Profile;
+  stopped?: number;
+  already?: boolean;
+};
+
 /**
  * Stop daemons across all profiles (or a single one if specified).
  * Idempotent: profiles that are not running produce {ok:true,already:true}.
- * Results are collected and printed as a JSON array.
+ * Results are collected, printed as a JSON array and returned (menubar notify).
  */
-export async function stopAll(onlyProfile?: Profile) {
+export async function stopAll(onlyProfile?: Profile): Promise<StopAllResult[]> {
   const profiles = onlyProfile ? [onlyProfile] : [...ALL_PROFILES];
-  const results: object[] = [];
+  const results: StopAllResult[] = [];
   for (const p of profiles) {
     const outcome = await stopOneProfile(p);
     if ("already" in outcome) {
@@ -522,12 +531,12 @@ export async function stopAll(onlyProfile?: Profile) {
     console.log(JSON.stringify(results));
   } else {
     for (const r of results) {
-      const e = r as { already?: boolean; stopped?: number; profile: Profile };
-      if (e.already) {
-        uiSuccess(`daemon not running (profile ${e.profile})`);
+      if (r.already) {
+        uiSuccess(`daemon not running (profile ${r.profile})`);
       } else {
-        uiSuccess(`daemon stopped (pid ${e.stopped}, profile ${e.profile})`);
+        uiSuccess(`daemon stopped (pid ${r.stopped}, profile ${r.profile})`);
       }
     }
   }
+  return results;
 }

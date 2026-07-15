@@ -1,6 +1,6 @@
 import { CanvasClient } from "@shemma/client";
-import { ALL_PROFILES, type Profile, portFor } from "./profile";
 import { isHealthy, status } from "./daemon";
+import { ALL_PROFILES, type Profile, portFor } from "./profile";
 import { getOutput, info as uiInfo } from "./ui";
 
 // Static port defaults per profile — used in ps to show correct port for each
@@ -49,8 +49,9 @@ export async function getRunningDaemonStorage(
   return health?.storage ?? null;
 }
 
-export async function cmdPs(): Promise<void> {
-  const results = await Promise.all(
+/** Собирает статусы всех профилей (без печати) — используется ps и menubar. */
+export async function collectProfileStatuses(): Promise<ProfileStatus[]> {
+  return Promise.all(
     ALL_PROFILES.map(async (p): Promise<ProfileStatus> => {
       try {
         const s = await status(p);
@@ -73,6 +74,10 @@ export async function cmdPs(): Promise<void> {
       }
     }),
   );
+}
+
+export async function cmdPs(): Promise<void> {
+  const results = await collectProfileStatuses();
   const ui = getOutput();
   if (ui.mode === "json") {
     console.log(JSON.stringify(results, null, 2));

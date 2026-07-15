@@ -307,19 +307,31 @@ export interface DoctorOptions {
   json: boolean;
 }
 
-export async function cmdDoctor(opts: DoctorOptions): Promise<void> {
-  const profiles: Profile[] = opts.all ? [...ALL_PROFILES] : [opts.profile];
+export interface DoctorChecksOptions {
+  /** false → пропустить сетевой manifest-reachable (menubar-рендер каждые 5 с). */
+  network?: boolean;
+}
 
-  // Run all checks in parallel
-  const results = await Promise.all([
+/** Прогоняет doctor-чеки без печати — используется doctor и menubar. */
+export async function runDoctorChecks(
+  profiles: readonly Profile[],
+  opts: DoctorChecksOptions = {},
+): Promise<CheckResult[]> {
+  const network = opts.network ?? true;
+  return Promise.all([
     Promise.resolve(checkBunVersion()),
     Promise.resolve(checkShemmaVersion()),
     ...profiles.map((p) => checkDaemonStatus(p)),
     ...profiles.map((p) => checkPortOwner(p)),
     ...profiles.map((p) => Promise.resolve(checkStorageWritable(p))),
-    checkManifestReachable(),
+    ...(network ? [checkManifestReachable()] : []),
     Promise.resolve(checkConfigReadable()),
   ]);
+}
+
+export async function cmdDoctor(opts: DoctorOptions): Promise<void> {
+  const profiles: Profile[] = opts.all ? [...ALL_PROFILES] : [opts.profile];
+  const results = await runDoctorChecks(profiles, { network: true });
 
   // Respect both `--json` global flag and the existing `doctor --json` local
   // flag (kept for backward compat). Either gates JSON output.
