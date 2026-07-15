@@ -1,5 +1,18 @@
 ## Unreleased
 
+### Added
+
+- **Menu bar helper (macOS): `shemma menubar` + SwiftBar shim.** Статус демона
+  цветной иконкой (работает/остановлен/ошибка), start/stop/restart, «Остановить
+  все инстансы» (`daemon stop --all`), открытие доски и галерей spaces, doctor-чеки,
+  update-badge (кеш 6 ч), лог и конфиг — из menu bar. Установка:
+  `shemma menubar install` (сам предложит `brew install --cask swiftbar`,
+  настроит plugin-папку через defaults, положит тонкий shim). Логика меню живёт
+  в CLI и обновляется вместе с бинарём (`shemma update`); shim стабильный.
+  Новый config-ключ `menubar.label` (подпись рядом с иконкой). `menubar render` —
+  presentation-интерфейс для SwiftBar, формат не является stable machine API.
+  Спека: `docs/superpowers/specs/2026-07-15-menubar-helper-design.md`.
+
 ## 0.32.1 — 2026-06-24 — Хотфикс: заметка с текстом роняла весь холст
 
 ### Bug Fixes

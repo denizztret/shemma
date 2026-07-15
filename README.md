@@ -91,6 +91,23 @@ shemma update --check              # check whether a newer release exists
 shemma update --channel stable     # download + verify + atomic swap + restart
 ```
 
+## Menu bar helper (macOS)
+
+Status and control of the shemma daemon from the menu bar (via [SwiftBar](https://github.com/swiftbar/SwiftBar)):
+
+```bash
+brew install --cask swiftbar   # if not installed yet
+shemma menubar install         # shim into the SwiftBar plugin folder + auto-setup
+```
+
+The icon shows daemon state (green — running, gray — stopped, red — error).
+Menu: start/stop/restart, "Stop all instances", open board and spaces, doctor
+checks, daemon log, shemma update. The menu logic lives in the CLI itself — it
+updates together with `shemma update`, the shim never needs touching.
+
+`shemma menubar uninstall` — remove; `shemma menubar status` — where it is
+installed. Label next to the icon: `shemma config set menubar.label shemma`.
+
 ## Architecture
 
 ```

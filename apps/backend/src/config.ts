@@ -201,6 +201,9 @@ export interface ConfigFile {
     token?: string;
     createdAt?: string;
   };
+  menubar?: {
+    label?: string;
+  };
 }
 
 /**
@@ -252,6 +255,6 @@ export function writeMiroToken(token: string): void {
 export function unsetMiroToken(): void {
   const cfg = readConfig();
   if (!cfg?.miro?.token) return;
-  delete cfg.miro.token;
+  cfg.miro.token = undefined;
   writeConfig(cfg);
 }
